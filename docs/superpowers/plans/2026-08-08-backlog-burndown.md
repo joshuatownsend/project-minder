@@ -81,7 +81,7 @@ The 2026-08-12 route audit and the wave records **observed** accurately — the 
 | W7 — Service mode + build hygiene | ⬜ Not started | Grew from 2 issues to 6 — see the addendum |
 | W8 — Project Groups P2→P3 | ⬜ Not started | |
 | W9 — Session-tooling deferred halves | ⬜ Not started | |
-| W10 — Cloud session ingest | 🔒 **Still gated** | The spike has never run — blocked by the permission classifier, not by a decision |
+| W10 — Cloud session ingest | ✅ **Closed as moot 2026-08-15** | The spike ran and returned a controlled negative — the endpoints no longer exist. All 5 TODO items archived |
 | W11 — Memory Observatory M.2 | 🔒 Gated on upstream research | |
 | **W12 — Demo-mode coverage** | ⬜ **New** | |
 | **W13 — Index-backed reads & aggregation correctness** | ⬜ **New** | |
@@ -111,7 +111,7 @@ W7 therefore reads: **#295, #296, #413, #417, #284, #287.**
 
 ### TODO invariant, restated
 
-The original table asserted `grep -c '^[[:space:]]*- \[ \]' TODO.md` = 22. **It is now 27**, and the composition changed on both sides — an unexplained count is what breaks this doc's self-check, so here is the delta.
+The original table asserted `grep -c '^[[:space:]]*- \[ \]' TODO.md` = 22. **It was 27 at reconciliation, and is 22 since W10 was archived on 2026-08-15**, and the composition changed on both sides — an unexplained count is what breaks this doc's self-check, so here is the delta.
 
 *Left the file (completed):* W4's `usage.speed` pricing item (1), W5's three items (3), W1's "upgrade to Next ≥16.3" (1, rewritten rather than closed — see below), and the screenshot-without-prose PR check (1, shipped as `.github/workflows/site-screenshots-check.yml`, archived 2026-08-12). **−6.**
 
@@ -123,11 +123,11 @@ Current distribution — this is the table to verify against:
 |---|---|---|
 | W8 | Project Groups P2 (aggregation); P3 (UI) | 2 |
 | W9 | Widen `SessionAdapter` full text; approval UI + phone view; token-usage rule fields; project-scope config drift; per-task `scheduleAtQuotaReset`; quota threshold in config; embed only semantic queries | 7 |
-| W10 | Endpoint spike; fetcher + disk sync; `claude-cloud` adapter; attribution; distribution stance | 5 |
+| ~~W10~~ | ~~Endpoint spike; fetcher + disk sync; adapter; attribution; distribution stance~~ — **all 5 archived 2026-08-15, endpoints gone** | 0 |
 | W11 | Memory Observatory M.2 | 1 |
 | **W12** | `RootLayout` leaks `devRoot`; `/stats` cross-check leaks real totals; ~18 empty screens; `/adapters` + `/config` + `/plans` leak; `/analytics` never loads; Home's `0 projects` header | 6 |
 | Housekeeping | `DERIVED_VERSION` release gate; #432 re-test gate; #284 next experiment; `instrumentation` bypass; capture `worktrees.png`; extract export-filename helpers | 6 |
-| **Total** | | **27** |
+| **Total** | | **22** |  *(27 at reconciliation; W10's 5 archived 2026-08-15)*
 
 *The cloud spike moved from W1 to W10 in this table. The 2026-08-08 version counted it under W1 as a parallel side-quest; it never ran there, and it gates only W10, so it is counted where it belongs.*
 
@@ -135,7 +135,7 @@ Current distribution — this is the table to verify against:
 
 They block or condition other work and have no home in the wave sequence:
 
-1. **The cloud spike needs you, not a wave.** It reads `~/.claude/.credentials.json` and calls an undocumented endpoint with a bearer token; the permission classifier blocked it during W1 and the script is still written and ready. Until it runs, W10 (5 TODO items) cannot be designed *and* the personal-vs-distributed decision stays correctly unasked. This is the cheapest open question in the backlog and the only one that can delete an entire section.
+1. ~~**The cloud spike needs you, not a wave.**~~ ✅ **Ran 2026-08-15 — and it did delete an entire section.** `GET /v1/sessions` returns 404 `not_found_error`, identical to a bogus control path, while the same token and headers get 200 from `/v1/models`. W10's 5 TODO items are archived and the personal-vs-distributed decision is permanently moot. It was indeed the cheapest question in the backlog: one script, one run.
 2. **No `DERIVED_VERSION` bump ships without the worker-ingest fix (#431 / PR #435).** The fix is on `main` and in no release; a bump without it hands every existing install another multi-hour blackout.
 3. **#432 gates every `next` bump**, including a routine Dependabot PR. The four-cold-boot probe is written up in the W1 REVERTED block.
 
@@ -451,7 +451,33 @@ Seven TODO items, all deferred halves of shipped work. Roughly ordered by value.
 
 ---
 
-## Wave 10 — Cloud session ingest (gated on the W1 spike)
+## Wave 10 — Cloud session ingest — ✅ **CLOSED AS MOOT (2026-08-15)**
+
+> ### W10 outcome — the spike ran, and the answer was no
+>
+> **The endpoints do not exist.** `GET https://api.anthropic.com/v1/sessions` returns **HTTP 404 `not_found_error`** with a valid, unexpired OAuth token (`sk-ant-oat…`) and the `x-organization-uuid` header. `/api/sessions` was probed as a variant and 404s identically.
+>
+> **The control is what makes this conclusive**, and it is the reason the spike is worth more than the upstream report. Two probes ran in the same process with the same headers:
+>
+> | Probe | Result |
+> |---|---|
+> | `/v1/models` (control — known-good route) | **HTTP 200** |
+> | `/v1/definitely_not_real` (control — path invented for this run) | HTTP 404 `not_found_error` |
+> | `/v1/sessions` (target) | HTTP 404 `not_found_error` |
+>
+> So the target is **indistinguishable from a path that was made up**, while the credentials demonstrably authenticate against the same host. This is a missing route — not an expired token, not a wrong header, not a network failure. Confirms [simonw/claude-code-transcripts#77](https://github.com/simonw/claude-code-transcripts/issues/77) **against our own account** rather than on trust.
+>
+> Without the control the 404 would have been ambiguous, and the plan's standing caveat about unverified causal claims says a bare 404 should not have been read as "the endpoint is gone". This is the repo's own lesson applied forward: *a zero from a system is not evidence of absence until you have checked the system can represent a non-zero.*
+>
+> **What closes:** all 5 TODO items, archived to `TODO.archive.md`. The **distribution-risk decision** — personal-only vs. shipped to other installs, deliberately deferred since W0 on 2026-08-08 pending exactly this result — is now permanently unnecessary. That deferral was correct: answering it in W0 would have been an hour spent designing consent strings, retention policy and a feature flag for a feature that cannot exist.
+>
+> **What does not close:** the driver. Sessions run on claude.ai/code still produce no local JSONL, so they remain invisible to every Minder read surface, and `ProjectDetail.tsx:170`'s `prSessionLinks` still dangles for any PR opened from a web session. There is no longer a route to fixing it from this direction. If a supported API appears, reopen the archived section — the design work is done and should not be re-derived.
+>
+> **The spike script is deliberately not committed** — it reads `~/.claude/.credentials.json`, and `src/lib/adapters/types.ts` states that auth/credential files are never read. Shipping it would contradict that invariant for a script the repo never runs. It is preserved in the archiving PR; re-testing is a few minutes' work from the description above, and the control probe is the part not to skip.
+
+*Original plan below, retained as the design record.*
+
+## Wave 10 — Cloud session ingest (gated on the W1 spike) — superseded
 
 **Only proceed if the spike says the endpoints live.** The spike's real output is the **response schema** — `session_ingress` almost certainly does not return the local JSONL shape, and that mapping layer is the actual work.
 

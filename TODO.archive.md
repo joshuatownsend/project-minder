@@ -430,3 +430,40 @@
 ## Site / docs tooling
 
 - [x] **PR check that warns when `site/screenshots/*.png` changes without `site/index.html`** *(archived 2026-08-12 — already shipped)*. Implemented as `.github/workflows/site-screenshots-check.yml`: triggers on PRs touching `site/screenshots/**`, greps `gh pr diff --name-only`, and fails with a step-summary explanation when screenshots changed but `site/index.html` did not. Deliberately one-directional (prose-only changes pass) and deliberately **not** a required status check, since it only reports on the minority of PRs that touch screenshots and would otherwise sit pending forever.
+
+## Cloud session ingest (Claude Code for web)
+
+> archived 2026-08-15 — **closed as moot: the endpoints no longer exist.** The gating spike ran and
+> returned a controlled negative. With a valid unexpired OAuth token (`sk-ant-oat…`, from
+> `~/.claude/.credentials.json`) and the org UUID header, `GET https://api.anthropic.com/v1/sessions`
+> returns **HTTP 404 `not_found_error`** — byte-identical to a deliberately bogus path
+> (`/v1/definitely_not_real`) probed as a control in the same run. The token itself is fine: the same
+> headers return **HTTP 200** from `/v1/models`. So this is a missing route, not an auth failure and
+> not a header mistake. `/api/sessions` was probed as a variant and 404s identically. This confirms
+> [simonw/claude-code-transcripts#77](https://github.com/simonw/claude-code-transcripts/issues/77)
+> against our own account rather than taking the upstream report on trust.
+>
+> All five items go with it, including the **distribution-risk decision** (personal-only vs. shipped),
+> which never has to be asked — the feature it gated cannot be built. That decision had been
+> deliberately deferred since 2026-08-08 pending exactly this result.
+> 
+> **The driver is still real and now has no solution here:** sessions run on claude.ai/code produce no
+> local JSONL, so they remain invisible to every Minder read surface, and `prSessionLinks` still
+> dangles for any PR opened from a web session. If a supported API ever appears, this section is the
+> design work already done — reopen it rather than re-deriving it. **The spike script is deliberately
+> not in this repo** — it reads `~/.claude/.credentials.json`, and `src/lib/adapters/types.ts` states
+> the invariant that auth/credential files are never read. It lives in the PR that archived this
+> section; to re-test, GET `/v1/sessions` with a bearer token from that file plus
+> `anthropic-version: 2023-06-01` and `x-organization-uuid`, and probe `/v1/models` alongside it as a
+> control so a 404 can be told apart from an auth failure.
+
+
+*Driver: sessions run on claude.ai/code produce **no local JSONL**, so they're invisible to every Minder read surface. Usage is currently light (small feature adds / bug fixes from away-from-desk) but expected to grow. The cost undercount is rounding error at this volume — the real damage is (a) a **gap in the project timeline** exactly where the away-from-desk work happened, and (b) a **dangling PR**: `ProjectDetail.tsx:170` builds `prSessionLinks` (`${repo}#${number}` → sessionId) from `/api/sessions` matched on `usageSlug`, so a PR opened from a web session has no session behind it. That cross-link degrades in proportion to web usage.*
+
+*Prior art: [`simonw/claude-code-transcripts`](https://github.com/simonw/claude-code-transcripts) (Apache-2.0, Python). **Do not vendor** — ~90% of it is a JSONL→HTML renderer that Minder already beats (`adapters/claude.ts` + DB ingest + FTS5 + `/sessions`). The only interesting ~150 lines are the fetcher: `GET https://api.anthropic.com/v1/sessions` (list) and `GET https://api.anthropic.com/v1/session_ingress/session/{id}` (detail), with `Authorization: Bearer <oauth token>`, `anthropic-version: 2023-06-01`, `x-organization-uuid`; org UUID from `~/.claude.json` → `oauthAccount.organizationUuid`. **These endpoints are undocumented and are broken in the reference tool right now** — see [issue #77](https://github.com/simonw/claude-code-transcripts/issues/77).*
+
+- [x] **Spike — do the endpoints still work?** ~60 lines, scratchpad only, outside the repo. Read org UUID from `~/.claude.json`, take a token, call `/v1/sessions`, dump the response shape. Gates everything below: if #77 means the endpoints are dead for everyone, the design is moot for an hour's cost. If they work, the spike's real output is **the response schema** — `session_ingress` almost certainly does not return the local JSONL shape, and that mapping layer is the actual work in this feature.
+- [x] **Fetcher + disk sync** — `src/lib/cloudSessions/fetcher.ts`, modeled on `githubActivityCache`: `globalThis` singleton, TTL, `available:false` sentinel with a `reason` enum, never throws, never blocks a scan. **No background poller** — volume is low and human-paced, so sync on explicit user action (a "Sync cloud sessions" button) plus opportunistically on project-detail open. Hitting an undocumented endpoint on user intent rather than on a timer keeps the failure surface small. Materialize to `~/.minder/cloud-sessions/projects/<slug>/<sessionId>.jsonl` — same on-disk layout as a real Claude home, so a broken endpoint degrades to *stale but present* rather than *gone*.
+- [x] **`claude-cloud` adapter** — thin; reuses `parseSessionTurns` verbatim and tags `source: "claude-cloud"`. Deliberately **not** a network adapter: `SessionAdapter` is filesystem-shaped (`SessionFile.filePath`), and syncing to disk preserves that contract instead of widening the interface for one caller. The `source` field already threads through ingest/usage/sessions from Wave 10.2a, so classifier, cost calculator, one-shot detector, FTS5, `/costs` and the MCP tools light up with no changes.
+- [x] **Attribution — strict + explicit fallback** — a cloud session has no local path, so `usageSlug`/`dev-<name>` can't help; the only join key is `owner/repo` → the scanned `remoteUrl` (reuse `parseGitHubRemote`). Attribute only on an exact match; everything else lands in an "unattributed" bucket surfaced for manual assignment, persisted in `.minder.json`. **Rejected: fuzzy name/title matching** — `/costs` is the main consumer and a mis-attributed session silently corrupts a project's number, which is worse than a missing one. Fuzzy may return later as a *suggestion* in the assignment UI only. The repo-centric use case (small fixes → PRs) should make strict matching hit high coverage anyway.
+- [x] **Distribution risk — resolve before shipping to other users** — this is the blocker, not the engineering. Shipping a client for two undocumented endpoints inside a signed installer with an auto-updater means breakage lands in other people's installs and the support burden is ours. It also requires reading `~/.claude/.credentials.json`, which **violates the invariant stated in `src/lib/adapters/types.ts`** (*"Auth/credential files are never read"*) — fine as a personal choice, a changed promise when distributed. Multi-user also means token location, org UUID, and OS credential storage all vary per install (the reference tool's macOS-keychain path covers none of our Windows users). Minimum bar: **default-off feature flag** (new `FeatureFlagKey`, same discipline as `githubActivity`), explicit per-install opt-in with a consent string naming the file read and where transcripts are stored, retention/eviction policy for synced transcripts, and hard graceful degradation on endpoint change.
