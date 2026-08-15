@@ -6,7 +6,7 @@
 
 Baseline: `main` @ `0196d9c` (v1.9.1), 4,741 tests passing.
 
-> ⚠️ **The Scope line above, and both ledger tables and the `grep -c` invariant below, are the 2026-08-08 baseline and no longer hold.** Current figures are **22 open issues** and **26 unchecked TODO items** — see [Status reconciliation — 2026-08-14](#status-reconciliation--2026-08-14), which supersedes them and restates the invariant. Do not run the top-of-doc self-check expecting it to pass; it is a historical record, not a live assertion.
+> ⚠️ **The Scope line above, and both ledger tables and the `grep -c` invariant below, are the 2026-08-08 baseline and no longer hold.** Current figures are **22 open issues** and **27 unchecked TODO items** — see [Status reconciliation — 2026-08-14](#status-reconciliation--2026-08-14), which supersedes them and restates the invariant. Do not run the top-of-doc self-check expecting it to pass; it is a historical record, not a live assertion.
 
 ---
 
@@ -27,7 +27,7 @@ All 34 open issues appear in exactly one wave below:
 | W7 — Service mode + build hygiene | #295, #296 |
 | **Total** | **34** |
 
-And all 22 unchecked `TODO.md` items appear in exactly one wave. Verify with `grep -c '^\s*- \[ \]' TODO.md` — the count must equal the total below.
+And all 22 unchecked `TODO.md` items appear in exactly one wave. Verify with `grep -c '^[[:space:]]*- \[ \]' TODO.md` — the count must equal the total below. *(Pattern corrected 2026-08-14: this originally used `\s`, which is a GNU extension and matches a literal `s` under POSIX grep. It happened to give the right answer only because no checkbox is indented — a self-check that works by luck, which is the failure this doc keeps finding elsewhere.)*
 
 | Wave | TODO items | n |
 |---|---|---|
@@ -81,7 +81,7 @@ The baseline dispositioned 34 issues. Ten more were filed between 2026-08-09 and
 |---|---|---|
 | #441 — demo mode leaks real data on `/workflows` | **W12** | Named in `TODO.md`'s demo-mode section as one of the two already-filed instances of a single coherent gap |
 | #443 — demo mode `/usage` throws "circular link", renders the browser error page | **W12** | Same gap; the only one that fails *hard* rather than leaking |
-| #445 — three loading idioms, none externally detectable | **W12** | Placed here as the wave's **enabler**, not a ride-along: W12's central measurement is "does this screen render fixtures or nothing", and you cannot separate *empty* from *still loading* without it. It is why the screenshot gate needed six idioms documented by hand in PR #446 |
+| #445 — three loading idioms, none externally detectable | **W12** | Maintenance value within the wave, **not** a prerequisite — the detector that covers all four idioms is a hand-maintained list that has to track them. *Originally filed here as the wave's enabler; corrected 2026-08-14, see W12 item 6.* |
 | #439 — Hot Files / File Coupling parse all session JSONL instead of the index | **W13** | |
 | #425 — session facets applied after the FTS top-200 cut | **W13** | Same shape: the index can answer correctly and the read layer doesn't ask it to |
 | #416 — `byProject` splits a macOS project across two path casings | **W13** | The wave's quick win; the case-folding pattern already exists in the scanner from #249–257 |
@@ -96,11 +96,11 @@ W7 therefore reads: **#295, #296, #413, #417, #284, #287.**
 
 ### TODO invariant, restated
 
-The original table asserted `grep -c '^\s*- \[ \]' TODO.md` = 22. **It is now 26**, and the composition changed on both sides — an unexplained count is what breaks this doc's self-check, so here is the delta.
+The original table asserted `grep -c '^[[:space:]]*- \[ \]' TODO.md` = 22. **It is now 27**, and the composition changed on both sides — an unexplained count is what breaks this doc's self-check, so here is the delta.
 
 *Left the file (completed):* W4's `usage.speed` pricing item (1), W5's three items (3), W1's "upgrade to Next ≥16.3" (1, rewritten rather than closed — see below), and the screenshot-without-prose PR check (1, shipped as `.github/workflows/site-screenshots-check.yml`, archived 2026-08-12). **−6.**
 
-*Entered the file:* five demo-mode findings from the 2026-08-12 route audit (**W12**), the `DERIVED_VERSION`-needs-the-worker-fix release gate, the #432 re-test-before-un-pinning gate, the `instrumentation` exclusion bypass, the export-filename helper extraction, and the rewritten #284 next-experiment item. **+10.**
+*Entered the file:* six demo-mode findings — five from the 2026-08-12 route audit plus the `/stats` cross-check leak added 2026-08-14 during this plan's own review (**W12**), the `DERIVED_VERSION`-needs-the-worker-fix release gate, the #432 re-test-before-un-pinning gate, the `instrumentation` exclusion bypass, the export-filename helper extraction, and the rewritten #284 next-experiment item. **+11.**
 
 Current distribution — this is the table to verify against:
 
@@ -110,9 +110,9 @@ Current distribution — this is the table to verify against:
 | W9 | Widen `SessionAdapter` full text; approval UI + phone view; token-usage rule fields; project-scope config drift; per-task `scheduleAtQuotaReset`; quota threshold in config; embed only semantic queries | 7 |
 | W10 | Endpoint spike; fetcher + disk sync; `claude-cloud` adapter; attribution; distribution stance | 5 |
 | W11 | Memory Observatory M.2 | 1 |
-| **W12** | App shell never demo-guarded; ~18 empty screens; `/adapters` + `/config` + `/plans` leak; `/analytics` never loads; Home's `0 projects` header | 5 |
+| **W12** | `RootLayout` leaks `devRoot`; `/stats` cross-check leaks real totals; ~18 empty screens; `/adapters` + `/config` + `/plans` leak; `/analytics` never loads; Home's `0 projects` header | 6 |
 | Housekeeping | `DERIVED_VERSION` release gate; #432 re-test gate; #284 next experiment; `instrumentation` bypass; capture `worktrees.png`; extract export-filename helpers | 6 |
-| **Total** | | **26** |
+| **Total** | | **27** |
 
 *The cloud spike moved from W1 to W10 in this table. The 2026-08-08 version counted it under W1 as a parallel side-quest; it never ran there, and it gates only W10, so it is counted where it belongs.*
 
@@ -465,19 +465,22 @@ Plan doc: `C:\Users\joshu\.claude\plans\i-recently-read-this-temporal-crane.md`.
 
 1. **#443 — `/usage` throws "circular link" under demo mode** and renders the browser error page instead of the app. The only demo-mode failure that is hard rather than leaky, so it is also the easiest to verify fixed.
 2. **#441 + `/adapters`, `/config`, `/plans`** — one family, one fix pattern. Only 19 of 165 API routes reference `demoMode` at all; most are covered transitively through the `data/index.ts` façade and these four are not. **Worth an audit rather than four patches**: establish which routes are covered by the façade and which need their own guard, then close the set. Four known instances found by one audit is weak evidence that there are exactly four.
-3. **`RootLayout` leaks `devRoot` on every route** (`TODO.md`). `src/app/layout.tsx:43-48` calls `readConfig()` → `getDevRoots(config)` inline in a server component, so it never passes through the façade or any route where a guard could apply; `/hooks` has the same shape and prints the real home path. Fix at the shell — per-route is how the gap happened.
+3. **`/stats` cross-check reads the real Claude stats cache under demo mode** — *added 2026-08-14 by Codex on this PR; it was in neither the audit nor `TODO.md`.* `buildStatsResponse` (`src/lib/server/queries/stats.ts:88-118`) calls `getStatsCache()` unconditionally, which reads `~/.claude/stats-cache.json` (`scanner/claudeStats.ts:26`) with no demo guard, so the cross-check panel compares demo totals against the user's **real** session and message counts. `capture-screenshots-hybrid.mjs:70-72` already documents the visible symptom — a red "-91% / -100%" drift — and refuses to promote that frame.
+
+   **This one is load-bearing for the wave's exit criterion**, not another entry on the pile: `stats-dashboard` is in the capture set (`capture-screenshots.mjs:426-429`), so every other item here could be closed and a single demo pass would still publish real totals. Worth noting the leak was *already known to the tooling* and recorded only as a capture-script comment — the hybrid script's refusal to promote the frame was the system telling us, and nobody had written it down where the plan would see it.
+4. **`RootLayout` leaks `devRoot` on every route** (`TODO.md`). `src/app/layout.tsx:43-48` calls `readConfig()` → `getDevRoots(config)` inline in a server component, so it never passes through the façade or any route where a guard could apply; `/hooks` has the same shape and prints the real home path. Fix at the shell — per-route is how the gap happened.
 
    > **Scope corrected 2026-08-14 by Codex on this plan's own PR (#447).** This item was written as *"the app shell is never demo-guarded, so every screen leaks real data"* and ranked **first** in the wave on that basis, citing the burn percentage + 7-day cap, MCP health, and the Quick Launch skill slugs alongside `devRoot`. Those three are **fixtures**, and their routes are correctly guarded: `demoQuota()` returns `"7d": { utilization: 0.52 }` — the literal "52%" the audit reported as a real burn rate (`demo/activity.ts:298`); `demoMcpHealth()` deliberately seeds one `status: "down"` server (`:207`); `demoSkills()` contains `changelog` / `gsd-planning` / `pr-review` / `memory` by name (`demo/catalogs.ts:273-325`).
    >
    > The mechanism claim survived and the impact claim did not — roughly 4:1 — which is why this dropped from rank 1 to rank 4. **The audit method is what to fix, not just the entry:** a value was recorded as exposure because it looked like the user's real data, when looking like real data is precisely what a good fixture does. A suspected leak has to be checked against the fixture that could have produced it before it counts. Note this is the *inverse* of the standing lesson from #426 — there, a zero was not evidence of absence until the system was shown able to represent a non-zero; here, a plausible value was not evidence of a leak until the fixture was shown unable to produce it.
-4. **~18 empty screens** (`TODO.md`) — the long tail, and the reason `capture-screenshots-hybrid.mjs` needs two passes at all. Fixtures here would let the whole capture run on demo data and make the published screenshot set fully shareable. Scope it by what the capture set actually uses.
-5. **#445 — standardize on one loading idiom.** *Demoted from rank 1 on 2026-08-14 — see the correction below.* Real maintenance value (three idioms, and the detector that covers them is a hand-maintained list that must track all of them — the same shape as #417's hand-maintained exclude list), but **not** a prerequisite for anything else in this wave.
+5. **~18 empty screens** (`TODO.md`) — the long tail, and the reason `capture-screenshots-hybrid.mjs` needs two passes at all. Fixtures here would let the whole capture run on demo data and make the published screenshot set fully shareable. Scope it by what the capture set actually uses.
+6. **#445 — standardize on one loading idiom.** *Demoted from rank 1 on 2026-08-14 — see the correction below.* Real maintenance value (three idioms, and the detector that covers them is a hand-maintained list that must track all of them — the same shape as #417's hand-maintained exclude list), but **not** a prerequisite for anything else in this wave.
 
    > **Corrected by Codex on this plan's own PR (#447), second finding of the same round.** This was ranked first and labelled *the enabler*, on the claim that the wave's core measurement — does a screen render fixtures or nothing — was impossible without it because *empty* and *still loading* are externally indistinguishable. **That was already false when written.** `waitForStableUI` in `scripts/capture-screenshots.mjs:220-254` (shipped in PR #446, merged the same morning) detects all four idioms — `.animate-pulse`, "Loading…"/"Connecting…" text, bespoke placeholders via `[style*="pulse"]` with a ≥24px height floor, and Next's Compiling pill — plus a body-text-length stability check, and returns false so `shoot()` skips the capture and records a failure. The measurement works today. Blocking the wave on this would have delayed a hard failure and two verified leaks behind a maintenance task.
    >
    > **Twice in one PR the same way** (see item 3): a claim about demo-mode/capture behaviour was written from what the situation looked like rather than from the code, and both times the source said otherwise. The pattern is asserting a *capability gap* — "you can't tell X from Y", "that value must be real" — without opening the thing that would already close it. For this wave specifically, check `capture-screenshots.mjs` and `src/lib/demo/` before claiming either.
-6. **`/analytics` never finishes loading** (90s hard timeout, the audit's only one) — likely the same session-JSONL parsing cost as **#439**, so **check W13 first**; if #439's fix covers it, this closes for free rather than being investigated twice.
-7. **Home's `0 projects · 0 active sessions` header** (`TODO.md`) — *not demo-specific*, and the one item here that may not belong: it reproduces on real data too. First establish whether it is simply awaiting the ~130s `/api/projects` scan or is wired to a source that never resolves. If it is the scan, it is a perf item and belongs in W13.
+7. **`/analytics` never finishes loading** (90s hard timeout, the audit's only one) — likely the same session-JSONL parsing cost as **#439**, so **check W13 first**; if #439's fix covers it, this closes for free rather than being investigated twice.
+8. **Home's `0 projects · 0 active sessions` header** (`TODO.md`) — *not demo-specific*, and the one item here that may not belong: it reproduces on real data too. First establish whether it is simply awaiting the ~130s `/api/projects` scan or is wired to a source that never resolves. If it is the scan, it is a perf item and belongs in W13.
 
 **Exit criterion:** a full capture run under `MINDER_DEMO=1` alone produces a publishable screenshot set — no second pass, no real data in any frame, no blank screens. That is a single testable claim, unlike "demo mode is better".
 
@@ -511,7 +514,7 @@ Plan doc: `C:\Users\joshu\.claude\plans\i-recently-read-this-temporal-crane.md`.
 >
 > W12 is the open cluster closest to a data-exposure defect rather than DX or latency: demo mode is the mode whose entire purpose is being safe to show other people, and it currently fails hard on `/usage`, leaks real project names on four routes, and leaks the real `devRoot` and home path through an unguarded shell. The capture-pipeline context is fresh from PR #446, and the wave has a single testable exit criterion — one `MINDER_DEMO=1` pass produces a publishable screenshot set. *(Margin narrowed 2026-08-14: three of the claimed leaks were fixtures. See the correction under W12 item 4 — W13 is a defensible alternative first move.)*
 >
-> Start with **#443** — the hard failure — then the leak family. *(#445 was originally named as the starting enabler; corrected 2026-08-14 — the capture pipeline already detects all four loading idioms, so it is maintenance, not a prerequisite. See W12 item 5.)*
+> Start with **#443** — the hard failure — then the leak family. *(#445 was originally named as the starting enabler; corrected 2026-08-14 — the capture pipeline already detects all four loading idioms, so it is maintenance, not a prerequisite. See W12 item 6.)*
 >
 > **Runnable in parallel:** W13 (index-backed reads) touches `src/lib/data` and the FTS query layer; W7's #413 touches the standalone packaging path. Neither collides with W12's shell/fixture work. W13 should land before W12's `/analytics` item, which it may close outright.
 >
