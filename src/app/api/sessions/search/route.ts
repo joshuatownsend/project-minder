@@ -25,6 +25,14 @@ import { SessionSearchError } from "@/lib/data/sessionSearch";
 //                 count as 'claude', matching the client's `?? "claude"`.
 //   entrypoint  — bucketed entrypoint (e.g. 'cli', 'sdk-cli', 'unknown');
 //                 null AND empty-string rows both bucket to 'unknown'.
+//
+//   `source` and `entrypoint` accept ANY non-empty value — deliberately no
+//   allowlist. Both are open sets that grow when an adapter or entrypoint
+//   is added, so validating against a fixed list would reject a legitimate
+//   new value, and an unrecognized one already yields an empty result that
+//   is *true* rather than misleading. Only emptiness is rejected. `starred`
+//   is different because it is a closed two-value axis, so an unrecognized
+//   value there IS meaningful and gets a 400.
 //   starred     — '1' / 'true' to restrict to starred sessions. Any other
 //                 value is rejected rather than coerced, because silently
 //                 reading an unrecognized value as "unfiltered" would
