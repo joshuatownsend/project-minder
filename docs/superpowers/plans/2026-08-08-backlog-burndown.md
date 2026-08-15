@@ -474,7 +474,7 @@ Plan doc: `C:\Users\joshu\.claude\plans\i-recently-read-this-temporal-crane.md`.
 
 ## Wave 12 — Demo-mode coverage (new, 2026-08-14) — **recommended next**
 
-**Driver:** the route-by-route audit on 2026-08-12 measured what `MINDER_DEMO=1` actually covers and found it is about half of what the flag's description implies. Demo mode exists for first-run, screenshots and demos — a screen that renders empty or leaks real data there fails in precisely the situation it was built for. Three issues (#441, #443, #445) plus the five `TODO.md` findings.
+**Driver:** the route-by-route audit on 2026-08-12 measured what `MINDER_DEMO=1` actually covers and found it is about half of what the flag's description implies. Demo mode exists for first-run, screenshots and demos — a screen that renders empty or leaks real data there fails in precisely the situation it was built for. Three issues (#441, #443, #445) plus the six `TODO.md` findings — five from the 2026-08-12 audit and the `/stats` cross-check leak added 2026-08-14 during this plan's review.
 
 **Recommended order — worst failure first:**
 
@@ -507,7 +507,7 @@ Plan doc: `C:\Users\joshu\.claude\plans\i-recently-read-this-temporal-crane.md`.
 
 **The unifying defect:** in all three, the SQLite index can answer the question correctly and the read layer either does not ask it or asks it too late. Same shape as #426 and the W5 `byCategory` finding — and the same standing lesson, that a zero from a system is not evidence of absence until you have checked the system can represent a non-zero.
 
-- **#439 — Hot Files / File Coupling take 30–100 s** because the routes parse all session JSONL instead of using the index. Largest win of the three, and it may also close `/analytics` in W12.
+- **#439 — Hot Files / File Coupling take 30–100 s** because the routes parse all session JSONL instead of using the index. Largest win of the three. *(An earlier draft added "and it may also close `/analytics` in W12" — removed 2026-08-14: `/analytics` is a static `ComingSoon` page that never calls these endpoints. See W12 item 7.)*
 - **#425 — session facets are applied after the FTS top-200 cut**, so a filtered search can confidently report zero matches that exist. *The worst failure mode in this wave*: it is silent and it looks like a correct answer. Push the facet predicate into the query, before the cut.
 - **#416 — `byProject` splits a macOS project recorded under two path casings** (case-insensitive APFS). The wave's quick win; the case-folding pattern already exists in the scanner from #249–257.
 
@@ -533,7 +533,7 @@ Plan doc: `C:\Users\joshu\.claude\plans\i-recently-read-this-temporal-crane.md`.
 >
 > Start with **#443** — the hard failure — then the leak family. *(#445 was originally named as the starting enabler; corrected 2026-08-14 — the capture pipeline already detects all four loading idioms, so it is maintenance, not a prerequisite. See W12 item 6.)*
 >
-> **Runnable in parallel:** W13 (index-backed reads) touches `src/lib/data` and the FTS query layer; W7's #413 touches the standalone packaging path. Neither collides with W12's shell/fixture work. W13 should land before W12's `/analytics` item, which it may close outright.
+> **Runnable in parallel:** W13 (index-backed reads) touches `src/lib/data` and the FTS query layer; W7's #413 touches the standalone packaging path. Neither collides with W12's shell/fixture work.
 >
 > **Needs you, not a wave:** the cloud spike — blocked by the permission classifier since W1, script written, and the cheapest question in the backlog since a dead endpoint deletes five TODO items outright.
 
