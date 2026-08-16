@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseAllSessions, getJsonlMaxMtime } from "@/lib/usage/parser";
-import { buildFileCoupling, type FileCouplingResult } from "@/lib/usage/fileCoupling";
+import { buildFileCoupling, buildFileCouplingFromEdits, type FileCouplingResult } from "@/lib/usage/fileCoupling";
 import { gatherProjectTurns } from "@/lib/usage/projectMatch";
 import { readConfig } from "@/lib/config";
+import { loadProjectFileEdits } from "@/lib/data";
 import { getClaudeHomes } from "@/lib/claudeHome";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
@@ -58,13 +59,35 @@ export async function GET(
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
     }
 
-    const sessionMap = await parseAllSessions();
-    const projectTurns = gatherProjectTurns(sessionMap, slug, project.path, pathMappings, getClaudeHomes(cfg));
+    // Index first. The JSONL path parses EVERY session in the portfolio and
+    // then filters to this one project, so its cost scales with total history
+    // rather than with what is being viewed — measured cold at 299s for a
+    // 16 KB payload. `loadProjectFileEdits` returns null, never [], when the
+    // index cannot serve the answer, so an empty project stays
+    // distinguishable from an unavailable backend (#439).
+    const dbEdits = await loadProjectFileEdits({
+      slug,
+      projectPath: project.path,
+      mappings: pathMappings,
+      homes: getClaudeHomes(cfg),
+    });
 
-    const result = buildFileCoupling(projectTurns, minCoOccurrences);
+    const backend = dbEdits ? "db" : "file";
+    let result: FileCouplingResult;
+    if (dbEdits) {
+      result = buildFileCouplingFromEdits(dbEdits, minCoOccurrences);
+    } else {
+      const sessionMap = await parseAllSessions();
+      const projectTurns = gatherProjectTurns(sessionMap, slug, project.path, pathMappings, getClaudeHomes(cfg));
+      result = buildFileCoupling(projectTurns, minCoOccurrences);
+    }
     const data: FileCouplingResponse = { slug, result, generatedAt: new Date().toISOString() };
     cache.set(cacheKey, { data, jsonlMtime: currentMtime, mappingsSig });
-    return NextResponse.json(data);
+    // Which path served this — the same `X-Minder-Backend` convention
+    // `/api/sessions/search` uses. Without it, "is the index actually
+    // being used?" is only answerable by timing, which is exactly how a
+    // silent fallback stays invisible (#439).
+    return NextResponse.json(data, { headers: { "X-Minder-Backend": backend } });
   } catch (err) {
     console.error(`[file-coupling] Error processing slug="${slug}":`, err);
     return NextResponse.json({ error: "Failed to compute file coupling. Check server logs." }, { status: 500 });

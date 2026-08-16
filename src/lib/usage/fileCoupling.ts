@@ -1,5 +1,5 @@
 import type { UsageTurn } from "./types";
-import { extractWriteEdits } from "./fileActivity";
+import { extractWriteEdits, type FileEdit } from "./fileActivity";
 
 export interface FilePair {
   readonly fileA: string;
@@ -21,12 +21,18 @@ export interface FileCouplingResult {
 // chronological insertion order; files beyond the cap are silently dropped.
 const MAX_FILES_PER_SESSION = 200;
 
-export function buildFileCoupling(
-  turns: UsageTurn[],
+/**
+ * Aggregate pre-extracted write edits into co-occurrence pairs.
+ *
+ * Split out so the SQLite-backed route can supply edits from `tool_uses`
+ * rather than re-deriving them from a portfolio-wide JSONL parse (#439). Both
+ * backends share this body, so "coupled" cannot come to mean two things.
+ */
+export function buildFileCouplingFromEdits(
+  edits: FileEdit[],
   minCoOccurrences = 2,
   limit = 100
 ): FileCouplingResult {
-  const edits = extractWriteEdits(turns);
 
   // Session → ordered list of unique file paths (chronological insertion order).
   // Parallel Set per session for O(1) membership testing (vs O(n) Array.includes).
@@ -88,4 +94,13 @@ export function buildFileCoupling(
   pairs.sort((a, b) => b.coOccurrences - a.coOccurrences || b.strength - a.strength);
 
   return { pairs: pairs.slice(0, limit), totalSessions: sessionFiles.size };
+}
+
+/** File-parse entry point — unchanged behaviour, now a thin wrapper. */
+export function buildFileCoupling(
+  turns: UsageTurn[],
+  minCoOccurrences = 2,
+  limit = 100
+): FileCouplingResult {
+  return buildFileCouplingFromEdits(extractWriteEdits(turns), minCoOccurrences, limit);
 }
