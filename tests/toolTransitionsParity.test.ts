@@ -189,6 +189,56 @@ describe.skipIf(!driverAvailable)("toolTransitions backend parity (#450)", () =>
     conn.closeDb();
   });
 
+  it("stays in parity when a session's timestamps are NOT monotonic", async () => {
+    // The case the original parity test could not see, because its fixture was
+    // tidy (Codex, PR #452). The DB path first synthesized `timestamp` from
+    // `turn_index`, so it paired turns in transcript order while the file path
+    // sorted the real timestamps — identical output on well-ordered input,
+    // different inter-turn edges the moment a clock went backwards.
+    //
+    // A divergence that only appears on unusual input is worse than one that
+    // always shows: nothing routine reveals it.
+    const reloaded = await reload();
+    await reloaded.mig.initDb();
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+    const { conn, ingest, fromDb, parser, toolTransitions } = reloaded;
+
+    // Turn 2 is stamped BEFORE turn 1 — accepted by the parser, and enough to
+    // make timestamp order and transcript order disagree.
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "skew.jsonl"), [
+      userTurn("2026-05-01T10:00:00Z", "go"),
+      assistantWithTools("2026-05-01T10:00:30Z", ["Read"]),
+      assistantWithTools("2026-05-01T10:00:10Z", ["Edit"]),
+      assistantWithTools("2026-05-01T10:00:50Z", ["Bash"]),
+    ]);
+
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+
+    const dbReport = fromDb.loadUsageReportFromSql(db, "all");
+    const bySession = await parser.parseAllSessions();
+    const assistantTurns = [...bySession.values()]
+      .flat()
+      .filter((t) => t.role === "assistant" && !t.isSidechain);
+    const fileFlow = toolTransitions.computeToolTransitions(assistantTurns);
+
+    expect(fileFlow.transitions.length).toBeGreaterThan(0);
+
+    const norm = <T,>(xs: readonly T[]): T[] =>
+      [...xs].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    expect(norm(dbReport.toolTransitions)).toEqual(norm(fileFlow.transitions));
+
+    // And pin the direction, so the test cannot pass by both backends being
+    // reordered the same wrong way: sorted by timestamp the chain is
+    // Edit(:10) -> Read(:30) -> Bash(:50), NOT the transcript's Read -> Edit.
+    const has = (from: string, to: string) =>
+      dbReport.toolTransitions.some((x) => x.from === from && x.to === to);
+    expect(has("Edit", "Read")).toBe(true);
+    expect(has("Read", "Bash")).toBe(true);
+    expect(has("Read", "Edit")).toBe(false);
+    conn.closeDb();
+  });
+
   it("returns empty output rather than throwing when nothing matches the filter", async () => {
     const { conn, ingest, fromDb, projectsDir } = await setup();
     const db = (await conn.getDb())!;

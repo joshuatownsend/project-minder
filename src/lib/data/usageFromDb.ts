@@ -942,13 +942,24 @@ function queryTopTools(db: DatabaseT.Database, f: FilterParams): [string, number
  * current ingest behaviour, not invariants, and the cost of an explicit
  * predicate is nothing next to a silently divergent count.
  *
- * Ordering comes from `(turn_index, sequence_in_turn)` — the transcript's own
- * order, which `tool_uses` stores as its primary key — rather than from
- * timestamps. `computeToolTransitions` sorts on `timestamp`, so the synthetic
- * value below is a zero-padded `turn_index`: within a session it sorts exactly
- * as turn order, and across sessions `sessionId` is compared first, so it
- * never competes with a real date. Where the two disagree, transcript order is
- * the authority — a timestamp can tie or be absent, a turn index cannot.
+ * Ordering: `ORDER BY (session_id, turn_index, sequence_in_turn)` fixes the
+ * order of tool calls WITHIN a turn, and the real `turns.ts` is carried
+ * through as each turn's `timestamp` so `computeToolTransitions` sorts turns
+ * across the session exactly as it does for the file backend.
+ *
+ * An earlier version synthesized `timestamp` from `turn_index` instead,
+ * reasoning that transcript order is more trustworthy than a clock. It is —
+ * but the file backend still sorts on the real timestamps, so on a session
+ * whose timestamps are not monotonic the two backends would pair different
+ * turns and report different inter-turn edges, defeating the parity this
+ * change exists to establish (Codex, PR #452). A divergence that only appears
+ * on unusual input is worse than one that always shows, because nothing
+ * routine reveals it. If transcript order should win, it has to win for BOTH
+ * callers, which is a change to the shared contract rather than to one side.
+ *
+ * `turns.ts` is `NOT NULL`, so there is nothing to fall back to. Ties break by
+ * array order, which is turn order, because `Array.prototype.sort` is stable —
+ * matching the file path, where ties break by parse order.
  */
 function queryToolTransitions(
   db: DatabaseT.Database,
@@ -957,6 +968,7 @@ function queryToolTransitions(
   const rows = prepCached(db,
       `SELECT tu.session_id AS sessionId,
               tu.turn_index  AS turnIndex,
+              t.ts           AS ts,
               tu.tool_name   AS toolName
          FROM tool_uses tu
          JOIN turns t USING (session_id, turn_index)
@@ -969,7 +981,7 @@ function queryToolTransitions(
           AND (@home IS NULL OR s.home_key = @home)
         ORDER BY tu.session_id, tu.turn_index, tu.sequence_in_turn`
     )
-    .all(f) as Array<{ sessionId: string; turnIndex: number; toolName: string }>;
+    .all(f) as Array<{ sessionId: string; turnIndex: number; ts: string; toolName: string }>;
 
   // Regroup the flat rows into one pseudo-turn per (session, turn_index),
   // which is the shape `computeToolTransitions` consumes. Rows arrive already
@@ -991,7 +1003,7 @@ function queryToolTransitions(
       prevTurnIndex = r.turnIndex;
       current = {
         sessionId: r.sessionId,
-        timestamp: String(r.turnIndex).padStart(12, "0"),
+        timestamp: r.ts,
         toolCalls: [],
       };
       turns.push(current);
