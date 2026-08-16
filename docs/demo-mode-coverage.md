@@ -39,10 +39,12 @@ here was concluded from what a page rendered — the plan's 4:1 correction came
 from exactly that mistake, where fixtures were reported as leaks because they
 looked like real data.
 
-Raw pass output: `scripts/`-free, reproduced by the two scratch scripts recorded
-in the PR; rerun by walking `src/app/api/**/route.ts` imports.
+Reproduce with `scripts/audit-demo-coverage/` (two passes, see its README).
 
 ## Counts
+
+Measured **before** this wave's fixes — that is the search space the triage
+still has to work through:
 
 | Bucket | n | Meaning |
 |---|---|---|
@@ -53,6 +55,21 @@ in the PR; rerun by walking `src/app/api/**/route.ts` imports.
 | Of those, reach a real-data source | 83¹ | Upper bound, heavy false-positive rate |
 
 ¹ Exceeds 81 because the write-guarded-only routes are counted here too.
+
+### The metric inflates — measured, not asserted
+
+Re-running the same pass after this wave shipped gives **127 reachable-guarded
+and 38 unguarded**. Six guards moved the count by fifty routes.
+
+They did not become safe. The guards landed in widely-imported modules
+(`claudeStats`, `claudePlans`, `userConfigCache`, `walkWorkflows`), so fifty
+routes that merely import one of those now "reach a `demoMode()` call" and get
+counted as covered. `telemetry/*` and the tasks-DB family moved into the
+guarded column without a line of their own changing.
+
+This is the clearest available demonstration that the number measures **import
+topology, not safety** — and the reason the tail below is described by family
+rather than by count. Do not report a coverage percentage from these scripts.
 
 ## Verified findings
 
