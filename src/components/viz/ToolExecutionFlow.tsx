@@ -10,6 +10,7 @@ interface Props {
   selfLoops: ToolSelfLoop[];
 }
 
+const MAX_TOP_N = 30;
 const NODE_WIDTH = 18;
 const NODE_PADDING = 10;
 const HEIGHT = 320;
@@ -55,7 +56,13 @@ export function ToolExecutionFlow({ transitions, selfLoops }: Props) {
 
     try {
       return { ...layout({ nodes: nodes as any, links: links as any }), droppedEdges, failed: false };
-    } catch {
+    } catch (err) {
+      // Logged, not merely swallowed: this branch exists precisely because a
+      // layout failure is unexpected, and degrading to a friendly message
+      // without a trace would make the next one undiagnosable — the failure
+      // would present as "chart missing" with nothing to go on.
+      // eslint-disable-next-line no-console
+      console.error("[ToolExecutionFlow] d3-sankey layout failed", err);
       // Second line of defence, and the one that matters most. This runs
       // during render, so anything d3-sankey throws here takes the entire
       // /usage route down and the browser replaces it with its own error
@@ -82,7 +89,12 @@ export function ToolExecutionFlow({ transitions, selfLoops }: Props) {
   const emptyReason = failed
     ? "This flow couldn't be laid out. The rest of the page is unaffected."
     : sankeyLinks.length === 0
-      ? "No transitions between the top tools at this threshold — try raising it."
+      ? topN < MAX_TOP_N
+        ? "No transitions between the top tools at this threshold — try raising it."
+        // At the ceiling there is nothing left to raise, so advising it would
+        // be as unfollowable as the unmounted-slider case above. Say what is
+        // true instead: these tools genuinely do not hand off to each other.
+        : `No transitions between the top ${MAX_TOP_N} tools — they don't hand off to each other.`
       : null;
 
   const linkPath = sankeyLinkHorizontal();
@@ -95,7 +107,7 @@ export function ToolExecutionFlow({ transitions, selfLoops }: Props) {
           <input
             type="range"
             min={5}
-            max={30}
+            max={MAX_TOP_N}
             value={topN}
             onChange={(e) => setTopN(Number(e.target.value))}
             style={{ marginLeft: "8px", verticalAlign: "middle", accentColor: "var(--accent)" }}
