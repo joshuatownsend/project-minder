@@ -23,6 +23,13 @@ import type { PathMapping } from "@/lib/types";
 // as matching `extractFileEdits`'s rule ("only args.file_path, never
 // args.path"), so the same edits are recoverable with a scoped query.
 
+// Declared locally, matching the repo's existing handling of this cap: it is
+// redeclared rather than shared in `ingest.ts`, `parser.ts`, `exportReader.ts`,
+// `claudeConversations.ts` and the context-attribution route. Kept at the same
+// value deliberately — the freshness scan has to skip exactly what ingest and
+// the file backend skip, or the two disagree about which files even exist.
+const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
+
 /** The session-identifying columns `gatherProjectTurns` matches on. */
 interface SessionRow {
   session_id: string;
@@ -31,6 +38,13 @@ interface SessionRow {
   home_key: string | null;
   file_path: string | null;
   file_mtime_ms: number | null;
+  file_size: number | null;
+}
+
+/** The per-transcript facts ingest compares to decide "unchanged". */
+interface KnownFile {
+  mtimeMs: number;
+  size: number;
 }
 
 /**
@@ -47,16 +61,28 @@ interface SessionRow {
  * the usage parser's in-memory FileCache, which is 0 on a cold server, so it
  * would pass precisely during the cold start it exists to catch.
  *
- * Two ways to be stale, and both matter:
- *   - a transcript on disk the index has never seen (a new session), and
- *   - a known transcript whose file is newer than the mtime recorded at ingest
- *     (an ongoing session that has grown).
+ * Three ways to be stale, and all three matter:
+ *   - a transcript on disk the index has never seen (a new session);
+ *   - a known transcript that has GROWN or been rewritten since ingest,
+ *     compared on mtime AND size — the same pair ingest itself compares
+ *     (`ingest.ts:3192-3193`) and the file backend's `FileCache` compares.
+ *     mtime alone silently misses an append that lands inside the same whole
+ *     millisecond, or any append at all on a filesystem with coarse timestamp
+ *     resolution (Codex, PR #454); and
+ *   - a known transcript that has been DELETED but not yet pruned. The file
+ *     backend re-sweeps from disk and so drops it; the index would otherwise
+ *     keep serving its edits as a current answer.
  *
- * Only TOP-LEVEL `*.jsonl` files are compared. Subagent transcripts live in a
- * nested `<session-id>/subagents/` directory and are ingested as their own
- * sessions, so they legitimately appear in the index without appearing in this
- * listing; treating that as "missing from disk" would report every project
- * permanently stale.
+ * Which directories get listed is worth stating precisely, because the earlier
+ * wording here was wrong (Copilot, PR #454). Two sources are unioned: the
+ * top-level `<home>/projects/<encoded>` directory per candidate, and the parent
+ * directory of every known session file. That second source means nested
+ * `<session-id>/subagents/` directories ARE enumerated whenever the index
+ * already knows a subagent transcript. Subagents are ingested as their own
+ * sessions, so listing their directory is exactly what lets a deleted subagent
+ * transcript be noticed instead of assumed present — while a subagent dir the
+ * index knows nothing about is never listed, so it cannot report false
+ * staleness either.
  *
  * Cost is a readdir per project directory plus one stat per known session —
  * milliseconds against the 77s parse this replaces.
@@ -77,6 +103,31 @@ function pathKey(p: string): string {
   return process.platform === "win32" ? abs.toLowerCase() : abs;
 }
 
+/**
+ * Is this directory safe to touch right now, given the READABLE homes?
+ *
+ * Directories reconstructed from `sessions.file_path` bypass the readable-homes
+ * gate the routes apply, so passing `getReadableClaudeHomes()` in was only half
+ * a fix (Codex, PR #454). And the rows this matters for are not hypothetical:
+ * ingest DELIBERATELY retains sessions belonging to a stopped distro —
+ * `reconcileAllSessions` shields them from the prune pass (`ingest.ts:3761`,
+ * `:3835`) precisely so a stopped home does not lose its history. Rows whose
+ * `file_path` is a UNC path into a now-stopped distro are therefore guaranteed
+ * to exist, and a `readdirSync` on one WAKES it.
+ *
+ * Under a readable home is always allowed — that is what "readable" was
+ * computed to mean. Otherwise a UNC path is refused (a stopped distro, or a
+ * dead network share, which hangs rather than wakes). A local path has no
+ * distro behind it and stays checkable, which also stops this from collapsing
+ * into a no-op when `homes` is empty — the round-2 failure mode, where a guard
+ * that silently disabled itself still read as protection.
+ */
+function isProbeSafe(dir: string, homeKeys: string[]): boolean {
+  const key = pathKey(dir);
+  if (homeKeys.some((h) => key === h || key.startsWith(h + path.sep))) return true;
+  return !/^[\\/]{2}/.test(dir);
+}
+
 function indexIsCurrentForProject(
   matched: SessionRow[],
   candidates: ReadonlyArray<{ dirName: string }>,
@@ -87,16 +138,25 @@ function indexIsCurrentForProject(
   // which on an active machine is close to permanent, and would have quietly
   // returned both routes to the 77-190s parse this change exists to remove.
   // Both reviewers caught it independently (Copilot + Codex, PR #454).
-  const known = new Map<string, number>();
+  const known = new Map<string, KnownFile>();
   // Keyed for comparison, valued with the ORIGINAL-case directory, so lookups
   // are platform-correct while filesystem calls stay verbatim.
   const dirs = new Map<string, string>();
+  const homeKeys = homes.map((h) => pathKey(h));
 
   for (const r of matched) {
     if (!r.file_path) continue;
     const abs = path.resolve(r.file_path);
-    known.set(pathKey(abs), r.file_mtime_ms ?? 0);
+    known.set(pathKey(abs), {
+      mtimeMs: r.file_mtime_ms ?? 0,
+      // -1 rather than 0, so a null size cannot accidentally equal a real
+      // zero-byte transcript. Both coalesces fail toward "stale": a false
+      // stale costs one parse, a false current caches a truncated answer for
+      // five minutes.
+      size: r.file_size ?? -1,
+    });
     const dir = path.dirname(abs);
+    if (!isProbeSafe(dir, homeKeys)) continue;
     dirs.set(pathKey(dir), dir);
   }
 
@@ -119,30 +179,71 @@ function indexIsCurrentForProject(
     }
   }
 
-  for (const dir of dirs.values()) {
+  // Which transcripts were actually observed, and which directories were read
+  // without error — the deletion sweep below needs both, and needs to tell
+  // "absent from a directory we listed" apart from "in a directory we never
+  // reached".
+  const seen = new Set<string>();
+  const enumerated = new Set<string>();
+
+  for (const [dirKey, dir] of dirs) {
     let entries: string[];
     try {
       entries = fs.readdirSync(dir);
     } catch {
       continue; // Directory absent — not evidence of staleness.
     }
+    enumerated.add(dirKey);
     for (const name of entries) {
       if (!name.endsWith(".jsonl")) continue;
       const full = path.join(dir, name);
-      const recorded = known.get(pathKey(full));
-      if (recorded === undefined) return false; // never ingested
+      const fullKey = pathKey(full);
       let st: fs.Stats;
       try {
         st = fs.statSync(full);
       } catch {
         continue; // Vanished mid-check; not something to block on.
       }
+      // Recorded before the size cap below, because `seen` means "present on
+      // disk" and is read only by the deletion sweep. A capped file that DOES
+      // still hold a row (ingest keeps the stale row rather than pruning it,
+      // `ingest.ts:3150-3152`) would otherwise look deleted.
+      seen.add(fullKey);
+      // Oversized transcripts are skipped by ingest (`ingest.ts:3153`) and by
+      // the file backend alike (`parser.ts:710`), so one is missing from the
+      // index BY DESIGN. Reading that as "never ingested" would pin the project
+      // permanently stale and send every request to a parse that skips the very
+      // same file — the slow path, forever, for an identical answer. Found
+      // while re-reading this loop; it came in with the round-1 freshness gate.
+      if (st.size > MAX_SESSION_FILE_SIZE) continue;
+      const recorded = known.get(fullKey);
+      if (recorded === undefined) return false; // never ingested
       // Truncated to whole ms on both sides: `file_mtime_ms` is stored as an
       // integer, while `statSync` returns a float on some platforms, and a
       // sub-millisecond difference is not staleness.
-      if (Math.floor(st.mtimeMs) > Math.floor(recorded)) return false;
+      if (Math.floor(st.mtimeMs) > Math.floor(recorded.mtimeMs)) return false;
+      // Size compared for equality, not growth — mirroring ingest's unchanged
+      // gate. A transcript that was truncated or rewritten in place is just as
+      // much a divergence as one that grew, and its mtime may not have moved.
+      if (st.size !== recorded.size) return false;
     }
   }
+
+  // Deleted-but-not-yet-pruned transcripts. The loop above can only notice
+  // files that are still there, so a session deleted after its last ingest
+  // would keep serving its edits as a current answer until the reconciler's
+  // prune pass catches up — while the file backend, which re-sweeps from disk,
+  // has already dropped it (Codex, PR #454).
+  //
+  // Scoped to directories that enumerated SUCCESSFULLY. Requiring every known
+  // path unconditionally would mark a project stale for any transcript sitting
+  // behind an unreadable home or a directory we deliberately refused to probe —
+  // turning the never-wake protection above into permanent staleness.
+  for (const key of known.keys()) {
+    if (seen.has(key)) continue;
+    if (enumerated.has(pathKey(path.dirname(key)))) return false;
+  }
+
   return true;
 }
 
@@ -183,7 +284,8 @@ function matchingSessionIds(
   // of a perf change.
   const rows = prepCached(
     db,
-    `SELECT session_id, project_slug, project_dir_name, home_key, file_path, file_mtime_ms
+    `SELECT session_id, project_slug, project_dir_name, home_key,
+            file_path, file_mtime_ms, file_size
        FROM sessions
       WHERE source = 'claude'`
   ).all() as SessionRow[];

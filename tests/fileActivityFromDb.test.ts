@@ -20,7 +20,7 @@
  *    if ingest ever changes, this fails instead of the panels silently gaining
  *    rows.
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import path from "path";
 import { promises as fs } from "fs";
 import { installIsolatedState } from "./_helpers/isolatedState";
@@ -349,6 +349,131 @@ describe.skipIf(!driverAvailable)("loadProjectFileEditsFromDb (#439)", () => {
     expect(
       fromDb.loadProjectFileEditsFromDb(db, { slug: "app", projectPath: "C:\\dev\\app" })
     ).toBeNull();
+    conn.closeDb();
+  });
+
+  it("returns null when a transcript grows without its mtime advancing", async () => {
+    // Size is the second half of the comparison, and mtime alone cannot stand
+    // in for it: rapid appends can land inside the same whole millisecond, and
+    // some filesystems keep timestamps at coarse resolution. Ingest compares
+    // mtime AND size (`ingest.ts:3192-3193`), and so does the file backend's
+    // FileCache — a guard that checked only mtime would let both routes cache a
+    // truncated answer for five minutes (Codex, PR #454).
+    const { conn, ingest, fromDb, projectsDir } = await setup();
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+    expect(
+      fromDb.loadProjectFileEditsFromDb(db, { slug: "app", projectPath: "C:\\dev\\app" })
+    ).not.toBeNull();
+
+    const target = path.join(projectsDir, "C--dev-app", "s1.jsonl");
+    const before = await fs.stat(target);
+    const existing = await fs.readFile(target, "utf8");
+    await fs.writeFile(
+      target,
+      existing +
+        JSON.stringify(
+          assistantWithFileOps("2026-05-01T10:00:03Z", [["Write", "C:\\dev\\app\\src\\d.ts"]])
+        ) +
+        "\n"
+    );
+    // Pin the mtime back to exactly what ingest recorded, so the ONLY thing
+    // that moved is the size. Without the size comparison this reads as
+    // current and the appended edit is silently missing.
+    await fs.utimes(target, before.atime, before.mtime);
+
+    expect(
+      fromDb.loadProjectFileEditsFromDb(db, { slug: "app", projectPath: "C:\\dev\\app" })
+    ).toBeNull();
+    conn.closeDb();
+  });
+
+  it("returns null when a known transcript was deleted before the prune pass", async () => {
+    // Scanning only what is still on disk cannot notice a disappearance. The
+    // file backend re-sweeps and drops the session; the index keeps its rows
+    // until the reconciler prunes, so without this the two backends disagree
+    // for the whole window in between (Codex, PR #454).
+    const { conn, ingest, fromDb, projectsDir } = await setup();
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+    expect(
+      fromDb.loadProjectFileEditsFromDb(db, { slug: "app", projectPath: "C:\\dev\\app" })
+    ).not.toBeNull();
+
+    await fs.unlink(path.join(projectsDir, "C--dev-app", "s1.jsonl"));
+
+    expect(
+      fromDb.loadProjectFileEditsFromDb(db, { slug: "app", projectPath: "C:\\dev\\app" })
+    ).toBeNull();
+    conn.closeDb();
+  });
+
+  it("stays current when an oversized transcript is absent from the index", async () => {
+    // A transcript over the 50 MB cap is skipped by ingest (`ingest.ts:3153`)
+    // BEFORE any row is written, so it is missing from the index by design.
+    // Reading that as "never ingested" pinned the project permanently stale and
+    // sent every request to the 190-299 s parse — which skips the same file
+    // (`parser.ts:710`) and so returns an identical answer. The slow path
+    // forever, for nothing. Self-found; it arrived with the round-1 gate.
+    const { conn, ingest, fromDb, projectsDir } = await setup();
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+
+    const huge = path.join(projectsDir, "C--dev-app", "s-huge.jsonl");
+    await fs.writeFile(huge, "");
+    await fs.truncate(huge, 51 * 1024 * 1024); // just past the cap
+    // Ingest is NOT re-run: this is the on-disk-but-unindexed state.
+
+    expect(
+      fromDb.loadProjectFileEditsFromDb(db, { slug: "app", projectPath: "C:\\dev\\app" })
+    ).not.toBeNull();
+    conn.closeDb();
+  });
+
+  it("never probes a UNC directory that is outside the readable homes", async () => {
+    // The never-wake invariant. Passing `getReadableClaudeHomes()` into the
+    // loader only covered the homes-derived directories; the ones rebuilt from
+    // `sessions.file_path` bypassed it entirely. Ingest deliberately RETAINS
+    // rows for a stopped distro (prune-shielding, `ingest.ts:3761`), so UNC
+    // paths into a stopped home are guaranteed to be present — and a readdir on
+    // one wakes the distro (Codex, PR #454).
+    const { conn, ingest, fromDb, projectsDir } = await setup();
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+
+    // Rewrite a row to look like one ingested while a distro was running and
+    // kept after it stopped.
+    const upd = db
+      .prepare("UPDATE sessions SET file_path = ? WHERE project_dir_name = ?")
+      .run(
+        "\\\\wsl.localhost\\Ubuntu\\home\\j\\.claude\\projects\\C--dev-app\\s1.jsonl",
+        "C--dev-app"
+      );
+    expect(upd.changes).toBeGreaterThan(0); // fixture actually applied
+
+    const nodeFs = await import("fs");
+    const probed: string[] = [];
+    const spy = vi
+      .spyOn(nodeFs.default, "readdirSync")
+      .mockImplementation(((p: unknown) => {
+        probed.push(String(p));
+        return [];
+      }) as never);
+
+    try {
+      fromDb.loadProjectFileEditsFromDb(db, {
+        slug: "app",
+        projectPath: "C:\\dev\\app",
+        homes: [path.join(tmpHome, ".claude")],
+      });
+    } finally {
+      spy.mockRestore();
+    }
+
+    // Guards the guard: if the spy never intercepted, `probed` would be empty
+    // and the UNC assertion below would pass without proving anything.
+    expect(probed.length).toBeGreaterThan(0);
+    expect(probed.some((p) => p.startsWith("\\\\"))).toBe(false);
     conn.closeDb();
   });
 
