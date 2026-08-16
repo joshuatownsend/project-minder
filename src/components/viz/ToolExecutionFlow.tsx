@@ -77,18 +77,13 @@ export function ToolExecutionFlow({ transitions, selfLoops }: Props) {
     );
   }
 
-  // Layout refused the graph, or nothing survived the top-N cut. Say so in
-  // the chart's own empty-state styling rather than rendering an empty SVG
-  // that reads as "no activity".
-  if (failed || sankeyLinks.length === 0) {
-    return (
-      <div style={{ padding: "24px", color: "var(--text-muted)", fontSize: "0.8rem" }}>
-        {failed
-          ? "This flow couldn't be laid out. The rest of the page is unaffected."
-          : "No transitions between the top tools at this threshold — try raising it."}
-      </div>
-    );
-  }
+  // Layout refused the graph, or nothing survived the top-N cut. Only the SVG
+  // is replaced — the controls stay mounted, see below.
+  const emptyReason = failed
+    ? "This flow couldn't be laid out. The rest of the page is unaffected."
+    : sankeyLinks.length === 0
+      ? "No transitions between the top tools at this threshold — try raising it."
+      : null;
 
   const linkPath = sankeyLinkHorizontal();
 
@@ -113,30 +108,68 @@ export function ToolExecutionFlow({ transitions, selfLoops }: Props) {
         {/* A Sankey needs an acyclic graph, but tool flows are cyclic by
             nature (Edit → Bash → Edit). Weakest edges are dropped to make one
             — disclosed here because a Sankey missing edges silently reads as
-            a complete picture of the flow. */}
+            a complete picture of the flow.
+
+            A real <details> rather than a `title` tooltip: `title` is
+            mouse-only — it does not open on keyboard focus in any major
+            browser, touch devices have no hover, and screen-reader support is
+            inconsistent. That is the exact gap #391 tracks, and putting the
+            list behind one would have made the disclosure unreachable for
+            precisely the users least able to infer what was dropped.
+            <details> is keyboard-, touch- and AT-accessible natively, so this
+            instance needs no shared tooltip primitive and does not pre-empt
+            the one W6 will build. */}
         {droppedEdges.length > 0 && (
-          <span
-            title={
-              `A Sankey diagram cannot show cycles, and tool flows contain them ` +
-              `(Edit → Bash → Edit). The lowest-volume transition in each cycle is ` +
-              `hidden so the rest can be drawn:\n\n` +
-              droppedEdges
-                .map((e) => `${e.from} → ${e.to} (${e.count.toLocaleString()})`)
-                .join("\n")
-            }
-            style={{
-              fontSize: "0.68rem",
-              color: "var(--text-muted)",
-              fontFamily: "var(--font-body)",
-              borderBottom: "1px dotted var(--border-subtle)",
-              cursor: "help",
-            }}
-          >
-            {droppedEdges.length} cyclic {droppedEdges.length === 1 ? "transition" : "transitions"} hidden
-          </span>
+          <details style={{ fontSize: "0.68rem", fontFamily: "var(--font-body)" }}>
+            <summary
+              style={{
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                listStyle: "revert",
+              }}
+            >
+              {droppedEdges.length} cyclic{" "}
+              {droppedEdges.length === 1 ? "transition" : "transitions"} hidden
+            </summary>
+            <div
+              style={{
+                marginTop: "6px",
+                padding: "8px 10px",
+                color: "var(--text-secondary)",
+                background: "var(--bg-elevated)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "var(--radius)",
+                maxWidth: "380px",
+              }}
+            >
+              <p style={{ margin: "0 0 6px" }}>
+                A Sankey diagram cannot show cycles, and tool flows contain them
+                (Edit → Bash → Edit). The lowest-volume transition in each cycle
+                is hidden so the rest can be drawn.
+              </p>
+              <ul style={{ margin: 0, paddingLeft: "16px", fontFamily: "var(--font-mono)" }}>
+                {droppedEdges.map((e) => (
+                  <li key={`${e.from}->${e.to}`}>
+                    {e.from} → {e.to} ({e.count.toLocaleString()})
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </details>
         )}
       </div>
 
+      {/* Only the CHART is replaced on an empty/failed layout — the Top-tools
+          slider above stays mounted. Returning early here instead stranded the
+          user: the message says "try raising it" while the control that raises
+          it had just been unmounted, so the advice was impossible to follow
+          and the chart could not recover without a remount. Both review bots
+          flagged it independently. */}
+      {emptyReason ? (
+        <div style={{ padding: "24px", color: "var(--text-muted)", fontSize: "0.8rem" }}>
+          {emptyReason}
+        </div>
+      ) : (
       <div style={{ width: "100%", overflowX: "auto" }}>
         <svg width={svgWidth} height={HEIGHT} style={{ display: "block" }}>
           <g transform={`translate(${MARGIN.left},${MARGIN.top})`}>
@@ -190,6 +223,7 @@ export function ToolExecutionFlow({ transitions, selfLoops }: Props) {
           </g>
         </svg>
       </div>
+      )}
     </div>
   );
 }

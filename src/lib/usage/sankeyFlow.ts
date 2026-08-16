@@ -111,7 +111,14 @@ export function breakCycles(edges: FlowEdge[]): { kept: FlowEdge[]; dropped: Flo
   const kept = [...edges];
   const dropped: FlowEdge[] = [];
 
-  // Each pass removes exactly one edge, so this cannot exceed the edge count.
+  // Each pass removes AT MOST one edge — the final pass finds no cycle and
+  // breaks without removing anything, which is why the bound is `<=` and not
+  // `<`. Tightening it to `<` would allow a graph needing N removals to exit
+  // on the bound instead of on that check, returning a result nothing had
+  // verified as acyclic. Reachable only via a self-edge (the sole single-edge
+  // cycle), which `buildSankeyFlow` filters — but `breakCycles` is exported
+  // and must hold on its own.
+  //
   // Bounded rather than `while (true)` because an infinite render loop is a
   // worse failure than an imperfect chart.
   for (let pass = 0; pass <= edges.length; pass++) {

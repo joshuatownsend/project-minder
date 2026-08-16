@@ -102,6 +102,20 @@ describe("breakCycles", () => {
     }
   });
 
+  it("handles a graph where EVERY edge has to go", () => {
+    // The worst case for the loop bound: N edges, N removals. Only reachable
+    // through self-edges, since a single non-self edge cannot be a cycle.
+    // `buildSankeyFlow` filters these out first, but `breakCycles` is exported
+    // and has to hold on its own.
+    const { kept, dropped } = breakCycles([
+      { from: "A", to: "A", count: 5 },
+      { from: "B", to: "B", count: 3 },
+    ]);
+    expect(kept).toEqual([]);
+    expect(dropped.length).toBe(2);
+    expect(hasCycle(kept)).toBe(false);
+  });
+
   it("does not mutate its input", () => {
     const edges: FlowEdge[] = [
       { from: "A", to: "B", count: 2 },
