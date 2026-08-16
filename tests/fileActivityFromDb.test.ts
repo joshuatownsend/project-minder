@@ -292,6 +292,34 @@ describe.skipIf(!driverAvailable)("loadProjectFileEditsFromDb (#439)", () => {
     conn.closeDb();
   });
 
+  it("is NOT marked stale by an un-ingested transcript in a DIFFERENT project", async () => {
+    // The freshness check originally ran over every row in `sessions`, so one
+    // un-ingested transcript anywhere in the portfolio marked EVERY project
+    // stale — near-permanent on an active machine, and it would have quietly
+    // returned both routes to the 77-190s parse this change exists to remove.
+    // Copilot and Codex reported it independently (PR #454).
+    const { conn, ingest, fromDb, projectsDir } = await setup();
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+
+    // A brand-new, un-ingested session in the OTHER project.
+    await writeJsonl(path.join(projectsDir, "C--dev-other", "s-other-new.jsonl"), [
+      userTurn("2026-05-01T13:00:00Z", "go"),
+      assistantWithFileOps("2026-05-01T13:00:01Z", [["Write", "C:\\dev\\other\\new.ts"]]),
+    ]);
+
+    // `app` is untouched, so it must still be served from the index...
+    expect(
+      fromDb.loadProjectFileEditsFromDb(db, { slug: "app", projectPath: "C:\\dev\\app" })
+    ).not.toBeNull();
+    // ...while `other` — the project that actually has an un-ingested file —
+    // correctly falls back.
+    expect(
+      fromDb.loadProjectFileEditsFromDb(db, { slug: "other", projectPath: "C:\\dev\\other" })
+    ).toBeNull();
+    conn.closeDb();
+  });
+
   it("returns null when a known transcript has grown since it was ingested", async () => {
     // The second staleness axis: not a new file, but an ongoing session whose
     // transcript has been appended to since ingest recorded its mtime.

@@ -4,7 +4,7 @@ import { buildHotFiles, buildHotFilesFromEdits, type HotFilesResult } from "@/li
 import { gatherProjectTurns } from "@/lib/usage/projectMatch";
 import { readConfig } from "@/lib/config";
 import { loadProjectFileEdits } from "@/lib/data";
-import { getClaudeHomes } from "@/lib/claudeHome";
+import { getClaudeHomes, getReadableClaudeHomes } from "@/lib/claudeHome";
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { getOrCreateRouteCache } from "@/lib/routeCache";
@@ -70,11 +70,18 @@ export async function GET(
     // `loadProjectFileEdits` returns null, never [], when the index cannot
     // serve the answer, so an empty project stays distinguishable from an
     // unavailable backend (#439).
+    // READABLE homes, not all configured ones. The freshness check inside the
+    // loader touches each home's `projects` directory synchronously, and a
+    // configured home on a stopped WSL distro lives behind a UNC path — so
+    // opening Hot Files could WAKE the distro. `getReadableClaudeHomes` is the
+    // repo's existing gate against exactly that (Codex, PR #454); the never-wake
+    // invariant predates this route and this change must not be what breaks it.
+    const readableHomes = await getReadableClaudeHomes(cfg);
     const dbEdits = await loadProjectFileEdits({
       slug,
       projectPath: project.path,
       mappings: pathMappings,
-      homes: getClaudeHomes(cfg),
+      homes: readableHomes,
     });
 
     const backend = dbEdits ? "db" : "file";

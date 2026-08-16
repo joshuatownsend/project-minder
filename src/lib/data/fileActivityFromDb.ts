@@ -61,61 +61,86 @@ interface SessionRow {
  * Cost is a readdir per project directory plus one stat per known session —
  * milliseconds against the 77s parse this replaces.
  */
+/**
+ * Comparison key for a path — case-folded only where the filesystem is.
+ *
+ * Folding everywhere was a real bug: the folded string was used for the
+ * `readdirSync` call itself, and on a case-sensitive volume a home or encoded
+ * directory containing any uppercase component simply does not exist under the
+ * lowercased spelling. The `readdir` then threw, the catch treated it as "no
+ * directory, nothing to check", and the whole guard silently passed (Codex,
+ * PR #454). Filesystem calls now always use the original path; only lookups
+ * use this.
+ */
+function pathKey(p: string): string {
+  const abs = path.resolve(p);
+  return process.platform === "win32" ? abs.toLowerCase() : abs;
+}
+
 function indexIsCurrentForProject(
-  rows: SessionRow[],
+  matched: SessionRow[],
   candidates: ReadonlyArray<{ dirName: string }>,
   homes: string[]
 ): boolean {
+  // `matched`, NOT every row in `sessions`. Scanning the whole table made ANY
+  // un-ingested transcript anywhere in the portfolio mark EVERY project stale —
+  // which on an active machine is close to permanent, and would have quietly
+  // returned both routes to the 77-190s parse this change exists to remove.
+  // Both reviewers caught it independently (Copilot + Codex, PR #454).
   const known = new Map<string, number>();
-  for (const r of rows) {
-    if (r.file_path) known.set(path.resolve(r.file_path).toLowerCase(), r.file_mtime_ms ?? 0);
+  // Keyed for comparison, valued with the ORIGINAL-case directory, so lookups
+  // are platform-correct while filesystem calls stay verbatim.
+  const dirs = new Map<string, string>();
+
+  for (const r of matched) {
+    if (!r.file_path) continue;
+    const abs = path.resolve(r.file_path);
+    known.set(pathKey(abs), r.file_mtime_ms ?? 0);
+    const dir = path.dirname(abs);
+    dirs.set(pathKey(dir), dir);
   }
 
-  // Directories to scan come from BOTH sources, and the union matters.
+  // Directories come from BOTH sources, and the union matters.
   //
-  // Deriving them only from `homes` made the check a no-op whenever `homes`
-  // was empty — the loop body never ran and every project reported current.
-  // Its own tests caught that, which is the point of writing them: a guard
-  // that quietly disables under a common configuration is worse than none,
-  // because it reads as protection.
+  // Deriving them only from `homes` made the check a no-op whenever `homes` was
+  // empty — the loop body never ran and every project reported current. Its own
+  // tests caught that, which is the point of writing them: a guard that quietly
+  // disables under a common configuration is worse than none, because it reads
+  // as protection.
   //
   // Session file paths are the reliable source: they exist whenever the index
   // knows anything about this project, independent of configuration. `homes` is
-  // still consulted, because a project whose sessions are ALL un-ingested has
-  // no rows to derive a directory from — exactly the first-run case.
-  const dirs = new Set<string>();
-  for (const key of known.keys()) dirs.add(path.dirname(key));
+  // still consulted, because a project whose sessions are ALL un-ingested has no
+  // rows to derive a directory from — exactly the first-run case.
   for (const home of homes) {
     for (const c of candidates) {
-      dirs.add(path.resolve(path.join(home, "projects", c.dirName)).toLowerCase());
+      const dir = path.resolve(path.join(home, "projects", c.dirName));
+      dirs.set(pathKey(dir), dir);
     }
   }
 
-  {
-    for (const dir of dirs) {
-      let entries: string[];
+  for (const dir of dirs.values()) {
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {
+      continue; // Directory absent — not evidence of staleness.
+    }
+    for (const name of entries) {
+      if (!name.endsWith(".jsonl")) continue;
+      const full = path.join(dir, name);
+      const recorded = known.get(pathKey(full));
+      if (recorded === undefined) return false; // never ingested
+      let st: fs.Stats;
       try {
-        entries = fs.readdirSync(dir);
+        st = fs.statSync(full);
       } catch {
-        continue; // Directory absent — not evidence of staleness.
+        continue; // Vanished mid-check; not something to block on.
       }
-      for (const name of entries) {
-        if (!name.endsWith(".jsonl")) continue;
-        const full = path.join(dir, name);
-        const key = path.resolve(full).toLowerCase();
-        const recorded = known.get(key);
-        if (recorded === undefined) return false; // never ingested
-        let st: fs.Stats;
-        try {
-          st = fs.statSync(full);
-        } catch {
-          continue; // Vanished mid-check; not something to block on.
-        }
-        // Truncated to whole ms on both sides: `file_mtime_ms` is stored as an
-        // integer, while `statSync` returns a float on some platforms, and a
-        // sub-millisecond difference is not staleness.
-        if (Math.floor(st.mtimeMs) > Math.floor(recorded)) return false;
-      }
+      // Truncated to whole ms on both sides: `file_mtime_ms` is stored as an
+      // integer, while `statSync` returns a float on some platforms, and a
+      // sub-millisecond difference is not staleness.
+      if (Math.floor(st.mtimeMs) > Math.floor(recorded)) return false;
     }
   }
   return true;
@@ -148,15 +173,25 @@ function matchingSessionIds(
   homes: string[]
 ): { ids: string[]; current: boolean } {
   const candidates = projectDirNameCandidates(projectPath, mappings, homes);
+  // `source = 'claude'` keeps the two backends measuring the same population.
+  // The fallback reads Claude homes only, via `parseAllSessions()`, so without
+  // this filter a Codex or Gemini session recorded under the same slug or
+  // encoded directory would appear in the indexed answer and not the file one —
+  // turning these panels into mixed-harness reports whose counts change purely
+  // because the DB is enabled (Codex, PR #454). Widening to other harnesses is
+  // a deliberate product decision for both backends together, not a side effect
+  // of a perf change.
   const rows = prepCached(
     db,
-    `SELECT session_id, project_slug, project_dir_name, home_key, file_path, file_mtime_ms FROM sessions`
+    `SELECT session_id, project_slug, project_dir_name, home_key, file_path, file_mtime_ms
+       FROM sessions
+      WHERE source = 'claude'`
   ).all() as SessionRow[];
 
-  const out: string[] = [];
+  const matched: SessionRow[] = [];
   for (const r of rows) {
     if (r.project_slug === slug) {
-      out.push(r.session_id);
+      matched.push(r);
       continue;
     }
     const hit = candidates.some((c) => {
@@ -164,11 +199,14 @@ function matchingSessionIds(
       if (c.homeKey === undefined || r.home_key === null || r.home_key === undefined) return true;
       return r.home_key === c.homeKey;
     });
-    if (hit) out.push(r.session_id);
+    if (hit) matched.push(r);
   }
-  // Freshness is judged from the SAME row set, so the check cannot disagree
-  // with the query about which sessions this project owns.
-  return { ids: out, current: indexIsCurrentForProject(rows, candidates, homes) };
+  // Freshness is judged from the MATCHED rows, so the check answers "is this
+  // project current?" rather than "is the whole portfolio current?".
+  return {
+    ids: matched.map((r) => r.session_id),
+    current: indexIsCurrentForProject(matched, candidates, homes),
+  };
 }
 
 /**
