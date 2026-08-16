@@ -23,6 +23,13 @@ interface CacheSlot {
   /** JSON of config.pathMappings at compute time — a Settings save that
    *  changes the mappings must invalidate (turn matching depends on them). */
   mappingsSig: string;
+  /**
+   * Which path produced `data`. Cached so `X-Minder-Backend` survives a cache
+   * HIT — otherwise the header is present only on the first request and absent
+   * on the common path, which is exactly where a caller still needs to tell an
+   * indexed result from a file fallback (Codex, PR #454).
+   */
+  backend: "db" | "file";
 }
 
 const cache = getOrCreateRouteCache<CacheSlot>("file-coupling", { ttlMs: CACHE_TTL_MS });
@@ -46,7 +53,9 @@ export async function GET(
     const cached = cache.get(cacheKey);
     const currentMtime = getJsonlMaxMtime();
     if (cached && cached.jsonlMtime === currentMtime && cached.mappingsSig === mappingsSig) {
-      return NextResponse.json(cached.data);
+      return NextResponse.json(cached.data, {
+        headers: { "X-Minder-Backend": cached.backend },
+      });
     }
 
     let scan = getCachedScan();
@@ -82,7 +91,7 @@ export async function GET(
       result = buildFileCoupling(projectTurns, minCoOccurrences);
     }
     const data: FileCouplingResponse = { slug, result, generatedAt: new Date().toISOString() };
-    cache.set(cacheKey, { data, jsonlMtime: currentMtime, mappingsSig });
+    cache.set(cacheKey, { data, jsonlMtime: currentMtime, mappingsSig, backend });
     // Which path served this — the same `X-Minder-Backend` convention
     // `/api/sessions/search` uses. Without it, "is the index actually
     // being used?" is only answerable by timing, which is exactly how a

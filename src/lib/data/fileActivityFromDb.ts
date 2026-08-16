@@ -1,4 +1,6 @@
 import "server-only";
+import fs from "fs";
+import path from "path";
 import type DatabaseT from "better-sqlite3";
 import { prepCached } from "@/lib/db/connection";
 import type { FileEdit } from "@/lib/usage/fileActivity";
@@ -27,6 +29,96 @@ interface SessionRow {
   project_slug: string | null;
   project_dir_name: string | null;
   home_key: string | null;
+  file_path: string | null;
+  file_mtime_ms: number | null;
+}
+
+/**
+ * Is the index current for THIS project's transcripts?
+ *
+ * A DB that opens is not a DB that has caught up. During the first reconcile,
+ * or in the lag between a session being written and ingested, the index is
+ * simply missing the newest work — and the callers cache their answer for five
+ * minutes, so serving a partial result as authoritative shows an empty panel
+ * for a project that has real edits on disk (Codex, PR #454).
+ *
+ * Checked against the filesystem rather than against a global watermark. The
+ * tempting global test — `getDbMaxMtimeMs(db) < getJsonlMaxMtime()` — reads
+ * the usage parser's in-memory FileCache, which is 0 on a cold server, so it
+ * would pass precisely during the cold start it exists to catch.
+ *
+ * Two ways to be stale, and both matter:
+ *   - a transcript on disk the index has never seen (a new session), and
+ *   - a known transcript whose file is newer than the mtime recorded at ingest
+ *     (an ongoing session that has grown).
+ *
+ * Only TOP-LEVEL `*.jsonl` files are compared. Subagent transcripts live in a
+ * nested `<session-id>/subagents/` directory and are ingested as their own
+ * sessions, so they legitimately appear in the index without appearing in this
+ * listing; treating that as "missing from disk" would report every project
+ * permanently stale.
+ *
+ * Cost is a readdir per project directory plus one stat per known session —
+ * milliseconds against the 77s parse this replaces.
+ */
+function indexIsCurrentForProject(
+  rows: SessionRow[],
+  candidates: ReadonlyArray<{ dirName: string }>,
+  homes: string[]
+): boolean {
+  const known = new Map<string, number>();
+  for (const r of rows) {
+    if (r.file_path) known.set(path.resolve(r.file_path).toLowerCase(), r.file_mtime_ms ?? 0);
+  }
+
+  // Directories to scan come from BOTH sources, and the union matters.
+  //
+  // Deriving them only from `homes` made the check a no-op whenever `homes`
+  // was empty — the loop body never ran and every project reported current.
+  // Its own tests caught that, which is the point of writing them: a guard
+  // that quietly disables under a common configuration is worse than none,
+  // because it reads as protection.
+  //
+  // Session file paths are the reliable source: they exist whenever the index
+  // knows anything about this project, independent of configuration. `homes` is
+  // still consulted, because a project whose sessions are ALL un-ingested has
+  // no rows to derive a directory from — exactly the first-run case.
+  const dirs = new Set<string>();
+  for (const key of known.keys()) dirs.add(path.dirname(key));
+  for (const home of homes) {
+    for (const c of candidates) {
+      dirs.add(path.resolve(path.join(home, "projects", c.dirName)).toLowerCase());
+    }
+  }
+
+  {
+    for (const dir of dirs) {
+      let entries: string[];
+      try {
+        entries = fs.readdirSync(dir);
+      } catch {
+        continue; // Directory absent — not evidence of staleness.
+      }
+      for (const name of entries) {
+        if (!name.endsWith(".jsonl")) continue;
+        const full = path.join(dir, name);
+        const key = path.resolve(full).toLowerCase();
+        const recorded = known.get(key);
+        if (recorded === undefined) return false; // never ingested
+        let st: fs.Stats;
+        try {
+          st = fs.statSync(full);
+        } catch {
+          continue; // Vanished mid-check; not something to block on.
+        }
+        // Truncated to whole ms on both sides: `file_mtime_ms` is stored as an
+        // integer, while `statSync` returns a float on some platforms, and a
+        // sub-millisecond difference is not staleness.
+        if (Math.floor(st.mtimeMs) > Math.floor(recorded)) return false;
+      }
+    }
+  }
+  return true;
 }
 
 /**
@@ -54,11 +146,11 @@ function matchingSessionIds(
   projectPath: string,
   mappings: PathMapping[],
   homes: string[]
-): string[] {
+): { ids: string[]; current: boolean } {
   const candidates = projectDirNameCandidates(projectPath, mappings, homes);
   const rows = prepCached(
     db,
-    `SELECT session_id, project_slug, project_dir_name, home_key FROM sessions`
+    `SELECT session_id, project_slug, project_dir_name, home_key, file_path, file_mtime_ms FROM sessions`
   ).all() as SessionRow[];
 
   const out: string[] = [];
@@ -74,7 +166,9 @@ function matchingSessionIds(
     });
     if (hit) out.push(r.session_id);
   }
-  return out;
+  // Freshness is judged from the SAME row set, so the check cannot disagree
+  // with the query about which sessions this project owns.
+  return { ids: out, current: indexIsCurrentForProject(rows, candidates, homes) };
 }
 
 /**
@@ -96,14 +190,19 @@ export function loadProjectFileEditsFromDb(
     mappings?: PathMapping[];
     homes?: string[];
   }
-): FileEdit[] {
-  const sessionIds = matchingSessionIds(
+): FileEdit[] | null {
+  const { ids: sessionIds, current } = matchingSessionIds(
     db,
     opts.slug,
     opts.projectPath,
     opts.mappings ?? [],
     opts.homes ?? []
   );
+  // `null`, not `[]`: the index is behind the transcripts on disk, so any
+  // answer from it would be partial. `[]` is a real result meaning "this
+  // project has edited no files", and conflating the two is what would show an
+  // empty panel — cached for five minutes — for a project mid-ingest.
+  if (!current) return null;
   if (sessionIds.length === 0) return [];
 
   // SQLite caps host parameters (default 999), and a portfolio can hold more
@@ -118,8 +217,12 @@ export function loadProjectFileEditsFromDb(
   for (let i = 0; i < sessionIds.length; i += CHUNK) {
     const chunk = sessionIds.slice(i, i + CHUNK);
     const placeholders = chunk.map(() => "?").join(",");
-    const rows = prepCached(
-      db,
+    // `db.prepare`, NOT `prepCached`. The statement cache is keyed on literal
+    // SQL and is unbounded by design, and `connection.ts` names this exact
+    // case — "variable IN-list arity" — as one not to hand it: the final chunk
+    // has a different length on almost every call, so each distinct arity
+    // would be cached forever (Copilot, PR #454).
+    const rows = db.prepare(
       // NO JOIN to `turns`, and the omission is measured rather than assumed.
       //
       // The obvious query joins `turns` for `ts` and for `role`/`is_sidechain`

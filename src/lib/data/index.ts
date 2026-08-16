@@ -1130,6 +1130,24 @@ export async function loadProjectFileEdits(opts: {
   if (!dbModeRequested()) return null;
   try {
     const db = await getReadyDb();
+
+    // A usable DB is not a CURRENT one. During the first reconcile, or in the
+    // ingest-lag window after a session is written, `getReadyDb()` succeeds
+    // while the index still knows nothing about the newest transcripts — and
+    // both callers cache whatever they get for five minutes, so a project with
+    // real edits on disk would show an empty Hot Files panel for minutes at a
+    // time (Codex, PR #454).
+    //
+    // The freshness test lives in the loader because it has to be PER PROJECT
+    // and filesystem-backed. The obvious global check —
+    // `getDbMaxMtimeMs(db) < getJsonlMaxMtime()` — is worse than useless here:
+    // `getJsonlMaxMtime()` reads the usage parser's in-memory FileCache
+    // (`parser.ts`, and see the note on `runFileSessionsList`), so on a cold
+    // server it returns 0 and the gate silently passes in exactly the
+    // cold-start window it was meant to catch.
+    //
+    // A `null` here means "index not current for this project", which the
+    // caller treats the same as "DB unavailable": fall back to the file parse.
     const { loadProjectFileEditsFromDb } = await import("./fileActivityFromDb");
     return loadProjectFileEditsFromDb(db, opts);
   } catch {

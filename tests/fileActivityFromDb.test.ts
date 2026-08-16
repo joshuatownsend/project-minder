@@ -165,6 +165,10 @@ describe.skipIf(!driverAvailable)("loadProjectFileEditsFromDb (#439)", () => {
       slug: "multi",
       projectPath: "C:\\dev\\multi",
     });
+
+    expect(edits).not.toBeNull();
+
+    if (!edits) throw new Error("unreachable");
     expect(edits.map((e) => e.filePath).sort()).toEqual([
       "C:\\dev\\multi\\one.ts",
       "C:\\dev\\multi\\three.ts",
@@ -186,6 +190,10 @@ describe.skipIf(!driverAvailable)("loadProjectFileEditsFromDb (#439)", () => {
       slug: "app",
       projectPath: "C:\\dev\\app",
     });
+
+    expect(dbEdits).not.toBeNull();
+
+    if (!dbEdits) throw new Error("unreachable");
 
     const sessionMap = await parser.parseAllSessions();
     const turns = projectMatch.gatherProjectTurns(sessionMap, "app", "C:\\dev\\app", [], []);
@@ -215,6 +223,10 @@ describe.skipIf(!driverAvailable)("loadProjectFileEditsFromDb (#439)", () => {
       slug: "app",
       projectPath: "C:\\dev\\app",
     });
+
+    expect(edits).not.toBeNull();
+
+    if (!edits) throw new Error("unreachable");
     expect(edits.every((e) => e.op !== "read")).toBe(true);
     expect(edits.some((e) => e.filePath.endsWith("c.ts"))).toBe(false);
     expect(edits.length).toBe(3); // Write a, Edit b, Edit a
@@ -230,6 +242,10 @@ describe.skipIf(!driverAvailable)("loadProjectFileEditsFromDb (#439)", () => {
       slug: "app",
       projectPath: "C:\\dev\\app",
     });
+
+    expect(edits).not.toBeNull();
+
+    if (!edits) throw new Error("unreachable");
     expect(edits.every((e) => !e.filePath.includes("other"))).toBe(true);
 
     const none = fromDb.loadProjectFileEditsFromDb(db, {
@@ -237,6 +253,74 @@ describe.skipIf(!driverAvailable)("loadProjectFileEditsFromDb (#439)", () => {
       projectPath: "C:\\dev\\nonexistent",
     });
     expect(none).toEqual([]);
+    conn.closeDb();
+  });
+
+  it("returns null when a transcript has never been ingested", async () => {
+    // Ingest lag. `getReadyDb()` succeeding says the DB opens, not that it has
+    // caught up — and the routes cache whatever they get for five minutes, so
+    // handing back a partial answer would show an empty Hot Files panel for a
+    // project with real edits on disk (Codex, PR #454).
+    const { conn, ingest, fromDb, projectsDir } = await setup();
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+
+    // Sanity: fresh index serves the project.
+    expect(
+      fromDb.loadProjectFileEditsFromDb(db, { slug: "app", projectPath: "C:\\dev\\app" })
+    ).not.toBeNull();
+
+    // A new session lands on disk and is NOT ingested — the cold-start and
+    // just-finished-a-session cases.
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "s-new.jsonl"), [
+      userTurn("2026-05-01T12:00:00Z", "go"),
+      assistantWithFileOps("2026-05-01T12:00:01Z", [["Write", "C:\\dev\\app\\src\\new.ts"]]),
+    ]);
+
+    expect(
+      fromDb.loadProjectFileEditsFromDb(db, { slug: "app", projectPath: "C:\\dev\\app" })
+    ).toBeNull();
+
+    // ...and once ingest catches up, the fast path resumes.
+    await ingest.reconcileAllSessions(db, { projectsDir });
+    const after = fromDb.loadProjectFileEditsFromDb(db, {
+      slug: "app",
+      projectPath: "C:\\dev\\app",
+    });
+    expect(after).not.toBeNull();
+    expect(after!.some((e) => e.filePath.endsWith("new.ts"))).toBe(true);
+    conn.closeDb();
+  });
+
+  it("returns null when a known transcript has grown since it was ingested", async () => {
+    // The second staleness axis: not a new file, but an ongoing session whose
+    // transcript has been appended to since ingest recorded its mtime.
+    const { conn, ingest, fromDb, projectsDir } = await setup();
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+    expect(
+      fromDb.loadProjectFileEditsFromDb(db, { slug: "app", projectPath: "C:\\dev\\app" })
+    ).not.toBeNull();
+
+    const target = path.join(projectsDir, "C--dev-app", "s1.jsonl");
+    const existing = await fs.readFile(target, "utf8");
+    await fs.writeFile(
+      target,
+      existing +
+        JSON.stringify(
+          assistantWithFileOps("2026-05-01T10:00:03Z", [["Write", "C:\\dev\\app\\src\\d.ts"]])
+        ) +
+        "\n"
+    );
+    // Push the mtime unambiguously past the recorded one — the check floors
+    // both sides to whole milliseconds, and a same-tick rewrite would not be
+    // staleness.
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(target, future, future);
+
+    expect(
+      fromDb.loadProjectFileEditsFromDb(db, { slug: "app", projectPath: "C:\\dev\\app" })
+    ).toBeNull();
     conn.closeDb();
   });
 
