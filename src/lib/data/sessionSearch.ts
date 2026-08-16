@@ -459,11 +459,19 @@ export function searchSessionsInDb(
   let facetedSemanticKeys = semanticKeys;
   if (facetSql && semanticKeys.length > 0) {
     const placeholders = semanticKeys.map(() => "?").join(",");
-    const survivors = prepCached(
-      db,
-      `SELECT session_id FROM sessions s
-        WHERE s.session_id IN (${placeholders}) AND ${facetSql}`
-    ).all(...semanticKeys, ...facetParams) as TitleRow[];
+    // `db.prepare`, NOT `prepCached`: this SQL is dynamic on TWO axes — the
+    // IN-list arity and the facet predicate — and the statement cache is
+    // unbounded by design, so every combination would be retained forever.
+    // `connection.ts` names "variable IN-list arity" as a case not to cache.
+    // Shipped this way in #425 and corrected here alongside the identical
+    // mistake in `fileActivityFromDb` (Copilot, PR #454); the other
+    // `prepCached` calls in this file are all static SQL and stay.
+    const survivors = db
+      .prepare(
+        `SELECT session_id FROM sessions s
+          WHERE s.session_id IN (${placeholders}) AND ${facetSql}`
+      )
+      .all(...semanticKeys, ...facetParams) as TitleRow[];
     const keep = new Set(survivors.map((r) => r.session_id));
     facetedSemanticKeys = semanticKeys.filter((k) => keep.has(k));
   }

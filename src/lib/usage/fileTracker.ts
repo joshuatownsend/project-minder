@@ -1,5 +1,5 @@
 import type { UsageTurn } from "./types";
-import { extractWriteEdits } from "./fileActivity";
+import { extractWriteEdits, type FileEdit } from "./fileActivity";
 
 export interface HotFile {
   readonly filePath: string;
@@ -16,8 +16,15 @@ export interface HotFilesResult {
   readonly totalEdits: number;
 }
 
-export function buildHotFiles(turns: UsageTurn[], limit = 50): HotFilesResult {
-  const edits = extractWriteEdits(turns);
+/**
+ * Aggregate pre-extracted write edits.
+ *
+ * Split out so the SQLite-backed route can supply edits straight from
+ * `tool_uses` instead of re-deriving them from a portfolio-wide JSONL parse
+ * (#439). Both backends share this body, so the two cannot drift in what a
+ * "hot file" means — only in how the edits were obtained.
+ */
+export function buildHotFilesFromEdits(edits: FileEdit[], limit = 50): HotFilesResult {
 
   const fileMap = new Map<
     string,
@@ -54,4 +61,9 @@ export function buildHotFiles(turns: UsageTurn[], limit = 50): HotFilesResult {
     }));
 
   return { hotFiles, totalFiles: fileMap.size, totalEdits: edits.length };
+}
+
+/** File-parse entry point — unchanged behaviour, now a thin wrapper. */
+export function buildHotFiles(turns: UsageTurn[], limit = 50): HotFilesResult {
+  return buildHotFilesFromEdits(extractWriteEdits(turns), limit);
 }

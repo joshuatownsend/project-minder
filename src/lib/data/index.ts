@@ -27,6 +27,8 @@ import type {
 } from "./sessionSearch";
 import { loadSessionCostsInWindow } from "./sessionsInWindow";
 import type { SessionCostRow } from "./sessionsInWindow";
+import type { FileEdit } from "@/lib/usage/fileActivity";
+import type { PathMapping } from "@/lib/types";
 import { demoMode } from "@/lib/demo/demoMode";
 import { readConfig } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
@@ -1105,6 +1107,56 @@ export interface SessionSearchResult {
  * aren't gated by the cost-reconcile state. A user typing in the
  * search box during the catch-up window still gets results.
  */
+/**
+ * Write-class file edits for one project, from the index when it is usable.
+ *
+ * Returns `null` — not `[]` — when the SQL path is unavailable (demo mode,
+ * `MINDER_USE_DB=0`, or a DB that will not open). The distinction is
+ * load-bearing: `[]` is a real answer meaning "this project has edited no
+ * files", and a caller that conflated the two would render an empty Hot Files
+ * panel for a healthy project whose index merely failed to open. `null` tells
+ * the route to fall back to the JSONL parse instead.
+ *
+ * Backend selection lives here rather than in the two routes so they cannot
+ * drift apart in when they use which path (#439).
+ */
+export async function loadProjectFileEdits(opts: {
+  slug: string;
+  projectPath: string;
+  mappings?: PathMapping[];
+  homes?: string[];
+}): Promise<FileEdit[] | null> {
+  if (await demoMode()) return null;
+  if (!dbModeRequested()) return null;
+  try {
+    const db = await getReadyDb();
+
+    // A usable DB is not a CURRENT one. During the first reconcile, or in the
+    // ingest-lag window after a session is written, `getReadyDb()` succeeds
+    // while the index still knows nothing about the newest transcripts — and
+    // both callers cache whatever they get for five minutes, so a project with
+    // real edits on disk would show an empty Hot Files panel for minutes at a
+    // time (Codex, PR #454).
+    //
+    // The freshness test lives in the loader because it has to be PER PROJECT
+    // and filesystem-backed. The obvious global check —
+    // `getDbMaxMtimeMs(db) < getJsonlMaxMtime()` — is worse than useless here:
+    // `getJsonlMaxMtime()` reads the usage parser's in-memory FileCache
+    // (`parser.ts`, and see the note on `runFileSessionsList`), so on a cold
+    // server it returns 0 and the gate silently passes in exactly the
+    // cold-start window it was meant to catch.
+    //
+    // A `null` here means "index not current for this project", which the
+    // caller treats the same as "DB unavailable": fall back to the file parse.
+    const { loadProjectFileEditsFromDb } = await import("./fileActivityFromDb");
+    return loadProjectFileEditsFromDb(db, opts);
+  } catch {
+    // Never throw: these routes have a working file-parse path, so a DB
+    // problem should cost latency, not the panel.
+    return null;
+  }
+}
+
 export async function searchSessions(
   query: string,
   scope: SessionSearchScope = "both",

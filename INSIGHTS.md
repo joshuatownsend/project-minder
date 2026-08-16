@@ -1,5 +1,17 @@
 # Insights
 
+<!-- insight:235d94b83326 | session:e1ddf31d-f85f-44af-a987-d10645dbba4a | 2026-08-14T23:11:15.161Z -->
+## ★ Insight
+The two shells in this session take genuinely different syntax for the same job. `@'...'@` is PowerShell's literal here-string; Bash needs `<<'EOF'`. Both are "quote this multi-line string literally," and passing the wrong one produces no error — the `@` just becomes part of the commit subject, which is exactly the silent-corruption shape that bit PR #446 with `\b` vs U+0008. Valid syntax carrying the wrong bytes doesn't announce itself.
+
+---
+
+<!-- insight:63e8ae7b5818 | session:e1ddf31d-f85f-44af-a987-d10645dbba4a | 2026-08-14T20:57:23.294Z -->
+## ★ Insight
+This doc's real design feature is that its ledger is **falsifiable**: "every item dispositioned exactly once," verified by a `grep -c` you can run. That's why the count mismatch mattered more than it looks — 22 vs 26 doesn't just mean four missing rows, it means the self-check had silently stopped checking, which is the same class as the W1 gate that "ran, passed, and proved nothing."
+
+---
+
 <!-- insight:bb5bb596966b | session:bd19f464-9595-4757-b862-ec01b51d3463 | 2026-08-14T15:21:23.467Z -->
 ## ★ Insight
 Worth noting what just happened: I wrote a justification into a code comment ("`/api/config` is a substring of `/api/claude-config`"), then wrote a test asserting it — and the test failed, because the claim was false. The fix was still the right fix, but for a different reason than I'd recorded.
