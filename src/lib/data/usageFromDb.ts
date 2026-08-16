@@ -18,6 +18,8 @@ import type {
   PeriodSummary,
   MetricDelta,
   UsageComparison,
+  ToolTransition,
+  ToolSelfLoop,
 } from "@/lib/usage/types";
 import { getAdapterDisplayNameMap } from "@/lib/adapters";
 import { parseStoredArgs } from "@/lib/db/storedArgs";
@@ -34,6 +36,7 @@ import { prepCached } from "@/lib/db/connection";
 import { bucketByHourDay, toLocalDateStr } from "@/lib/usage/activityBuckets";
 import { computeStreaks } from "@/lib/usage/streaks";
 import { computeContributionCalendar } from "@/lib/usage/contributionCalendar";
+import { computeToolTransitions } from "@/lib/usage/toolTransitions";
 
 // SQL-aggregate read path for /api/usage. Builds a `UsageReport`
 // directly from `SELECT SUM(...) GROUP BY ...` queries against the
@@ -178,6 +181,7 @@ export function loadUsageReportFromSql(
   const byMcpCost = queryByMcpCost(db, filter);
   const daily = queryDaily(db, filter);
   const topTools = queryTopTools(db, filter);
+  const toolFlow = queryToolTransitions(db, filter);
   const mcpStats = queryMcpStats(db, filter);
   const shellStats = queryShellStats(db, filter);
   const oneShot = queryOneShot(db, filter);
@@ -219,8 +223,8 @@ export function loadUsageReportFromSql(
     bySkillCost,
     byMcpCost,
     topTools,
-    toolTransitions: [],
-    toolSelfLoops: [],
+    toolTransitions: toolFlow.transitions,
+    toolSelfLoops: toolFlow.selfLoops,
     shellStats,
     mcpStats,
     projectDetails,
@@ -912,6 +916,92 @@ function queryTopTools(db: DatabaseT.Database, f: FilterParams): [string, number
     )
     .all(f) as Array<{ name: string; count: number }>;
   return rows.map((r) => [r.name, r.count]);
+}
+
+/**
+ * Tool→tool transitions and self-loops for the Execution Flow Sankey.
+ *
+ * Deliberately **reuses `computeToolTransitions`** rather than expressing the
+ * pairing in SQL. The definition is fiddly — consecutive calls inside a turn,
+ * plus the last tool of one turn to the first of the next, per session, with
+ * tool-less turns NOT breaking the chain — and a second implementation of it
+ * would be free to drift from the file backend's while both kept returning a
+ * valid shape. That is precisely the divergence class W5 found in
+ * `byCategory.oneShotRate`, where the two backends had quietly grown different
+ * answers to the same question. One definition, two callers.
+ *
+ * These were hardcoded to `[]` here until #450, so the chart they feed had
+ * never rendered on the default backend at all.
+ *
+ * The `role = 'assistant'` and `is_sidechain = 0` predicates mirror the file
+ * backend's input exactly (`aggregator.ts:596` feeds it
+ * `assistantTurns.filter((t) => !t.isSidechain)`). Both are stated rather than
+ * relied upon: tool calls only arise from assistant messages, and the schema
+ * comment says sidechain turns carry no `tool_uses` — but those describe
+ * current ingest behaviour, not invariants, and the cost of an explicit
+ * predicate is nothing next to a silently divergent count.
+ *
+ * Ordering comes from `(turn_index, sequence_in_turn)` — the transcript's own
+ * order, which `tool_uses` stores as its primary key — rather than from
+ * timestamps. `computeToolTransitions` sorts on `timestamp`, so the synthetic
+ * value below is a zero-padded `turn_index`: within a session it sorts exactly
+ * as turn order, and across sessions `sessionId` is compared first, so it
+ * never competes with a real date. Where the two disagree, transcript order is
+ * the authority — a timestamp can tie or be absent, a turn index cannot.
+ */
+function queryToolTransitions(
+  db: DatabaseT.Database,
+  f: FilterParams
+): { transitions: ToolTransition[]; selfLoops: ToolSelfLoop[] } {
+  const rows = prepCached(db,
+      `SELECT tu.session_id AS sessionId,
+              tu.turn_index  AS turnIndex,
+              tu.tool_name   AS toolName
+         FROM tool_uses tu
+         JOIN turns t USING (session_id, turn_index)
+         JOIN sessions s ON s.session_id = t.session_id
+        WHERE t.role = 'assistant'
+          AND t.is_sidechain = 0
+          AND (@periodStart IS NULL OR t.ts >= @periodStart)
+          AND (@project IS NULL OR s.project_slug = @project)
+          AND (@source IS NULL OR s.source = @source)
+          AND (@home IS NULL OR s.home_key = @home)
+        ORDER BY tu.session_id, tu.turn_index, tu.sequence_in_turn`
+    )
+    .all(f) as Array<{ sessionId: string; turnIndex: number; toolName: string }>;
+
+  // Regroup the flat rows into one pseudo-turn per (session, turn_index),
+  // which is the shape `computeToolTransitions` consumes. Rows arrive already
+  // ordered, so a run of equal keys is contiguous and no sorting is needed.
+  const turns: Array<{ sessionId: string; timestamp: string; toolCalls: Array<{ name: string }> }> = [];
+  let current: (typeof turns)[number] | null = null;
+  // Compared field-by-field rather than through a composite string key. Such
+  // a key needs a separator that cannot occur in a session id, and the
+  // obvious choice is a control character -- which is how a literal NUL byte
+  // ends up in a source file when an escape gets resolved by a layer nobody
+  // accounted for. This repo has shipped that bug once already, as 24 literal
+  // U+0008 bytes standing in for a backspace escape (PR #446). Two plain
+  // variables need no escape at all.
+  let prevSessionId: string | null = null;
+  let prevTurnIndex: number | null = null;
+  for (const r of rows) {
+    if (r.sessionId !== prevSessionId || r.turnIndex !== prevTurnIndex) {
+      prevSessionId = r.sessionId;
+      prevTurnIndex = r.turnIndex;
+      current = {
+        sessionId: r.sessionId,
+        timestamp: String(r.turnIndex).padStart(12, "0"),
+        toolCalls: [],
+      };
+      turns.push(current);
+    }
+    current!.toolCalls.push({ name: r.toolName });
+  }
+
+  // Only `sessionId`, `timestamp` and `toolCalls[].name` are read, so the
+  // partial shape is safe — and typing it as the full `UsageTurn` would be a
+  // lie about what was fetched.
+  return computeToolTransitions(turns as never);
 }
 
 function queryMcpStats(db: DatabaseT.Database, f: FilterParams): McpServerStats[] {
