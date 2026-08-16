@@ -25,7 +25,8 @@ After toggling the Settings flag, use **Rescan** (or wait out the ~5-minute scan
 
 ## What it does *not* do
 
-- It's **read-only synthetic data** — no files are created, and none of your real projects, sessions, or credentials are touched or exposed.
+- It's **read-only synthetic data** — no files are created, and credentials are never read.
 - Writes (toggling a real manual step, editing a board, launching a workflow) aren't meaningful against fixtures and are blocked with a "read-only in demo mode" notice.
+- **Coverage is good but not yet total.** The main surfaces — projects, sessions, usage and costs, the board, insights, agents and skills, workflows, plans, hooks and config, the stats cross-check, and the dev-root shown in the top bar — are all fixture-backed. Some less-travelled screens still read real data, mostly the telemetry cards, the per-session analysis tabs, `usage/export`, and anything backed by the tasks database (tasks, swarms, schedules, inbox, kanban), which demo mode does not model yet. **If you are recording or screen-sharing, stick to the main screens** until those are closed — progress is tracked in `docs/demo-mode-coverage.md`.
 - The per-project **Hot Files**, **Errors**, and **Patterns** tabs are **hidden** for demo projects: they analyze real session JSONL keyed on the actual project path, which the fixtures don't provide, so they'd otherwise render empty. The **Efficiency** tab still renders.
 - Turn it off (unset the env var / flip the flag off) to return to your real data.

@@ -2,6 +2,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import { parseWorkflowMeta, type WorkflowPhase } from "./parseWorkflowMeta";
+import { demoMode } from "@/lib/demo/demoMode";
 
 /**
  * C1 — catalog of Claude Code `Workflow` scripts.
@@ -115,6 +116,20 @@ async function readRunRecords(workflowsDir: string): Promise<Map<string, RunReco
 export async function walkClaudeWorkflows(
   opts: { projectsDir?: string; projectsDirs?: string[] } = {}
 ): Promise<ClaudeWorkflowEntry[]> {
+  // Demo mode short-circuits here, at the walker, because BOTH `/api/workflows`
+  // and `/api/workflows/[id]` call it and neither had a guard of its own — the
+  // catalog was publishing real workflow names, run counts, session ids and
+  // absolute script paths (#441).
+  //
+  // Deliberately unconditional, ahead of the `projectsDir(s)` override rather
+  // than only on the default path. A guard that stops guarding as soon as a
+  // caller passes an argument is the failure shape this repo has now fixed
+  // several times; demo mode means demo data whoever is asking.
+  if (await demoMode()) {
+    const { demoWorkflows } = await import("@/lib/demo/workflows");
+    return demoWorkflows(Date.now());
+  }
+
   // Every configured Claude home, not just the host's.
   //
   // `claudeHomes` exists so Minder on Windows can read Claude data out of a WSL

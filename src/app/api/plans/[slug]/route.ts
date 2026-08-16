@@ -3,6 +3,8 @@ import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import { parseFrontmatter } from "@/lib/indexer/parseFrontmatter";
+import { demoMode } from "@/lib/demo/demoMode";
+import { demoPlanDetail } from "@/lib/demo/plans";
 
 const PLANS_DIR = path.join(os.homedir(), ".claude", "plans");
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
@@ -14,6 +16,16 @@ export async function GET(
   const { slug } = await params;
   if (!slug || /[/\\]/.test(slug)) {
     return NextResponse.json({ error: "invalid slug" }, { status: 400 });
+  }
+
+  // Guarded here rather than in `scanClaudePlans()`, which this route never
+  // calls — it opens the file directly. Placed after slug validation so the
+  // 400 for a traversal-shaped slug behaves identically in both modes.
+  if (await demoMode()) {
+    const detail = demoPlanDetail(slug, Date.now());
+    return detail
+      ? NextResponse.json(detail)
+      : NextResponse.json({ error: "not found" }, { status: 404 });
   }
 
   const filePath = path.join(PLANS_DIR, `${slug}.md`);

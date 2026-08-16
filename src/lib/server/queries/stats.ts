@@ -5,6 +5,7 @@ import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { computeStats } from "@/lib/stats";
 import { getClaudeUsage, getSessionsList } from "@/lib/data";
 import { demoMode } from "@/lib/demo/demoMode";
+import { demoStatsCache } from "@/lib/demo/stats";
 import {
   getStatsCache,
   crossCheckStats,
@@ -96,9 +97,12 @@ export async function buildStatsResponse(inputs: StatsInputs) {
 
   // Sessions list (scatter + message-count cross-check) and Claude's own
   // stats-cache are independent — fetch concurrently. Both are cached, so cheap.
-  const [sessionsList, statsCache] = await Promise.all([
+  // In demo mode `getStatsCache()` resolves null immediately (guarded at the
+  // loader), so the concurrency costs nothing and the real file is never read.
+  const [sessionsList, realStatsCache, demo] = await Promise.all([
     getSessionsList().catch(() => null), // non-fatal — scatter just shows empty
     getStatsCache(),
+    demoMode(),
   ]);
 
   const sessions: ReturnType<typeof projectScatter>[] =
@@ -110,10 +114,14 @@ export async function buildStatsResponse(inputs: StatsInputs) {
   const observedMessages = sessionsList
     ? sessionsList.sessions.reduce((sum, s) => sum + (s.messageCount ?? 0), 0)
     : null;
-  const crossCheck = crossCheckStats(statsCache, {
-    sessions: stats.claudeSessions.total,
-    messages: observedMessages,
-  });
+  // Demo mode substitutes a fixture derived from the observed totals. It has to
+  // be derived rather than constant: the two rows come from two independent
+  // demo sources (sessions from the project scan, messages from the session
+  // fixtures), so fixed numbers would drift apart as either source changed and
+  // render the red panel the capture pipeline refuses to publish.
+  const observed = { sessions: stats.claudeSessions.total, messages: observedMessages };
+  const statsCache = demo ? demoStatsCache(observed, Date.now()) : realStatsCache;
+  const crossCheck = crossCheckStats(statsCache, observed);
 
   return { ...stats, sessions, crossCheck };
 }
