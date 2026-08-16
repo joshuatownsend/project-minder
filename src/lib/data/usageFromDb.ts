@@ -37,6 +37,7 @@ import { bucketByHourDay, toLocalDateStr } from "@/lib/usage/activityBuckets";
 import { computeStreaks } from "@/lib/usage/streaks";
 import { computeContributionCalendar } from "@/lib/usage/contributionCalendar";
 import { computeToolTransitions } from "@/lib/usage/toolTransitions";
+import type { ToolTransitionsTurn } from "@/lib/usage/toolTransitions";
 
 // SQL-aggregate read path for /api/usage. Builds a `UsageReport`
 // directly from `SELECT SUM(...) GROUP BY ...` queries against the
@@ -973,7 +974,7 @@ function queryToolTransitions(
   // Regroup the flat rows into one pseudo-turn per (session, turn_index),
   // which is the shape `computeToolTransitions` consumes. Rows arrive already
   // ordered, so a run of equal keys is contiguous and no sorting is needed.
-  const turns: Array<{ sessionId: string; timestamp: string; toolCalls: Array<{ name: string }> }> = [];
+  const turns: Array<ToolTransitionsTurn & { toolCalls: Array<{ name: string }> }> = [];
   let current: (typeof turns)[number] | null = null;
   // Compared field-by-field rather than through a composite string key. Such
   // a key needs a separator that cannot occur in a session id, and the
@@ -998,10 +999,10 @@ function queryToolTransitions(
     current!.toolCalls.push({ name: r.toolName });
   }
 
-  // Only `sessionId`, `timestamp` and `toolCalls[].name` are read, so the
-  // partial shape is safe — and typing it as the full `UsageTurn` would be a
-  // lie about what was fetched.
-  return computeToolTransitions(turns as never);
+  // No cast: `ToolTransitionsTurn` is the contract this function declares, and
+  // these rows satisfy it exactly. If it ever starts reading a field the DB
+  // path cannot supply, this line stops compiling — which is the point.
+  return computeToolTransitions(turns);
 }
 
 function queryMcpStats(db: DatabaseT.Database, f: FilterParams): McpServerStats[] {

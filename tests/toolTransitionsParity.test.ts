@@ -146,8 +146,8 @@ describe.skipIf(!driverAvailable)("toolTransitions backend parity (#450)", () =>
     const bySession = await parser.parseAllSessions();
     const assistantTurns = [...bySession.values()]
       .flat()
-      .filter((t: any) => t.role === "assistant" && !t.isSidechain);
-    const fileFlow = toolTransitions.computeToolTransitions(assistantTurns as never);
+      .filter((t) => t.role === "assistant" && !t.isSidechain);
+    const fileFlow = toolTransitions.computeToolTransitions(assistantTurns);
 
     // Precondition: a fixture that produced nothing would make the equality
     // below vacuously true — exactly the shape of the bug being fixed.

@@ -1,8 +1,29 @@
-import type { UsageTurn } from "./types";
 import type { ToolTransition, ToolSelfLoop } from "./types";
 
+/**
+ * The minimal turn this function reads — deliberately narrower than
+ * `UsageTurn`, which satisfies it structurally.
+ *
+ * Two backends feed this: the file path passes real `UsageTurn`s, and the DB
+ * path (#450) reconstructs turns from `tool_uses` rows, where most of
+ * `UsageTurn` simply does not exist. That call was originally written as
+ * `computeToolTransitions(turns as never)`, which type-checked by disabling
+ * type-checking — and would have kept compiling if this function later started
+ * reading a field the DB path never supplies, producing `undefined` at runtime
+ * on the default backend with nothing to catch it (Copilot, PR #452).
+ *
+ * Naming the contract instead means the compiler enforces it: widening what is
+ * read here breaks the DB caller at build time, which is the moment it should
+ * break.
+ */
+export interface ToolTransitionsTurn {
+  sessionId: string;
+  timestamp: string;
+  toolCalls: ReadonlyArray<{ name: string }>;
+}
+
 export function computeToolTransitions(
-  turns: UsageTurn[]
+  turns: readonly ToolTransitionsTurn[]
 ): { transitions: ToolTransition[]; selfLoops: ToolSelfLoop[] } {
   const transMap = new Map<string, number>();
   const loopMap = new Map<string, number>();
