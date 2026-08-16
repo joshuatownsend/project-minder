@@ -18,6 +18,8 @@ import type {
   PeriodSummary,
   MetricDelta,
   UsageComparison,
+  ToolTransition,
+  ToolSelfLoop,
 } from "@/lib/usage/types";
 import { getAdapterDisplayNameMap } from "@/lib/adapters";
 import { parseStoredArgs } from "@/lib/db/storedArgs";
@@ -34,6 +36,8 @@ import { prepCached } from "@/lib/db/connection";
 import { bucketByHourDay, toLocalDateStr } from "@/lib/usage/activityBuckets";
 import { computeStreaks } from "@/lib/usage/streaks";
 import { computeContributionCalendar } from "@/lib/usage/contributionCalendar";
+import { computeToolTransitions } from "@/lib/usage/toolTransitions";
+import type { ToolTransitionsTurn } from "@/lib/usage/toolTransitions";
 
 // SQL-aggregate read path for /api/usage. Builds a `UsageReport`
 // directly from `SELECT SUM(...) GROUP BY ...` queries against the
@@ -178,6 +182,7 @@ export function loadUsageReportFromSql(
   const byMcpCost = queryByMcpCost(db, filter);
   const daily = queryDaily(db, filter);
   const topTools = queryTopTools(db, filter);
+  const toolFlow = queryToolTransitions(db, filter);
   const mcpStats = queryMcpStats(db, filter);
   const shellStats = queryShellStats(db, filter);
   const oneShot = queryOneShot(db, filter);
@@ -219,8 +224,8 @@ export function loadUsageReportFromSql(
     bySkillCost,
     byMcpCost,
     topTools,
-    toolTransitions: [],
-    toolSelfLoops: [],
+    toolTransitions: toolFlow.transitions,
+    toolSelfLoops: toolFlow.selfLoops,
     shellStats,
     mcpStats,
     projectDetails,
@@ -912,6 +917,104 @@ function queryTopTools(db: DatabaseT.Database, f: FilterParams): [string, number
     )
     .all(f) as Array<{ name: string; count: number }>;
   return rows.map((r) => [r.name, r.count]);
+}
+
+/**
+ * Tool→tool transitions and self-loops for the Execution Flow Sankey.
+ *
+ * Deliberately **reuses `computeToolTransitions`** rather than expressing the
+ * pairing in SQL. The definition is fiddly — consecutive calls inside a turn,
+ * plus the last tool of one turn to the first of the next, per session, with
+ * tool-less turns NOT breaking the chain — and a second implementation of it
+ * would be free to drift from the file backend's while both kept returning a
+ * valid shape. That is precisely the divergence class W5 found in
+ * `byCategory.oneShotRate`, where the two backends had quietly grown different
+ * answers to the same question. One definition, two callers.
+ *
+ * These were hardcoded to `[]` here until #450, so the chart they feed had
+ * never rendered on the default backend at all.
+ *
+ * The `role = 'assistant'` and `is_sidechain = 0` predicates mirror the file
+ * backend's input exactly (`aggregator.ts:596` feeds it
+ * `assistantTurns.filter((t) => !t.isSidechain)`). Both are stated rather than
+ * relied upon: tool calls only arise from assistant messages, and the schema
+ * comment says sidechain turns carry no `tool_uses` — but those describe
+ * current ingest behaviour, not invariants, and the cost of an explicit
+ * predicate is nothing next to a silently divergent count.
+ *
+ * Ordering: `ORDER BY (session_id, turn_index, sequence_in_turn)` fixes the
+ * order of tool calls WITHIN a turn, and the real `turns.ts` is carried
+ * through as each turn's `timestamp` so `computeToolTransitions` sorts turns
+ * across the session exactly as it does for the file backend.
+ *
+ * An earlier version synthesized `timestamp` from `turn_index` instead,
+ * reasoning that transcript order is more trustworthy than a clock. It is —
+ * but the file backend still sorts on the real timestamps, so on a session
+ * whose timestamps are not monotonic the two backends would pair different
+ * turns and report different inter-turn edges, defeating the parity this
+ * change exists to establish (Codex, PR #452). A divergence that only appears
+ * on unusual input is worse than one that always shows, because nothing
+ * routine reveals it. If transcript order should win, it has to win for BOTH
+ * callers, which is a change to the shared contract rather than to one side.
+ *
+ * `turns.ts` is `NOT NULL`, so there is nothing to fall back to. Ties break by
+ * array order, which is turn order, because `Array.prototype.sort` is stable —
+ * matching the file path, where ties break by parse order.
+ */
+function queryToolTransitions(
+  db: DatabaseT.Database,
+  f: FilterParams
+): { transitions: ToolTransition[]; selfLoops: ToolSelfLoop[] } {
+  const rows = prepCached(db,
+      `SELECT tu.session_id AS sessionId,
+              tu.turn_index  AS turnIndex,
+              t.ts           AS ts,
+              tu.tool_name   AS toolName
+         FROM tool_uses tu
+         JOIN turns t USING (session_id, turn_index)
+         JOIN sessions s ON s.session_id = t.session_id
+        WHERE t.role = 'assistant'
+          AND t.is_sidechain = 0
+          AND (@periodStart IS NULL OR t.ts >= @periodStart)
+          AND (@project IS NULL OR s.project_slug = @project)
+          AND (@source IS NULL OR s.source = @source)
+          AND (@home IS NULL OR s.home_key = @home)
+        ORDER BY tu.session_id, tu.turn_index, tu.sequence_in_turn`
+    )
+    .all(f) as Array<{ sessionId: string; turnIndex: number; ts: string; toolName: string }>;
+
+  // Regroup the flat rows into one pseudo-turn per (session, turn_index),
+  // which is the shape `computeToolTransitions` consumes. Rows arrive already
+  // ordered, so a run of equal keys is contiguous and no sorting is needed.
+  const turns: Array<ToolTransitionsTurn & { toolCalls: Array<{ name: string }> }> = [];
+  let current: (typeof turns)[number] | null = null;
+  // Compared field-by-field rather than through a composite string key. Such
+  // a key needs a separator that cannot occur in a session id, and the
+  // obvious choice is a control character -- which is how a literal NUL byte
+  // ends up in a source file when an escape gets resolved by a layer nobody
+  // accounted for. This repo has shipped that bug once already, as 24 literal
+  // U+0008 bytes standing in for a backspace escape (PR #446). Two plain
+  // variables need no escape at all.
+  let prevSessionId: string | null = null;
+  let prevTurnIndex: number | null = null;
+  for (const r of rows) {
+    if (r.sessionId !== prevSessionId || r.turnIndex !== prevTurnIndex) {
+      prevSessionId = r.sessionId;
+      prevTurnIndex = r.turnIndex;
+      current = {
+        sessionId: r.sessionId,
+        timestamp: r.ts,
+        toolCalls: [],
+      };
+      turns.push(current);
+    }
+    current!.toolCalls.push({ name: r.toolName });
+  }
+
+  // No cast: `ToolTransitionsTurn` is the contract this function declares, and
+  // these rows satisfy it exactly. If it ever starts reading a field the DB
+  // path cannot supply, this line stops compiling — which is the point.
+  return computeToolTransitions(turns);
 }
 
 function queryMcpStats(db: DatabaseT.Database, f: FilterParams): McpServerStats[] {
