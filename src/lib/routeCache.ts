@@ -38,7 +38,15 @@ export class TtlCache<T> {
   private readonly slots = new Map<string, Slot<T>>();
   private readonly ttlMs: number;
   private readonly maxEntries: number;
+  private gen = 0;
   readonly name: string;
+
+  /** Bumped by `clear()`/`dispose()`. A caller that captured this before
+   *  starting an async load can tell whether the cache was reset while it was
+   *  in flight — see `getOrLoad`. */
+  get generation(): number {
+    return this.gen;
+  }
 
   constructor(opts: TtlCacheOptions) {
     this.ttlMs = opts.ttlMs;
@@ -81,9 +89,38 @@ export class TtlCache<T> {
     this.slots.delete(key);
   }
 
-  /** Drop everything. */
+  /** Drop everything, and invalidate any load already in flight (see
+   *  `getOrLoad`) so it cannot write its now-stale result back afterwards. */
   clear(): void {
     this.slots.clear();
+    this.gen++;
+  }
+
+  /**
+   * Read-through load that will not resurrect data the cache was told to
+   * forget. Returns the cached value if fresh; otherwise runs `load()` and
+   * caches the result **only if no `clear()`/`dispose()` happened while it was
+   * awaiting**.
+   *
+   * The bare `get`-miss-`await`-`set` sequence has a window that plain
+   * disposal cannot close, because the write happens after the clear:
+   *
+   *   T0  request misses the cache, calls the loader (real mode)
+   *   T1  Settings enables demoMode -> PATCH /api/config -> dispose
+   *   T2  loader resolves, `set()` writes the REAL payload back
+   *   T3  demo requests read it for the full TTL, past a correct guard
+   *
+   * Found by Codex on PR #455, against the dispose-on-config-write that had
+   * just fixed the non-racy version of the same leak. Routes whose loader is
+   * demo-guarded must use this rather than `get`/`set` by hand.
+   */
+  async getOrLoad(key: string, load: () => Promise<T>): Promise<T> {
+    const cached = this.get(key);
+    if (cached !== undefined) return cached;
+    const gen = this.gen;
+    const value = await load();
+    if (gen === this.gen) this.set(key, value);
+    return value;
   }
 
   /** Alias for `clear()` — HMR/reset hook, mirrors the `dispose()` convention

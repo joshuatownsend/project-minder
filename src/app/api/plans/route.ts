@@ -13,12 +13,15 @@ export async function GET(request: NextRequest) {
   const tag = request.nextUrl.searchParams.get("tag") ?? undefined;
   const sessionId = request.nextUrl.searchParams.get("session") ?? undefined;
 
+  // `getOrLoad` rather than get/await/set: `scanClaudePlans()` is demo-guarded,
+  // and a hand-rolled write can land after a config-write dispose and put real
+  // plan titles back under this mode-agnostic key. See TtlCache.getOrLoad.
+  const cacheable = !q && !tag && !sessionId;
   let plans = cache.get(PLANS_CACHE_KEY) ?? null;
   if (!plans) {
-    plans = await scanClaudePlans();
-    if (!q && !tag && !sessionId) {
-      cache.set(PLANS_CACHE_KEY, plans);
-    }
+    plans = cacheable
+      ? await cache.getOrLoad(PLANS_CACHE_KEY, scanClaudePlans)
+      : await scanClaudePlans();
   }
 
   if (q) {

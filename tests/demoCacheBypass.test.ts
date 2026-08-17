@@ -188,3 +188,53 @@ describe("demoStatsCache daily rows agree with the headline", () => {
     expect(cache.dailyActivity.every((d) => d.sessionCount >= 1)).toBe(true);
   });
 });
+
+describe("a load in flight across a dispose cannot write its result back", () => {
+  /**
+   * Codex, PR #455 round 2 — against the dispose-on-config-write that had just
+   * fixed the non-racy version of this leak. Clearing a cache says nothing
+   * about a loader that is already awaiting: it resolves afterwards and writes
+   * under the same mode-agnostic key, so demo requests read real data for the
+   * full TTL past a correct guard.
+   *
+   * Sequenced explicitly rather than with timers — the window is "between the
+   * await and the set", and a sleep would only make it likely, not certain.
+   */
+  it("drops the late write when the cache was cleared mid-load", async () => {
+    const { TtlCache } = await import("@/lib/routeCache");
+    const cache = new TtlCache<string>({ ttlMs: 120_000 });
+
+    let release!: (v: string) => void;
+    const inFlight = cache.getOrLoad("all", () => new Promise<string>((r) => (release = r)));
+
+    cache.dispose(); // the Settings toggle lands while the loader is awaiting
+    release("real plan titles");
+
+    await expect(inFlight).resolves.toBe("real plan titles"); // this caller still gets its answer
+    expect(cache.get("all")).toBeUndefined(); // ...but nothing was cached for the next one
+  });
+
+  // Control: with no dispose, the same sequence DOES cache — otherwise the
+  // assertion above would pass against a getOrLoad that never writes at all.
+  it("caches normally when nothing cleared it", async () => {
+    const { TtlCache } = await import("@/lib/routeCache");
+    const cache = new TtlCache<string>({ ttlMs: 120_000 });
+
+    let release!: (v: string) => void;
+    const inFlight = cache.getOrLoad("all", () => new Promise<string>((r) => (release = r)));
+    release("real plan titles");
+    await inFlight;
+
+    expect(cache.get("all")).toBe("real plan titles");
+  });
+
+  it("serves a fresh hit without calling the loader", async () => {
+    const { TtlCache } = await import("@/lib/routeCache");
+    const cache = new TtlCache<string>({ ttlMs: 120_000 });
+    cache.set("all", "cached");
+
+    const load = vi.fn(async () => "loaded");
+    await expect(cache.getOrLoad("all", load)).resolves.toBe("cached");
+    expect(load).not.toHaveBeenCalled();
+  });
+});
