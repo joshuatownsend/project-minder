@@ -1291,7 +1291,6 @@ export async function initDb(): Promise<InitResult> {
       }
     }
   }
-  result.quickCheckSkipped = !runQuickCheck;
 
   try {
     const { applied, current } = applyPendingMigrations(db);

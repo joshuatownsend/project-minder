@@ -103,7 +103,10 @@ pub fn probe(port: u16) -> ServerStatus {
     // the port. Distinguishing the two is the whole point of the split — see the
     // module header.
     let (code, resp) = match agent().get(&url).call() {
-        Ok(resp) => (200u16, resp),
+        // Read the real status rather than assuming 200: ureq treats every 2xx
+        // as Ok, and a 204 or 206 hard-coded to 200 would be classified as a
+        // healthy Minder on the strength of a status it never sent.
+        Ok(resp) => (resp.status(), resp),
         Err(ureq::Error::Status(code, resp)) => (code, resp),
         Err(_) => return ServerStatus::Unreachable,
     };
