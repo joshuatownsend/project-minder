@@ -246,7 +246,7 @@ function resolveLaunchOrFail() {
         `[service] --payload directory has no server.js: ${bundleDir}\n` +
           `  Expected ${path.join(bundleDir, "server.js")} to exist.\n` +
           `  For the installed desktop app this is the "minder-server" folder ` +
-          `beside minder-tray.exe.`
+          `inside the app's install directory (alongside its bundled "node").`
       );
       process.exit(1);
     }

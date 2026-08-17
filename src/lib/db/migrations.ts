@@ -1264,6 +1264,13 @@ export async function initDb(): Promise<InitResult> {
     dbSizeBytes: dbFileSizeBytes(),
     force: quickCheckForced(),
   });
+  // Recorded as soon as the decision is made, not after the check completes:
+  // the quarantine-then-failed-reopen path below returns early, and setting
+  // this at the end left it `undefined` there — reporting "never reached
+  // Path 2" about a run that had just executed Path 2 and quarantined a
+  // database. The field describes the decision, so it belongs with it.
+  result.quickCheckSkipped = !runQuickCheck;
+
   if (runQuickCheck) {
     const integrity = db.prepare("PRAGMA quick_check").get() as {
       quick_check?: string;

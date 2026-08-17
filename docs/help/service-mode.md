@@ -39,15 +39,22 @@ If you previously installed the Phase A scheduled-task/service described above, 
 
 If you *want* both (so the server survives quitting the tray), make sure they launch the **same** payload. By default `service:install` can only find the payload this repo built (`dist/minder-server`), while the installed desktop app runs its own bundled copy — so the same machine ends up serving a different build depending on which one won the boot, and the port collision decides which you get.
 
-Install the service against the app's bundle instead:
-
-```powershell
-pnpm service:install --payload "$env:LOCALAPPDATA\Project Minder Tray\minder-server"
-```
-
-The directory must be the one containing `server.js`. If a Node runtime ships beside it (`../node/node.exe`, as the desktop app bundles), the service uses that runtime too, keeping it on the version the app was built against. `MINDER_SERVICE_PAYLOAD` works as an alternative to the flag.
+Point the service at an explicit payload with `--payload` (or `MINDER_SERVICE_PAYLOAD`). The directory must be the one containing `server.js`; if a Node runtime ships beside it (`../node/node.exe` on Windows, `../node/bin/node` on macOS/Linux, as the desktop app bundles), the service uses that runtime too, so it stays on the version the payload was built against.
 
 With both installed and pointed at one payload, whichever starts first at logon binds the port and the other attaches — a race that no longer changes what you're running.
+
+> #### ⚠️ Targeting the app's *own* install directory breaks self-update
+>
+> It is tempting to point the service straight at the installed app's bundle. Don't, unless you are willing to stop the service by hand before every app update.
+>
+> The tray's updater stops its **own** sidecar before exiting, precisely because an orphaned process holding `resources/node/node.exe` makes the installer fail on a locked file. But when the service owns the port, the tray is in *attach* mode — where quitting deliberately leaves the running server untouched, because it is not the tray's process to kill. So the service keeps the app's own bundled Node locked, and the Windows installer cannot overwrite it. On macOS and Linux the replacement usually succeeds, but the service keeps serving the **old payload from memory** until it is restarted, which is worse: the update looks like it worked.
+>
+> Two safe arrangements:
+>
+> 1. **Give the service its own copy** of the payload, outside the app's install directory — `pnpm package:standalone` output, or a copy of the app's `minder-server` + `node` folders. Update it when you update the app.
+> 2. **Let the tray own the server** — `pnpm service:uninstall`, and use the tray's "Start at login". Simplest, at the cost of the server stopping when you quit the tray.
+>
+> If you have already pointed the service at the app's directory, stop it (`pnpm service:stop`) before installing an app update, then start it again afterwards.
 
 ## Operating System Details
 
