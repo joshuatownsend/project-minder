@@ -11,6 +11,7 @@ import { readPluginScopeHooks } from "./scanner/pluginHooks";
 import { tryParseJsonc } from "./scanner/util/jsonc";
 import { loadInstalledPlugins } from "./indexer/walkPlugins";
 import { RESERVED_SETTINGS_KEYS } from "./template/jsonPath";
+import { demoMode } from "./demo/demoMode";
 import {
   HookEntry,
   McpServer,
@@ -36,6 +37,16 @@ export function invalidateUserConfigCache(): void {
 }
 
 export async function getUserConfig(): Promise<UserConfig> {
+  // Above the cache read, deliberately. The slot is shared across modes and is
+  // not salted by demo state, so guarding below it would let a slot warmed
+  // before the Settings toggle serve the real `~/.claude` config for the rest
+  // of the TTL. Returning the fixture without touching the slot also means demo
+  // traffic never populates it for the real mode to inherit.
+  if (await demoMode()) {
+    const { demoUserConfig } = await import("@/lib/demo/userConfig");
+    return demoUserConfig();
+  }
+
   const slot = globalForUC.__userConfigCache;
   if (slot && Date.now() - slot.cachedAt < CACHE_TTL_MS) {
     return slot.data;

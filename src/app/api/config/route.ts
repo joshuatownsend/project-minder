@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { readConfig, mutateConfig } from "@/lib/config";
 import { invalidateCache } from "@/lib/cache";
 import { invalidateClaudeConfigRouteCache } from "@/app/api/claude-config/route";
+import { disposeAllRouteCaches } from "@/lib/routeCache";
 import { setProjectStatus } from "@/lib/server/mutations/projectStatus";
 import { ProjectStatus, MinderConfig, FeatureFlagKey, PricingRule, ScheduleMode, SCHEDULE_MODES, SubscriptionTier } from "@/lib/types";
 import { isFeatureFlagKey } from "@/lib/featureFlags";
@@ -26,6 +27,24 @@ const VALID_SCHEDULE_MODES = SCHEDULE_MODES.map((m) => m.value);
 function invalidateAll() {
   invalidateCache();
   invalidateClaudeConfigRouteCache();
+  // Every route cache, not just the two named above — this is the
+  // "feature-flag-flip hook" `disposeAllRouteCaches` was written for.
+  //
+  // Route caches sit ABOVE their loader, so a flag flip that changes what the
+  // loader returns cannot reach an entry already cached under the old flag
+  // state. That is a correctness bug for any flag, and a data leak for
+  // `demoMode`: `/api/plans` keys its cache on the literal string "all" and
+  // `/api/claude-config` on `type|project`, neither salted by mode, so an
+  // entry warmed in real mode kept serving real plan titles and hook commands
+  // for the rest of its TTL after the Settings toggle turned demo mode on —
+  // straight past the loader guards. Found by Codex on PR #455 for `/plans`;
+  // `/claude-config` had the identical shape and was not reported.
+  //
+  // Disposing centrally rather than salting each key keeps the next route
+  // author from having to know about this: `getOrCreateRouteCache` callers get
+  // it by construction. Config writes are rare (a human toggling settings), so
+  // rebuilding every route cache here is cheap.
+  disposeAllRouteCaches();
 }
 
 // Validate first, mutate second. We can't validate inside `mutateConfig` because

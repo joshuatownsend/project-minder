@@ -70,6 +70,11 @@ docs/perf/trace-*.json
 docs/perf/report.html
 docs/perf/report.json
 
+# demo-coverage audit intermediates (regenerate; never commit — the counts go
+# stale the moment a guard lands, and a committed copy reads as a verdict)
+scripts/audit-demo-coverage/demo-audit.json
+scripts/audit-demo-coverage/demo-leaks.json
+
 # git worktrees
 .worktrees/
 

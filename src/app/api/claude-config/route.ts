@@ -16,10 +16,6 @@ function getRouteCache(key: string): ConfigPayload | null {
   return cache.get(key) ?? null;
 }
 
-function setRouteCache(key: string, data: ConfigPayload) {
-  cache.set(key, data);
-}
-
 export function invalidateClaudeConfigRouteCache() {
   cache.clear();
 }
@@ -39,10 +35,12 @@ export async function GET(request: NextRequest) {
     if (cached) return NextResponse.json(cached);
   }
 
-  const payload = await loadClaudeConfigResponse(type, projectSlug ?? null, query ?? null);
+  // `getOrLoad` rather than load-then-set: `loadClaudeConfigResponse` reaches
+  // the demo-guarded `getUserConfig()`, so a write racing a config-write
+  // dispose could put real hook commands and MCP servers back under this
+  // mode-agnostic key. See TtlCache.getOrLoad.
+  const load = () => loadClaudeConfigResponse(type, projectSlug ?? null, query ?? null);
+  const payload = cacheable ? await cache.getOrLoad(cacheKey, load) : await load();
 
-  if (cacheable) {
-    setRouteCache(cacheKey, payload);
-  }
   return NextResponse.json(payload);
 }

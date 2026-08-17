@@ -3,6 +3,7 @@ import os from "os";
 import { promises as fs } from "fs";
 import { FileCache } from "@/lib/usage/cache";
 import { num, str, bool } from "@/lib/coerce";
+import { demoMode } from "@/lib/demo/demoMode";
 
 // ── Claude Code's own data files (cc-lens-inspired, TODO item 2) ─────────────
 //
@@ -115,8 +116,17 @@ async function readJsonCached<T>(
 /**
  * Read `~/.claude/stats-cache.json` — Claude Code's own aggregate stats.
  * Returns null when absent or malformed (degrade, never throw).
+ *
+ * Demo mode returns null *here*, at the loader, rather than at the one caller.
+ * This file is the user's real session and message totals, and the cross-check
+ * panel put them on `/stats` — which is in the screenshot capture set — so the
+ * leak published real numbers in the one mode whose whole purpose is being safe
+ * to show other people. Guarding the loader keeps the seam closed if a second
+ * caller ever appears; a caller that wants a *populated* demo panel opts in via
+ * `demoStatsCache()` instead, which derives from the observed totals.
  */
-export function getStatsCache(): Promise<StatsCache | null> {
+export async function getStatsCache(): Promise<StatsCache | null> {
+  if (await demoMode()) return null;
   return readJsonCached(statsCacheStore(), STATS_CACHE_PATH, parseStatsCache);
 }
 
@@ -124,8 +134,13 @@ export function getStatsCache(): Promise<StatsCache | null> {
  * mtime (ms) of stats-cache.json, or 0 when absent. Exposed so `/api/stats`
  * can fold it into its ETag — a change to this file alone alters the
  * cross-check block, so without it a 304 could serve a stale cross-check.
+ *
+ * Demo mode reports 0 for the same reason it reports no cache: the real file
+ * contributes nothing to a demo response, and letting its mtime move would make
+ * otherwise-identical capture runs miss their 304 and re-shoot.
  */
 export async function getStatsCacheMtimeMs(): Promise<number> {
+  if (await demoMode()) return 0;
   try {
     return (await fs.stat(STATS_CACHE_PATH)).mtimeMs;
   } catch {

@@ -3,12 +3,23 @@ import path from "path";
 import os from "os";
 import { parseFrontmatter } from "../indexer/parseFrontmatter";
 import type { PlanEntry } from "../types";
+import { demoMode } from "@/lib/demo/demoMode";
 
 const PLANS_DIR = path.join(os.homedir(), ".claude", "plans");
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 
-/** Scan ~/.claude/plans/*.md and return a PlanEntry per file. Fails open. */
+/** Scan ~/.claude/plans/*.md and return a PlanEntry per file. Fails open.
+ *
+ *  Demo mode returns fixtures instead: plan titles describe what the user is
+ *  actually building, which is exactly what a shared screenshot must not carry.
+ *  Note `/api/plans/[slug]` does NOT come through here — it opens the file
+ *  directly and carries its own guard. */
 export async function scanClaudePlans(): Promise<PlanEntry[]> {
+  if (await demoMode()) {
+    const { demoPlans } = await import("@/lib/demo/plans");
+    return demoPlans(Date.now());
+  }
+
   let files: string[];
   try {
     const entries = await fs.readdir(PLANS_DIR, { withFileTypes: true });

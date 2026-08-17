@@ -10,6 +10,8 @@ import { ClaudeStatusProvider } from "@/components/ClaudeStatusProvider";
 import { PulseProvider } from "@/components/PulseProvider";
 import { EmergencyStopButton } from "@/components/EmergencyStopButton";
 import { readConfig, getDevRoots } from "@/lib/config";
+import { demoMode } from "@/lib/demo/demoMode";
+import { DEMO_DEV_ROOT } from "@/lib/demo/projects";
 import { getFlag } from "@/lib/featureFlags";
 import { ConfigProvider } from "@/components/ConfigProvider";
 import { QueryProvider } from "@/components/QueryProvider";
@@ -41,7 +43,12 @@ export default async function RootLayout({
   children: React.ReactNode;
 }) {
   const config = await readConfig();
-  const devRoots = getDevRoots(config);
+  // The shell prints the configured dev root on every route. It is a server
+  // component, so it passes through neither the `data/index.ts` façade nor any
+  // API route — there is no guard upstream of it, which is exactly how this one
+  // survived the route-by-route audit. In demo mode it reports the root the
+  // synthetic projects actually hang off instead of the user's real one.
+  const devRoots = (await demoMode()) ? [DEMO_DEV_ROOT] : getDevRoots(config);
   const rootLabel =
     devRoots.length === 1
       ? devRoots[0]

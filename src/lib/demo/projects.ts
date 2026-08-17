@@ -433,12 +433,20 @@ const SEEDS: Seed[] = [
   },
 ];
 
+/**
+ * The dev root every demo project hangs off. Exported because the app shell
+ * (`RootLayout`) prints the configured root inline in a server component —
+ * outside the façade and outside any route — so it needs the same constant to
+ * avoid printing the user's real root beside synthetic projects.
+ */
+export const DEMO_DEV_ROOT = "C:\\dev";
+
 function buildProject(seed: Seed, nowMs: number): ProjectData {
   const rich = seed.rich === true;
   return {
     slug: seed.slug,
     name: seed.name,
-    path: `C:\\dev\\${seed.slug}`,
+    path: `${DEMO_DEV_ROOT}\\${seed.slug}`,
     status: seed.status,
     usageSlug: `dev-${seed.slug}`,
     usageDirName: `C--dev-${seed.slug}`,
@@ -466,7 +474,7 @@ function buildProject(seed: Seed, nowMs: number): ProjectData {
     claudeMdAudit: seed.auditScore === undefined ? absentAudit : presentAudit(seed.auditScore),
     todos: rich || seed.todos ? demoTodos() : undefined,
     manualSteps: rich || seed.manualSteps ? demoManualSteps(nowMs) : undefined,
-    insights: rich || seed.insights ? demoInsights(nowMs, seed.slug, `C:\\dev\\${seed.slug}`) : undefined,
+    insights: rich || seed.insights ? demoInsights(nowMs, seed.slug, `${DEMO_DEV_ROOT}\\${seed.slug}`) : undefined,
     board: rich ? demoBoard() : undefined,
     operations: rich ? demoOps() : undefined,
     lastActivity: iso(nowMs, Math.min(seed.sessionOffset, seed.commitOffset)),
