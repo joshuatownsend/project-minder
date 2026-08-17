@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-08-17
+
+*Mostly about Minder telling the truth about itself. A dashboard that reports on your work is worth only as much as its own honesty, and this cycle found several places where it was quietly wrong: demo mode serving real session data on seven surfaces, two charts that had never rendered for anyone on a default install, a search reporting "no matches" while matches existed, and a tray app that spent every boot accusing its own server of being a foreign process. The other half is speed — the panels that took 77 seconds now take half of one.*
+
+*The tray fix has a root cause worth knowing about. `PRAGMA quick_check` runs on every database open and scales with file size, and because the SQLite driver is synchronous it blocks the entire server while it runs — measured at 2m47s on a 2.1 GB index read cold after a reboot, against 74ms warm. For that window the dashboard accepted connections and answered none, which is exactly what the tray was misreading as a foreign process. The check is now skipped after a provably clean shutdown, so orderly restarts are fast while reboots and force-kills are still verified.*
+
+*No re-index — `DERIVED_VERSION` is unchanged at 20. Upgrading from 1.10.1 is a restart.*
+
 ### Fixed
 
 - **The tray app no longer reports its own still-booting server as a foreign process.** After a reboot the tray showed `port in use (foreign) — observing` and never recovered; restarting it from the Start menu fixed things, which made it look like a startup race between the tray and the logon service. It wasn't. The port really was bound by Minder — the server just couldn't answer yet, and the tray had no way to say so.
