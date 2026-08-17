@@ -193,6 +193,25 @@ fn handle_menu_event<R: Runtime>(
 /// *to* — this function's job is just to make the OS registration (the
 /// plugin handles persistence) match that, and to leave the checkbox
 /// reflecting reality if it can't.
+/// Whether this build is allowed to register itself for launch-at-login.
+///
+/// Debug builds are not. `tauri_plugin_autostart` registers **whatever
+/// executable is currently running**, so enabling the checkbox once under
+/// `pnpm tray:dev` writes `target\debug\minder-tray.exe` into the user's
+/// Windows Run key (or the equivalent LaunchAgent / `.desktop` entry) and
+/// leaves it there. That entry then keeps starting a throwaway dev binary at
+/// every logon — outliving the branch it was built from, and silently taking
+/// precedence over the release build the user later installs, because the
+/// plugin's notion of "enabled" is a boolean, not "enabled *and pointing at
+/// me*". Observed in the wild: a machine booting a month-old `0.1.0` debug tray
+/// while the installed `1.10.1` release was only ever launched by hand.
+///
+/// Disabling still works in debug, so a dev build can always clean up an
+/// entry — it just can't create one.
+fn autostart_registration_allowed() -> bool {
+    !cfg!(debug_assertions)
+}
+
 fn sync_autostart<R: Runtime>(app: &tauri::AppHandle<R>, item: &CheckMenuItem<R>) {
     let manager = app.autolaunch();
 
@@ -219,6 +238,18 @@ fn sync_autostart<R: Runtime>(app: &tauri::AppHandle<R>, item: &CheckMenuItem<R>
             return;
         }
     };
+
+    // Refuse to CREATE an autostart entry from a debug build, but always allow
+    // removing one — see `autostart_registration_allowed`.
+    if want_enabled && !autostart_registration_allowed() {
+        crate::supervisor::log(
+            "refusing to enable autostart from a debug build — it would register this \
+             target/debug binary to launch at every logon and shadow the installed release. \
+             Use an installed release build to turn this on.",
+        );
+        let _ = item.set_checked(false);
+        return;
+    }
 
     let sync_result = if want_enabled {
         manager.enable()
@@ -312,7 +343,11 @@ fn describe(status: ServerStatus, port: u16, supervisor: &Arc<Supervisor>) -> (S
     let word = match status {
         ServerStatus::Up => "running",
         ServerStatus::Degraded => "degraded",
-        ServerStatus::Down => "not responding",
+        // Both mean "not serving us right now", and the attach note carried in
+        // `suffix` is what distinguishes a proven-foreign owner from a server
+        // that simply hasn't answered yet — so the word itself stays neutral
+        // rather than asserting a cause the status alone can't establish.
+        ServerStatus::Foreign | ServerStatus::Unreachable => "not responding",
     };
     (
         format!("Status: {word} (:{port}){suffix}"),
@@ -356,7 +391,7 @@ fn open_logs_dir<R: Runtime>(app: &tauri::AppHandle<R>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{recovered_checked_state, revert_target};
+    use super::{autostart_registration_allowed, recovered_checked_state, revert_target};
 
     #[test]
     fn revert_target_no_op_when_sync_succeeds() {
@@ -379,5 +414,20 @@ mod tests {
     #[test]
     fn recovered_checked_state_is_none_when_the_fresh_read_also_fails() {
         assert_eq!(recovered_checked_state::<()>(Err(())), None);
+    }
+
+    #[test]
+    fn debug_builds_may_not_register_autostart() {
+        // Asserted against the same cfg the guard reads, so this stays true in
+        // both profiles rather than pinning whichever one CI happens to run.
+        // The invariant: a build that can be produced by `pnpm tray:dev` must
+        // never be able to write itself into the user's logon entries.
+        assert_eq!(autostart_registration_allowed(), !cfg!(debug_assertions));
+        if cfg!(debug_assertions) {
+            assert!(
+                !autostart_registration_allowed(),
+                "a debug build must not be able to claim launch-at-login"
+            );
+        }
     }
 }

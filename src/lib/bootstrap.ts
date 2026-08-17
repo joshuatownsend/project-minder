@@ -269,11 +269,19 @@ async function registerServiceDisposers(): Promise<void> {
 async function bootDb(): Promise<void> {
   try {
     const { probeInitStatus } = await import("@/lib/data");
+    // Timed because this step is the one that can silently hold the whole
+    // server hostage: better-sqlite3 is synchronous, so a slow open blocks the
+    // event loop and every in-flight request with it — `/api/health` included,
+    // which is what makes the tray report a healthy-but-booting service as an
+    // unresponsive foreign process. A cold 2.1 GB index measured 2m47s here
+    // against 74ms warm, and the previous log line recorded neither.
+    const startedAt = Date.now();
     const status = await probeInitStatus();
     blog("db: probed", {
       state: status.state,
       attempts: status.attempts,
       quarantineRuns: status.quarantineRuns,
+      ms: Date.now() - startedAt,
     });
     recordSubsystem("db");
   } catch (err) {

@@ -1,5 +1,29 @@
 # Insights
 
+<!-- insight:00352f40650e | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-17T20:14:42.677Z -->
+## ★ Insight
+The mtime mutation is the one worth noting: dropping mtime from the binding still passed **30 of 31** tests. Size alone catches a growing index, which is the common case — but not an in-place rewrite at identical length, which is exactly what a crash mid-write produces. A test suite that only exercised the common case would have ratified a marker that trusts a torn file.
+
+---
+
+<!-- insight:bb271adbf3ba | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-17T19:57:15.906Z -->
+## ★ Insight
+`tauri_plugin_autostart` registers **whatever exe is currently running**. A single past `pnpm tray:dev` wrote `target\debug\minder-tray.exe` into your Run key permanently — and it kept winning even after you installed the real app, because the plugin reads "is autostart enabled?" as a boolean, not "does it point at *me*?". A dev build being able to claim a user's boot sequence is arguably a product bug, not just local mess.
+
+---
+
+<!-- insight:89f662012610 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-17T19:48:53.334Z -->
+## ★ Insight
+**A bound port and a responsive server are different facts.** The OS completes the TCP handshake from the listen backlog in kernel space — no application code required. So `port_is_bound()` says "yes" while the process behind it is wedged. Any check that infers liveness from a successful `connect()` is measuring the kernel, not your app.
+
+---
+
+<!-- insight:5740ff7ee4d4 | session:e1ddf31d-f85f-44af-a987-d10645dbba4a | 2026-08-17T19:35:35.258Z -->
+## ★ Insight
+The most useful artifact wasn't a fix. Mutation testing showed that reverting `/api/plans` to a hand-rolled `set` **passed all 4,994 tests** — my tests proved `getOrLoad` worked but never that the route reached for it. That's the same "silently stops guarding" shape as the bugs themselves, relocated into the test suite, and only a deliberate mutation surfaced it.
+
+---
+
 <!-- insight:260ea4d1154a | session:e1ddf31d-f85f-44af-a987-d10645dbba4a | 2026-08-17T17:48:30.045Z -->
 ## ★ Insight
 The through-line across all five rounds: every finding was something sitting **above** a correct guard — a cache, a boot path, a second caller, a stale docstring promising protection that was opt-in. Finding the read and guarding it was the easy half. The half that took five rounds was asking what sits between the guard and the response.

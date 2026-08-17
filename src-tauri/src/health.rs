@@ -4,11 +4,29 @@
 //! returns `ok` (true only when the DB state machine reached `success`) and
 //! `status` ("ok"/"degraded"), with HTTP 200 when healthy and 503 otherwise —
 //! all carrying the full body. We trust those server-computed fields rather
-//! than re-deriving health from `db.state` ourselves, and map onto three tray
+//! than re-deriving health from `db.state` ourselves, and map onto four tray
 //! states:
 //!   - Up: HTTP 200 and the server's own `ok` is true.
 //!   - Degraded: a Minder-shaped response that isn't healthy (503, or `ok:false`).
-//!   - Down: no response at all, or a response that isn't Minder's.
+//!   - Foreign: something answered over HTTP, but it isn't Minder.
+//!   - Unreachable: nothing answered — connection refused, or the request timed out.
+//!
+//! **Foreign and Unreachable used to be one variant (`Down`), and conflating
+//! them was a bug.** They are both "not Minder right now", but they carry
+//! opposite amounts of information:
+//!
+//!   - `Foreign` is *proof*. Some other server owns this port and said so.
+//!   - `Unreachable` is the *absence* of information. The most likely cause on a
+//!     cold boot is our own server still starting up: the OS completes the TCP
+//!     handshake from the listen backlog with no application code involved, so
+//!     the port reads as bound while the Node process is still blocked opening a
+//!     large SQLite index. A 2.1 GB index measured 2m47s of blocked event loop,
+//!     against this agent's 4s timeout — so the tray would time out, conclude
+//!     "foreign process", and latch that verdict for the rest of the session
+//!     while the perfectly healthy service finished booting behind it.
+//!
+//! A timeout is not evidence of foreignness. Callers must treat `Unreachable` as
+//! "ask again later", never as a settled verdict.
 
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::OnceLock;
@@ -34,7 +52,10 @@ pub(crate) fn agent() -> &'static ureq::Agent {
 pub enum ServerStatus {
     Up,
     Degraded,
-    Down,
+    /// Something answered over HTTP, but the body isn't Minder-shaped.
+    Foreign,
+    /// Nothing answered: connection refused, timed out, or DNS failed.
+    Unreachable,
 }
 
 impl ServerStatus {
@@ -42,6 +63,14 @@ impl ServerStatus {
     /// startup attach decision keys on.
     pub fn is_minder(self) -> bool {
         matches!(self, ServerStatus::Up | ServerStatus::Degraded)
+    }
+
+    /// Whether this probe settles the question of who owns the port. Only
+    /// `Unreachable` is inconclusive — see the module header. Callers deciding
+    /// spawn-vs-attach must keep re-probing while this is false rather than
+    /// committing to a verdict they can't support.
+    pub fn is_conclusive(self) -> bool {
+        !matches!(self, ServerStatus::Unreachable)
     }
 }
 
@@ -58,8 +87,8 @@ pub fn port_is_bound(port: u16) -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
 }
 
-/// Probe `GET /api/health` and classify the result. Never panics; any
-/// transport error or unparseable body degrades to `Down`.
+/// Probe `GET /api/health` and classify the result. Never panics; a transport
+/// error yields `Unreachable` and an unparseable body yields `Foreign`.
 pub fn probe(port: u16) -> ServerStatus {
     let url = format!("http://{HOST}:{port}/api/health");
 
@@ -67,14 +96,40 @@ pub fn probe(port: u16) -> ServerStatus {
     // server's allowlist is port-aware (src/proxy.ts derives it from the bound
     // PORT), so a loopback host on the bound port is accepted on any port.
     // Both the 2xx and the 503-"degraded" arms carry the same body shape, so
-    // normalize to (code, body) and classify once; only a transport failure
-    // (connection refused / timeout / DNS) is an outright Down.
-    let (code, body) = match agent().get(&url).call() {
-        Ok(resp) => (200u16, resp.into_string().unwrap_or_default()),
-        Err(ureq::Error::Status(code, resp)) => (code, resp.into_string().unwrap_or_default()),
-        Err(_) => return ServerStatus::Down,
+    // normalize to (code, body) and classify once.
+    //
+    // A transport failure (connection refused / timeout / DNS) is `Unreachable`,
+    // NOT `Foreign`: nobody answered, so we've learned nothing about who owns
+    // the port. Distinguishing the two is the whole point of the split — see the
+    // module header.
+    let (code, resp) = match agent().get(&url).call() {
+        // Read the real status rather than assuming 200: ureq treats every 2xx
+        // as Ok, and a 204 or 206 hard-coded to 200 would be classified as a
+        // healthy Minder on the strength of a status it never sent.
+        Ok(resp) => (resp.status(), resp),
+        Err(ureq::Error::Status(code, resp)) => (code, resp),
+        Err(_) => return ServerStatus::Unreachable,
+    };
+
+    // Reading the body is a second chance to fail, and the failure is still
+    // transport-level: headers can arrive and then the body stall until the
+    // agent's timeout. The previous `.unwrap_or_default()` turned that into an
+    // EMPTY body, which `classify_body` correctly reads as "not JSON" and
+    // therefore Foreign — permanently latching a Minder process that stalled
+    // mid-response as a foreign one, which is exactly the rule this split
+    // exists to enforce. An unfinished read tells us nothing about ownership.
+    let body = match body_or_unreachable(resp.into_string()) {
+        Ok(body) => body,
+        Err(status) => return status,
     };
     classify_body(code, body)
+}
+
+/// Map a body-read result onto either its content or an inconclusive verdict.
+/// Split out from [`probe`] purely so the rule is unit-testable — a `Response`
+/// that fails midway through `into_string()` can't be constructed in a test.
+pub fn body_or_unreachable<E>(read: Result<String, E>) -> Result<String, ServerStatus> {
+    read.map_err(|_| ServerStatus::Unreachable)
 }
 
 /// Pure classification of an HTTP status + body string. Extracted so the
@@ -82,19 +137,21 @@ pub fn probe(port: u16) -> ServerStatus {
 /// `ok` verdict — the health route already folds `db.state` (and anything else)
 /// into that boolean, so we don't second-guess it here.
 pub fn classify_body(http_status: u16, body: String) -> ServerStatus {
+    // Everything below this point has an HTTP answer in hand, so every outcome
+    // is conclusive: it's either Minder or it demonstrably isn't.
     let json: serde_json::Value = match serde_json::from_str(&body) {
         Ok(v) => v,
         // Something answered but it isn't JSON — not a Minder server.
-        Err(_) => return ServerStatus::Down,
+        Err(_) => return ServerStatus::Foreign,
     };
 
     // A Minder health body always carries a boolean `ok` and a string `status`.
-    // Anything missing those isn't Minder → treat as Down (a foreign process on
-    // the port).
+    // Anything missing those isn't Minder — and because it *answered*, that's
+    // proof of a foreign process rather than a slow one.
     let has_status = json.get("status").and_then(|v| v.as_str()).is_some();
     let ok = match json.get("ok").and_then(|v| v.as_bool()) {
         Some(ok) if has_status => ok,
-        _ => return ServerStatus::Down,
+        _ => return ServerStatus::Foreign,
     };
 
     if http_status == 200 && ok {
@@ -137,24 +194,85 @@ mod tests {
     }
 
     #[test]
-    fn foreign_json_is_down() {
-        // No `ok`/`status` fields → not Minder.
+    fn foreign_json_is_foreign() {
+        // No `ok`/`status` fields → not Minder. It answered, so this is proof.
         let body = r#"{"hello":"world"}"#;
-        assert_eq!(classify_body(200, body.to_string()), ServerStatus::Down);
+        assert_eq!(classify_body(200, body.to_string()), ServerStatus::Foreign);
     }
 
     #[test]
-    fn non_json_is_down() {
+    fn non_json_is_foreign() {
         assert_eq!(
             classify_body(200, "<html>nginx</html>".to_string()),
-            ServerStatus::Down
+            ServerStatus::Foreign
         );
+    }
+
+    #[test]
+    fn partial_minder_body_is_foreign() {
+        // `status` present but `ok` missing — shaped like Minder's but isn't.
+        let body = r#"{"status":"ok"}"#;
+        assert_eq!(classify_body(200, body.to_string()), ServerStatus::Foreign);
     }
 
     #[test]
     fn up_and_degraded_are_minder() {
         assert!(ServerStatus::Up.is_minder());
         assert!(ServerStatus::Degraded.is_minder());
-        assert!(!ServerStatus::Down.is_minder());
+        assert!(!ServerStatus::Foreign.is_minder());
+        assert!(!ServerStatus::Unreachable.is_minder());
+    }
+
+    #[test]
+    fn only_unreachable_is_inconclusive() {
+        // The invariant the whole split exists to encode: a timeout tells us
+        // nothing about ownership, so it must never settle the decision. Every
+        // other outcome had an HTTP answer behind it.
+        assert!(ServerStatus::Up.is_conclusive());
+        assert!(ServerStatus::Degraded.is_conclusive());
+        assert!(ServerStatus::Foreign.is_conclusive());
+        assert!(!ServerStatus::Unreachable.is_conclusive());
+    }
+
+    #[test]
+    fn a_failed_body_read_is_unreachable_not_foreign() {
+        // Regression: headers arrive, then the body read times out. Treating
+        // that as an empty body made classify_body call it Foreign, which the
+        // observe loop takes as settled — latching a stalled Minder as foreign.
+        let failed: Result<String, &str> = Err("read timed out");
+        assert_eq!(body_or_unreachable(failed), Err(ServerStatus::Unreachable));
+    }
+
+    #[test]
+    fn a_successful_body_read_passes_through_verbatim() {
+        // Including an empty-but-COMPLETE body, which is a real answer (and
+        // classifies as Foreign) rather than a transport failure.
+        let ok: Result<String, &str> = Ok(String::new());
+        assert_eq!(body_or_unreachable(ok), Ok(String::new()));
+        let body: Result<String, &str> = Ok(r#"{"ok":true,"status":"ok"}"#.to_string());
+        assert_eq!(
+            body_or_unreachable(body),
+            Ok(r#"{"ok":true,"status":"ok"}"#.to_string())
+        );
+    }
+
+    #[test]
+    fn classify_body_never_returns_unreachable() {
+        // `classify_body` only ever runs when something answered, so it must
+        // not be able to produce the "nothing answered" verdict. Guards against
+        // a future edit reintroducing the conflation this split removed.
+        for (code, body) in [
+            (200u16, r#"{"ok":true,"status":"ok"}"#),
+            (503, r#"{"ok":false,"status":"degraded"}"#),
+            (200, r#"{"hello":"world"}"#),
+            (404, "<html>nginx</html>"),
+            (500, ""),
+        ] {
+            assert_ne!(
+                classify_body(code, body.to_string()),
+                ServerStatus::Unreachable,
+                "classify_body({code}, {body:?}) must be conclusive"
+            );
+        }
     }
 }

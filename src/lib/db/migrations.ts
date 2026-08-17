@@ -1,9 +1,15 @@
 import "server-only";
 import path from "path";
 import { promises as fs } from "fs";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, statSync } from "fs";
 import type DatabaseT from "better-sqlite3";
 import { DB_DIR, DB_PATH, getDb, getDbError, closeDb, isDriverLoaded } from "./connection";
+import {
+  clearCleanShutdownMarker,
+  quickCheckForced,
+  readCleanShutdownState,
+  shouldRunQuickCheck,
+} from "./cleanShutdown";
 import { renameWithRetry } from "../atomicWrite";
 import { resolveServerRoot } from "../serverRoot";
 import { sessionFileHomeKey } from "../platform";
@@ -1107,6 +1113,19 @@ async function quarantineCorruptDb(reason: string): Promise<string | null> {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const dest = path.join(DB_DIR, `index.db.corrupt-${stamp}`);
 
+  // Drop the clean-shutdown marker up front, before the file it describes goes
+  // anywhere. Doing it here rather than at the call sites covers all three
+  // quarantine paths (open failed, quick_check failed, schema_version
+  // unreadable) and both outcomes below (renamed aside, or deleted outright) —
+  // clearing it at one call site left the other two able to leave a marker
+  // behind that described a database no longer present.
+  //
+  // The size+mtime binding means a stale marker would almost certainly be
+  // rejected anyway, so this is belt-and-braces rather than a live bug; the
+  // reason to do it properly is that "almost certainly" is not a property worth
+  // relying on when the consequence is skipping an integrity check.
+  clearCleanShutdownMarker(DB_PATH);
+
   try {
     await renameWithRetry(DB_PATH, dest);
     await moveOrDeleteSiblings(dest);
@@ -1139,6 +1158,18 @@ export interface InitResult {
   schemaVersion: number;
   quarantined: string | null;
   error: Error | null;
+  /**
+   * True when `PRAGMA quick_check` was skipped because the previous shutdown
+   * was provably clean and the index is large enough for the scan to be
+   * user-visible. Observability only — nothing branches on it; it exists so the
+   * bootstrap log can distinguish "fast boot" from "check passed fast".
+   *
+   * Optional because results that never reached the check can't answer the
+   * question: `synthFailureResult()` and the driver-missing path both
+   * short-circuit before Path 2. `undefined` means "didn't get that far",
+   * which is distinct from `false` ("ran it").
+   */
+  quickCheckSkipped?: boolean;
 }
 
 /**
@@ -1162,6 +1193,19 @@ export interface InitResult {
  *
  * The indexer is responsible for repopulating the rebuilt DB.
  */
+/**
+ * Size of the main DB file in bytes, or 0 if it can't be stat'd. Feeding 0 into
+ * `shouldRunQuickCheck` fails toward running the check, which is the safe
+ * direction when we can't measure.
+ */
+function dbFileSizeBytes(): number {
+  try {
+    return statSync(DB_PATH).size;
+  } catch {
+    return 0;
+  }
+}
+
 export async function initDb(): Promise<InitResult> {
   const result: InitResult = {
     available: false,
@@ -1169,6 +1213,10 @@ export async function initDb(): Promise<InitResult> {
     schemaVersion: 0,
     quarantined: null,
     error: null,
+    // Deliberately NOT initialized. The field is optional precisely so that
+    // `undefined` means "never reached Path 2" (driver missing, open failed) —
+    // seeding it to `false` would have every early return claim the check ran,
+    // which is the opposite of the truth and makes the bootstrap log lie.
   };
 
   // Path 0: driver missing. Don't quarantine — the file is fine, the
@@ -1197,25 +1245,50 @@ export async function initDb(): Promise<InitResult> {
     }
   }
 
-  // Path 2: quick_check on every open. quick_check is materially cheaper
-  // than integrity_check (skips index/UNIQUE cross-checks) and catches the
-  // same corruption classes that matter for a derived index — page-level
-  // damage and freelist breakage. We can rebuild from the JSONLs anyway,
-  // so we don't need integrity_check's index-level assurance on startup.
-  const integrity = db.prepare("PRAGMA quick_check").get() as {
-    quick_check?: string;
-  };
-  if (integrity.quick_check !== "ok") {
-    closeDb();
-    result.quarantined = await quarantineCorruptDb(
-      `quick_check returned ${integrity.quick_check}`
-    );
-    db = await getDb();
-    if (!db) {
-      result.error = new Error("Failed to reopen DB after quarantine", {
-        cause: getDbError() ?? undefined,
-      });
-      return result;
+  // Path 2: quick_check, on every open EXCEPT a provably-clean restart of a
+  // large index. quick_check is materially cheaper than integrity_check (skips
+  // index/UNIQUE cross-checks) and catches the same corruption classes that
+  // matter for a derived index — page-level damage and freelist breakage. We
+  // can rebuild from the JSONLs anyway, so we don't need integrity_check's
+  // index-level assurance on startup.
+  //
+  // It is, however, O(database size) and better-sqlite3 is synchronous, so on a
+  // large index it blocks the event loop and the whole server is unreachable
+  // until it finishes — measured at 2m47s on a 2.1 GB index.db from a cold page
+  // cache, versus 74ms warm. `db/cleanShutdown.ts` documents the trust protocol
+  // that lets us skip it after a graceful stop; anything short of proof (no
+  // marker, changed file, non-empty WAL, forced via env) still runs it.
+  const cleanState = readCleanShutdownState(DB_PATH);
+  const runQuickCheck = shouldRunQuickCheck({
+    cleanShutdown: cleanState.trusted,
+    dbSizeBytes: dbFileSizeBytes(),
+    force: quickCheckForced(),
+  });
+  // Recorded as soon as the decision is made, not after the check completes:
+  // the quarantine-then-failed-reopen path below returns early, and setting
+  // this at the end left it `undefined` there — reporting "never reached
+  // Path 2" about a run that had just executed Path 2 and quarantined a
+  // database. The field describes the decision, so it belongs with it.
+  result.quickCheckSkipped = !runQuickCheck;
+
+  if (runQuickCheck) {
+    const integrity = db.prepare("PRAGMA quick_check").get() as {
+      quick_check?: string;
+    };
+    if (integrity.quick_check !== "ok") {
+      closeDb();
+      // The marker is cleared inside quarantineCorruptDb, which covers every
+      // quarantine path rather than just this one.
+      result.quarantined = await quarantineCorruptDb(
+        `quick_check returned ${integrity.quick_check}`
+      );
+      db = await getDb();
+      if (!db) {
+        result.error = new Error("Failed to reopen DB after quarantine", {
+          cause: getDbError() ?? undefined,
+        });
+        return result;
+      }
     }
   }
 

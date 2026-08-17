@@ -3,6 +3,7 @@ import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
 import type DatabaseT from "better-sqlite3";
+import { readCleanShutdownState, writeCleanShutdownMarker } from "./cleanShutdown";
 
 // Local SQLite index for Project Minder. Sits at ~/.minder/index.db.
 //
@@ -220,6 +221,33 @@ export function checkpointAndCloseDb(): void {
     /* best-effort — fall through to close regardless */
   }
   closeDb();
+
+  // Record the clean shutdown so the next open can skip a multi-minute
+  // `PRAGMA quick_check` on a large index (see db/cleanShutdown.ts).
+  //
+  // Ordered after closeDb() so the recorded size/mtime describe the final
+  // on-disk state the next open will stat, with no handle still able to move
+  // them. Note this ordering is a belt-and-braces choice, not a load-bearing
+  // one: `wal_checkpoint(TRUNCATE)` zeroes the WAL in place while the handle is
+  // still open, and closing does not modify the main file, so moving this call
+  // above `closeDb()` produces identical results — verified by mutation, which
+  // is also why no test pins the ordering. Don't add one that pretends to.
+  //
+  // Gated on the WAL actually having drained rather than on the checkpoint
+  // call not throwing — `wal_checkpoint` reports failure by RETURNING a busy
+  // result (e.g. another connection still holds the DB), not by throwing, and
+  // the catch above swallows the throwing cases anyway. Writing the marker on
+  // that path would certify a dirty database as clean, which is the one
+  // failure mode this whole mechanism must not have.
+  //
+  // This gate is reasoned, not covered: reproducing a busy checkpoint needs a
+  // second live connection holding a read transaction, which no test here sets
+  // up. `cleanShutdown.test.ts` does pin the half that matters downstream — a
+  // non-empty WAL is distrusted at open even when the marker matches perfectly
+  // — so a marker that slipped through here would still not be believed.
+  if (readCleanShutdownState(DB_PATH).reason !== "wal-not-empty") {
+    writeCleanShutdownMarker(DB_PATH);
+  }
 }
 
 /**

@@ -224,6 +224,49 @@ export function resolveServicePort(env = process.env) {
 }
 
 /**
+ * An explicit server payload directory to install the service against, from
+ * `--payload <dir>` or `MINDER_SERVICE_PAYLOAD`.
+ *
+ * WHY THIS EXISTS
+ *
+ * Without it, `resolveServerLaunch` can only ever find the payload the REPO
+ * built (`<root>/dist/minder-server`). The installed desktop app ships its own
+ * server bundle — a flatter `minder-server/` beside its own `node/node.exe` —
+ * which no repo-relative lookup can reach. So a machine with both the tray app
+ * and the logon service installed ended up running the app's bundle when
+ * launched from the Start Menu and the dev tree's bundle at logon: two owners of
+ * one port, serving two different builds, with the port race decided by
+ * whichever won the boot.
+ *
+ * Pointing the service at the same bundle the app ships makes them the same
+ * server, so which one wins the race stops mattering.
+ *
+ * @param {{ argv?: string[], env?: Record<string, string | undefined> }} [opts]
+ * @returns {string | null} absolute-ish directory as given, or null if unset
+ */
+export function resolveServicePayloadArg(opts = {}) {
+  const { argv = process.argv, env = process.env } = opts;
+  const flagIndex = argv.indexOf("--payload");
+  if (flagIndex !== -1) {
+    // Trimmed on the same terms as the env var below — a path pasted with a
+    // trailing space survives `path.resolve()` intact and then fails as a
+    // missing `server.js` in a directory that looks correct in the error.
+    const value = argv[flagIndex + 1]?.trim();
+    // A bare trailing `--payload`, or one followed by another flag, is a user
+    // error worth surfacing rather than silently falling back to the dev tree.
+    if (!value || value.startsWith("-")) {
+      throw new Error("--payload requires a directory path");
+    }
+    return value;
+  }
+  // Trimmed on the way out, not just tested for emptiness — an env var set with
+  // stray whitespace would otherwise be carried into path resolution verbatim
+  // and fail as a missing directory.
+  const fromEnv = env.MINDER_SERVICE_PAYLOAD?.trim();
+  return fromEnv ? fromEnv : null;
+}
+
+/**
  * Recovers the port the INSTALLED service actually listens on, using the same
  * precedence as `resolveInstalledLaunch`: the JSON manifest first, then the
  * generated vbs (installs predating the manifest's `port` field), then the
@@ -421,6 +464,45 @@ function defaultResolveNextBin(root) {
  *   port?: number,
  * }} opts
  */
+/**
+ * Locate a Node runtime shipped beside a server bundle, if there is one.
+ *
+ * The desktop app's install layout puts them side by side, and the runtime's
+ * own layout is platform-dependent — see scripts/fetch-node-runtime.mjs:21-22,
+ * which lays these down:
+ *   <app>/minder-server/server.js
+ *   <app>/node/node.exe    (Windows)
+ *   <app>/node/bin/node    (macOS, Linux)
+ *
+ * The POSIX `bin/` level is NOT optional: a resolver that only checks a flat
+ * `node/node` finds nothing on macOS or Linux and silently falls back to
+ * whichever Node is running the installer. That is worse than it sounds —
+ * `better-sqlite3` is a native addon tied to a specific Node ABI, so a fallback
+ * across a major version leaves the installed service unable to load the
+ * database at all, with no error until first use.
+ *
+ * Returns null when no bundled runtime is present, leaving the caller to fall
+ * back to the current `execPath`.
+ *
+ * @param {{ bundleDir: string, existsSync?: (p: string) => boolean }} opts
+ * @returns {string | null}
+ */
+export function resolveBundledNodeExe(opts) {
+  const { bundleDir, existsSync = fsExistsSync } = opts;
+  const siblingNodeDir = path.join(path.dirname(bundleDir), "node");
+  const candidates = [
+    path.join(siblingNodeDir, "node.exe"),
+    path.join(siblingNodeDir, "bin", "node"),
+    // Flat POSIX layout — not what the packaging script produces today, but a
+    // cheap last resort before falling back to an ABI-mismatched runtime.
+    path.join(siblingNodeDir, "node"),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 export function resolveServerLaunch(opts) {
   const {
     root,
@@ -428,7 +510,29 @@ export function resolveServerLaunch(opts) {
     existsSync = fsExistsSync,
     resolveNextBin = defaultResolveNextBin,
     port = DEFAULT_SERVICE_PORT,
+    bundleDir = null,
   } = opts;
+
+  // An explicit payload wins over anything repo-relative — that's the point of
+  // passing it (see resolveServicePayloadArg). Reported as mode "standalone"
+  // because it IS one structurally (an absolute `server.js` invoked by node), so
+  // the identity-marker and vbs-recovery paths keep working unchanged rather
+  // than needing a third mode threaded through all of them.
+  if (bundleDir) {
+    const entry = path.join(bundleDir, "server.js");
+    if (!existsSync(entry)) return null;
+    return {
+      mode: "standalone",
+      // Prefer a runtime shipped alongside the bundle. The desktop app bundles
+      // its own `node/` next to `minder-server/`, and using it keeps the service
+      // on the same Node version the app was built and tested against instead of
+      // whatever happens to be first on PATH.
+      exe: resolveBundledNodeExe({ bundleDir, existsSync }) ?? execPath,
+      args: [entry],
+      cwd: bundleDir,
+    };
+  }
+
   const standaloneServer = path.join(root, "dist", "minder-server", "server.js");
   if (existsSync(standaloneServer)) {
     const cwd = path.join(root, "dist", "minder-server");
