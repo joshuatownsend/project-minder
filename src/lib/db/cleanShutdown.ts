@@ -56,6 +56,28 @@ const MARKER_VERSION = 1;
  */
 export const QUICK_CHECK_ALWAYS_MAX_BYTES = 256 * 1024 * 1024;
 
+/**
+ * The effective threshold, with `MINDER_QUICK_CHECK_MAX_BYTES` as an override.
+ *
+ * Exists so the skip branch is *reachable in a test*. With a hardcoded 256 MB
+ * constant, the only code path that will ever run on a real multi-gigabyte index
+ * could not be exercised without fabricating one — leaving the production
+ * behavior verified solely by argument. The seam that needs real coverage is
+ * temporal, not logical: the marker stats the DB file after `closeDb()`, while
+ * the next open runs SQLite's own pragmas *before* the marker is read, so if any
+ * of them touched mtime or left a non-empty WAL the marker would silently never
+ * validate. That failure is safe (we just run the check) but total, and no
+ * amount of pure-function testing can see it.
+ *
+ * Also a support lever: lowering it forces the fast path on, raising it forces
+ * the check back on for every index.
+ */
+export function quickCheckAlwaysMaxBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.MINDER_QUICK_CHECK_MAX_BYTES;
+  const n = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isInteger(n) && n >= 0 ? n : QUICK_CHECK_ALWAYS_MAX_BYTES;
+}
+
 export interface CleanShutdownMarker {
   version: number;
   closedAt: string;
@@ -212,10 +234,13 @@ export function shouldRunQuickCheck(opts: {
   cleanShutdown: boolean;
   dbSizeBytes: number;
   force?: boolean;
+  /** Override for the always-check threshold; defaults to the env-aware value. */
+  alwaysCheckBelowBytes?: number;
 }): boolean {
   if (opts.force) return true;
   if (!opts.cleanShutdown) return true;
-  return opts.dbSizeBytes < QUICK_CHECK_ALWAYS_MAX_BYTES;
+  const threshold = opts.alwaysCheckBelowBytes ?? quickCheckAlwaysMaxBytes();
+  return opts.dbSizeBytes < threshold;
 }
 
 /** `MINDER_FORCE_QUICK_CHECK=1` — support escape hatch for a full scan. */

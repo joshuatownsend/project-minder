@@ -85,6 +85,7 @@ Service mode respects these environment variables:
 | `MINDER_DEMO` | `1` | Optional: enable demo mode with synthetic fixtures. Default is off. |
 | `MINDER_SERVICE_PAYLOAD` | path | Install-time only: directory containing the `server.js` to install the service against, instead of the repo's `dist/minder-server`. Equivalent to `--payload`. See [Keeping both](#keeping-both-point-them-at-the-same-server). |
 | `MINDER_FORCE_QUICK_CHECK` | `1` | Force the SQLite integrity check to run on DB open even after a clean shutdown. Diagnostic escape hatch — see [Database corruption after hard stop](#database-corruption-after-hard-stop). |
+| `MINDER_QUICK_CHECK_MAX_BYTES` | bytes | Size below which the integrity check always runs regardless of a clean shutdown. Defaults to 268435456 (256 MB). Lower it to allow the fast path on a smaller index; raise it to keep checking a large one. |
 
 **Note:** there is no `MINDER_PORT` override. The service templates pin `PORT=4100` at install time, and the repo's `dev`/`start` scripts hardcode `-p 4100`. The standalone `server.js` itself honors `PORT`/`HOSTNAME` environment variables when run by hand, but the installed service always uses 4100.
 
