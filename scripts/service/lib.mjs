@@ -248,7 +248,10 @@ export function resolveServicePayloadArg(opts = {}) {
   const { argv = process.argv, env = process.env } = opts;
   const flagIndex = argv.indexOf("--payload");
   if (flagIndex !== -1) {
-    const value = argv[flagIndex + 1];
+    // Trimmed on the same terms as the env var below — a path pasted with a
+    // trailing space survives `path.resolve()` intact and then fails as a
+    // missing `server.js` in a directory that looks correct in the error.
+    const value = argv[flagIndex + 1]?.trim();
     // A bare trailing `--payload`, or one followed by another flag, is a user
     // error worth surfacing rather than silently falling back to the dev tree.
     if (!value || value.startsWith("-")) {

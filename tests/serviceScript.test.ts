@@ -462,6 +462,27 @@ describe("resolveServicePayloadArg", () => {
     ).toBeNull();
   });
 
+  it("trims whitespace off the --payload argument", () => {
+    // Paths are usually pasted, and a trailing space survives path.resolve()
+    // intact — producing a "missing server.js" error naming a directory that
+    // looks exactly right.
+    expect(
+      resolveServicePayloadArg({
+        argv: ["node", "service.mjs", "install", "--payload", "  C:/apps/minder/minder-server  "],
+        env: {},
+      })
+    ).toBe("C:/apps/minder/minder-server");
+  });
+
+  it("treats a whitespace-only --payload as the error it is", () => {
+    expect(() =>
+      resolveServicePayloadArg({
+        argv: ["node", "service.mjs", "install", "--payload", "   "],
+        env: {},
+      })
+    ).toThrow(/requires a directory path/);
+  });
+
   it("trims whitespace off an accepted env var", () => {
     // Testing only for emptiness while returning the raw value would carry the
     // padding into path resolution and fail later as a missing directory.

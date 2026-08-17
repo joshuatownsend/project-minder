@@ -157,9 +157,15 @@ export function writeCleanShutdownMarker(dbPath: string): boolean {
 }
 
 /**
- * Remove any existing marker. Called before we begin writing to the DB, and by
- * the quarantine path so a rebuilt index never inherits the old file's claim.
- * Never throws.
+ * Remove any existing marker, so a rebuilt index cannot inherit the previous
+ * file's claim to a clean shutdown.
+ *
+ * The quarantine path in `migrations.ts` is the only production caller, and
+ * that is by design rather than an oversight: ordinary writes do not need to
+ * clear the marker, because the size+mtime binding in
+ * `readCleanShutdownState` already invalidates it the moment the file changes.
+ * Quarantine is the exception — it *replaces* the file, so the binding would
+ * otherwise be compared against a different database entirely.
  */
 export function clearCleanShutdownMarker(dbPath: string): void {
   try {

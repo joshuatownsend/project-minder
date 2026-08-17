@@ -179,6 +179,11 @@ enum AttachVerdict {
     Pending,
 }
 
+/// Note shown while observing a port that has been released. Distinct from
+/// every `AttachVerdict` note because it describes the *absence* of a listener
+/// rather than a claim about who owns one.
+const PENDING_UNBOUND_NOTE: &str = "port free — observing (server not running)";
+
 impl AttachVerdict {
     /// The tray-menu note for this verdict. `Pending` deliberately does NOT say
     /// "foreign": we have no evidence for that, and claiming it is what made the
@@ -421,6 +426,9 @@ fn observe_until_shutdown(
 ) {
     let mut pending = verdict == AttachVerdict::Pending;
     let mut delay = RECLASSIFY_BASE;
+    // Which unsettled situation the note currently describes, so a transition
+    // between them rewrites it and a steady state doesn't churn the mutex.
+    let mut pending_note_is_unbound = false;
     loop {
         // Settled verdicts have nothing to re-probe, so block indefinitely —
         // identical to the pre-existing behavior and free of wakeups.
@@ -452,10 +460,27 @@ fn observe_until_shutdown(
                 // A port that has since been released is still not ours to take:
                 // this loop is entered only after we've decided not to own the
                 // server, and respawning here would race whoever is restarting
-                // it. Keep observing; the note stays honest either way.
+                // it. Keep observing — but say so, because "port bound, not
+                // responding" describes a port that is no longer bound, and
+                // leaving it up is the same stale-note bug in miniature.
                 if !health::port_is_bound(cfg.port) {
+                    if !pending_note_is_unbound {
+                        set_note(attach_note, PENDING_UNBOUND_NOTE);
+                        log(&format!(
+                            "port {} is no longer bound — the server we were observing has \
+                             stopped; still not respawning (not our process), still watching",
+                            cfg.port
+                        ));
+                        pending_note_is_unbound = true;
+                    }
                     delay = next_reclassify_delay(delay);
                     continue;
+                }
+                // Bound again after a gap: restore the "bound but silent" note
+                // before we know any more than that.
+                if pending_note_is_unbound {
+                    set_note(attach_note, AttachVerdict::Pending.note());
+                    pending_note_is_unbound = false;
                 }
                 let status = health::probe(cfg.port);
                 let settled = classify_attach(status);
@@ -918,6 +943,21 @@ mod crash_decision_tests {
         assert!(
             AttachVerdict::Foreign.note().contains("foreign"),
             "the proven-foreign note should still say so"
+        );
+    }
+
+    #[test]
+    fn the_unbound_note_describes_absence_not_ownership() {
+        use super::PENDING_UNBOUND_NOTE;
+        // While observing, a port can be released under us. Leaving up
+        // "port bound, not responding" would describe a port that is no longer
+        // bound — the same stale-note failure this PR exists to remove, just
+        // smaller. It must also not claim foreignness, having proved nothing.
+        assert_ne!(PENDING_UNBOUND_NOTE, AttachVerdict::Pending.note());
+        assert!(!PENDING_UNBOUND_NOTE.contains("foreign"));
+        assert!(
+            !PENDING_UNBOUND_NOTE.contains("bound,"),
+            "the unbound note must not assert the port is bound, got: {PENDING_UNBOUND_NOTE:?}"
         );
     }
 
