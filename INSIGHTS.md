@@ -1,5 +1,41 @@
 # Insights
 
+<!-- insight:260ea4d1154a | session:e1ddf31d-f85f-44af-a987-d10645dbba4a | 2026-08-17T17:48:30.045Z -->
+## ★ Insight
+The through-line across all five rounds: every finding was something sitting **above** a correct guard — a cache, a boot path, a second caller, a stale docstring promising protection that was opt-in. Finding the read and guarding it was the easy half. The half that took five rounds was asking what sits between the guard and the response.
+
+---
+
+<!-- insight:2873ac987920 | session:e1ddf31d-f85f-44af-a987-d10645dbba4a | 2026-08-17T17:21:47.866Z -->
+## ★ Insight
+This is a bigger deal than "untidy worktree". A committed `demo-audit.json` would read as a **verdict** rather than the search aid the README insists it is — and its numbers go stale the instant a guard lands. This PR is the proof: it moved "guarded" from 77 to 127 routes without making fifty of them any safer. A stale snapshot of that number, sitting in the repo looking authoritative, is exactly the false-confidence artifact the whole audit doc argues against.
+
+---
+
+<!-- insight:2127d129593e | session:e1ddf31d-f85f-44af-a987-d10645dbba4a | 2026-08-17T14:30:43.049Z -->
+## ★ Insight
+`demoSessionDetail()` falls back to the **freshest seed** when nothing matches (`sessions.ts:819-820`), so every "Related sessions" link opened the *same unrelated Aurora session* while claiming to be the related one. A 404 would have been self-announcing. This produced a screen that looks right and is wrong — strictly worse in a published screenshot than the ~18 obviously-empty ones W12 already tracks, because nothing signals the reader to distrust it. A tolerant fallback turned a broken reference into a confident lie.
+
+---
+
+<!-- insight:90e7e4571318 | session:e1ddf31d-f85f-44af-a987-d10645dbba4a | 2026-08-17T13:59:52.195Z -->
+## ★ Insight
+Mutation testing caught something the passing suite hid. **M5 — reverting `/api/plans` to a hand-rolled `set` — survived the entire 4994-test suite.** My tests proved `getOrLoad` works; nothing proved the *routes reach for it*. That's the same "silently stops guarding" shape as the bugs themselves, relocated into the test layer: a unit test of a mechanism says nothing about whether the caller uses it. The fix was a second file driving both handlers and reproducing the race through them — after which M5, the same revert on `/api/claude-config`, and removing the generation bump all fail.
+
+---
+
+<!-- insight:ccec8f3dfb72 | session:e1ddf31d-f85f-44af-a987-d10645dbba4a | 2026-08-17T13:39:09.774Z -->
+## ★ Insight
+This one inverts the PR's own premise. Before these fixtures, that boot path probed the *user's own* servers — unremarkable, since they'd be probed in real mode anyway. Adding fixtures is what made an inert path outbound, at a third party the user may have no relationship with. **A fixture is data something downstream may act on, not just data something renders** — so "is this fake?" is the wrong question to stop at; "what consumes it?" is the one that catches this.
+
+---
+
+<!-- insight:0313dee14c05 | session:e1ddf31d-f85f-44af-a987-d10645dbba4a | 2026-08-17T11:40:44.705Z -->
+## ★ Insight
+The INSIGHTS.md commit had a wrinkle worth naming. Seven entries accumulated, but only four came from this branch — the other three are provenance for **#454, which merged before they could ride along**. CLAUDE.md's default is that insights travel in the PR whose session produced them; the standalone `chore:` commit is the fallback for provenance that is *structurally unable* to travel with its change. That's exactly this case, so I committed all seven together and said which three are orphaned in the message, rather than splitting an append-only file to make the bookkeeping look tidier than it is.
+
+---
+
 <!-- insight:7f650359812a | session:e1ddf31d-f85f-44af-a987-d10645dbba4a | 2026-08-16T22:14:55.437Z -->
 ## ★ Insight
 The `/stats` fixture derives from the *observed* totals rather than using constants, because its two rows come from two independent demo sources — a hardcoded pair would drift apart and render the red `-91%` panel the capture pipeline already refuses to publish. My first version floored the nudge at `+1` to avoid a "suspiciously perfect zero", which turned 1 observed session into a **−50% drift**: an absolute floor can't be safe on a value consumed as a ratio. The small-N test caught it.
