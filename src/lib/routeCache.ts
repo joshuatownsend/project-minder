@@ -89,8 +89,18 @@ export class TtlCache<T> {
     this.slots.delete(key);
   }
 
-  /** Drop everything, and invalidate any load already in flight (see
-   *  `getOrLoad`) so it cannot write its now-stale result back afterwards. */
+  /**
+   * Drop everything, and bump `generation` so a `getOrLoad()` already in
+   * flight declines to write its now-stale result back.
+   *
+   * **That protection is opt-in, not a property of clearing.** A caller doing
+   * `get` -> `await` -> `set` by hand is unaffected: its `set()` lands after
+   * this returns and repopulates the cache with pre-clear data. Most route
+   * modules still cache that way, which is fine while their loader has no
+   * mode-dependent behavior — but a route whose loader is demo-guarded (or
+   * otherwise flag-dependent) must use `getOrLoad()`, or compare `generation`
+   * itself, or the clear buys it nothing.
+   */
   clear(): void {
     this.slots.clear();
     this.gen++;
