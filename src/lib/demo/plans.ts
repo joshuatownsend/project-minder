@@ -26,7 +26,7 @@ const SEEDS: PlanSeed[] = [
     title: "Checkout abandonment recovery",
     tags: ["aurora-commerce", "growth"],
     daysAgo: 2,
-    sessionIds: ["6f1c2d84-3a5b-4e7f-9c10-2b8d4e6a1f33"],
+    sessionIds: ["demo-aurora-commerce-1"],
     body: `# Checkout abandonment recovery
 
 Recover the ~18% of carts that stall at the payment step.
@@ -46,7 +46,7 @@ Recover the ~18% of carts that stall at the payment step.
     title: "Ledger: migrate to double-entry",
     tags: ["ledger-api", "data", "migration"],
     daysAgo: 6,
-    sessionIds: ["a2e9b7c1-8d4f-4a06-b3e5-71c9d0f2a844", "0c5d1e93-7b62-4f18-8a2d-5e3f9b1c7d60"],
+    sessionIds: ["demo-ledger-api-1", "demo-ledger-api-2"],
     body: `# Ledger: migrate to double-entry
 
 The single-entry table cannot express reversals without a synthetic row, and
@@ -86,7 +86,7 @@ without adopting a full CRDT library?
     title: "Atlas CLI plugin API",
     tags: ["atlas-cli", "api-design"],
     daysAgo: 19,
-    sessionIds: ["d7f0a3b5-2c14-4e89-9b6a-8f2e1d0c4a75"],
+    sessionIds: ["demo-atlas-cli-1"],
     body: `# Atlas CLI plugin API
 
 Third parties want to add commands. The shape we pick is very hard to change
