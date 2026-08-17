@@ -45,6 +45,12 @@ const MAX_BACKOFF: Duration = Duration::from_secs(30);
 /// A child that ran at least this long before crashing is treated as a fresh,
 /// unrelated failure — reset the backoff instead of compounding it.
 const HEALTHY_UPTIME_RESET: Duration = Duration::from_secs(30);
+/// First delay before re-probing a port that is bound but hasn't answered yet.
+/// Short, because the common case is a server a second or two from being ready.
+const RECLASSIFY_BASE: Duration = Duration::from_secs(2);
+/// Cap on the re-probe backoff. The loop never gives up (see
+/// [`observe_until_shutdown`]) — it just stops asking so often.
+const RECLASSIFY_MAX: Duration = Duration::from_secs(60);
 
 /// Windows `CREATE_NO_WINDOW` process-creation flag. The tray is
 /// `windows_subsystem = "windows"` (no console of its own), so a spawned
@@ -91,7 +97,7 @@ impl Supervisor {
         state_dir: Option<PathBuf>,
     ) -> Arc<Supervisor> {
         let attach_note = Arc::new(Mutex::new(None));
-        let mode = decide_mode(&cfg, &attach_note);
+        let (mode, verdict) = decide_mode(&cfg, &attach_note);
         let attached = Arc::new(AtomicBool::new(mode == Mode::Attach));
 
         let (tx, rx) = channel::<Command>();
@@ -105,6 +111,7 @@ impl Supervisor {
                     payload_dir,
                     state_dir,
                     mode,
+                    verdict,
                     rx,
                     attached_thread,
                     note_thread,
@@ -156,32 +163,83 @@ impl Supervisor {
     }
 }
 
+/// How settled our answer to "who owns this port?" is.
+///
+/// The distinction exists because a health probe that times out and a health
+/// probe that gets a non-Minder answer used to collapse into the same verdict,
+/// and they must not: see the `health` module header. `Pending` is the honest
+/// third state for "the port is bound, but nobody has told us by whom yet".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AttachVerdict {
+    /// A Minder server (healthy or degraded) answered.
+    Minder,
+    /// Something answered and it isn't Minder — a settled, proven verdict.
+    Foreign,
+    /// Port bound, nothing answered. Unknown — must keep asking.
+    Pending,
+}
+
+impl AttachVerdict {
+    /// The tray-menu note for this verdict. `Pending` deliberately does NOT say
+    /// "foreign": we have no evidence for that, and claiming it is what made the
+    /// old build slander its own still-booting service.
+    fn note(self) -> &'static str {
+        match self {
+            AttachVerdict::Minder => "attached to existing service",
+            AttachVerdict::Foreign => "port in use (foreign) — observing",
+            AttachVerdict::Pending => "port bound, not responding — observing",
+        }
+    }
+}
+
+fn classify_attach(status: ServerStatus) -> AttachVerdict {
+    if status.is_minder() {
+        AttachVerdict::Minder
+    } else if status.is_conclusive() {
+        AttachVerdict::Foreign
+    } else {
+        AttachVerdict::Pending
+    }
+}
+
 /// Decide spawn-vs-attach. Attach if explicitly requested, or if the port is
 /// already bound at startup (whether by a Minder or a foreign process — either
 /// way we must not spawn a second server and must not kill the incumbent).
-fn decide_mode(cfg: &TrayConfig, attach_note: &Arc<Mutex<Option<String>>>) -> Mode {
+///
+/// Returns the verdict alongside the mode so the observe loop knows whether the
+/// question is settled. An unsettled verdict is re-probed there rather than
+/// being frozen into the tray menu for the life of the process.
+fn decide_mode(
+    cfg: &TrayConfig,
+    attach_note: &Arc<Mutex<Option<String>>>,
+) -> (Mode, AttachVerdict) {
     if cfg.attach {
         set_note(attach_note, "attach mode (MINDER_TRAY_ATTACH=1)");
-        return Mode::Attach;
+        return (Mode::Attach, AttachVerdict::Minder);
     }
     if health::port_is_bound(cfg.port) {
         let status = health::probe(cfg.port);
-        if status.is_minder() {
-            set_note(attach_note, "attached to existing service");
-            log(&format!(
+        let verdict = classify_attach(status);
+        set_note(attach_note, verdict.note());
+        match verdict {
+            AttachVerdict::Minder => log(&format!(
                 "port {} already serving Minder ({status:?}) — attaching, not spawning",
                 cfg.port
-            ));
-        } else {
-            set_note(attach_note, "port in use (foreign) — observing");
-            log(&format!(
+            )),
+            AttachVerdict::Foreign => log(&format!(
                 "port {} bound by a non-Minder process — observing, not spawning or killing",
                 cfg.port
-            ));
+            )),
+            AttachVerdict::Pending => log(&format!(
+                "port {} is bound but did not answer /api/health in time — NOT calling it \
+                 foreign; it is most likely our own server still starting up. Observing and \
+                 re-probing.",
+                cfg.port
+            )),
         }
-        return Mode::Attach;
+        return (Mode::Attach, verdict);
     }
-    Mode::Spawn
+    (Mode::Spawn, AttachVerdict::Pending)
 }
 
 fn set_note(note: &Arc<Mutex<Option<String>>>, msg: &str) {
@@ -203,6 +261,7 @@ fn run_supervisor(
     payload_dir: Option<PathBuf>,
     state_dir: Option<PathBuf>,
     mode: Mode,
+    verdict: AttachVerdict,
     rx: Receiver<Command>,
     attached: Arc<AtomicBool>,
     attach_note: Arc<Mutex<Option<String>>>,
@@ -212,7 +271,7 @@ fn run_supervisor(
         cfg.port
     ));
     if mode == Mode::Attach {
-        return observe_until_shutdown(&rx);
+        return observe_until_shutdown(&rx, &cfg, &attach_note, verdict);
     }
 
     let mut backoff = BASE_BACKOFF;
@@ -266,7 +325,7 @@ fn run_supervisor(
                 let status = if bound {
                     health::probe(cfg.port)
                 } else {
-                    ServerStatus::Down
+                    ServerStatus::Unreachable
                 };
                 match decide_after_crash(bound, status) {
                     CrashAction::AttachExisting => {
@@ -280,7 +339,12 @@ fn run_supervisor(
                              sidecar exited — switching to attach mode, no further restarts",
                             cfg.port
                         ));
-                        return observe_until_shutdown(&rx);
+                        return observe_until_shutdown(
+                            &rx,
+                            &cfg,
+                            &attach_note,
+                            AttachVerdict::Minder,
+                        );
                     }
                     CrashAction::ObserveForeign => {
                         attached.store(true, Ordering::SeqCst);
@@ -293,7 +357,28 @@ fn run_supervisor(
                              — observing, not respawning (would just conflict)",
                             cfg.port
                         ));
-                        return observe_until_shutdown(&rx);
+                        return observe_until_shutdown(
+                            &rx,
+                            &cfg,
+                            &attach_note,
+                            AttachVerdict::Foreign,
+                        );
+                    }
+                    CrashAction::ObservePending => {
+                        attached.store(true, Ordering::SeqCst);
+                        set_note(&attach_note, AttachVerdict::Pending.note());
+                        log(&format!(
+                            "port {} was taken while our sidecar was starting (likely the \
+                             logon service) and hasn't answered /api/health yet — observing \
+                             and re-probing rather than assuming it's foreign",
+                            cfg.port
+                        ));
+                        return observe_until_shutdown(
+                            &rx,
+                            &cfg,
+                            &attach_note,
+                            AttachVerdict::Pending,
+                        );
                     }
                     CrashAction::Respawn => {
                         let uptime = started.elapsed();
@@ -318,21 +403,89 @@ fn run_supervisor(
 
 /// Observe-only loop: wait for a shutdown command and never touch the server.
 /// Used for a startup attach and after a post-crash attach switch alike.
-fn observe_until_shutdown(rx: &Receiver<Command>) {
+///
+/// When `verdict` is [`AttachVerdict::Pending`] the loop also re-probes the port
+/// on a backoff until the question settles, then updates the tray note in place.
+///
+/// **The re-probe has no expiry.** An earlier design let a grace period lapse
+/// and then declared "foreign", which just moved the original bug down a layer:
+/// a server slower than the grace window would be permanently mislabelled, with
+/// no way back short of restarting the tray. Waiting longer is free; being
+/// confidently wrong is not. The backoff only makes us ask less often, never
+/// stop.
+fn observe_until_shutdown(
+    rx: &Receiver<Command>,
+    cfg: &TrayConfig,
+    attach_note: &Arc<Mutex<Option<String>>>,
+    verdict: AttachVerdict,
+) {
+    let mut pending = verdict == AttachVerdict::Pending;
+    let mut delay = RECLASSIFY_BASE;
     loop {
-        match rx.recv() {
-            Ok(Command::Shutdown(ack)) => {
+        // Settled verdicts have nothing to re-probe, so block indefinitely —
+        // identical to the pre-existing behavior and free of wakeups.
+        let cmd = if pending {
+            match rx.recv_timeout(delay) {
+                Ok(cmd) => Some(cmd),
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+        } else {
+            match rx.recv() {
+                Ok(cmd) => Some(cmd),
+                Err(_) => return,
+            }
+        };
+
+        match cmd {
+            Some(Command::Shutdown(ack)) => {
                 log("observe mode: quit requested — leaving the existing server untouched");
                 let _ = ack.send(());
                 return;
             }
-            Ok(Command::Restart(ack)) => {
+            Some(Command::Restart(ack)) => {
                 log("observe mode: restart requested — ignored (not our process)");
                 let _ = ack.send(());
             }
-            Err(_) => return,
+            // Re-probe tick. Only reachable while `pending`.
+            None => {
+                // A port that has since been released is still not ours to take:
+                // this loop is entered only after we've decided not to own the
+                // server, and respawning here would race whoever is restarting
+                // it. Keep observing; the note stays honest either way.
+                if !health::port_is_bound(cfg.port) {
+                    delay = next_reclassify_delay(delay);
+                    continue;
+                }
+                let status = health::probe(cfg.port);
+                let settled = classify_attach(status);
+                if settled == AttachVerdict::Pending {
+                    delay = next_reclassify_delay(delay);
+                    continue;
+                }
+                set_note(attach_note, settled.note());
+                match settled {
+                    AttachVerdict::Minder => log(&format!(
+                        "port {} answered /api/health ({status:?}) after all — it is Minder, \
+                         not a foreign process; now attached",
+                        cfg.port
+                    )),
+                    AttachVerdict::Foreign => log(&format!(
+                        "port {} answered with a non-Minder response — confirmed foreign, \
+                         observing",
+                        cfg.port
+                    )),
+                    AttachVerdict::Pending => unreachable!("handled above"),
+                }
+                pending = false;
+            }
         }
     }
+}
+
+/// Exponential backoff for the re-probe tick, capped at [`RECLASSIFY_MAX`].
+fn next_reclassify_delay(current: Duration) -> Duration {
+    std::cmp::min(current.saturating_mul(2), RECLASSIFY_MAX)
 }
 
 /// What to do after the supervised sidecar exits, based on a fresh probe of the
@@ -346,15 +499,22 @@ enum CrashAction {
     AttachExisting,
     /// A non-Minder process holds the port — observe without respawn-hammering.
     ObserveForeign,
+    /// Port is held by something that hasn't answered yet — observe and keep
+    /// re-probing. This is the EADDRINUSE case at logon: our sidecar loses the
+    /// race to the Phase A service, which is then mid-bootstrap and cannot
+    /// answer a health probe, so treating "no answer" as "foreign" here would
+    /// mislabel the very service that just beat us to the port.
+    ObservePending,
 }
 
 fn decide_after_crash(port_bound: bool, status: ServerStatus) -> CrashAction {
     if !port_bound {
-        CrashAction::Respawn
-    } else if status.is_minder() {
-        CrashAction::AttachExisting
-    } else {
-        CrashAction::ObserveForeign
+        return CrashAction::Respawn;
+    }
+    match classify_attach(status) {
+        AttachVerdict::Minder => CrashAction::AttachExisting,
+        AttachVerdict::Foreign => CrashAction::ObserveForeign,
+        AttachVerdict::Pending => CrashAction::ObservePending,
     }
 }
 
@@ -662,16 +822,30 @@ mod contract_tests {
 
 #[cfg(test)]
 mod crash_decision_tests {
-    use super::{decide_after_crash, CrashAction};
+    use super::{classify_attach, decide_after_crash, AttachVerdict, CrashAction};
     use crate::health::ServerStatus;
 
     #[test]
     fn free_port_respawns() {
         // Port not bound after the crash → the sidecar just crashed; restart.
         assert_eq!(
-            decide_after_crash(false, ServerStatus::Down),
+            decide_after_crash(false, ServerStatus::Unreachable),
             CrashAction::Respawn
         );
+    }
+
+    #[test]
+    fn free_port_respawns_regardless_of_status() {
+        // `port_bound` short-circuits: an unbound port is ours to retake even if
+        // a stale status says otherwise.
+        for status in [
+            ServerStatus::Up,
+            ServerStatus::Degraded,
+            ServerStatus::Foreign,
+            ServerStatus::Unreachable,
+        ] {
+            assert_eq!(decide_after_crash(false, status), CrashAction::Respawn);
+        }
     }
 
     #[test]
@@ -694,11 +868,70 @@ mod crash_decision_tests {
 
     #[test]
     fn foreign_process_holding_port_observes() {
-        // Bound but the probe can't confirm Minder → observe, don't respawn-hammer.
+        // Something ANSWERED and it wasn't Minder → proven foreign. Observe,
+        // don't respawn-hammer.
         assert_eq!(
-            decide_after_crash(true, ServerStatus::Down),
+            decide_after_crash(true, ServerStatus::Foreign),
             CrashAction::ObserveForeign
         );
+    }
+
+    #[test]
+    fn unreachable_holder_is_pending_not_foreign() {
+        // The regression this split exists to prevent. Our sidecar lost the
+        // EADDRINUSE race to the logon service, which is now mid-bootstrap and
+        // can't answer a health probe. Calling that "foreign" mislabels our own
+        // server; the only honest verdict is "don't know yet — keep asking".
+        assert_eq!(
+            decide_after_crash(true, ServerStatus::Unreachable),
+            CrashAction::ObservePending
+        );
+    }
+
+    #[test]
+    fn classify_attach_maps_every_status() {
+        assert_eq!(classify_attach(ServerStatus::Up), AttachVerdict::Minder);
+        assert_eq!(
+            classify_attach(ServerStatus::Degraded),
+            AttachVerdict::Minder
+        );
+        assert_eq!(
+            classify_attach(ServerStatus::Foreign),
+            AttachVerdict::Foreign
+        );
+        assert_eq!(
+            classify_attach(ServerStatus::Unreachable),
+            AttachVerdict::Pending
+        );
+    }
+
+    #[test]
+    fn pending_note_does_not_claim_foreign() {
+        // The user-visible half of the bug: the old build told the user its own
+        // booting server was a foreign process. Whatever this string becomes, it
+        // must not assert something a timeout cannot prove.
+        let note = AttachVerdict::Pending.note();
+        assert!(
+            !note.contains("foreign"),
+            "pending note must not claim foreignness, got: {note:?}"
+        );
+        assert!(
+            AttachVerdict::Foreign.note().contains("foreign"),
+            "the proven-foreign note should still say so"
+        );
+    }
+
+    #[test]
+    fn reclassify_backoff_grows_and_caps() {
+        use super::{next_reclassify_delay, RECLASSIFY_BASE, RECLASSIFY_MAX};
+        let mut d = RECLASSIFY_BASE;
+        for _ in 0..20 {
+            let next = next_reclassify_delay(d);
+            assert!(next >= d, "backoff must be monotonic");
+            assert!(next <= RECLASSIFY_MAX, "backoff must stay capped");
+            d = next;
+        }
+        assert_eq!(d, RECLASSIFY_MAX, "backoff should reach the cap");
     }
 }
 

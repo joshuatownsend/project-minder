@@ -35,6 +35,20 @@ If you're on a desktop machine, the Project Minder tray app's built-in "Start at
 
 If you previously installed the Phase A scheduled-task/service described above, run `pnpm service:uninstall` **before** launching the tray app, to avoid double supervision (two processes trying to run the same dashboard). If the tray was already launched and attached to that older service, relaunch the tray after uninstalling — otherwise it's left observing the now-stopped server instead of spawning its own. Leaving both installed is not dangerous — the tray simply attaches to the existing server instead of spawning a second one — but doing it in this order keeps things simple.
 
+### Keeping both: point them at the same server
+
+If you *want* both (so the server survives quitting the tray), make sure they launch the **same** payload. By default `service:install` can only find the payload this repo built (`dist/minder-server`), while the installed desktop app runs its own bundled copy — so the same machine ends up serving a different build depending on which one won the boot, and the port collision decides which you get.
+
+Install the service against the app's bundle instead:
+
+```powershell
+pnpm service:install --payload "$env:LOCALAPPDATA\Project Minder Tray\minder-server"
+```
+
+The directory must be the one containing `server.js`. If a Node runtime ships beside it (`../node/node.exe`, as the desktop app bundles), the service uses that runtime too, keeping it on the version the app was built against. `MINDER_SERVICE_PAYLOAD` works as an alternative to the flag.
+
+With both installed and pointed at one payload, whichever starts first at logon binds the port and the other attaches — a race that no longer changes what you're running.
+
 ## Operating System Details
 
 ### Windows
@@ -69,6 +83,8 @@ Service mode respects these environment variables:
 | `NODE_ENV` | `production` | Automatically set by the service scripts; do not override. |
 | `MINDER_USE_DB` | `0` | Optional: set to disable the SQLite index and fall back to direct JSONL parsing. Default is on (uses the index). |
 | `MINDER_DEMO` | `1` | Optional: enable demo mode with synthetic fixtures. Default is off. |
+| `MINDER_SERVICE_PAYLOAD` | path | Install-time only: directory containing the `server.js` to install the service against, instead of the repo's `dist/minder-server`. Equivalent to `--payload`. See [Keeping both](#keeping-both-point-them-at-the-same-server). |
+| `MINDER_FORCE_QUICK_CHECK` | `1` | Force the SQLite integrity check to run on DB open even after a clean shutdown. Diagnostic escape hatch — see [Database corruption after hard stop](#database-corruption-after-hard-stop). |
 
 **Note:** there is no `MINDER_PORT` override. The service templates pin `PORT=4100` at install time, and the repo's `dev`/`start` scripts hardcode `-p 4100`. The standalone `server.js` itself honors `PORT`/`HOSTNAME` environment variables when run by hand, but the installed service always uses 4100.
 
@@ -185,3 +201,14 @@ If commands like `git`, `gh`, or `node` are not found in log files, it usually m
 ### Database corruption after hard stop
 
 If `~/.minder/index.db` becomes corrupted after a hard kill, delete it — it will be rebuilt from your project files on the next startup. Session data lives separately in `~/.claude/projects/`, so no work is lost.
+
+**How the integrity check is scheduled.** Opening the index runs `PRAGMA quick_check`, and that scan scales with the file's size — on a multi-gigabyte index read cold after a reboot it can take minutes. Because the SQLite driver is synchronous, the whole server is unresponsive for that entire window (including `/api/health`, which is what made the tray app report a still-booting server as an unresponsive foreign process).
+
+So the check is now skipped when **all** of these hold:
+
+- the previous shutdown was graceful, recorded in an `index.db.clean` marker written only after the WAL was confirmed drained;
+- the DB file's size and mtime still match what that marker recorded — any write since invalidates it;
+- the `-wal` sidecar is absent or empty, which is independent evidence the graceful path completed;
+- the index is at least 256 MB. Below that the scan is milliseconds, so it always runs.
+
+Anything short of that proof runs the full check, which means a reboot, a force-kill, or a power loss still gets verified. Set `MINDER_FORCE_QUICK_CHECK=1` to force it regardless. The `db: probed` line in `~/.minder/logs/minder.log` records how long the open actually took in its `ms` field.

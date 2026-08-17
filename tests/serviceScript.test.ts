@@ -14,6 +14,8 @@ import {
   parseServiceManifest,
   resolveInstalledLaunch,
   resolveServicePort,
+  resolveServicePayloadArg,
+  resolveBundledNodeExe,
   resolveInstalledPort,
   DEFAULT_SERVICE_PORT,
   SERVICE_MANIFEST_FILENAME,
@@ -419,6 +421,87 @@ describe("SERVICE_MANIFEST_FILENAME", () => {
   });
 });
 
+describe("resolveServicePayloadArg", () => {
+  it("returns null when neither flag nor env is set", () => {
+    expect(resolveServicePayloadArg({ argv: ["node", "service.mjs", "install"], env: {} })).toBeNull();
+  });
+
+  it("reads --payload <dir>", () => {
+    expect(
+      resolveServicePayloadArg({
+        argv: ["node", "service.mjs", "install", "--payload", "C:/apps/minder/minder-server"],
+        env: {},
+      })
+    ).toBe("C:/apps/minder/minder-server");
+  });
+
+  it("prefers the flag over the env var", () => {
+    expect(
+      resolveServicePayloadArg({
+        argv: ["node", "service.mjs", "install", "--payload", "C:/from-flag"],
+        env: { MINDER_SERVICE_PAYLOAD: "C:/from-env" },
+      })
+    ).toBe("C:/from-flag");
+  });
+
+  it("falls back to MINDER_SERVICE_PAYLOAD", () => {
+    expect(
+      resolveServicePayloadArg({
+        argv: ["node", "service.mjs", "install"],
+        env: { MINDER_SERVICE_PAYLOAD: "C:/from-env" },
+      })
+    ).toBe("C:/from-env");
+  });
+
+  it("ignores a blank env var", () => {
+    expect(
+      resolveServicePayloadArg({
+        argv: ["node", "service.mjs", "install"],
+        env: { MINDER_SERVICE_PAYLOAD: "   " },
+      })
+    ).toBeNull();
+  });
+
+  it("throws on a trailing --payload with no value", () => {
+    // Silently falling back to the dev tree here is exactly the confusion this
+    // flag exists to end, so a malformed invocation must be loud.
+    expect(() =>
+      resolveServicePayloadArg({ argv: ["node", "service.mjs", "install", "--payload"], env: {} })
+    ).toThrow(/requires a directory path/);
+  });
+
+  it("throws when --payload is followed by another flag", () => {
+    expect(() =>
+      resolveServicePayloadArg({
+        argv: ["node", "service.mjs", "install", "--payload", "--force"],
+        env: {},
+      })
+    ).toThrow(/requires a directory path/);
+  });
+});
+
+describe("resolveBundledNodeExe", () => {
+  const bundleDir = path.join("C:", "apps", "minder", "minder-server");
+
+  it("finds node.exe in a sibling node/ directory", () => {
+    const expected = path.join("C:", "apps", "minder", "node", "node.exe");
+    expect(
+      resolveBundledNodeExe({ bundleDir, existsSync: (p: string) => p === expected })
+    ).toBe(expected);
+  });
+
+  it("finds an extensionless node on POSIX layouts", () => {
+    const expected = path.join("C:", "apps", "minder", "node", "node");
+    expect(
+      resolveBundledNodeExe({ bundleDir, existsSync: (p: string) => p === expected })
+    ).toBe(expected);
+  });
+
+  it("returns null when no runtime ships beside the bundle", () => {
+    expect(resolveBundledNodeExe({ bundleDir, existsSync: () => false })).toBeNull();
+  });
+});
+
 describe("resolveServerLaunch", () => {
   const root = "C:/repo";
   const fakeNextBinPath = "C:/repo/node_modules/next/dist/bin/next";
@@ -430,6 +513,79 @@ describe("resolveServerLaunch", () => {
   // with the SAME `path.join` calls the implementation uses instead of
   // hardcoded separator literals, so this assertion is construction-
   // symmetric and can't diverge between Windows and Linux CI.
+  describe("with an explicit bundleDir", () => {
+    const bundleDir = path.join("C:", "apps", "minder", "minder-server");
+    const bundleEntry = path.join(bundleDir, "server.js");
+    const bundledNode = path.join("C:", "apps", "minder", "node", "node.exe");
+
+    it("uses the bundle and its sibling node runtime", () => {
+      const launch = resolveServerLaunch({
+        root,
+        bundleDir,
+        execPath: "C:/nodejs/node.exe",
+        existsSync: (p: string) => p === bundleEntry || p === bundledNode,
+      });
+      expect(launch).toEqual({
+        mode: "standalone",
+        exe: bundledNode,
+        args: [bundleEntry],
+        cwd: bundleDir,
+      });
+    });
+
+    it("falls back to execPath when the bundle ships no runtime", () => {
+      const launch = resolveServerLaunch({
+        root,
+        bundleDir,
+        execPath: "C:/nodejs/node.exe",
+        existsSync: (p: string) => p === bundleEntry,
+      });
+      expect(launch?.exe).toBe("C:/nodejs/node.exe");
+    });
+
+    it("wins over a repo-relative standalone build", () => {
+      // The whole point: a machine with both installed must not silently keep
+      // serving the dev tree's payload.
+      const launch = resolveServerLaunch({
+        root,
+        bundleDir,
+        execPath: "C:/nodejs/node.exe",
+        // BOTH exist — the explicit payload must still win.
+        existsSync: (p: string) =>
+          p === bundleEntry ||
+          p === bundledNode ||
+          p.replace(/\\/g, "/").includes("dist/minder-server/server.js"),
+      });
+      expect(launch?.args).toEqual([bundleEntry]);
+      expect(launch?.cwd).toBe(bundleDir);
+    });
+
+    it("returns null when the named directory has no server.js", () => {
+      // Must NOT fall through to the repo build: the user named a directory,
+      // and silently installing a different payload is the bug, not a recovery.
+      const launch = resolveServerLaunch({
+        root,
+        bundleDir,
+        execPath: "C:/nodejs/node.exe",
+        existsSync: (p: string) =>
+          p.replace(/\\/g, "/").includes("dist/minder-server/server.js"),
+      });
+      expect(launch).toBeNull();
+    });
+
+    it("stays recognizable to the installed-launch recovery path", () => {
+      // `extractLaunchFromVbs` infers mode from the args, treating a trailing
+      // absolute server.js as standalone. If the bundle path stopped satisfying
+      // that, `service:stop` would fail to identify its own process.
+      const launch = resolveServerLaunch({
+        root,
+        bundleDir,
+        existsSync: (p: string) => p === bundleEntry,
+      });
+      expect(launch?.args.some((a) => /server\.js$/i.test(a))).toBe(true);
+    });
+  });
+
   it("prefers the standalone package when dist/minder-server/server.js exists", () => {
     const launch = resolveServerLaunch({
       root,

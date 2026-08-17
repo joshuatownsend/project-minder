@@ -3,6 +3,7 @@ import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
 import type DatabaseT from "better-sqlite3";
+import { readCleanShutdownState, writeCleanShutdownMarker } from "./cleanShutdown";
 
 // Local SQLite index for Project Minder. Sits at ~/.minder/index.db.
 //
@@ -220,6 +221,24 @@ export function checkpointAndCloseDb(): void {
     /* best-effort — fall through to close regardless */
   }
   closeDb();
+
+  // Record the clean shutdown so the next open can skip a multi-minute
+  // `PRAGMA quick_check` on a large index (see db/cleanShutdown.ts).
+  //
+  // Ordered AFTER closeDb() deliberately, for two reasons: SQLite removes the
+  // `-wal` sidecar when the last connection closes, so `readCleanShutdownState`
+  // can only observe a drained WAL once we've let go; and the size/mtime we
+  // record must describe the post-checkpoint file the next open will stat.
+  //
+  // Gated on the WAL actually having drained rather than on the checkpoint
+  // call not throwing — `wal_checkpoint` reports failure by RETURNING a busy
+  // result (e.g. another connection still holds the DB), not by throwing, and
+  // the catch above swallows the throwing cases anyway. Writing the marker on
+  // that path would certify a dirty database as clean, which is the one
+  // failure mode this whole mechanism must not have.
+  if (readCleanShutdownState(DB_PATH).reason !== "wal-not-empty") {
+    writeCleanShutdownMarker(DB_PATH);
+  }
 }
 
 /**

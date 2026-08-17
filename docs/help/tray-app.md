@@ -30,6 +30,24 @@ By default the tray app starts manually each session. To enable automatic startu
 
 (The setting is stored in the OS autostart mechanism — Windows registry Run key, macOS LaunchAgent, or Linux XDG autostart .desktop entry — Project Minder does not persist this itself.)
 
+**Only installed release builds can enable it.** The autostart entry records the path of whichever executable registers it, so turning this on from a `pnpm tray:dev` build would write `target/debug/minder-tray` into your logon entries and keep launching that throwaway binary at every boot — outliving the branch it was built from, and quietly taking precedence over a release you install later, since the OS entry has no notion of which build "should" own it. Development builds therefore refuse to enable the checkbox (they log why, and can still *disable* an existing entry so you can clean one up).
+
+If you suspect a stale entry, check what it actually points at — it should be your installed app, not a path inside a source checkout:
+
+```powershell
+# Windows
+Get-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'Project Minder Tray'
+```
+
+```bash
+# macOS
+cat ~/Library/LaunchAgents/*minder*.plist 2>/dev/null | grep -A2 ProgramArguments
+# Linux
+cat ~/.config/autostart/*minder*.desktop 2>/dev/null | grep Exec
+```
+
+The quickest repair is to toggle **Start at login** off and back on from the installed build, which rewrites the entry with the correct path.
+
 ### Local Development
 
 To run the tray app from source during development:
@@ -63,7 +81,7 @@ Click the tray icon to open the menu. The menu resets its status display every 1
 |-----------|----------|-------|
 | **Open Dashboard** | Opens your default browser to `http://localhost:4100` | Launches the web UI. Click this to navigate to any page (the first suggested destination). |
 | **Status** | Display-only line showing current server state | Updates every 15s: "Status: starting…" initially, then "Status: running (:4100)", "Status: degraded (:4100)", or "Status: not responding (:4100)"; suffix notes added when attached to an existing server. |
-| **Start at login** | Checkbox that registers/unregisters OS autostart | Checked state syncs with the OS (Windows registry Run key, macOS LaunchAgent, Linux XDG autostart .desktop entry). Reboot is not required. (This is distinct from Phase A service mode, which uses Windows Task Scheduler / macOS LaunchAgent / Linux systemd.) |
+| **Start at login** | Checkbox that registers/unregisters OS autostart | Checked state syncs with the OS (Windows registry Run key, macOS LaunchAgent, Linux XDG autostart .desktop entry). Reboot is not required. (This is distinct from Phase A service mode, which uses Windows Task Scheduler / macOS LaunchAgent / Linux systemd.) **Development builds cannot turn this on** — see below. |
 | **Mute notifications** | Checkbox that suppresses new-manual-steps toasts | When checked, `MANUAL_STEPS.md` changes no longer trigger OS notifications. The mute flag persists to disk. |
 | **Restart server** | Graceful server restart | **Disabled when in attach mode** (see [Modes](#modes) below). Blocks ~6s on graceful shutdown. Useful when the server becomes unresponsive. |
 | **View logs** | Opens `~/.minder/logs/` directory in your file manager | Reveals the rotating `minder.log` file for troubleshooting. |
@@ -161,7 +179,13 @@ If port 4100 is already in use:
 
 When the port is already bound **and answering Minder's health check**, the tray **automatically enters attach mode**. The menu shows "Restart server (attached — n/a)" and the tray observes instead of spawning.
 
-If you see `port 4100 bound by a non-Minder process`, something is actively accepting TCP connections on the port without answering Minder's health check the way Minder does — a genuinely different local app, or (occasionally, on Windows) a virtualization networking component acting as a relay. This message requires an actual listener to connect to; it is not what a bind-blocked port looks like (see next paragraph).
+If you see `port 4100 bound by a non-Minder process`, something **answered** an HTTP request on the port with a response that isn't Minder's health body — a genuinely different local app, or (occasionally, on Windows) a virtualization networking component acting as a relay. This message requires an actual listener to connect to; it is not what a bind-blocked port looks like (see next paragraph).
+
+If instead you see `port 4100 is bound but did not answer /api/health in time`, and a Status line reading `not responding — port bound, not responding — observing`, then **nothing** answered — and the most likely cause is Minder's own server still starting up. The tray keeps re-probing on a backoff and updates the status line by itself the moment the server answers; there is nothing to do but wait, and **no need to restart the tray**.
+
+The usual reason for a long startup is the SQLite index: the integrity check that runs when the DB is opened scales with the file's size, and on a multi-gigabyte `~/.minder/index.db` read cold after a reboot it can take minutes, during which the server accepts connections but cannot answer them. Minder now skips that check when the previous shutdown was clean, so this should only affect the first boot after an unclean stop (a reboot, a force-kill, or a power loss). To see how long it actually took, check `~/.minder/logs/minder.log` for the `db: probed` line and its `ms` field.
+
+> Earlier versions labelled this case `port in use (foreign) — observing` and never re-checked, so a slow-but-healthy startup was permanently reported as a foreign process until the tray was restarted. If you are seeing that wording, you are running an older build.
 
 If instead nothing about "attach mode" appears at all, and you instead see the tray or server fail to start repeatedly — a crash/retry loop with no server ever coming up, and a permission-denied error visible in the tray's console output (launch it from a terminal to see `[minder-server]` lines; see [Tray icon doesn't appear](#tray-icon-doesnt-appear)) — that is the shape of the Windows-specific cause below: the OS refuses the *bind* itself, so there is no listener for a TCP connect to even reach.
 

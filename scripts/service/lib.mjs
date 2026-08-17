@@ -224,6 +224,43 @@ export function resolveServicePort(env = process.env) {
 }
 
 /**
+ * An explicit server payload directory to install the service against, from
+ * `--payload <dir>` or `MINDER_SERVICE_PAYLOAD`.
+ *
+ * WHY THIS EXISTS
+ *
+ * Without it, `resolveServerLaunch` can only ever find the payload the REPO
+ * built (`<root>/dist/minder-server`). The installed desktop app ships its own
+ * server bundle — a flatter `minder-server/` beside its own `node/node.exe` —
+ * which no repo-relative lookup can reach. So a machine with both the tray app
+ * and the logon service installed ended up running the app's bundle when
+ * launched from the Start Menu and the dev tree's bundle at logon: two owners of
+ * one port, serving two different builds, with the port race decided by
+ * whichever won the boot.
+ *
+ * Pointing the service at the same bundle the app ships makes them the same
+ * server, so which one wins the race stops mattering.
+ *
+ * @param {{ argv?: string[], env?: Record<string, string | undefined> }} [opts]
+ * @returns {string | null} absolute-ish directory as given, or null if unset
+ */
+export function resolveServicePayloadArg(opts = {}) {
+  const { argv = process.argv, env = process.env } = opts;
+  const flagIndex = argv.indexOf("--payload");
+  if (flagIndex !== -1) {
+    const value = argv[flagIndex + 1];
+    // A bare trailing `--payload`, or one followed by another flag, is a user
+    // error worth surfacing rather than silently falling back to the dev tree.
+    if (!value || value.startsWith("-")) {
+      throw new Error("--payload requires a directory path");
+    }
+    return value;
+  }
+  const fromEnv = env.MINDER_SERVICE_PAYLOAD;
+  return fromEnv && fromEnv.trim() ? fromEnv : null;
+}
+
+/**
  * Recovers the port the INSTALLED service actually listens on, using the same
  * precedence as `resolveInstalledLaunch`: the JSON manifest first, then the
  * generated vbs (installs predating the manifest's `port` field), then the
@@ -421,6 +458,29 @@ function defaultResolveNextBin(root) {
  *   port?: number,
  * }} opts
  */
+/**
+ * Locate a Node runtime shipped beside a server bundle, if there is one.
+ *
+ * The desktop app's install layout puts them side by side:
+ *   <app>/minder-server/server.js
+ *   <app>/node/node.exe
+ *
+ * Returns null when no bundled runtime is present, leaving the caller to fall
+ * back to the current `execPath`.
+ *
+ * @param {{ bundleDir: string, existsSync?: (p: string) => boolean }} opts
+ * @returns {string | null}
+ */
+export function resolveBundledNodeExe(opts) {
+  const { bundleDir, existsSync = fsExistsSync } = opts;
+  const siblingNodeDir = path.join(path.dirname(bundleDir), "node");
+  for (const name of ["node.exe", "node"]) {
+    const candidate = path.join(siblingNodeDir, name);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 export function resolveServerLaunch(opts) {
   const {
     root,
@@ -428,7 +488,29 @@ export function resolveServerLaunch(opts) {
     existsSync = fsExistsSync,
     resolveNextBin = defaultResolveNextBin,
     port = DEFAULT_SERVICE_PORT,
+    bundleDir = null,
   } = opts;
+
+  // An explicit payload wins over anything repo-relative — that's the point of
+  // passing it (see resolveServicePayloadArg). Reported as mode "standalone"
+  // because it IS one structurally (an absolute `server.js` invoked by node), so
+  // the identity-marker and vbs-recovery paths keep working unchanged rather
+  // than needing a third mode threaded through all of them.
+  if (bundleDir) {
+    const entry = path.join(bundleDir, "server.js");
+    if (!existsSync(entry)) return null;
+    return {
+      mode: "standalone",
+      // Prefer a runtime shipped alongside the bundle. The desktop app bundles
+      // its own `node/` next to `minder-server/`, and using it keeps the service
+      // on the same Node version the app was built and tested against instead of
+      // whatever happens to be first on PATH.
+      exe: resolveBundledNodeExe({ bundleDir, existsSync }) ?? execPath,
+      args: [entry],
+      cwd: bundleDir,
+    };
+  }
+
   const standaloneServer = path.join(root, "dist", "minder-server", "server.js");
   if (existsSync(standaloneServer)) {
     const cwd = path.join(root, "dist", "minder-server");

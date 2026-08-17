@@ -73,6 +73,7 @@ import {
   describeStepFailure,
   isTaskkillAlreadyGone,
   SERVICE_MANIFEST_FILENAME,
+  resolveServicePayloadArg,
   resolveServicePort,
   resolveInstalledPort,
   resolveInstalledLaunch,
@@ -223,18 +224,41 @@ async function runSteps(steps) {
 // --- Actions -------------------------------------------------------------
 
 function resolveLaunchOrFail() {
+  let bundleDir = null;
+  try {
+    bundleDir = resolveServicePayloadArg();
+  } catch (err) {
+    console.error(`[service] ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+  if (bundleDir) bundleDir = path.resolve(bundleDir);
+
   // The fallback (`next start`) mode takes an explicit `-p`, which OVERRIDES the
   // PORT env var the generated launcher sets — so the install-time port has to
   // be threaded in here too, not just into the templates (PR #316 review).
-  const launch = resolveServerLaunch({ root, port: resolveServicePort() });
+  const launch = resolveServerLaunch({ root, port: resolveServicePort(), bundleDir });
   if (!launch) {
+    // An explicit payload that didn't resolve is a distinct failure from "this
+    // repo has no build": the user named a directory and we couldn't use it, so
+    // say which one rather than telling them to run a build they don't need.
+    if (bundleDir) {
+      console.error(
+        `[service] --payload directory has no server.js: ${bundleDir}\n` +
+          `  Expected ${path.join(bundleDir, "server.js")} to exist.\n` +
+          `  For the installed desktop app this is the "minder-server" folder ` +
+          `beside minder-tray.exe.`
+      );
+      process.exit(1);
+    }
     console.error(`[service] ${NO_BUILD_MESSAGE}`);
     process.exit(1);
   }
-  step(
-    `Using ${launch.mode === "standalone" ? "standalone package (dist/minder-server)" : "from-source build (next start)"}: ` +
-      `${launch.exe} ${launch.args.join(" ")} (cwd: ${launch.cwd})`
-  );
+  const describeSource = bundleDir
+    ? `explicit payload (${bundleDir})`
+    : launch.mode === "standalone"
+      ? "standalone package (dist/minder-server)"
+      : "from-source build (next start)";
+  step(`Using ${describeSource}: ${launch.exe} ${launch.args.join(" ")} (cwd: ${launch.cwd})`);
   return launch;
 }
 
