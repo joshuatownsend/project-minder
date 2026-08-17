@@ -1,5 +1,47 @@
 # Insights
 
+<!-- insight:7f650359812a | session:e1ddf31d-f85f-44af-a987-d10645dbba4a | 2026-08-16T22:14:55.437Z -->
+## ★ Insight
+The `/stats` fixture derives from the *observed* totals rather than using constants, because its two rows come from two independent demo sources — a hardcoded pair would drift apart and render the red `-91%` panel the capture pipeline already refuses to publish. My first version floored the nudge at `+1` to avoid a "suspiciously perfect zero", which turned 1 observed session into a **−50% drift**: an absolute floor can't be safe on a value consumed as a ratio. The small-N test caught it.
+
+---
+
+<!-- insight:8e9ac5975c69 | session:e1ddf31d-f85f-44af-a987-d10645dbba4a | 2026-08-16T21:39:23.351Z -->
+## ★ Insight
+The `Math.max(1, …)` floor I added to avoid a "suspiciously perfect zero" backfires at small N: with 1 observed session it produces a fixture of 2, i.e. **−50% drift** — the exact red panel this fix exists to eliminate. An absolute floor on a value that's consumed as a *ratio* is the bug. Dropping the floor means tiny demo datasets show exactly 0% drift, which is honest: with 1 session, perfect agreement is genuinely plausible.
+
+---
+
+<!-- insight:b46568d86d17 | session:e1ddf31d-f85f-44af-a987-d10645dbba4a | 2026-08-16T21:37:28.847Z -->
+## ★ Insight
+The guard placement here encodes a distinction worth naming: `getStatsCache()` returns **null** in demo (the loader refuses to read the real file — that's the security property), while the *presentation* choice to show a populated panel lives at the caller via `demoStatsCache()`. Collapsing those two into one "return a fixture from the loader" would have meant every future caller silently inherits a presentation decision it never asked for.
+
+---
+
+<!-- insight:694eef031c83 | session:e1ddf31d-f85f-44af-a987-d10645dbba4a | 2026-08-16T21:30:49.560Z -->
+## ★ Insight
+The audit's hard part is that coverage is **transitive**: a route importing `@/lib/server/queries/stats` is guarded if *that* module reaches a guarded façade function. Classifying by "does this file mention `demoMode`" would mislabel every façade-covered route as a leak. So the script walks local imports to a fixed point, and — critically — records *why* a route is classified, since the plan's own 4:1 correction came from asserting leaks without checking the code path.
+
+---
+
+<!-- insight:a7ae45008f44 | session:e1ddf31d-f85f-44af-a987-d10645dbba4a | 2026-08-16T21:14:15.909Z -->
+## ★ Insight
+Worth recording what this PR cost versus what it bought: four review rounds to ship a query that replaces a 190–299s parse with ~295ms. Every round but the last found the same defect shape — a guard that silently stops guarding — in the *freshness check I added*, not in the query itself. The performance work was right on the first try; the safety valve around it took four attempts. That asymmetry is the useful signal for the next time an index is put in front of a filesystem read.
+
+---
+
+<!-- insight:afeccd4bcc4e | session:e1ddf31d-f85f-44af-a987-d10645dbba4a | 2026-08-16T20:58:45.342Z -->
+## ★ Insight
+The self-found bug is the interesting one because it inverts the PR's purpose. Ingest skips transcripts over 50 MB *before* writing a row (`ingest.ts:3153`), so such a file is absent from the index **by design**. My guard read "no row" as "not yet ingested" → project permanently stale → every request routed to the 190–299s parse. And that parse skips *the same file* (`parser.ts:710`), so it returns an identical answer. A permanent slow path, bought for nothing — in the PR whose entire point is removing that slow path.
+
+---
+
+<!-- insight:858af19fa114 | session:e1ddf31d-f85f-44af-a987-d10645dbba4a | 2026-08-16T20:33:42.770Z -->
+## ★ Insight
+The pattern worth naming: **this is the fourth "guard that silently stops guarding" in one PR**, and the third consecutive round where this same freshness check was wrong in a *new* way. Each fix was correct and each revealed another hole — because I hand-rolled a staleness detector that duplicates logic ingest already implements properly. The mtime+size comparison I'm missing is sitting at `ingest.ts:3192`.
+
+---
+
 <!-- insight:235d94b83326 | session:e1ddf31d-f85f-44af-a987-d10645dbba4a | 2026-08-14T23:11:15.161Z -->
 ## ★ Insight
 The two shells in this session take genuinely different syntax for the same job. `@'...'@` is PowerShell's literal here-string; Bash needs `<<'EOF'`. Both are "quote this multi-line string literally," and passing the wrong one produces no error — the `@` just becomes part of the commit subject, which is exactly the silent-corruption shape that bit PR #446 with `\b` vs U+0008. Valid syntax carrying the wrong bytes doesn't announce itself.
