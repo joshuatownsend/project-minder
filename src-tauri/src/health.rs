@@ -102,12 +102,31 @@ pub fn probe(port: u16) -> ServerStatus {
     // NOT `Foreign`: nobody answered, so we've learned nothing about who owns
     // the port. Distinguishing the two is the whole point of the split — see the
     // module header.
-    let (code, body) = match agent().get(&url).call() {
-        Ok(resp) => (200u16, resp.into_string().unwrap_or_default()),
-        Err(ureq::Error::Status(code, resp)) => (code, resp.into_string().unwrap_or_default()),
+    let (code, resp) = match agent().get(&url).call() {
+        Ok(resp) => (200u16, resp),
+        Err(ureq::Error::Status(code, resp)) => (code, resp),
         Err(_) => return ServerStatus::Unreachable,
     };
+
+    // Reading the body is a second chance to fail, and the failure is still
+    // transport-level: headers can arrive and then the body stall until the
+    // agent's timeout. The previous `.unwrap_or_default()` turned that into an
+    // EMPTY body, which `classify_body` correctly reads as "not JSON" and
+    // therefore Foreign — permanently latching a Minder process that stalled
+    // mid-response as a foreign one, which is exactly the rule this split
+    // exists to enforce. An unfinished read tells us nothing about ownership.
+    let body = match body_or_unreachable(resp.into_string()) {
+        Ok(body) => body,
+        Err(status) => return status,
+    };
     classify_body(code, body)
+}
+
+/// Map a body-read result onto either its content or an inconclusive verdict.
+/// Split out from [`probe`] purely so the rule is unit-testable — a `Response`
+/// that fails midway through `into_string()` can't be constructed in a test.
+pub fn body_or_unreachable<E>(read: Result<String, E>) -> Result<String, ServerStatus> {
+    read.map_err(|_| ServerStatus::Unreachable)
 }
 
 /// Pure classification of an HTTP status + body string. Extracted so the
@@ -210,6 +229,28 @@ mod tests {
         assert!(ServerStatus::Degraded.is_conclusive());
         assert!(ServerStatus::Foreign.is_conclusive());
         assert!(!ServerStatus::Unreachable.is_conclusive());
+    }
+
+    #[test]
+    fn a_failed_body_read_is_unreachable_not_foreign() {
+        // Regression: headers arrive, then the body read times out. Treating
+        // that as an empty body made classify_body call it Foreign, which the
+        // observe loop takes as settled — latching a stalled Minder as foreign.
+        let failed: Result<String, &str> = Err("read timed out");
+        assert_eq!(body_or_unreachable(failed), Err(ServerStatus::Unreachable));
+    }
+
+    #[test]
+    fn a_successful_body_read_passes_through_verbatim() {
+        // Including an empty-but-COMPLETE body, which is a real answer (and
+        // classifies as Foreign) rather than a transport failure.
+        let ok: Result<String, &str> = Ok(String::new());
+        assert_eq!(body_or_unreachable(ok), Ok(String::new()));
+        let body: Result<String, &str> = Ok(r#"{"ok":true,"status":"ok"}"#.to_string());
+        assert_eq!(
+            body_or_unreachable(body),
+            Ok(r#"{"ok":true,"status":"ok"}"#.to_string())
+        );
     }
 
     #[test]

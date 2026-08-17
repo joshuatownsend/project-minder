@@ -1200,7 +1200,10 @@ export async function initDb(): Promise<InitResult> {
     schemaVersion: 0,
     quarantined: null,
     error: null,
-    quickCheckSkipped: false,
+    // Deliberately NOT initialized. The field is optional precisely so that
+    // `undefined` means "never reached Path 2" (driver missing, open failed) —
+    // seeding it to `false` would have every early return claim the check ran,
+    // which is the opposite of the truth and makes the bootstrap log lie.
   };
 
   // Path 0: driver missing. Don't quarantine — the file is fine, the

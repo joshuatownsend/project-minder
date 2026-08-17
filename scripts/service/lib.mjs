@@ -256,8 +256,11 @@ export function resolveServicePayloadArg(opts = {}) {
     }
     return value;
   }
-  const fromEnv = env.MINDER_SERVICE_PAYLOAD;
-  return fromEnv && fromEnv.trim() ? fromEnv : null;
+  // Trimmed on the way out, not just tested for emptiness — an env var set with
+  // stray whitespace would otherwise be carried into path resolution verbatim
+  // and fail as a missing directory.
+  const fromEnv = env.MINDER_SERVICE_PAYLOAD?.trim();
+  return fromEnv ? fromEnv : null;
 }
 
 /**
@@ -461,9 +464,19 @@ function defaultResolveNextBin(root) {
 /**
  * Locate a Node runtime shipped beside a server bundle, if there is one.
  *
- * The desktop app's install layout puts them side by side:
+ * The desktop app's install layout puts them side by side, and the runtime's
+ * own layout is platform-dependent — see scripts/fetch-node-runtime.mjs:21-22,
+ * which lays these down:
  *   <app>/minder-server/server.js
- *   <app>/node/node.exe
+ *   <app>/node/node.exe    (Windows)
+ *   <app>/node/bin/node    (macOS, Linux)
+ *
+ * The POSIX `bin/` level is NOT optional: a resolver that only checks a flat
+ * `node/node` finds nothing on macOS or Linux and silently falls back to
+ * whichever Node is running the installer. That is worse than it sounds —
+ * `better-sqlite3` is a native addon tied to a specific Node ABI, so a fallback
+ * across a major version leaves the installed service unable to load the
+ * database at all, with no error until first use.
  *
  * Returns null when no bundled runtime is present, leaving the caller to fall
  * back to the current `execPath`.
@@ -474,8 +487,14 @@ function defaultResolveNextBin(root) {
 export function resolveBundledNodeExe(opts) {
   const { bundleDir, existsSync = fsExistsSync } = opts;
   const siblingNodeDir = path.join(path.dirname(bundleDir), "node");
-  for (const name of ["node.exe", "node"]) {
-    const candidate = path.join(siblingNodeDir, name);
+  const candidates = [
+    path.join(siblingNodeDir, "node.exe"),
+    path.join(siblingNodeDir, "bin", "node"),
+    // Flat POSIX layout — not what the packaging script produces today, but a
+    // cheap last resort before falling back to an ABI-mismatched runtime.
+    path.join(siblingNodeDir, "node"),
+  ];
+  for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
   }
   return null;

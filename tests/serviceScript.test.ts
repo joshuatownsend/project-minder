@@ -462,6 +462,17 @@ describe("resolveServicePayloadArg", () => {
     ).toBeNull();
   });
 
+  it("trims whitespace off an accepted env var", () => {
+    // Testing only for emptiness while returning the raw value would carry the
+    // padding into path resolution and fail later as a missing directory.
+    expect(
+      resolveServicePayloadArg({
+        argv: ["node", "service.mjs", "install"],
+        env: { MINDER_SERVICE_PAYLOAD: "  C:/apps/minder/minder-server  " },
+      })
+    ).toBe("C:/apps/minder/minder-server");
+  });
+
   it("throws on a trailing --payload with no value", () => {
     // Silently falling back to the dev tree here is exactly the confusion this
     // flag exists to end, so a malformed invocation must be loud.
@@ -490,7 +501,26 @@ describe("resolveBundledNodeExe", () => {
     ).toBe(expected);
   });
 
-  it("finds an extensionless node on POSIX layouts", () => {
+  it("finds node/bin/node — the actual POSIX packaging layout", () => {
+    // scripts/fetch-node-runtime.mjs:21-22 lays down `dist/node/bin/node` on
+    // macOS/Linux. Missing this level doesn't fail loudly: the installer falls
+    // back to whatever Node is running it, and a Node-major mismatch leaves the
+    // service unable to load the ABI-tied better-sqlite3 binary at all.
+    const expected = path.join("C:", "apps", "minder", "node", "bin", "node");
+    expect(
+      resolveBundledNodeExe({ bundleDir, existsSync: (p: string) => p === expected })
+    ).toBe(expected);
+  });
+
+  it("prefers node.exe over the POSIX layout when both somehow exist", () => {
+    const win = path.join("C:", "apps", "minder", "node", "node.exe");
+    const posix = path.join("C:", "apps", "minder", "node", "bin", "node");
+    expect(
+      resolveBundledNodeExe({ bundleDir, existsSync: (p: string) => p === win || p === posix })
+    ).toBe(win);
+  });
+
+  it("still accepts a flat extensionless node as a last resort", () => {
     const expected = path.join("C:", "apps", "minder", "node", "node");
     expect(
       resolveBundledNodeExe({ bundleDir, existsSync: (p: string) => p === expected })

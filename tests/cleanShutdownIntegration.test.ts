@@ -137,6 +137,14 @@ describe.skipIf(!driverAvailable)("quick_check skip — against a real database"
     db!.prepare("INSERT INTO _dirty (x) VALUES (1)").run();
 
     expect(clean.readCleanShutdownState(dbPath).trusted).toBe(false);
+
+    // Release the handle before the isolated-state helper tears the temp dir
+    // down. It drops the global cache without closing, and on Windows an open
+    // SQLite file blocks directory removal — a leaked handle here shows up as
+    // flakiness in whichever test happens to run next, not as a failure here.
+    // `closeDb()` rather than `checkpointAndCloseDb()`: the point of this test
+    // is to leave the DB dirty, and checkpointing would write a clean marker.
+    conn.closeDb();
   });
 
   it("honors MINDER_FORCE_QUICK_CHECK even with a valid marker", async () => {

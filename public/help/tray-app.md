@@ -30,7 +30,7 @@ By default the tray app starts manually each session. To enable automatic startu
 
 (The setting is stored in the OS autostart mechanism — Windows registry Run key, macOS LaunchAgent, or Linux XDG autostart .desktop entry — Project Minder does not persist this itself.)
 
-**Only installed release builds can enable it.** The autostart entry records the path of whichever executable registers it, so turning this on from a `pnpm tray:dev` build would write `target/debug/minder-tray` into your logon entries and keep launching that throwaway binary at every boot — outliving the branch it was built from, and quietly taking precedence over a release you install later, since the OS entry has no notion of which build "should" own it. Development builds therefore refuse to enable the checkbox (they log why, and can still *disable* an existing entry so you can clean one up).
+**Only installed release builds can enable it.** The autostart entry records the path of whichever executable registers it, so turning this on from a `pnpm tray:dev` build would write `target\debug\minder-tray.exe` (or `target/debug/minder-tray` on macOS/Linux) into your logon entries and keep launching that throwaway binary at every boot — outliving the branch it was built from, and quietly taking precedence over a release you install later, since the OS entry has no notion of which build "should" own it. Development builds therefore refuse to enable the checkbox (they log why, and can still *disable* an existing entry so you can clean one up).
 
 If you suspect a stale entry, check what it actually points at — it should be your installed app, not a path inside a source checkout:
 
