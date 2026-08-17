@@ -95,14 +95,19 @@ export async function buildStatsResponse(inputs: StatsInputs) {
     result.catalogLintFindings,
   );
 
-  // Sessions list (scatter + message-count cross-check) and Claude's own
-  // stats-cache are independent — fetch concurrently. Both are cached, so cheap.
-  // In demo mode `getStatsCache()` resolves null immediately (guarded at the
-  // loader), so the concurrency costs nothing and the real file is never read.
-  const [sessionsList, realStatsCache, demo] = await Promise.all([
+  // Resolve the mode first, then fan out. Running `demoMode()` alongside
+  // `getStatsCache()` (which calls it again internally) raced two `readConfig()`
+  // file reads against a cold config cache for an answer we then had to await
+  // anyway. Sequencing costs one already-cached await and lets the demo branch
+  // skip the loader call entirely. (Copilot, PR #455.)
+  //
+  // Skipping the call here is an optimization, NOT the guard — `getStatsCache()`
+  // keeps its own, so the real file stays unreadable in demo mode no matter
+  // which caller arrives next.
+  const demo = await demoMode();
+  const [sessionsList, realStatsCache] = await Promise.all([
     getSessionsList().catch(() => null), // non-fatal — scatter just shows empty
-    getStatsCache(),
-    demoMode(),
+    demo ? Promise.resolve(null) : getStatsCache(),
   ]);
 
   const sessions: ReturnType<typeof projectScatter>[] =

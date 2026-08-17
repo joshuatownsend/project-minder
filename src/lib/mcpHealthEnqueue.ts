@@ -1,6 +1,7 @@
 import { getFlag } from "@/lib/featureFlags";
 import { getUserConfig } from "@/lib/userConfigCache";
 import { mcpHealthCache } from "@/lib/mcpHealthCache";
+import { demoMode } from "@/lib/demo/demoMode";
 import type { MinderConfig, McpServer } from "@/lib/types";
 
 /**
@@ -32,6 +33,20 @@ export async function enqueueMcpHealth(
   try {
     const { mcpServers } = await getUserConfig();
     const configured = mcpServers.servers;
+    // Demo mode returns the list but never probes it. `GET /api/mcp-health`
+    // already short-circuits to `demoMcpHealth()` fixtures and never reaches
+    // here, but `bootMcpHealthCache()` calls this helper directly at server
+    // boot — the second caller the route guard cannot cover.
+    //
+    // Probing demo fixtures is not merely pointless, it is externally visible:
+    // `demoUserConfig()` carries a Linear SSE endpoint and
+    // `npx -y @modelcontextprotocol/server-github`, so booting in demo mode
+    // would fire a real request at a third party and, with the opt-in
+    // `mcpHealthStdioProbe` flag, execute npx and download packages. Demo mode
+    // is meant to be inert — read-only, no files created, nothing dialled.
+    // Before this PR these fixtures did not exist and boot probed the user's
+    // own servers; the fixtures are what made an inert path outbound.
+    if (await demoMode()) return configured;
     if (configured.length > 0) mcpHealthCache.enqueue(configured);
     return configured;
   } catch {

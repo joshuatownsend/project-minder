@@ -66,7 +66,13 @@ function dailyActivity(sessions: number, messages: number, nowMs: number): Stats
     out.push({
       date,
       messageCount: Math.round(messages * share),
-      sessionCount: Math.max(1, Math.round(sessions * share)),
+      // Floor at 1 only when there ARE sessions — it exists to keep a busy
+      // demo week from showing empty days, not to invent activity. With
+      // `sessions: 0` an unconditional floor put 1 session on all 14 days
+      // while `totalSessions` read 0, so the chart contradicted the headline
+      // it sits under. Same absolute-floor mistake as the one removed from
+      // `ahead()` above, in the second of the two places it was written.
+      sessionCount: sessions > 0 ? Math.max(1, Math.round(sessions * share)) : 0,
       toolCallCount: Math.round(messages * share * 1.8),
     });
   }

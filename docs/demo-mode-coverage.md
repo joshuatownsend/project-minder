@@ -120,3 +120,34 @@ And make the guard unconditional. A guard that stops applying when a caller
 passes an argument — `walkClaudeWorkflows({ projectsDir })` was the temptation
 here — is the "guard that silently stops guarding" shape this repo has now
 fixed several times.
+
+## Anything above the guard defeats it
+
+Review of this wave found three more leaks, and all three were the same shape:
+code sitting **above** a guarded loader, so the guard was never asked.
+
+- **A route cache above the loader.** `/api/plans` keys its cache on the literal
+  `"all"` and `/api/claude-config` on `type|project` — neither salted by mode.
+  An entry warmed in real mode kept serving real plan titles and hook commands
+  for its full 2-minute TTL after the Settings toggle enabled demo mode, right
+  past a correctly-guarded loader. Fixed centrally: `invalidateAll()` in
+  `/api/config` now calls `disposeAllRouteCaches()`, so every
+  `getOrCreateRouteCache` caller inherits it instead of each route author having
+  to remember. Note this only ever affected the **flag** path — `MINDER_DEMO=1`
+  is set before boot, so no real-mode entry exists to serve.
+- **A second caller above the route guard.** `GET /api/mcp-health` was already
+  guarded, but `bootMcpHealthCache()` calls `enqueueMcpHealth()` directly at
+  server boot. Worse than a leak: the fixtures added in this wave carry a Linear
+  SSE URL and an `npx -y …` command, so demo boot would have made an outbound
+  request to a third party — and with `mcpHealthStdioProbe` on, executed npx.
+  **Adding a fixture can make a previously-inert path active.** A fixture is
+  data that something downstream may act on, not just data something renders.
+- **A floor above a derived value.** `dailyActivity()` forced `sessionCount` to
+  at least 1, so a 0-session fixture rendered 14 days of activity beneath a
+  headline reading 0. Identical to the `ahead()` floor removed earlier in the
+  same wave — the mistake was made twice, in two functions, and caught in one.
+
+The generalization for a reviewer: finding the read and guarding it is the easy
+half. The other half is asking **what sits between that guard and the response**
+— a cache, a second caller, a boot path, a background probe — and whether any of
+it can answer without consulting the guard.
