@@ -138,13 +138,23 @@ describe.skipIf(!driverAvailable)("quick_check skip — against a real database"
 
     expect(clean.readCleanShutdownState(dbPath).trusted).toBe(false);
 
-    // Release the handle before the isolated-state helper tears the temp dir
-    // down. It drops the global cache without closing, and on Windows an open
-    // SQLite file blocks directory removal — a leaked handle here shows up as
-    // flakiness in whichever test happens to run next, not as a failure here.
-    // `closeDb()` rather than `checkpointAndCloseDb()`: the point of this test
-    // is to leave the DB dirty, and checkpointing would write a clean marker.
+    // Release the handle before reopening. `closeDb()` rather than
+    // `checkpointAndCloseDb()`: the point is to leave the DB dirty, and
+    // checkpointing would write a fresh clean marker and erase the scenario.
+    // Closing also matters for teardown — the isolated-state helper drops its
+    // cache without closing, and on Windows an open SQLite file blocks temp-dir
+    // removal, which surfaces as flakiness in whatever test runs next.
     conn.closeDb();
+
+    // The part the assertions above do NOT establish: that the next open
+    // actually re-verifies. An untrusted marker is only meaningful if it
+    // translates into the pragma running again, so observe the pragma itself
+    // rather than stopping at the state the gate reads.
+    const watch = watchQuickCheck();
+    const reopened = await mig.initDb();
+    expect(reopened.available).toBe(true);
+    expect(watch.ran).toBe(true);
+    expect(reopened.quickCheckSkipped).toBe(false);
   });
 
   it("honors MINDER_FORCE_QUICK_CHECK even with a valid marker", async () => {

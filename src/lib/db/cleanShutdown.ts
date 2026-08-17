@@ -104,7 +104,11 @@ export interface CleanShutdownState {
 
 /**
  * Sidecar path for a given DB path. Kept next to the DB (not in a temp dir) so
- * it travels with the index and is removed by the same quarantine/rename paths.
+ * it travels with the index rather than with a machine's scratch space.
+ *
+ * Note it is NOT swept up automatically by the quarantine rename, which moves
+ * `index.db` and its `-wal`/`-shm` siblings and nothing else — `quarantineCorruptDb`
+ * calls `clearCleanShutdownMarker` explicitly for exactly that reason.
  */
 export function markerPathFor(dbPath: string): string {
   return path.join(path.dirname(dbPath), `${path.basename(dbPath)}.clean`);

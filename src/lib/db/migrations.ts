@@ -1113,6 +1113,19 @@ async function quarantineCorruptDb(reason: string): Promise<string | null> {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const dest = path.join(DB_DIR, `index.db.corrupt-${stamp}`);
 
+  // Drop the clean-shutdown marker up front, before the file it describes goes
+  // anywhere. Doing it here rather than at the call sites covers all three
+  // quarantine paths (open failed, quick_check failed, schema_version
+  // unreadable) and both outcomes below (renamed aside, or deleted outright) —
+  // clearing it at one call site left the other two able to leave a marker
+  // behind that described a database no longer present.
+  //
+  // The size+mtime binding means a stale marker would almost certainly be
+  // rejected anyway, so this is belt-and-braces rather than a live bug; the
+  // reason to do it properly is that "almost certainly" is not a property worth
+  // relying on when the consequence is skipping an integrity check.
+  clearCleanShutdownMarker(DB_PATH);
+
   try {
     await renameWithRetry(DB_PATH, dest);
     await moveOrDeleteSiblings(dest);
@@ -1257,9 +1270,8 @@ export async function initDb(): Promise<InitResult> {
     };
     if (integrity.quick_check !== "ok") {
       closeDb();
-      // Drop the marker with the file it describes, so the rebuilt index can't
-      // inherit the corrupt one's claim to a clean shutdown.
-      clearCleanShutdownMarker(DB_PATH);
+      // The marker is cleared inside quarantineCorruptDb, which covers every
+      // quarantine path rather than just this one.
       result.quarantined = await quarantineCorruptDb(
         `quick_check returned ${integrity.quick_check}`
       );
