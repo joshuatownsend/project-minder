@@ -129,8 +129,8 @@ Current distribution — this is the table to verify against:
 | ~~W10~~ | ~~Endpoint spike; fetcher + disk sync; adapter; attribution; distribution stance~~ — **all 5 archived 2026-08-15, endpoints gone** | 0 |
 | W11 | Memory Observatory M.2 | 1 |
 | **W12** | `RootLayout` leaks `devRoot`; `/stats` cross-check leaks real totals; ~18 empty screens; `/adapters` + `/config` + `/plans` leak; `/analytics` never loads; Home's `0 projects` header | 6 |
-| Housekeeping | `DERIVED_VERSION` release gate; #432 re-test gate; #284 next experiment; `instrumentation` bypass; capture `worktrees.png`; extract export-filename helpers | 6 |
-| **Total** | | **22** |  *(27 at reconciliation; W10's 5 archived 2026-08-15)*
+| Housekeeping | #432 re-test gate; #284 next experiment; `instrumentation` bypass; capture `worktrees.png`; extract export-filename helpers | 5 |
+| **Total** | | **21** |  *(27 at reconciliation; W10's 5 archived 2026-08-15; the `DERIVED_VERSION` gate archived 2026-08-18)*
 
 *The cloud spike moved from W1 to W10 in this table. The 2026-08-08 version counted it under W1 as a parallel side-quest; it never ran there, and it gates only W10, so it is counted where it belongs.*
 
@@ -139,7 +139,7 @@ Current distribution — this is the table to verify against:
 They block or condition other work and have no home in the wave sequence:
 
 1. ~~**The cloud spike needs you, not a wave.**~~ ✅ **Ran 2026-08-15 — and it did delete an entire section.** `GET /v1/sessions` returns 404 `not_found_error`, identical to a bogus control path, while the same token and headers get 200 from `/v1/models`. W10's 5 TODO items are archived and the personal-vs-distributed decision is permanently moot. It was indeed the cheapest question in the backlog: one script, one run.
-2. **No `DERIVED_VERSION` bump ships without the worker-ingest fix (#431 / PR #435).** The fix is on `main` and in no release; a bump without it hands every existing install another multi-hour blackout.
+2. ~~**No `DERIVED_VERSION` bump ships without the worker-ingest fix (#431 / PR #435).**~~ ✅ **Discharged 2026-08-18 — the fix shipped.** `80dac0e fix(package): host ingest in the worker thread by default (#435)` is in **v1.11.0**, published 2026-08-17, so any install that takes a future bump already runs ingest off the main thread and the forced re-parse can no longer blackout the dashboard. The bump itself is still deliberately unshipped, but that is now a scheduling choice rather than a safety gate. Archived out of `TODO.md` in the same pass.
 3. **#432 gates every `next` bump**, including a routine Dependabot PR. The four-cold-boot probe is written up in the W1 REVERTED block.
 
 ### Recommended order from here
