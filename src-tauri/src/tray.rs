@@ -182,6 +182,12 @@ fn handle_menu_event<R: Runtime>(
             crate::updater::spawn_check(app.clone(), supervisor.clone(), port, true);
         }
         "quit" => {
+            // If an update stopped the logon service and then never finished —
+            // quitting mid-download is exactly that — put it back before we go.
+            // Otherwise the user loses the service AND the sidecar until their
+            // next logon, for an update that did not happen. A no-op unless a
+            // stop is actually outstanding.
+            crate::service_handoff::restore_if_armed();
             // Block until the sidecar is cleanly stopped, THEN exit — so Quit
             // never leaves an orphan node process behind.
             supervisor.shutdown();

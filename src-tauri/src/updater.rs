@@ -162,6 +162,11 @@ async fn run_check<R: Runtime>(
             // (bounded), which is exactly what we want here.
             crate::supervisor::log("update: stopping sidecar before installer hand-off");
             exit_supervisor.shutdown();
+            // The install is committing, so the service stays down by design —
+            // it returns at the next logon. Give up the restore before the
+            // process is force-exited, so a Quit racing this cannot resurrect a
+            // service onto the port the updated tray is about to take.
+            crate::service_handoff::disarm_restore();
             // Our own child first, the borrowed one second — and the ordering is
             // load-bearing, not tidiness. In spawn mode the sidecar we just
             // stopped is itself listening on the installed service's port with a
@@ -206,13 +211,22 @@ async fn run_check<R: Runtime>(
     // whether the tray attached, and can hold our files while we are happily
     // spawning on a different port. The one case that must be skipped is the
     // narrow one where our own sidecar is the only thing the helper could find.
-    let stopped_before_download = match &handoff {
-        Some(handoff) if handoff.should_stop_before_download(supervisor.is_attached()) => {
-            handoff.stop()?;
-            true
+    // `stop()` hands back a token only when it actually stopped a RUNNING
+    // service — the helper exits 0 either way, and arming on "it exited 0"
+    // would later start a service the user deliberately left down. The token
+    // is the only thing `arm_restore` accepts, so that cannot be got wrong here.
+    //
+    // Armed process-wide rather than held in this task, because the case it
+    // covers is this task never finishing: Quit stays clickable through the
+    // download and takes the process out from under us mid-await, so the
+    // recovery below would never run.
+    if let Some(handoff) = &handoff {
+        if handoff.should_stop_before_download(supervisor.is_attached()) {
+            if let Some(stopped) = handoff.stop()? {
+                crate::service_handoff::arm_restore(stopped);
+            }
         }
-        _ => false,
-    };
+    }
 
     if let Err(e) = update
         .download_and_install(|_chunk, _total| {}, || {})
@@ -224,11 +238,11 @@ async fn run_check<R: Runtime>(
         // would stay down until the next logon. Put it back. There is no port
         // race here: this path does not relaunch the app, so the tray simply
         // resumes observing.
-        if stopped_before_download {
-            if let Some(handoff) = &handoff {
-                handoff.start();
-            }
-        }
+        // Unconditional, and a no-op unless a stop was armed and unclaimed —
+        // which is why there is no "did we stop it?" flag to keep in sync here.
+        // Going through the shared slot also means this and the Quit handler
+        // cannot both start the service: whoever claims it, acts.
+        crate::service_handoff::restore_if_armed();
         return Err(e);
     }
 
@@ -249,6 +263,9 @@ async fn run_check<R: Runtime>(
     if let Some(handoff) = &handoff {
         let _ = handoff.stop();
     }
+    // Committed here too: we are about to relaunch, and the service returns at
+    // the next logon rather than racing us for the port.
+    crate::service_handoff::disarm_restore();
     crate::supervisor::log("update: restarting into the new version");
     app.restart();
 }

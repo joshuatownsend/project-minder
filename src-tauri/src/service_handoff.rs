@@ -60,6 +60,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as StdCommand, ExitStatus, Stdio};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -92,6 +93,65 @@ fn helper_target_port(installed_port: Option<u16>) -> u16 {
 /// console, so a default-flagged child flashes one. (0x08000000.)
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// A service this process stopped and still owes a restart to, if the update
+/// does not go through.
+///
+/// Process-wide rather than held by the update task, because the hole it closes
+/// is the task **not finishing**: the tray's Quit item stays clickable during
+/// the download and calls `app.exit(0)`, which drops the task mid-await. The
+/// recovery in the `Err` branch never runs, and the user is left with both the
+/// service and the tray's sidecar down until the next logon — for an update
+/// that never happened.
+///
+/// Armed only when a stop actually stopped something, and disarmed the moment
+/// the update commits (a successful install deliberately does *not* restart the
+/// service; see this module's header).
+static PENDING_RESTORE: Mutex<Option<Arc<ServiceHandoff>>> = Mutex::new(None);
+
+/// Proof that this process stopped a service that **was running**, and
+/// therefore owes it a restart if the update does not go through.
+///
+/// A type rather than a `bool` because the rule it carries was otherwise
+/// untestable and easy to get wrong: the stop helper exits 0 whether it stopped
+/// something or found nothing listening, so a caller tracking "did I stop it?"
+/// by hand can arm a restore for a service the user deliberately left down —
+/// and then start it behind their back. Only [`ServiceHandoff::stop`] can mint
+/// one, and only when a Minder was genuinely answering, so the mistake stops
+/// being a rule to remember and becomes one the compiler refuses.
+#[derive(Debug)]
+pub struct StoppedService(Arc<ServiceHandoff>);
+
+/// Record that a stopped service is owed a restart. Takes the token by value:
+/// there is no way to call this without having actually stopped something.
+pub fn arm_restore(stopped: StoppedService) {
+    if let Ok(mut slot) = PENDING_RESTORE.lock() {
+        *slot = Some(stopped.0);
+    }
+}
+
+/// Claim the outstanding restore, if any. Taking it is what makes this safe to
+/// call from both the update task and the Quit handler concurrently: whichever
+/// arrives first gets the handoff and the other gets `None`.
+fn take_restore() -> Option<Arc<ServiceHandoff>> {
+    PENDING_RESTORE.lock().ok().and_then(|mut slot| slot.take())
+}
+
+/// Forget any outstanding restore without acting on it. Called once the update
+/// is committed, where leaving the service stopped is the intended outcome.
+pub fn disarm_restore() {
+    let _ = take_restore();
+}
+
+/// Restart a service this process stopped for an update that is not going to
+/// happen. Safe to call unconditionally — it is a no-op unless a stop was armed
+/// and nobody has claimed it yet.
+pub fn restore_if_armed() {
+    if let Some(handoff) = take_restore() {
+        log("update: abandoning the update — putting the logon service back");
+        handoff.start();
+    }
+}
 
 /// A registered logon service that is holding files this update will replace,
 /// together with everything needed to stop it.
@@ -440,7 +500,13 @@ impl ServiceHandoff {
     /// hook runs moments before a hard `std::process::exit()`, and on POSIX the
     /// files are already swapped — so they exist as belt-and-braces, not as the
     /// safety net.
-    pub fn stop(&self) -> Result<(), String> {
+    ///
+    /// `Ok(Some(_))` means a Minder really was answering on the helper's port
+    /// and is now stopped — the token is the only thing [`arm_restore`] accepts.
+    /// `Ok(None)` means there was nothing to stop, which the helper also reports
+    /// as success, and which must never lead to *starting* a service the user
+    /// deliberately left down.
+    pub fn stop(self: &Arc<Self>) -> Result<Option<StoppedService>, String> {
         log(&format!(
             "update: {} registers the logon service against this app's own bundle — stopping it \
              so the installer can replace those files",
@@ -472,10 +538,17 @@ impl ServiceHandoff {
 
         let verdict = classify_stop(expect_release, exit, port_still_bound, target);
         match &verdict {
-            Ok(()) => log("update: the logon service is stopped"),
+            Ok(()) if expect_release => log("update: the logon service is stopped"),
+            // Reached whenever the helper found nothing listening — an already
+            // stopped service, or one that never ran. Nothing was changed, so
+            // nothing may be put back later.
+            Ok(()) => log("update: no logon service was running — nothing to stop"),
             Err(why) => log(&format!("update: could not stop the logon service — {why}")),
         }
-        verdict
+        verdict?;
+        // The token exists only on this branch. That is the whole point: no
+        // caller can record a debt for a service that was never running.
+        Ok(expect_release.then(|| StoppedService(self.clone())))
     }
 
     /// Start the service again. Used on exactly one path: an update that
@@ -943,6 +1016,58 @@ mod tests {
         // A registration with no port recorded must report absence, not a
         // guess — the gate treats the two differently.
         assert_eq!(extract_declared_port(r#"{"mode":"standalone"}"#, JSON), None);
+    }
+
+    fn fake_handoff(port: u16, installed_port: Option<u16>) -> ServiceHandoff {
+        use std::path::PathBuf;
+        ServiceHandoff {
+            node: PathBuf::from("node"),
+            cli: PathBuf::from("service.mjs"),
+            cwd: PathBuf::from("."),
+            port,
+            installed_port,
+            evidence: PathBuf::from("manifest.json"),
+        }
+    }
+
+    /// Round 5, Codex P2: the outstanding-restore slot, exercised as one
+    /// sequence rather than three tests.
+    ///
+    /// It is process-global state, and `cargo test` runs tests on parallel
+    /// threads — so three separate tests sharing it would interleave and fail
+    /// intermittently. A flaky test in the harness that is supposed to *prove*
+    /// this module is worse than no test: it trains you to re-run rather than
+    /// read. The ordering matters here anyway, which makes one sequence the
+    /// honest shape.
+    #[test]
+    fn the_outstanding_restore_slot_is_armed_claimed_once_and_disarmable() {
+        use super::{arm_restore, disarm_restore, restore_if_armed, take_restore, StoppedService};
+        use std::sync::Arc;
+
+        // Nothing armed — the state after every update that never stopped a
+        // running service. Restoring must be a no-op, or a failed download
+        // would START a service the user had deliberately left down.
+        assert!(take_restore().is_none());
+        restore_if_armed();
+        assert!(take_restore().is_none());
+
+        // Claiming is destructive, and that is precisely what makes the update
+        // task and the Quit handler safe to race: exactly one of them gets the
+        // handoff, so the service can never be started twice.
+        arm_restore(StoppedService(Arc::new(fake_handoff(4100, Some(4199)))));
+        assert!(take_restore().is_some(), "the first claim wins it");
+        assert!(take_restore().is_none(), "a second claim must find nothing");
+
+        // Committing the update gives the restore up rather than performing it:
+        // a successful install leaves the service down until the next logon by
+        // design, and a Quit racing the hand-off must not resurrect it onto the
+        // port the updated tray is about to take.
+        arm_restore(StoppedService(Arc::new(fake_handoff(4100, Some(4199)))));
+        disarm_restore();
+        assert!(
+            take_restore().is_none(),
+            "a committed update must leave nothing to put back"
+        );
     }
 
     /// A dev build has no bundle for a service to lock, so there is nothing to
