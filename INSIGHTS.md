@@ -1,5 +1,29 @@
 # Insights
 
+<!-- insight:e2c92f7a2dc4 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T12:52:46.256Z -->
+## ★ Insight
+The two "proofs" available here differ in what they can rule out. A green Tauri build fails loudly on an *empty* glob, so it rules out a typo'd path — but it says nothing about a path that resolves to the wrong place. The installer listing rules out both, and the A/B against 1.11.0 additionally rules out "these entries were always there." Each check eliminates a different failure, which is why the cheap one didn't make the expensive one redundant.
+
+---
+
+<!-- insight:9ff1f21a09e4 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T12:22:40.385Z -->
+## ★ Insight
+The "don't stash these three files" rule has an escape hatch worth naming: the rule protects *content*, not the working copy. Once `diff -q` proves the working-tree bytes already exist in a pushed commit, `git checkout -- INSIGHTS.md` discards nothing. That's a different move from stashing, which defers the problem to a `pop` that can fail silently.
+
+---
+
+<!-- insight:8133c556855a | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T11:59:31.737Z -->
+## ★ Insight
+"Is fix X in release Y" is easy to answer wrongly. My first check found *the newest commit mentioning #435* and tested that — which would pass if a TODO.md edit or release note referenced the number. Two commits in the tag mention it and only one is the fix. Grepping **within the tag's history** and eyeballing the actual commit is the check that discriminates; a tag also needs `isDraft: false` before "shipped" means anything to a user.
+
+---
+
+<!-- insight:d4d5e4475577 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T11:17:23.180Z -->
+## ★ Insight
+This finding is the sharpest of the eleven, because the mistake was **using the wrong primitive one layer above where the codebase had already learned the lesson.**
+
+---
+
 <!-- insight:07b29f30e71a | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T10:57:43.141Z -->
 ## ★ Insight
 My token gate asks `probe(target).is_minder()` — "was a Minder *answering*?" But the whole reason this PR series exists is that **a running server and a responsive server are different facts**. A service mid-boot on a large index is bound but silent. So the exact state PR #457 was written to handle correctly is the state where my restore-token silently fails: helper kills it, no token minted, nothing armed, service down until logon.
