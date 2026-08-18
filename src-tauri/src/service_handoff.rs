@@ -574,27 +574,38 @@ impl ServiceHandoff {
         // every update. The mirror error is as bad: a quiet tray port would let
         // a genuinely failed stop of 4199 pass unverified.
         let target = helper_target_port(self.installed_port);
-        let expect_release = crate::health::probe(target).is_minder();
+        // Two questions, two primitives — a distinction this codebase has
+        // already paid to learn (see `crate::health`). A TCP connect answers
+        // "was something running?" even for a server that is bound but not yet
+        // responding; only an actual health answer licenses demanding that the
+        // port come free.
+        let was_listening = crate::health::port_is_bound(target);
+        let served_minder = crate::health::probe(target).is_minder();
         let exit = self.run_helper("stop");
-        // Only worth asking, and only meaningful, when a Minder was answering
-        // and the helper claims to have done its job.
-        let port_still_bound = expect_release
-            && exit == StopExit::Ok
-            && !port_released(target, RELEASE_GRACE);
-
-        let verdict = classify_stop(expect_release, exit, port_still_bound, target);
+        // Short-circuits: only worth the wait when something was there to go
+        // away and the helper claims to have done its job.
+        let port_came_free =
+            was_listening && exit == StopExit::Ok && port_released(target, RELEASE_GRACE);
+        let verdict = classify_stop(
+            StopObservations {
+                was_listening,
+                served_minder,
+                exit,
+                port_came_free,
+            },
+            target,
+        );
         match &verdict {
-            Ok(()) if expect_release => log("update: the logon service is stopped"),
-            // Reached whenever the helper found nothing listening — an already
-            // stopped service, or one that never ran. Nothing was changed, so
-            // nothing may be put back later.
-            Ok(()) => log("update: no logon service was running — nothing to stop"),
+            Ok(true) => log("update: the logon service is stopped"),
+            // Reached whenever nothing was listening — an already stopped
+            // service, or one that never ran. Nothing changed, so nothing may
+            // be put back later.
+            Ok(false) => log("update: no logon service was running — nothing to stop"),
             Err(why) => log(&format!("update: could not stop the logon service — {why}")),
         }
-        verdict?;
-        // The token exists only on this branch. That is the whole point: no
-        // caller can record a debt for a service that was never running.
-        Ok(expect_release.then(|| StoppedService(self.clone())))
+        // The token exists only when something really did stop. That is the
+        // whole point: no caller can record a debt we do not owe.
+        Ok(verdict?.then(|| StoppedService(self.clone())))
     }
 
     /// Start the service again. Used on exactly one path: an update that
@@ -640,12 +651,32 @@ pub enum StopExit {
 /// to begin with. If something foreign held the port, or nothing did, the port
 /// tells us nothing about our service and demanding it come free would abort an
 /// update that would have succeeded.
-pub fn classify_stop(
-    expect_release: bool,
-    exit: StopExit,
-    port_still_bound: bool,
-    port: u16,
-) -> Result<(), String> {
+/// The facts a caller can gather around a stop, kept as a struct because two
+/// of them look interchangeable and are not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StopObservations {
+    /// Something held the helper's target port before the stop — a plain TCP
+    /// connect, which is true for a service that is running but has not begun
+    /// answering yet. This, not `served_minder`, is what "was it running?"
+    /// means.
+    pub was_listening: bool,
+    /// A Minder *answered* on that port before the stop. Strictly stronger than
+    /// `was_listening`, and the only thing that licenses demanding a release.
+    pub served_minder: bool,
+    /// How the helper itself ended.
+    pub exit: StopExit,
+    /// The port was observed to come free afterwards. Only ever set when it was
+    /// worth asking — see [`ServiceHandoff::stop`].
+    pub port_came_free: bool,
+}
+
+pub fn classify_stop(obs: StopObservations, port: u16) -> Result<bool, String> {
+    let StopObservations {
+        was_listening,
+        served_minder,
+        exit,
+        port_came_free,
+    } = obs;
     match exit {
         StopExit::Failed(why) => {
             return Err(format!(
@@ -660,13 +691,24 @@ pub fn classify_stop(
         }
         StopExit::Ok => {}
     }
-    if expect_release && port_still_bound {
+    // A Minder that *was answering* must have let go. Only that case: something
+    // foreign holding the port, or nothing holding it at all, tells us nothing
+    // about our service, and demanding a release there would abort an update
+    // that would have succeeded.
+    if served_minder && !port_came_free {
         return Err(format!(
             "port {port} is still served by Minder after stopping the logon service — whatever \
              holds it was not recognized as this installation's server"
         ));
     }
-    Ok(())
+    // Whether we owe a restart is a DIFFERENT question, and answering it with
+    // `served_minder` was wrong. A registered service that is running but still
+    // booting — blocked opening a large index, which is the exact state this
+    // app's tray was rewritten to stop misreading — never answers a health
+    // probe. It minted no token, so a failed download or a Quit mid-download
+    // could not put it back, and the user lost it until the next logon. The
+    // honest signal is that something WAS on that port and is now gone.
+    Ok(was_listening && port_came_free)
 }
 
 /// The Node the C4 packaging workflow lays down beside the payload. Mirrors the
@@ -718,7 +760,8 @@ fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Option<ExitStatus>
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_path_text, registration_references, RegistrationFormat, ServiceHandoff,
+        classify_stop, normalize_path_text, registration_references, RegistrationFormat,
+        ServiceHandoff, StopExit, StopObservations,
     };
 
     const JSON: RegistrationFormat = RegistrationFormat::Json;
@@ -909,24 +952,34 @@ mod tests {
         assert!(!registration_references("anything at all", "/", JSON));
     }
 
+    /// Build observations for the common shapes, so each test below reads as
+    /// the situation it describes rather than four positional booleans.
+    fn obs(was_listening: bool, served_minder: bool, exit: StopExit, came_free: bool) -> StopObservations {
+        StopObservations {
+            was_listening,
+            served_minder,
+            exit,
+            port_came_free: came_free,
+        }
+    }
+
     /// A helper that reports failure must abort the update. Before this was a
     /// gate, the failure only reached the log and the install went ahead —
     /// straight into the locked-file (Windows) or stale-payload (POSIX) outcome
     /// the whole module exists to prevent. (Codex P1 on #459.)
     #[test]
     fn a_failing_stop_helper_aborts_the_update() {
-        use super::{classify_stop, StopExit};
         for exit in [
             StopExit::Failed("it exited with exit code: 1".into()),
             StopExit::TimedOut,
         ] {
             assert!(
-                classify_stop(true, exit.clone(), false, 4100).is_err(),
+                classify_stop(obs(true, true, exit.clone(), false), 4100).is_err(),
                 "{exit:?} must not be reported as a successful stop"
             );
-            // …and the verdict must not depend on the port having come free:
-            // a helper that failed tells us enough on its own.
-            assert!(classify_stop(false, exit, false, 4100).is_err());
+            // …and it must not depend on anything else being observed: a helper
+            // that failed tells us enough on its own.
+            assert!(classify_stop(obs(false, false, exit, false), 4100).is_err());
         }
     }
 
@@ -935,9 +988,8 @@ mod tests {
     /// that port still being served is evidence the service never let go.
     #[test]
     fn a_clean_exit_is_not_enough_when_the_port_is_still_served() {
-        use super::{classify_stop, StopExit};
-        assert!(classify_stop(true, StopExit::Ok, true, 4100).is_err());
-        assert!(classify_stop(true, StopExit::Ok, false, 4100).is_ok());
+        assert!(classify_stop(obs(true, true, StopExit::Ok, false), 4100).is_err());
+        assert!(classify_stop(obs(true, true, StopExit::Ok, true), 4100).is_ok());
     }
 
     /// The other half of that rule, and the one that keeps it from becoming a
@@ -946,8 +998,50 @@ mod tests {
     /// at all — so a still-bound port must NOT abort a viable update.
     #[test]
     fn a_port_we_never_expected_to_free_does_not_abort() {
-        use super::{classify_stop, StopExit};
-        assert!(classify_stop(false, StopExit::Ok, true, 4100).is_ok());
+        assert!(classify_stop(obs(true, false, StopExit::Ok, false), 4100).is_ok());
+    }
+
+    /// Round 7, Codex P2 — the inverse case the restore token created. A
+    /// registered service that is running but still BOOTING never answers a
+    /// health probe: it is bound, and silent, which is the exact state the tray
+    /// was rewritten to stop misreading. Keying the token on "a Minder
+    /// answered" meant the helper killed it, no restart was owed, and a failed
+    /// download or a Quit left the user's dashboard down until the next logon.
+    ///
+    /// Liveness is `was_listening`; `served_minder` only ever licenses
+    /// demanding a release.
+    #[test]
+    fn a_running_but_unresponsive_service_is_still_owed_a_restart() {
+        let stopped = classify_stop(obs(true, false, StopExit::Ok, true), 4100)
+            .expect("a silent holder that went away is a clean stop");
+        assert!(
+            stopped,
+            "something was on the port and is now gone — that debt must be recorded"
+        );
+    }
+
+    /// …and the converse, which is what stops it becoming a licence to restart
+    /// anything: nothing listening means nothing was stopped, so nothing may be
+    /// started later behind the user's back.
+    #[test]
+    fn a_service_that_was_not_running_is_owed_nothing() {
+        let stopped = classify_stop(obs(false, false, StopExit::Ok, false), 4100)
+            .expect("nothing to stop is a successful stop");
+        assert!(!stopped);
+        // Even if the port somehow reads as free afterwards, it was never ours
+        // to have stopped.
+        let stopped = classify_stop(obs(false, false, StopExit::Ok, true), 4100).expect("clean");
+        assert!(!stopped);
+    }
+
+    /// A holder that never went away was not stopped by us, so no restart is
+    /// owed for it either — the foreign-process case, which must neither abort
+    /// the update nor arm a restore.
+    #[test]
+    fn a_holder_that_never_let_go_is_owed_nothing() {
+        let stopped = classify_stop(obs(true, false, StopExit::Ok, false), 4100)
+            .expect("a foreign holder must not abort a viable update");
+        assert!(!stopped);
     }
 
 

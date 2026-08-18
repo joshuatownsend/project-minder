@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:07b29f30e71a | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T10:57:43.141Z -->
+## ★ Insight
+My token gate asks `probe(target).is_minder()` — "was a Minder *answering*?" But the whole reason this PR series exists is that **a running server and a responsive server are different facts**. A service mid-boot on a large index is bound but silent. So the exact state PR #457 was written to handle correctly is the state where my restore-token silently fails: helper kills it, no token minted, nothing armed, service down until logon.
+
+---
+
 <!-- insight:f83917994a37 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T04:15:16.738Z -->
 ## ★ Insight
 Round 5's better fix came from refusing the obvious one. Codex asked me to "preserve whether the service was active" — a bool. But a bool has to be *kept correct* by every caller, and the mutation harness proved I couldn't test that it was.
