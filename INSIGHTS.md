@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:e2c92f7a2dc4 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T12:52:46.256Z -->
+## ★ Insight
+The two "proofs" available here differ in what they can rule out. A green Tauri build fails loudly on an *empty* glob, so it rules out a typo'd path — but it says nothing about a path that resolves to the wrong place. The installer listing rules out both, and the A/B against 1.11.0 additionally rules out "these entries were always there." Each check eliminates a different failure, which is why the cheap one didn't make the expensive one redundant.
+
+---
+
 <!-- insight:9ff1f21a09e4 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T12:22:40.385Z -->
 ## ★ Insight
 The "don't stash these three files" rule has an escape hatch worth naming: the rule protects *content*, not the working copy. Once `diff -q` proves the working-tree bytes already exist in a pushed commit, `git checkout -- INSIGHTS.md` discards nothing. That's a different move from stashing, which defers the problem to a `pop` that can fail silently.
