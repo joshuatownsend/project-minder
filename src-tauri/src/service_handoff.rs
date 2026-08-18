@@ -75,6 +75,19 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(45);
 /// that reported success. Verification only — nothing is retried.
 const RELEASE_GRACE: Duration = Duration::from_secs(5);
 
+/// The port `service.mjs stop` scans when the registration records none.
+/// Mirrors `DEFAULT_SERVICE_PORT` in `scripts/service/lib.mjs` — if this drifts,
+/// we predict a different target than the helper actually scans.
+const DEFAULT_SERVICE_PORT: u16 = 4100;
+
+/// The port the stop helper will actually target, which is the only port any of
+/// our own checks may reason about. Split out as a free function so the
+/// prediction is testable, and so the `None` case cannot quietly become a
+/// different rule at each call site.
+fn helper_target_port(installed_port: Option<u16>) -> u16 {
+    installed_port.unwrap_or(DEFAULT_SERVICE_PORT)
+}
+
 /// Windows `CREATE_NO_WINDOW`. Same reason as in `supervisor`: the tray has no
 /// console, so a default-flagged child flashes one. (0x08000000.)
 #[cfg(windows)]
@@ -90,7 +103,8 @@ pub struct ServiceHandoff {
     cli: PathBuf,
     /// Where the CLI runs, so its own relative lookups resolve inside the app.
     cwd: PathBuf,
-    /// The tray's own port, used to verify the port actually came free.
+    /// The tray's OWN port. Used only to decide whether the helper's target is
+    /// a port we already occupy — never as the port to probe or wait on.
     port: u16,
     /// The port the registration declares — what `service.mjs stop` will scan.
     /// `None` when the file did not record one.
@@ -317,19 +331,12 @@ fn find_registration(home: &Path, resource_dir: &Path) -> Option<(PathBuf, Optio
 ///   cannot be running on it and cannot be holding anything. There is nothing to
 ///   stop, and running the helper anyway would find only our own child and
 ///   hard-kill it. Skip.
-/// * **Port undeterminable** — stop. The two mistakes are not symmetric: a
-///   needless stop costs our sidecar its graceful exit moments before the app
-///   restarts anyway, while a needless skip is the broken update itself.
-pub fn should_stop_before_download(
-    attached: bool,
-    installed_port: Option<u16>,
-    our_port: u16,
-) -> bool {
-    match (attached, installed_port) {
-        (true, _) => true,
-        (false, None) => true,
-        (false, Some(port)) => port != our_port,
-    }
+/// `target_port` is what the helper will actually scan — [`helper_target_port`],
+/// not the raw registration field. That is what folds the "no port recorded"
+/// case in without a rule of its own: an unrecorded port means the helper falls
+/// back to the default, so comparing the default is exactly right.
+pub fn should_stop_before_download(attached: bool, target_port: u16, our_port: u16) -> bool {
+    attached || target_port != our_port
 }
 
 impl ServiceHandoff {
@@ -381,7 +388,7 @@ impl ServiceHandoff {
     /// [`should_stop_before_download`] for why the port comparison is the
     /// discriminator rather than attach state alone.
     pub fn should_stop_before_download(&self, attached: bool) -> bool {
-        should_stop_before_download(attached, self.installed_port, self.port)
+        should_stop_before_download(attached, helper_target_port(self.installed_port), self.port)
     }
 
     /// Run the bundled service CLI with one action and report how it ended.
@@ -437,15 +444,23 @@ impl ServiceHandoff {
         // not ours to reason about: a foreign server can legitimately hold it
         // while our registered service isn't running at all, and demanding the
         // port come free would abort an update that would have succeeded.
-        let expect_release = crate::health::probe(self.port).is_minder();
+        // Every check below is about the port the HELPER targets, never the
+        // tray's own. Round 2 conflated them, and the two differ in precisely
+        // the configuration round 2 existed to support: with the service on
+        // 4199 and our sidecar on 4100, probing 4100 sees our own healthy
+        // Minder, then waits for a port that correctly never frees — failing
+        // every update. The mirror error is as bad: a quiet tray port would let
+        // a genuinely failed stop of 4199 pass unverified.
+        let target = helper_target_port(self.installed_port);
+        let expect_release = crate::health::probe(target).is_minder();
         let exit = self.run_helper("stop");
         // Only worth asking, and only meaningful, when a Minder was answering
         // and the helper claims to have done its job.
         let port_still_bound = expect_release
             && exit == StopExit::Ok
-            && !port_released(self.port, RELEASE_GRACE);
+            && !port_released(target, RELEASE_GRACE);
 
-        let verdict = classify_stop(expect_release, exit, port_still_bound, self.port);
+        let verdict = classify_stop(expect_release, exit, port_still_bound, target);
         match &verdict {
             Ok(()) => log("update: the logon service is stopped"),
             Err(why) => log(&format!("update: could not stop the logon service — {why}")),
@@ -795,7 +810,7 @@ mod tests {
     #[test]
     fn a_service_on_another_port_is_stopped_even_when_we_are_not_attached() {
         use super::should_stop_before_download;
-        assert!(should_stop_before_download(false, Some(4199), 4100));
+        assert!(should_stop_before_download(false, 4199, 4100));
     }
 
     /// The one case that must be skipped: our own sidecar bound this port, so
@@ -804,7 +819,7 @@ mod tests {
     #[test]
     fn our_own_sidecar_on_the_registered_port_is_never_handed_to_the_helper() {
         use super::should_stop_before_download;
-        assert!(!should_stop_before_download(false, Some(4100), 4100));
+        assert!(!should_stop_before_download(false, 4100, 4100));
     }
 
     /// Attached means the port-holder is not ours and our supervisor has no
@@ -812,18 +827,55 @@ mod tests {
     #[test]
     fn an_attached_tray_always_stops_regardless_of_port() {
         use super::should_stop_before_download;
-        assert!(should_stop_before_download(true, Some(4100), 4100));
-        assert!(should_stop_before_download(true, Some(4199), 4100));
-        assert!(should_stop_before_download(true, None, 4100));
+        assert!(should_stop_before_download(true, 4100, 4100));
+        assert!(should_stop_before_download(true, 4199, 4100));
     }
 
-    /// An undeterminable port errs toward stopping. The mistakes are not
-    /// symmetric: a needless stop costs our sidecar its graceful exit moments
-    /// before the app restarts anyway; a needless skip is the broken update.
+    /// A registration recording no port does not get a rule of its own: the
+    /// helper falls back to the default, so predicting the default is what
+    /// makes our checks agree with what it will actually scan.
     #[test]
-    fn an_unknown_registered_port_errs_toward_stopping() {
-        use super::should_stop_before_download;
-        assert!(should_stop_before_download(false, None, 4100));
+    fn an_unrecorded_port_resolves_to_the_helper_default() {
+        use super::{helper_target_port, should_stop_before_download, DEFAULT_SERVICE_PORT};
+        assert_eq!(helper_target_port(None), DEFAULT_SERVICE_PORT);
+        assert_eq!(helper_target_port(Some(4199)), 4199);
+        // …so an unrecorded port on a tray already holding the default is the
+        // skip case, not a stop: the helper would find only our own sidecar.
+        assert!(!should_stop_before_download(
+            false,
+            helper_target_port(None),
+            DEFAULT_SERVICE_PORT
+        ));
+        // …while a tray on some other port still needs the default stopped.
+        assert!(should_stop_before_download(false, helper_target_port(None), 4199));
+    }
+
+    /// Round 3, Codex P1 — a bug introduced by round 2's own fix. Every check
+    /// in `stop()` must follow the port the HELPER targets, never the tray's.
+    /// With the service on 4199 and our sidecar on 4100 — the exact
+    /// configuration round 2 added support for — probing the tray's port sees
+    /// our own healthy Minder and then waits for a port that correctly never
+    /// frees, failing every update.
+    #[test]
+    fn the_stop_is_verified_against_the_helpers_port_not_the_trays() {
+        use super::{helper_target_port, ServiceHandoff};
+        use std::path::PathBuf;
+        let handoff = ServiceHandoff {
+            node: PathBuf::from("node"),
+            cli: PathBuf::from("service.mjs"),
+            cwd: PathBuf::from("."),
+            port: 4100,
+            installed_port: Some(4199),
+            evidence: PathBuf::from("manifest.json"),
+        };
+        assert_eq!(
+            helper_target_port(handoff.installed_port),
+            4199,
+            "the verified port must be the service's, not the tray's"
+        );
+        assert_ne!(helper_target_port(handoff.installed_port), handoff.port);
+        // And this configuration must still be stopped at all — the round-2 rule.
+        assert!(handoff.should_stop_before_download(false));
     }
 
     /// The gate is only as good as the port it reads, and each format records
@@ -934,5 +986,42 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+/// Compile-time tether to the JavaScript side of the port contract.
+///
+/// `helper_target_port` predicts what `service.mjs stop` will scan when the
+/// registration records no port. That prediction is only correct while both
+/// sides agree on the default — and nothing at runtime would notice if they
+/// stopped agreeing: the tray would probe one port, the helper would stop
+/// another, and every verification would silently answer about the wrong
+/// thing. `include_str!` resolves relative to this file and only compiles
+/// in-repo, so it costs nothing in the packaged binary. Mirrors the same
+/// pattern in `supervisor::contract_tests`.
+#[cfg(test)]
+mod contract_tests {
+    use super::DEFAULT_SERVICE_PORT;
+
+    const LIB_MJS: &str = include_str!("../../scripts/service/lib.mjs");
+
+    #[test]
+    fn the_default_port_matches_the_service_cli() {
+        const NAME: &str = "export const DEFAULT_SERVICE_PORT =";
+        let at = LIB_MJS
+            .find(NAME)
+            .expect("lib.mjs must still export DEFAULT_SERVICE_PORT");
+        let digits: String = LIB_MJS[at + NAME.len()..]
+            .chars()
+            .skip_while(|c| c.is_whitespace())
+            .take_while(char::is_ascii_digit)
+            .collect();
+        let from_js: u16 = digits.parse().expect("a numeric default port");
+        assert_eq!(
+            from_js, DEFAULT_SERVICE_PORT,
+            "scripts/service/lib.mjs defaults to port {from_js} but service_handoff.rs \
+             predicts {DEFAULT_SERVICE_PORT} — the tray would verify a different port than \
+             the stop helper actually targets"
+        );
     }
 }

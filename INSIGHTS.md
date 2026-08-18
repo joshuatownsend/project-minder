@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:3178b7a78284 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T03:12:13.144Z -->
+## ★ Insight
+Round 2's P1 is a lesson in how a *simplifying* assumption becomes a bug. I gated on attach mode because it made the ordering hazard structural — genuinely good reasoning — but it smuggled in a premise I never checked: **"the service holds our files" ⟺ "the service owns our port."**
+
+---
+
 <!-- insight:5ea2850dfb2a | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T02:39:16.870Z -->
 ## ★ Insight
 The mutation harness earned its keep on this round. My P1 fix looked correct and all 102 tests passed — but **both P1 mutants survived**, because the rule only existed inside a function that spawns a process and probes a live port. A test can't reach in there, so nothing was actually pinning the behavior.
