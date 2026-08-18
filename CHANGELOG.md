@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-08-18
+
+*A tray-only release, and both entries are about the same subject: a server the tray did not start. 1.11.0 taught it to stop accusing its own still-booting server of being a stranger; this one closes the two remaining ways it could be wrong about a port it does not own — an update that destroys itself against a logon service holding the app's own files, and a "foreign" verdict that, once reached, was never revisited for the life of the tray.*
+
+*Worth knowing how the first fix reaches you, because it is the unusual case where a release cannot repair the version installing it. The stop-before-install runs in the **installed** build, so 1.12.0 is the version that gains the ability, not the version the ability rescues: updating 1.11.0 → 1.12.0 still runs 1.11.0's updater, with the old failure intact if a logon service is pointed at the app's own bundle. Stop that service by hand for this one update if you run that configuration. From 1.12.0 onward the hand-off runs by itself.*
+
+*No re-index — `DERIVED_VERSION` is unchanged at 20, verified by diffing against `v1.11.0` rather than assumed. Upgrading from 1.11.0 is a restart.*
+
 ### Fixed
 
 - **A self-update no longer fails when the logon service is running the app's own bundle.** `--payload` (1.11.0) made it possible — and recommended — to point the Phase A logon service at the tray app's own server bundle, so both halves run the same build. But when that service owns the port the tray is in *attach* mode, where it deliberately never touches a server it doesn't own, including at quit. The two behaviors are each correct and together they broke updating: the service kept the app's own `resources/node/node.exe` open, and the Windows installer cannot overwrite a file a live process holds. On macOS and Linux the replacement succeeded while the service went on serving the **old payload from memory** — an update that reported success and changed nothing, which is the worse failure of the two.
