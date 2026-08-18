@@ -36,7 +36,9 @@
     ],
     "resources": {
       "../dist/minder-server": "minder-server",
-      "../dist/node": "node"
+      "../dist/node": "node",
+      "../scripts/service.mjs": "scripts/service.mjs",
+      "../scripts/service": "scripts/service"
     }
   }
 }

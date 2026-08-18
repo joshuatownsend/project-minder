@@ -1,5 +1,53 @@
 # Insights
 
+<!-- insight:07b29f30e71a | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T10:57:43.141Z -->
+## ★ Insight
+My token gate asks `probe(target).is_minder()` — "was a Minder *answering*?" But the whole reason this PR series exists is that **a running server and a responsive server are different facts**. A service mid-boot on a large index is bound but silent. So the exact state PR #457 was written to handle correctly is the state where my restore-token silently fails: helper kills it, no token minted, nothing armed, service down until logon.
+
+---
+
+<!-- insight:f83917994a37 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T04:15:16.738Z -->
+## ★ Insight
+Round 5's better fix came from refusing the obvious one. Codex asked me to "preserve whether the service was active" — a bool. But a bool has to be *kept correct* by every caller, and the mutation harness proved I couldn't test that it was.
+
+---
+
+<!-- insight:d4738bd092e6 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T03:47:50.032Z -->
+## ★ Insight
+Round 4 is the round where the mutation harness stopped me from shipping a false claim. Copilot reported a UTF-8 panic; I fixed it, wrote a test with an accented home directory, and **117 tests passed**. Then the mutation run put the bug back — and everything still passed.
+
+---
+
+<!-- insight:05d0007d22ce | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T03:33:08.043Z -->
+## ★ Insight
+Round 3's finding is the most instructive of the six: **my round-2 fix introduced it.** Teaching the gate to handle a service on its own port meant the tray's port and the helper's port became different numbers — and `stop()` was still verifying against the tray's. The result would have aborted *every* update in precisely the configuration round 2 existed to support.
+
+---
+
+<!-- insight:3178b7a78284 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T03:12:13.144Z -->
+## ★ Insight
+Round 2's P1 is a lesson in how a *simplifying* assumption becomes a bug. I gated on attach mode because it made the ordering hazard structural — genuinely good reasoning — but it smuggled in a premise I never checked: **"the service holds our files" ⟺ "the service owns our port."**
+
+---
+
+<!-- insight:5ea2850dfb2a | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T02:39:16.870Z -->
+## ★ Insight
+The mutation harness earned its keep on this round. My P1 fix looked correct and all 102 tests passed — but **both P1 mutants survived**, because the rule only existed inside a function that spawns a process and probes a live port. A test can't reach in there, so nothing was actually pinning the behavior.
+
+---
+
+<!-- insight:2a80b54640a9 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T02:03:13.530Z -->
+## ★ Insight
+The advisor caught something my tests structurally could not: **`on_before_exit` is Windows-only despite its platform-neutral name.** Its sole call site in `tauri-plugin-updater` 2.10.1 sits inside the `cfg(windows)` `install_inner`; the macOS and Linux implementations never invoke it.
+
+---
+
+<!-- insight:0930a349db47 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T01:21:13.526Z -->
+## ★ Insight
+The fix turned a *latch* into a *lease*. The old code asked "is this question settled?" and, once yes, stopped asking forever. But `Foreign` isn't a property of the port — it's a claim about **who holds it right now**, and holders change. The new `next_verdict` encodes two asymmetric rules that fall straight out of `health.rs`'s existing `is_conclusive`: an unbound port *voids* every verdict (the owner it described is gone), while an inconclusive probe *never downgrades* one (a timeout is evidence of nothing, in either direction).
+
+---
+
 <!-- insight:00352f40650e | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-17T20:14:42.677Z -->
 ## ★ Insight
 The mtime mutation is the one worth noting: dropping mtime from the binding still passed **30 of 31** tests. Size alone catches a growing index, which is the common case — but not an in-place rewrite at identical length, which is exactly what a crash mid-write produces. A test suite that only exercised the common case would have ratified a marker that trusts a torn file.

@@ -108,6 +108,9 @@ pub fn init<R: Runtime>(
 
     let menu_sup = supervisor.clone();
     let menu_url = cfg.dashboard_url();
+    // The updater needs it to verify the port actually came free after stopping
+    // a logon service that was holding this app's bundle (crate::service_handoff).
+    let menu_port = cfg.port;
     let menu_autostart_item = autostart_item.clone();
     let menu_mute_item = mute_item.clone();
     let menu_notify_controller = notify_controller.clone();
@@ -122,6 +125,7 @@ pub fn init<R: Runtime>(
                 event.id().as_ref(),
                 &menu_sup,
                 &menu_url,
+                menu_port,
                 &menu_autostart_item,
                 &menu_mute_item,
                 &menu_notify_controller,
@@ -152,6 +156,7 @@ fn handle_menu_event<R: Runtime>(
     id: &str,
     supervisor: &Arc<Supervisor>,
     dashboard_url: &str,
+    port: u16,
     autostart_item: &CheckMenuItem<R>,
     mute_item: &CheckMenuItem<R>,
     notify_controller: &Arc<NotifyController>,
@@ -174,9 +179,15 @@ fn handle_menu_event<R: Runtime>(
             // install: true — an explicit menu click is the user asking for the
             // update to be applied, unlike the periodic check (which only
             // notifies; see crate::updater::notify_available).
-            crate::updater::spawn_check(app.clone(), supervisor.clone(), true);
+            crate::updater::spawn_check(app.clone(), supervisor.clone(), port, true);
         }
         "quit" => {
+            // If an update stopped the logon service and then never finished —
+            // quitting mid-download is exactly that — put it back before we go.
+            // Otherwise the user loses the service AND the sidecar until their
+            // next logon, for an update that did not happen. A no-op unless a
+            // stop is actually outstanding.
+            crate::service_handoff::restore_if_armed();
             // Block until the sidecar is cleanly stopped, THEN exit — so Quit
             // never leaves an orphan node process behind.
             supervisor.shutdown();
@@ -320,7 +331,7 @@ fn spawn_poll_loop<R: Runtime>(
             // crate::updater::notify_available for why it must not restart the
             // server out from under an active session.
             if crate::updater::is_check_tick(tick, crate::updater::CHECK_EVERY_TICKS) {
-                crate::updater::spawn_check(app.clone(), supervisor.clone(), false);
+                crate::updater::spawn_check(app.clone(), supervisor.clone(), port, false);
             }
             tick = tick.saturating_add(1);
 

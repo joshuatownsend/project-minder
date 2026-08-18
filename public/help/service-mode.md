@@ -43,18 +43,25 @@ Point the service at an explicit payload with `--payload` (or `MINDER_SERVICE_PA
 
 With both installed and pointed at one payload, whichever starts first at logon binds the port and the other attaches — a race that no longer changes what you're running.
 
-> #### ⚠️ Targeting the app's *own* install directory breaks self-update
+> #### Targeting the app's *own* install directory, and self-update
 >
-> It is tempting to point the service straight at the installed app's bundle. Don't, unless you are willing to stop the service by hand before every app update.
+> Pointing the service straight at the installed app's bundle used to break the tray's self-update, and the tray now handles it for you. Worth understanding, because what it does is visible.
 >
-> The tray's updater stops its **own** sidecar before exiting, precisely because an orphaned process holding `resources/node/node.exe` makes the installer fail on a locked file. But when the service owns the port, the tray is in *attach* mode — where quitting deliberately leaves the running server untouched, because it is not the tray's process to kill. So the service keeps the app's own bundled Node locked, and the Windows installer cannot overwrite it. On macOS and Linux the replacement usually succeeds, but the service keeps serving the **old payload from memory** until it is restarted, which is worse: the update looks like it worked.
+> The problem: the updater stops its **own** sidecar before exiting, precisely because an orphaned process holding `resources/node/node.exe` makes the installer fail on a locked file. But when the service owns the port the tray is in *attach* mode — where quitting deliberately leaves the running server untouched, because it is not the tray's process to kill. So the service kept the app's own bundled Node locked and the Windows installer could not overwrite it. On macOS and Linux the replacement succeeded but the service went on serving the **old payload from memory**, which is worse: the update looked like it worked.
 >
-> Two safe arrangements:
+> What the tray does now, when you install an update:
+>
+> - It reads the service registration (`~/.minder/service/service-manifest.json` on Windows, the LaunchAgent plist or systemd unit elsewhere) and checks whether it names a path **inside the app's own bundle**. A service running any other payload is not holding the app's files, and is left strictly alone.
+> - If it does, the tray stops it — after gracefully stopping its own sidecar, and using the same identity check as `pnpm service:stop`, so a process it cannot positively identify as this installation's server is never killed.
+> - It does **not** start the service back up. The registration is logon-triggered, so it returns by itself at your next logon; until then the port is free and the updated tray simply runs its own server. Restarting it here would race the relaunching tray for the port.
+> - If a service is holding the bundle and the tray has no way to stop it, the update is **refused before anything is downloaded**, with a notification telling you to stop it yourself. It will not start an install it knows cannot finish.
+>
+> One visible side effect: stopping the service is a hard kill (on Windows that is the only option — see [Windows](#windows) below), so no clean-shutdown marker is written and **the first launch after an update re-verifies the index**. On a large `index.db` that first start is slow, once. It is not the cold-boot bug returning.
+>
+> Both arrangements below remain good ideas — they are now preferences rather than requirements:
 >
 > 1. **Give the service its own copy** of the payload, outside the app's install directory — `pnpm package:standalone` output, or a copy of the app's `minder-server` + `node` folders. Update it when you update the app.
 > 2. **Let the tray own the server** — `pnpm service:uninstall`, and use the tray's "Start at login". Simplest, at the cost of the server stopping when you quit the tray.
->
-> If you have already pointed the service at the app's directory, stop it (`pnpm service:stop`) before installing an app update, then start it again afterwards.
 
 ## Operating System Details
 
