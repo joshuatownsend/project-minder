@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:9ff1f21a09e4 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T12:22:40.385Z -->
+## ★ Insight
+The "don't stash these three files" rule has an escape hatch worth naming: the rule protects *content*, not the working copy. Once `diff -q` proves the working-tree bytes already exist in a pushed commit, `git checkout -- INSIGHTS.md` discards nothing. That's a different move from stashing, which defers the problem to a `pop` that can fail silently.
+
+---
+
 <!-- insight:8133c556855a | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T11:59:31.737Z -->
 ## ★ Insight
 "Is fix X in release Y" is easy to answer wrongly. My first check found *the newest commit mentioning #435* and tested that — which would pass if a TODO.md edit or release note referenced the number. Two commits in the tag mention it and only one is the fix. Grepping **within the tag's history** and eyeballing the actual commit is the check that discriminates; a tag also needs `isDraft: false` before "shipped" means anything to a user.
