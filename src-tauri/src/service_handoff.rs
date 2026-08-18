@@ -156,6 +156,36 @@ pub fn normalize_path_text(text: &str) -> String {
     out
 }
 
+/// Undo the escaping each registration format applies to the paths inside it,
+/// so a path containing a character one of them serializes still matches.
+///
+/// `service.mjs` writes these paths through `escapeXml` (macOS plists: `&` `<`
+/// `>` `"`) and `escapeSystemdPercent` (Linux units: `%` doubled). A resource
+/// directory under a home like `/Users/R&D` therefore appears in the plist as
+/// `R&amp;D` and never matches the unescaped `resource_dir` — a false negative
+/// that skips the hand-off and leaves the old service running through the
+/// update, which is the silent failure this whole module exists to prevent.
+///
+/// **`&amp;` is decoded last, and that ordering is a correctness requirement.**
+/// `escapeXml` encodes `&` *first*, so `&lt;` in a real path was written as
+/// `&amp;lt;`; decoding `&amp;` first would turn that back into `&lt;` and the
+/// next pass would wrongly reduce it to `<`. Decoding in reverse order of
+/// encoding is what makes the round trip exact.
+///
+/// Applied unconditionally rather than per-platform: a false positive would
+/// need a directory literally named `x&amp;y` colliding with a bundle at `x&y`,
+/// and the boundary check still has to pass afterwards.
+fn decode_registration_escapes(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        // Not emitted by our own escapeXml, but valid XML that a hand-edited or
+        // differently-generated plist may carry.
+        .replace("&apos;", "'")
+        .replace("%%", "%")
+        .replace("&amp;", "&")
+}
+
 /// True if `registration` names something inside `dir`.
 ///
 /// The match is boundary-delimited (mirroring `commandLineMatchesServer` in
@@ -163,8 +193,11 @@ pub fn normalize_path_text(text: &str) -> String {
 /// `…/project minder tray` match a registration pointing at `…/project minder
 /// tray 2`, and stopping a service on behalf of a *different* installation is
 /// exactly the class of mistake the identity machinery exists to prevent.
+///
+/// Only the registration is un-escaped; `dir` comes from the OS and was never
+/// serialized into anything.
 pub fn registration_references(registration: &str, dir: &str) -> bool {
-    let haystack = normalize_path_text(registration);
+    let haystack = normalize_path_text(&decode_registration_escapes(registration));
     let needle = normalize_path_text(dir);
     let needle = needle.trim_end_matches('/');
     if needle.is_empty() {
@@ -239,22 +272,11 @@ impl ServiceHandoff {
         }
     }
 
-    /// Stop the service. Best-effort by construction, and reports only to the
-    /// log: on Windows it runs moments before a hard `std::process::exit()`
-    /// inside the plugin's `on_before_exit`, so there is nobody left to raise an
-    /// error to; on macOS and Linux it runs after the files have already been
-    /// replaced, so there is nothing left to abort. Everything that can be
-    /// refused is refused earlier, in [`ServiceHandoff::resolve`].
-    pub fn stop(&self) {
-        log(&format!(
-            "update: {} registers the logon service against this app's own bundle — stopping it \
-             so the installer can replace those files",
-            self.evidence.display()
-        ));
-
+    /// Run the bundled service CLI with one action and report how it ended.
+    fn run_helper(&self, action: &str) -> StopExit {
         let mut cmd = StdCommand::new(&self.node);
         cmd.arg(&self.cli)
-            .arg("stop")
+            .arg(action)
             .current_dir(&self.cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -267,40 +289,128 @@ impl ServiceHandoff {
 
         let mut child = match cmd.spawn() {
             Ok(child) => child,
-            Err(e) => {
-                log(&format!("update: could not run the service stop helper: {e}"));
-                return;
-            }
+            Err(e) => return StopExit::Failed(format!("could not run the helper: {e}")),
         };
         match wait_with_timeout(&mut child, STOP_TIMEOUT) {
-            Some(status) if status.success() => log("update: service stop helper finished"),
-            Some(status) => log(&format!(
-                "update: service stop helper exited with {status} — the installer may still find \
-                 the payload locked"
-            )),
+            Some(status) if status.success() => StopExit::Ok,
+            Some(status) => StopExit::Failed(format!("it exited with {status}")),
             None => {
                 let _ = child.kill();
-                log(&format!(
-                    "update: service stop helper did not finish within {STOP_TIMEOUT:?} — killed \
-                     it and carrying on"
-                ));
+                StopExit::TimedOut
             }
         }
+    }
 
-        // The helper exits 0 when it finds a listener whose identity it cannot
-        // confirm — it refuses to kill strangers, which is right, but it means
-        // a clean exit is not proof the port came free. Ask the port itself.
-        if port_released(self.port, RELEASE_GRACE) {
-            log(&format!("update: port {} released", self.port));
-        } else {
-            log(&format!(
-                "update: port {} is STILL bound after the service stop — whatever holds it was \
-                 not recognized as this installation's server, so the update may fail on a \
-                 locked file",
-                self.port
-            ));
+    /// Stop the service, reporting whether it actually stopped.
+    ///
+    /// The caller decides what a failure means, and the two callers differ: the
+    /// pre-download call in `crate::updater` **aborts the update** on `Err`,
+    /// because nothing has been downloaded or replaced yet and leaving the
+    /// user on their working version is strictly better than installing over a
+    /// live process. The two post-download calls can only log — on Windows the
+    /// hook runs moments before a hard `std::process::exit()`, and on POSIX the
+    /// files are already swapped — so they exist as belt-and-braces, not as the
+    /// safety net.
+    pub fn stop(&self) -> Result<(), String> {
+        log(&format!(
+            "update: {} registers the logon service against this app's own bundle — stopping it \
+             so the installer can replace those files",
+            self.evidence.display()
+        ));
+
+        // Decided BEFORE the stop, because afterwards the answer is gone. A
+        // Minder answering here is the case where the service really is holding
+        // our files, and the port coming free is then meaningful evidence that
+        // it let go. If something else answers — or nothing does — the port is
+        // not ours to reason about: a foreign server can legitimately hold it
+        // while our registered service isn't running at all, and demanding the
+        // port come free would abort an update that would have succeeded.
+        let expect_release = crate::health::probe(self.port).is_minder();
+        let exit = self.run_helper("stop");
+        // Only worth asking, and only meaningful, when a Minder was answering
+        // and the helper claims to have done its job.
+        let port_still_bound = expect_release
+            && exit == StopExit::Ok
+            && !port_released(self.port, RELEASE_GRACE);
+
+        let verdict = classify_stop(expect_release, exit, port_still_bound, self.port);
+        match &verdict {
+            Ok(()) => log("update: the logon service is stopped"),
+            Err(why) => log(&format!("update: could not stop the logon service — {why}")),
+        }
+        verdict
+    }
+
+    /// Start the service again. Used on exactly one path: an update that
+    /// stopped the service and then failed to download, where leaving it
+    /// stopped would cost the user their dashboard until the next logon for an
+    /// update that never happened.
+    ///
+    /// Deliberately **not** called after a successful install. There the app is
+    /// about to relaunch and would race the service for the port; the
+    /// registration is logon-triggered, so it returns on its own.
+    pub fn start(&self) {
+        match self.run_helper("start") {
+            StopExit::Ok => log("update: restarted the logon service after a failed download"),
+            other => log(&format!(
+                "update: could not restart the logon service after a failed download ({other:?}) \
+                 — it will return at the next logon"
+            )),
         }
     }
+}
+
+/// How running the bundled service CLI ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StopExit {
+    /// It ran to completion and reported success.
+    Ok,
+    /// It ran and reported failure.
+    Failed(String),
+    /// It never finished within [`STOP_TIMEOUT`] and was killed.
+    TimedOut,
+}
+
+/// Decide whether the service is stopped, from the three facts a caller can
+/// gather. Pure, because the alternative is untestable: the real path spawns a
+/// process and probes a live port, and a rule that only exists inside that path
+/// cannot be shown to hold. Mutating this function must break a test.
+///
+/// The asymmetry is the point. A helper failure is decisive — we asked it to
+/// stop the service and it says it did not. But a *clean* exit is not proof:
+/// the helper deliberately exits 0 when it finds a listener whose identity it
+/// cannot confirm, because refusing to kill strangers is correct. So a clean
+/// exit is corroborated by the port, and only when a Minder was answering there
+/// to begin with. If something foreign held the port, or nothing did, the port
+/// tells us nothing about our service and demanding it come free would abort an
+/// update that would have succeeded.
+pub fn classify_stop(
+    expect_release: bool,
+    exit: StopExit,
+    port_still_bound: bool,
+    port: u16,
+) -> Result<(), String> {
+    match exit {
+        StopExit::Failed(why) => {
+            return Err(format!(
+                "the helper that stops the logon service failed ({why}), so the service may still \
+                 be holding this app's files"
+            ))
+        }
+        StopExit::TimedOut => {
+            return Err(format!(
+                "the helper that stops the logon service did not finish within {STOP_TIMEOUT:?}"
+            ))
+        }
+        StopExit::Ok => {}
+    }
+    if expect_release && port_still_bound {
+        return Err(format!(
+            "port {port} is still served by Minder after stopping the logon service — whatever \
+             holds it was not recognized as this installation's server"
+        ));
+    }
+    Ok(())
 }
 
 /// The Node the C4 packaging workflow lays down beside the payload. Mirrors the
@@ -416,6 +526,41 @@ mod tests {
         assert!(registration_references(text, r"C:\Apps\Minder Tray"));
     }
 
+    /// A macOS plist is XML, so `service.mjs` runs the path through `escapeXml`
+    /// on the way in. A home directory containing `&` therefore never matched
+    /// the unescaped `resource_dir` — the hand-off was skipped and the old
+    /// service survived the update, silently. (Codex P2 on #459.)
+    #[test]
+    fn an_xml_escaped_ampersand_in_a_plist_still_matches() {
+        let plist = "<string>/Users/R&amp;D/Minder.app/Contents/Resources/minder-server/server.js\
+                     </string>";
+        assert!(registration_references(
+            plist,
+            "/Users/R&D/Minder.app/Contents/Resources"
+        ));
+    }
+
+    /// The systemd half of the same bug: `escapeSystemdPercent` doubles `%`.
+    #[test]
+    fn a_doubled_percent_in_a_systemd_unit_still_matches() {
+        let unit = "ExecStart=/opt/minder%%20app/node/bin/node /opt/minder%%20app/minder-server/server.js";
+        assert!(registration_references(unit, "/opt/minder%20app"));
+    }
+
+    /// Ordering rule, tested on the decoder directly because it is invisible
+    /// through `registration_references`. `escapeXml` encodes `&` FIRST, so a
+    /// literal `&lt;` in a path was written `&amp;lt;`. Decoding `&amp;` first
+    /// would yield `&lt;` and the next pass would wrongly reduce it to `<` —
+    /// the classic double-decode. Decoding must run in reverse order of
+    /// encoding, which puts `&amp;` last.
+    #[test]
+    fn entity_decoding_runs_in_reverse_order_of_encoding() {
+        use super::decode_registration_escapes;
+        assert_eq!(decode_registration_escapes("&amp;lt;"), "&lt;");
+        assert_eq!(decode_registration_escapes("&amp;"), "&");
+        assert_eq!(decode_registration_escapes("&lt;a&gt;"), "<a>");
+    }
+
     /// A reference to the directory with nothing under it names no file we
     /// could be holding open.
     #[test]
@@ -430,6 +575,47 @@ mod tests {
     fn an_empty_directory_never_matches_anything() {
         assert!(!registration_references("anything at all", ""));
         assert!(!registration_references("anything at all", "/"));
+    }
+
+    /// A helper that reports failure must abort the update. Before this was a
+    /// gate, the failure only reached the log and the install went ahead —
+    /// straight into the locked-file (Windows) or stale-payload (POSIX) outcome
+    /// the whole module exists to prevent. (Codex P1 on #459.)
+    #[test]
+    fn a_failing_stop_helper_aborts_the_update() {
+        use super::{classify_stop, StopExit};
+        for exit in [
+            StopExit::Failed("it exited with exit code: 1".into()),
+            StopExit::TimedOut,
+        ] {
+            assert!(
+                classify_stop(true, exit.clone(), false, 4100).is_err(),
+                "{exit:?} must not be reported as a successful stop"
+            );
+            // …and the verdict must not depend on the port having come free:
+            // a helper that failed tells us enough on its own.
+            assert!(classify_stop(false, exit, false, 4100).is_err());
+        }
+    }
+
+    /// A clean exit is not proof. The helper exits 0 when it refuses to kill a
+    /// process it cannot identify, so when a Minder was answering on the port,
+    /// that port still being served is evidence the service never let go.
+    #[test]
+    fn a_clean_exit_is_not_enough_when_the_port_is_still_served() {
+        use super::{classify_stop, StopExit};
+        assert!(classify_stop(true, StopExit::Ok, true, 4100).is_err());
+        assert!(classify_stop(true, StopExit::Ok, false, 4100).is_ok());
+    }
+
+    /// The other half of that rule, and the one that keeps it from becoming a
+    /// false alarm: if no Minder was answering, the port says nothing about our
+    /// service — a foreign server can hold it while our service isn't running
+    /// at all — so a still-bound port must NOT abort a viable update.
+    #[test]
+    fn a_port_we_never_expected_to_free_does_not_abort() {
+        use super::{classify_stop, StopExit};
+        assert!(classify_stop(false, StopExit::Ok, true, 4100).is_ok());
     }
 
     /// A dev build has no bundle for a service to lock, so there is nothing to

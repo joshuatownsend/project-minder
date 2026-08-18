@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:2a80b54640a9 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T02:03:13.530Z -->
+## ★ Insight
+The advisor caught something my tests structurally could not: **`on_before_exit` is Windows-only despite its platform-neutral name.** Its sole call site in `tauri-plugin-updater` 2.10.1 sits inside the `cfg(windows)` `install_inner`; the macOS and Linux implementations never invoke it.
+
+---
+
 <!-- insight:0930a349db47 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T01:21:13.526Z -->
 ## ★ Insight
 The fix turned a *latch* into a *lease*. The old code asked "is this question settled?" and, once yes, stopped asking forever. But `Foreign` isn't a property of the port — it's a claim about **who holds it right now**, and holders change. The new `next_verdict` encodes two asymmetric rules that fall straight out of `health.rs`'s existing `is_conclusive`: an unbound port *voids* every verdict (the owner it described is gone), while an inconclusive probe *never downgrades* one (a timeout is evidence of nothing, in either direction).

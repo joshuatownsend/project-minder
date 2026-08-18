@@ -179,7 +179,7 @@ async fn run_check<R: Runtime>(
             // why the same stop is repeated on the post-install path below —
             // which is the one those platforms reach.
             if let Some(handoff) = &exit_handoff {
-                handoff.stop();
+                let _ = handoff.stop();
             }
         })
         .build()
@@ -194,10 +194,44 @@ async fn run_check<R: Runtime>(
         return Ok(Outcome::Available(version));
     }
 
-    update
+    // Stop the service HERE, before a byte is downloaded, so its failure can
+    // still abort the update. The hooks below cannot: on Windows `on_before_exit`
+    // fires after the download with no way to refuse the install, and on POSIX
+    // the files are already replaced by the time control returns. A stop that
+    // only logs its failure reproduces exactly the silent stale-payload outcome
+    // this change exists to remove.
+    //
+    // Gated on ATTACH mode, which makes the ordering hazard structural rather
+    // than sequential: attach means the server on the port is not ours and our
+    // supervisor has no child, so the helper cannot possibly find our own
+    // sidecar and hard-kill it. In spawn mode the port-holder IS our child, the
+    // service is not holding it, and the graceful-shutdown-then-stop ordering in
+    // the hooks below covers the remainder.
+    let stopped_before_download = match (&handoff, supervisor.is_attached()) {
+        (Some(handoff), true) => {
+            handoff.stop()?;
+            true
+        }
+        _ => false,
+    };
+
+    if let Err(e) = update
         .download_and_install(|_chunk, _total| {}, || {})
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())
+    {
+        // Nothing was installed, so a service we stopped on the way in is down
+        // for an update that never happened — and being logon-triggered, it
+        // would stay down until the next logon. Put it back. There is no port
+        // race here: this path does not relaunch the app, so the tray simply
+        // resumes observing.
+        if stopped_before_download {
+            if let Some(handoff) = &handoff {
+                handoff.start();
+            }
+        }
+        return Err(e);
+    }
 
     // Windows never reaches this line — the plugin force-exited us above, and
     // the installer relaunches the app itself. macOS and Linux DO reach it: the
@@ -214,7 +248,7 @@ async fn run_check<R: Runtime>(
     // sidecar stops gracefully first, so the helper cannot mistake it for the
     // service and hard-kill it.
     if let Some(handoff) = &handoff {
-        handoff.stop();
+        let _ = handoff.stop();
     }
     crate::supervisor::log("update: restarting into the new version");
     app.restart();
