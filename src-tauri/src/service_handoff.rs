@@ -293,7 +293,13 @@ pub fn registration_references(registration: &str, dir: &str, format: Registrati
         if haystack[at + needle.len()..].starts_with('/') {
             return true;
         }
-        from = at + 1;
+        // Advance by one CHARACTER, not one byte. `at` is a char boundary (both
+        // `find` and the previous step land on one) but `at + 1` need not be,
+        // and slicing a `String` off a boundary panics rather than failing — so
+        // a home directory with any non-ASCII character in it (`C:\Users\José`)
+        // would take the whole update check down with it the first time a
+        // candidate match failed the separator test above.
+        from = at + haystack[at..].chars().next().map_or(1, char::len_utf8);
     }
     false
 }
@@ -374,11 +380,15 @@ impl ServiceHandoff {
                 installed_port,
                 evidence,
             })),
+            // Phrased for whoever actually reads it: this string is surfaced in
+            // a tray notification on an end-user machine, which has the app but
+            // need not have pnpm, Node, or a checkout of this repo — so naming a
+            // repo script as the remedy would be advice they cannot follow.
             _ => Err(format!(
                 "the logon service registered in {} runs this app's own bundle, so it must be \
                  stopped before the update can replace those files — but this build does not \
-                 ship the helper needed to stop it. Stop it yourself with `pnpm service:stop` \
-                 (or quit the service) and try the update again.",
+                 ship the helper needed to stop it. Stop the Project Minder logon service, then \
+                 try the update again.",
                 evidence.display()
             )),
         }
@@ -695,6 +705,34 @@ mod tests {
         assert_eq!(decode_registration_escapes("&amp;lt;", PLIST), "&lt;");
         assert_eq!(decode_registration_escapes("&amp;", PLIST), "&");
         assert_eq!(decode_registration_escapes("&lt;a&gt;", PLIST), "<a>");
+    }
+
+    /// Round 4, Copilot: the scan advanced one BYTE past a failed match, and a
+    /// byte step off a char boundary panics rather than failing.
+    ///
+    /// **Latent, not live** — and worth stating precisely, because the obvious
+    /// reading of the finding is wrong. The index it steps from is where the
+    /// *needle* starts, and the needle is a normalized absolute path, which
+    /// always begins `c:` or `/`. So an accented **home directory** never
+    /// triggers it: `C:\Users\José\Apps` still starts with an ASCII `c`. It
+    /// takes a needle whose FIRST character is multi-byte, which
+    /// `resource_dir()` cannot currently produce.
+    ///
+    /// Fixed anyway: this is a public function, the correction is free, and
+    /// "unreachable through today's only caller" is a property of the caller,
+    /// not of the loop. The input below is therefore deliberately synthetic —
+    /// the first occurrence fails the separator test, forcing the advance to
+    /// step through the multi-byte `é`. It panics without the fix.
+    #[test]
+    fn the_scan_steps_by_characters_so_it_cannot_split_a_codepoint() {
+        assert!(registration_references("éax éa/server.js", "éa", JSON));
+    }
+
+    /// The same loop must also terminate cleanly — returning false, not
+    /// panicking — when the non-ASCII near-match is the only occurrence.
+    #[test]
+    fn a_non_ascii_near_match_returns_false_instead_of_panicking() {
+        assert!(!registration_references("éax", "éa", JSON));
     }
 
     /// A reference to the directory with nothing under it names no file we

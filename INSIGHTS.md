@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:05d0007d22ce | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T03:33:08.043Z -->
+## ★ Insight
+Round 3's finding is the most instructive of the six: **my round-2 fix introduced it.** Teaching the gate to handle a service on its own port meant the tray's port and the helper's port became different numbers — and `stop()` was still verifying against the tray's. The result would have aborted *every* update in precisely the configuration round 2 existed to support.
+
+---
+
 <!-- insight:3178b7a78284 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T03:12:13.144Z -->
 ## ★ Insight
 Round 2's P1 is a lesson in how a *simplifying* assumption becomes a bug. I gated on attach mode because it made the ordering hazard structural — genuinely good reasoning — but it smuggled in a premise I never checked: **"the service holds our files" ⟺ "the service owns our port."**
