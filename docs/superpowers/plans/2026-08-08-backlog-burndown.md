@@ -72,7 +72,7 @@ The 2026-08-12 route audit and the wave records **observed** accurately — the 
 |---|---|---|
 | W0 — Decisions | ✅ Done 2026-08-08 | 3 closed, 4 parked |
 | W0b — Shipped-never-closed | ✅ Done 2026-08-08 | 6 closed |
-| W1 — Next 16.3 | ⛔ **Shipped then reverted** | v1.10.1 pinned back to `~16.2.12`; see the W1 REVERTED block. #284 retired on its own evidence, #287 survives, #413 found here |
+| W1 — Next 16.3 | ✅ **Resolved 2026-08-18** | Shipped → reverted to `~16.2.12` in v1.10.1 → un-pinned to `~16.3.1` after the gate ran in both directions; see the W1 REVERTED and W1 RESOLVED blocks. #284 retired on its own evidence, #287 survives, #413 found here |
 | W2 — Quick wins | ✅ Done | #186, #188, #190, #236 all closed |
 | W3 — Test infrastructure | ◐ **Mostly done** | #331, #345, #355, #362, #282, #175 closed; **#273, #220 still open**, and #421 + #430 joined the family after the baseline |
 | W4 — Pricing correctness | ✅ Done 2026-08-10 | #393, #394 closed; `DERIVED_VERSION` 18 |
@@ -140,7 +140,7 @@ They block or condition other work and have no home in the wave sequence:
 
 1. ~~**The cloud spike needs you, not a wave.**~~ ✅ **Ran 2026-08-15 — and it did delete an entire section.** `GET /v1/sessions` returns 404 `not_found_error`, identical to a bogus control path, while the same token and headers get 200 from `/v1/models`. W10's 5 TODO items are archived and the personal-vs-distributed decision is permanently moot. It was indeed the cheapest question in the backlog: one script, one run.
 2. ~~**No `DERIVED_VERSION` bump ships without the worker-ingest fix (#431 / PR #435).**~~ ✅ **Discharged 2026-08-18 — the fix shipped.** `80dac0e fix(package): host ingest in the worker thread by default (#435)` is in **v1.11.0**, published 2026-08-17, so any install that takes a future bump already runs ingest off the main thread and the forced re-parse can no longer blackout the dashboard. The bump itself is still deliberately unshipped, but that is now a scheduling choice rather than a safety gate. Archived out of `TODO.md` in the same pass.
-3. **#432 gates every `next` bump**, including a routine Dependabot PR. The four-cold-boot probe is written up in the W1 REVERTED block.
+3. **#432 gates every `next` bump**, including a routine Dependabot PR. **Still true after 2026-08-18** — the bump to `~16.3.1` cleared the gate, but the root cause was never found, so the four-cold-boot probe (written up in the W1 REVERTED block, with a third trap added in W1 RESOLVED) governs the *next* bump too.
 
 ### Recommended order from here
 
@@ -248,6 +248,20 @@ All four (#152/#153/#156/#157) shipped together as the T1.1 follow-up cluster �
 > **How it shipped past the gates, which is the part worth keeping.** This wave's record says it was verified with "an out-of-repo smoke test of `dist/minder-server` (4 routes, all 200)". That gate ran, passed, and proved nothing: the failure needs a **large real index** *and* the **first request after a cold boot**. Against a fresh or small index every route returns 200, and a later request in the same process often succeeds even when the index is large — so a retry that goes green is not evidence either.
 >
 > **Gate for any future framework upgrade** (a documented step, deliberately not CI automation — CI has no 1.9 GB index): point a packaged build at a `VACUUM INTO` copy of a real index via `MINDER_STATE_DIR` and probe `/api/usage`, `/api/stats`, `/api/skills` and `/api/sessions` — **one cold boot per route, four boots total**, each route the first request its process ever serves. One boot followed by four sequential probes tests only the first route: by the time probe 2 fires the process is warm, which is the condition under which this bug goes green. `/api/agents` is a useful control — it was unaffected throughout, so run it as a fifth boot to confirm the harness itself works.
+
+> ### W1 RESOLVED — 2026-08-18
+
+> **The gate ran, and `next` is un-pinned to `~16.3.1`.** Three arms on one machine with only the framework version differing: **16.3.0 reproduced 4/4 failures** with the exact TypeErrors on #432, and **16.3.1 returned 200 on all five routes across two independent runs** — ten cold boots, zero TypeErrors, real payloads rather than 200-shaped errors. Index copy: 1.88 GB, 6,512 sessions, 210,942 turns. Full table and harness recipe on #432.
+>
+> **The negative-control arm is the finding to carry forward, not the verdict.** Running only the candidate version cannot distinguish "fixed" from "the harness cannot see the bug" — which is precisely how this wave's original upgrade passed its gate and shipped broken. Any future framework probe should reproduce the failure on the known-bad version *first*, and treat an all-green candidate run as uninterpretable until it does.
+>
+> **A third false-green trap surfaced while building the harness**, alongside the two already recorded above: **readiness cannot be detected by polling the server over HTTP**, because that poll is itself request #1 and warms the process before the probe fires. Detect readiness from the child's stdout instead. This is the easiest way to build a broken version of this gate, and it fails silently.
+>
+> **One correction to the recorded timing heuristic:** failing calls are *not* reliably faster than succeeding ones. It held on `/api/usage` (44s failing vs 96s succeeding) and inverted on `/api/stats` (54s failing vs 49s succeeding). Use the status code and the presence of the TypeError, not elapsed time.
+>
+> **Scope of the payoff, measured rather than assumed:** #396's **4 postcss alerts close**. The sharp alert does **not** — 16.3.1 moves Next's own sharp to 0.35.3, but the vulnerable 0.34.5 arrives via `@huggingface/transformers`, so the `next` pin never held it. #396's re-triage ("keep open until W1 lands") is now unblocked, against 4 rather than 5.
+>
+> **The gate itself is not retired.** The root cause was never identified, so "16.3.1 is clean" is an empirical result about one version, not a reason to trust the next one.
 
 **Parallel side-quest (cheap, high information):** the **cloud-session spike** — ~60 lines, scratchpad only, outside the repo. Read org UUID from `~/.claude.json`, call `GET /v1/sessions`, dump the response shape. This gates 4 TODO items. If upstream issue simonw/claude-code-transcripts#77 means the endpoints are dead for everyone, an entire backlog section collapses to "closed, moot" — which is exactly what a burn-down wants to learn on day one, not month three.
 

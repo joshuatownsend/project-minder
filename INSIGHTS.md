@@ -1,5 +1,35 @@
 # Insights
 
+<!-- insight:febb16185866 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T19:12:38.182Z -->
+## ★ Insight
+There's a subtle trap in building this harness. The gate says each route must be *the first request its process ever serves* — which means I cannot detect server readiness by polling it with an HTTP request, the obvious approach. That poll would itself be request #1, and the probe would land on an already-warm process, reproducing exactly the false-green the gate exists to prevent. Readiness has to come from parsing stdout instead.
+
+---
+
+<!-- insight:52a49f561422 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T19:09:26.627Z -->
+## ★ Insight
+This gate is unusual in that its **procedure** is the hard-won part, not the fix. Two ways to get a false pass are already documented: a small or fresh index returns 200 whether or not the bug exists, and probing all four routes after a single boot means only the first is genuinely cold — the other three ride a warmed process and succeed regardless. A gate that can go green while broken is worse than no gate, which is why the recipe is this specific.
+
+---
+
+<!-- insight:a46955e1261c | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T14:41:26.254Z -->
+## ★ Insight
+The alert count was a poor proxy for the work. 23 alerts came from 4 causes, 16 needed no upgrade at all, and roughly 12 of them described code this app never executes — the SDK ships express *and* hono *and* web-standard transports, and we import only the third. Reading the import graph before the advisory list changed both the size and the urgency of the job.
+
+---
+
+<!-- insight:fd27fe4af95f | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T14:25:02.727Z -->
+## ★ Insight
+Pinning a transitive dependency to fix a CVE quietly converts a one-time fix into a standing maintenance obligation — the pin can't float to the *next* patch, so it becomes the vulnerability it was added to prevent. The alert count made this look like 23 problems; the dependency graph shows it's ~4, and one of them is a fix that expired.
+
+---
+
+<!-- insight:a17825f5ea41 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T13:55:29.245Z -->
+## ★ Insight
+This is the failure mode of splitting "what's outstanding" from "when it happens" across two documents: the archive move was locally correct and globally wrong. Worth noting the count is the *weakest* signal here — the number could have stayed accidentally right (it briefly did in `TODO.md`, drifting 21→22→21) while the prose stayed wrong. The load-bearing fix is the sentence "in no release," not the digit.
+
+---
+
 <!-- insight:e2c92f7a2dc4 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T12:52:46.256Z -->
 ## ★ Insight
 The two "proofs" available here differ in what they can rule out. A green Tauri build fails loudly on an *empty* glob, so it rules out a typo'd path — but it says nothing about a path that resolves to the wrong place. The installer listing rules out both, and the A/B against 1.11.0 additionally rules out "these entries were always there." Each check eliminates a different failure, which is why the cheap one didn't make the expensive one redundant.
