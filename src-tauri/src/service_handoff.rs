@@ -44,11 +44,13 @@
 //!
 //! ## What it deliberately does not do
 //!
-//! **It never restarts the service.** The registration is logon-triggered on
-//! every platform, so it returns by itself at next logon; until then the port
-//! is free and the updated tray simply spawns its own sidecar. Starting it back
-//! up here would instead race the relaunching tray for the port. One less
-//! moving part, on the path least able to be tested.
+//! **It never restarts the service after a successful install.** The
+//! registration is logon-triggered on every platform, so it returns by itself at
+//! next logon; until then the port is free and the updated tray simply spawns its
+//! own sidecar. Starting it back up there would instead race the relaunching tray
+//! for the port. The one exception is a download that failed *after* we stopped
+//! the service — that path never relaunches, so it cannot race, and leaving the
+//! service down for an update that never happened would be a pure loss.
 //!
 //! The consequence worth knowing: the stop is a hard kill (that is what
 //! `service.mjs stop` does on Windows, by necessity), so it writes no
@@ -88,11 +90,33 @@ pub struct ServiceHandoff {
     cli: PathBuf,
     /// Where the CLI runs, so its own relative lookups resolve inside the app.
     cwd: PathBuf,
-    /// Port to verify actually came free. Only ever logged.
+    /// The tray's own port, used to verify the port actually came free.
     port: u16,
+    /// The port the registration declares — what `service.mjs stop` will scan.
+    /// `None` when the file did not record one.
+    installed_port: Option<u16>,
     /// The registration file that referenced our bundle — logged so the reason
     /// we are touching a service at all is in the record.
     evidence: PathBuf,
+}
+
+/// How a given registration file serializes the paths and the port inside it.
+///
+/// Carried explicitly rather than inferred, because the decoding in
+/// [`decode_registration_escapes`] is only correct for the format that applied
+/// it: run the XML decoder over a Windows manifest and a directory genuinely
+/// named `R&amp;D` silently becomes `R&D`, which then fails to match the real
+/// `resource_dir` — the same skipped hand-off, arrived at from the other side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RegistrationFormat {
+    /// Windows `service-manifest.json`.
+    Json,
+    /// Windows `run-hidden.vbs`.
+    Vbs,
+    /// macOS LaunchAgent plist (XML).
+    Plist,
+    /// Linux systemd `--user` unit.
+    SystemdUnit,
 }
 
 /// Registration files that could name our payload, newest mechanism first.
@@ -100,29 +124,58 @@ pub struct ServiceHandoff {
 /// VBS as the fallback for installs predating it; macOS and Linux keep the
 /// command in the plist/unit itself.
 #[cfg(windows)]
-fn registration_files(home: &Path) -> Vec<PathBuf> {
+fn registration_files(home: &Path) -> Vec<(PathBuf, RegistrationFormat)> {
     let dir = home.join(".minder").join("service");
     vec![
-        dir.join("service-manifest.json"),
-        dir.join("run-hidden.vbs"),
+        (
+            dir.join("service-manifest.json"),
+            RegistrationFormat::Json,
+        ),
+        (dir.join("run-hidden.vbs"), RegistrationFormat::Vbs),
     ]
 }
 
 #[cfg(target_os = "macos")]
-fn registration_files(home: &Path) -> Vec<PathBuf> {
-    vec![home
-        .join("Library")
-        .join("LaunchAgents")
-        .join("com.minder.dashboard.plist")]
+fn registration_files(home: &Path) -> Vec<(PathBuf, RegistrationFormat)> {
+    vec![(
+        home.join("Library")
+            .join("LaunchAgents")
+            .join("com.minder.dashboard.plist"),
+        RegistrationFormat::Plist,
+    )]
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn registration_files(home: &Path) -> Vec<PathBuf> {
-    vec![home
-        .join(".config")
-        .join("systemd")
-        .join("user")
-        .join("minder.service")]
+fn registration_files(home: &Path) -> Vec<(PathBuf, RegistrationFormat)> {
+    vec![(
+        home.join(".config")
+            .join("systemd")
+            .join("user")
+            .join("minder.service"),
+        RegistrationFormat::SystemdUnit,
+    )]
+}
+
+/// The port the registration declares its server should bind, which is the port
+/// `service.mjs stop` will scan. Mirrors `resolveInstalledPort` in
+/// `scripts/service/lib.mjs`, deliberately tolerantly: the marker locates the
+/// field and the first digits after it are the value, so a template whitespace
+/// change doesn't turn into a silent `None`.
+fn extract_declared_port(text: &str, format: RegistrationFormat) -> Option<u16> {
+    let marker = match format {
+        RegistrationFormat::Json => "\"port\"",
+        RegistrationFormat::Vbs => "WshEnv(\"PORT\")",
+        RegistrationFormat::Plist => "<key>PORT</key>",
+        RegistrationFormat::SystemdUnit => "Environment=PORT=",
+    };
+    let after = &text[text.find(marker)? + marker.len()..];
+    let start = after.find(|c: char| c.is_ascii_digit())?;
+    after[start..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .ok()
 }
 
 /// Collapse every path in `text` to one comparable form: forward slashes, no
@@ -172,18 +225,32 @@ pub fn normalize_path_text(text: &str) -> String {
 /// next pass would wrongly reduce it to `<`. Decoding in reverse order of
 /// encoding is what makes the round trip exact.
 ///
-/// Applied unconditionally rather than per-platform: a false positive would
-/// need a directory literally named `x&amp;y` colliding with a bundle at `x&y`,
-/// and the boundary check still has to pass afterwards.
-fn decode_registration_escapes(text: &str) -> String {
-    text.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        // Not emitted by our own escapeXml, but valid XML that a hand-edited or
-        // differently-generated plist may carry.
-        .replace("&apos;", "'")
-        .replace("%%", "%")
-        .replace("&amp;", "&")
+/// Each decoder is applied **only to the format that produced it**. Decoding
+/// unconditionally corrupts formats that never encoded: a Windows manifest
+/// naming a directory literally called `R&amp;D` would be rewritten to `R&D`
+/// and stop matching the real `resource_dir`, and a Windows path containing a
+/// literal `%%` would collapse to `%` — both of them false negatives that skip
+/// the hand-off and let a live service break the update, which is the failure
+/// this module exists to prevent, reached from the opposite direction.
+fn decode_registration_escapes(text: &str, format: RegistrationFormat) -> String {
+    match format {
+        // JSON escapes `\` as `\\`, which the separator-run collapsing in
+        // `normalize_path_text` already handles; nothing else in a Windows path
+        // is escaped by `JSON.stringify`.
+        RegistrationFormat::Json => text.to_string(),
+        // VBScript's only escape is a doubled `"`, and a Windows path cannot
+        // contain a quote — so there is nothing here to undo either.
+        RegistrationFormat::Vbs => text.to_string(),
+        RegistrationFormat::Plist => text
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            // Not emitted by our own escapeXml, but valid XML that a
+            // hand-edited or differently-generated plist may carry.
+            .replace("&apos;", "'")
+            .replace("&amp;", "&"),
+        RegistrationFormat::SystemdUnit => text.replace("%%", "%"),
+    }
 }
 
 /// True if `registration` names something inside `dir`.
@@ -196,8 +263,8 @@ fn decode_registration_escapes(text: &str) -> String {
 ///
 /// Only the registration is un-escaped; `dir` comes from the OS and was never
 /// serialized into anything.
-pub fn registration_references(registration: &str, dir: &str) -> bool {
-    let haystack = normalize_path_text(&decode_registration_escapes(registration));
+pub fn registration_references(registration: &str, dir: &str, format: RegistrationFormat) -> bool {
+    let haystack = normalize_path_text(&decode_registration_escapes(registration, format));
     let needle = normalize_path_text(dir);
     let needle = needle.trim_end_matches('/');
     if needle.is_empty() {
@@ -217,15 +284,52 @@ pub fn registration_references(registration: &str, dir: &str) -> bool {
     false
 }
 
-/// Whether a registered logon service points into `resource_dir`, and if so
-/// which registration file said so.
-fn registration_naming(home: &Path, resource_dir: &Path) -> Option<PathBuf> {
+/// The first registration file that points into `resource_dir`, with the port
+/// it declares — the port `service.mjs stop` will scan, which the pre-download
+/// gate needs in order to tell "the service could be running elsewhere" from
+/// "the only thing on that port is our own sidecar".
+fn find_registration(home: &Path, resource_dir: &Path) -> Option<(PathBuf, Option<u16>)> {
     let dir = resource_dir.to_string_lossy().to_string();
-    registration_files(home).into_iter().find(|path| {
-        std::fs::read_to_string(path)
-            .map(|text| registration_references(&text, &dir))
-            .unwrap_or(false)
+    registration_files(home).into_iter().find_map(|(path, format)| {
+        let text = std::fs::read_to_string(&path).ok()?;
+        if !registration_references(&text, &dir, format) {
+            return None;
+        }
+        Some((path, extract_declared_port(&text, format)))
     })
+}
+
+/// Whether the pre-download stop — the only one whose failure can still abort
+/// the update — should run.
+///
+/// It must run whenever a registered service could be holding our files, and
+/// must **not** run when the only thing the helper could find on its target
+/// port is our own sidecar.
+///
+/// * **Attached** — the port-holder is not ours and our supervisor has no child
+///   at all, so the helper cannot reach one. Stop.
+/// * **Not attached, service registered on a different port** — the service can
+///   be running entirely independently of the tray's attach state, holding our
+///   files while the helper's target port is one we do not own. Stop. (This is
+///   the case the first version of this gate missed: it assumed a service that
+///   holds our files must also own our port.)
+/// * **Not attached, same port** — our sidecar bound that port, so the service
+///   cannot be running on it and cannot be holding anything. There is nothing to
+///   stop, and running the helper anyway would find only our own child and
+///   hard-kill it. Skip.
+/// * **Port undeterminable** — stop. The two mistakes are not symmetric: a
+///   needless stop costs our sidecar its graceful exit moments before the app
+///   restarts anyway, while a needless skip is the broken update itself.
+pub fn should_stop_before_download(
+    attached: bool,
+    installed_port: Option<u16>,
+    our_port: u16,
+) -> bool {
+    match (attached, installed_port) {
+        (true, _) => true,
+        (false, None) => true,
+        (false, Some(port)) => port != our_port,
+    }
 }
 
 impl ServiceHandoff {
@@ -248,7 +352,7 @@ impl ServiceHandoff {
             // A dev build with no resource dir has no bundle to lock.
             return Ok(None);
         };
-        let Some(evidence) = registration_naming(home, resource_dir) else {
+        let Some((evidence, installed_port)) = find_registration(home, resource_dir) else {
             return Ok(None);
         };
 
@@ -260,6 +364,7 @@ impl ServiceHandoff {
                 cli,
                 cwd: resource_dir.to_path_buf(),
                 port,
+                installed_port,
                 evidence,
             })),
             _ => Err(format!(
@@ -270,6 +375,13 @@ impl ServiceHandoff {
                 evidence.display()
             )),
         }
+    }
+
+    /// Whether the pre-download stop should run for this handoff. See
+    /// [`should_stop_before_download`] for why the port comparison is the
+    /// discriminator rather than attach state alone.
+    pub fn should_stop_before_download(&self, attached: bool) -> bool {
+        should_stop_before_download(attached, self.installed_port, self.port)
     }
 
     /// Run the bundled service CLI with one action and report how it ended.
@@ -461,7 +573,13 @@ fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Option<ExitStatus>
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_path_text, registration_references, ServiceHandoff};
+    use super::{
+        normalize_path_text, registration_references, RegistrationFormat, ServiceHandoff,
+    };
+
+    const JSON: RegistrationFormat = RegistrationFormat::Json;
+    const PLIST: RegistrationFormat = RegistrationFormat::Plist;
+    const UNIT: RegistrationFormat = RegistrationFormat::SystemdUnit;
     use std::path::Path;
 
     #[test]
@@ -480,7 +598,7 @@ mod tests {
     fn a_json_escaped_windows_path_matches_the_plain_one() {
         let manifest = r#"{"mode":"standalone","exe":"C:\\App\\node\\node.exe",
             "args":["C:\\App\\minder-server\\server.js"],"port":4100}"#;
-        assert!(registration_references(manifest, r"C:\App"));
+        assert!(registration_references(manifest, r"C:\App", JSON));
     }
 
     #[test]
@@ -491,7 +609,8 @@ mod tests {
             </array>";
         assert!(registration_references(
             plist,
-            "/Applications/Minder.app/Contents/Resources"
+            "/Applications/Minder.app/Contents/Resources",
+            PLIST
         ));
     }
 
@@ -502,7 +621,8 @@ mod tests {
         let manifest = r#"{"args":["C:\\dev\\project-minder\\dist\\minder-server\\server.js"]}"#;
         assert!(!registration_references(
             manifest,
-            r"C:\Users\joshu\AppData\Local\Project Minder Tray"
+            r"C:\Users\joshu\AppData\Local\Project Minder Tray",
+            JSON
         ));
     }
 
@@ -512,10 +632,10 @@ mod tests {
     #[test]
     fn a_longer_sibling_directory_does_not_match() {
         let manifest = r#"{"args":["C:\\Apps\\Minder Tray 2\\minder-server\\server.js"]}"#;
-        assert!(!registration_references(manifest, r"C:\Apps\Minder Tray"));
+        assert!(!registration_references(manifest, r"C:\Apps\Minder Tray", JSON));
         // …while the real thing still does.
         let ours = r#"{"args":["C:\\Apps\\Minder Tray\\minder-server\\server.js"]}"#;
-        assert!(registration_references(ours, r"C:\Apps\Minder Tray"));
+        assert!(registration_references(ours, r"C:\Apps\Minder Tray", JSON));
     }
 
     /// An earlier occurrence that fails the boundary test must not shadow a
@@ -523,7 +643,7 @@ mod tests {
     #[test]
     fn an_earlier_non_match_does_not_hide_a_later_match() {
         let text = r#"{"note":"C:\\Apps\\Minder Tray 2","args":["C:\\Apps\\Minder Tray\\x.js"]}"#;
-        assert!(registration_references(text, r"C:\Apps\Minder Tray"));
+        assert!(registration_references(text, r"C:\Apps\Minder Tray", JSON));
     }
 
     /// A macOS plist is XML, so `service.mjs` runs the path through `escapeXml`
@@ -536,7 +656,8 @@ mod tests {
                      </string>";
         assert!(registration_references(
             plist,
-            "/Users/R&D/Minder.app/Contents/Resources"
+            "/Users/R&D/Minder.app/Contents/Resources",
+            PLIST
         ));
     }
 
@@ -544,7 +665,7 @@ mod tests {
     #[test]
     fn a_doubled_percent_in_a_systemd_unit_still_matches() {
         let unit = "ExecStart=/opt/minder%%20app/node/bin/node /opt/minder%%20app/minder-server/server.js";
-        assert!(registration_references(unit, "/opt/minder%20app"));
+        assert!(registration_references(unit, "/opt/minder%20app", UNIT));
     }
 
     /// Ordering rule, tested on the decoder directly because it is invisible
@@ -556,9 +677,9 @@ mod tests {
     #[test]
     fn entity_decoding_runs_in_reverse_order_of_encoding() {
         use super::decode_registration_escapes;
-        assert_eq!(decode_registration_escapes("&amp;lt;"), "&lt;");
-        assert_eq!(decode_registration_escapes("&amp;"), "&");
-        assert_eq!(decode_registration_escapes("&lt;a&gt;"), "<a>");
+        assert_eq!(decode_registration_escapes("&amp;lt;", PLIST), "&lt;");
+        assert_eq!(decode_registration_escapes("&amp;", PLIST), "&");
+        assert_eq!(decode_registration_escapes("&lt;a&gt;", PLIST), "<a>");
     }
 
     /// A reference to the directory with nothing under it names no file we
@@ -567,14 +688,15 @@ mod tests {
     fn the_bare_directory_alone_is_not_a_reference_to_a_file_in_it() {
         assert!(!registration_references(
             r#"{"cwd":"C:\\Apps\\Minder Tray"}"#,
-            r"C:\Apps\Minder Tray"
+            r"C:\Apps\Minder Tray",
+            JSON
         ));
     }
 
     #[test]
     fn an_empty_directory_never_matches_anything() {
-        assert!(!registration_references("anything at all", ""));
-        assert!(!registration_references("anything at all", "/"));
+        assert!(!registration_references("anything at all", "", JSON));
+        assert!(!registration_references("anything at all", "/", JSON));
     }
 
     /// A helper that reports failure must abort the update. Before this was a
@@ -616,6 +738,121 @@ mod tests {
     fn a_port_we_never_expected_to_free_does_not_abort() {
         use super::{classify_stop, StopExit};
         assert!(classify_stop(false, StopExit::Ok, true, 4100).is_ok());
+    }
+
+
+    /// Round 2, Codex P2: decoding must be chosen by format, not applied to
+    /// everything. A Windows directory genuinely named `R&amp;D` is legal, and
+    /// running the XML decoder over its manifest rewrites the haystack to `R&D`
+    /// — which then fails to match the real `resource_dir`, skipping the
+    /// hand-off and letting the live service break the update.
+    #[test]
+    fn a_literal_entity_in_a_windows_manifest_is_not_decoded() {
+        let manifest = r#"{"args":["C:\\Apps\\R&amp;D\\minder-server\\server.js"]}"#;
+        assert!(registration_references(manifest, r"C:\Apps\R&amp;D", JSON));
+        // …and it must NOT be mistaken for the different directory `R&D`.
+        assert!(!registration_references(manifest, r"C:\Apps\R&D", JSON));
+    }
+
+    /// The systemd half of the same rule: `%%` is only doubled in units, so a
+    /// Windows path containing a literal `%%` must survive intact.
+    #[test]
+    fn a_literal_double_percent_in_a_windows_manifest_is_not_collapsed() {
+        let manifest = r#"{"args":["C:\\Apps\\a%%b\\minder-server\\server.js"]}"#;
+        assert!(registration_references(manifest, r"C:\Apps\a%%b", JSON));
+        assert!(!registration_references(manifest, r"C:\Apps\a%b", JSON));
+    }
+
+    /// The VBS fallback (installs predating the JSON manifest) is a Windows
+    /// format too, so neither decoder may touch it either. Tested separately
+    /// from the manifest because they are separate match arms — covering only
+    /// one leaves the other free to rot.
+    #[test]
+    fn a_vbs_registration_decodes_neither_entities_nor_percents() {
+        use super::RegistrationFormat;
+        let vbs = r#"WshShell.Run "C:\Apps\a%%b&amp;c\minder-server\server.js", 0, False"#;
+        assert!(registration_references(
+            vbs,
+            r"C:\Apps\a%%b&amp;c",
+            RegistrationFormat::Vbs
+        ));
+        assert!(!registration_references(
+            vbs,
+            r"C:\Apps\a%b&amp;c",
+            RegistrationFormat::Vbs
+        ));
+        assert!(!registration_references(
+            vbs,
+            r"C:\Apps\a%%b&c",
+            RegistrationFormat::Vbs
+        ));
+    }
+
+    /// Round 2, Codex P1: a service registered on its OWN port runs entirely
+    /// independently of whether the tray attached. The first version of this
+    /// gate keyed on attach state alone and therefore skipped the only stop
+    /// whose failure can abort the update.
+    #[test]
+    fn a_service_on_another_port_is_stopped_even_when_we_are_not_attached() {
+        use super::should_stop_before_download;
+        assert!(should_stop_before_download(false, Some(4199), 4100));
+    }
+
+    /// The one case that must be skipped: our own sidecar bound this port, so
+    /// the service cannot be running on it — and the helper would find only our
+    /// child and hard-kill it, costing the clean-shutdown marker.
+    #[test]
+    fn our_own_sidecar_on_the_registered_port_is_never_handed_to_the_helper() {
+        use super::should_stop_before_download;
+        assert!(!should_stop_before_download(false, Some(4100), 4100));
+    }
+
+    /// Attached means the port-holder is not ours and our supervisor has no
+    /// child at all, so there is nothing the helper could mistake for one.
+    #[test]
+    fn an_attached_tray_always_stops_regardless_of_port() {
+        use super::should_stop_before_download;
+        assert!(should_stop_before_download(true, Some(4100), 4100));
+        assert!(should_stop_before_download(true, Some(4199), 4100));
+        assert!(should_stop_before_download(true, None, 4100));
+    }
+
+    /// An undeterminable port errs toward stopping. The mistakes are not
+    /// symmetric: a needless stop costs our sidecar its graceful exit moments
+    /// before the app restarts anyway; a needless skip is the broken update.
+    #[test]
+    fn an_unknown_registered_port_errs_toward_stopping() {
+        use super::should_stop_before_download;
+        assert!(should_stop_before_download(false, None, 4100));
+    }
+
+    /// The gate is only as good as the port it reads, and each format records
+    /// it differently.
+    #[test]
+    fn the_declared_port_is_read_from_every_registration_format() {
+        use super::{extract_declared_port, RegistrationFormat};
+        assert_eq!(
+            extract_declared_port(r#"{"mode":"standalone","port":4199}"#, JSON),
+            Some(4199)
+        );
+        assert_eq!(
+            extract_declared_port(
+                "WshEnv(\"PORT\") = \"4199\"\nWshEnv(\"HOSTNAME\") = \"127.0.0.1\"",
+                RegistrationFormat::Vbs
+            ),
+            Some(4199)
+        );
+        assert_eq!(
+            extract_declared_port("<key>PORT</key>\n    <string>4199</string>", PLIST),
+            Some(4199)
+        );
+        assert_eq!(
+            extract_declared_port("Environment=PORT=4199\nEnvironment=HOSTNAME=127.0.0.1", UNIT),
+            Some(4199)
+        );
+        // A registration with no port recorded must report absence, not a
+        // guess — the gate treats the two differently.
+        assert_eq!(extract_declared_port(r#"{"mode":"standalone"}"#, JSON), None);
     }
 
     /// A dev build has no bundle for a service to lock, so there is nothing to

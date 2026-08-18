@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:5ea2850dfb2a | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T02:39:16.870Z -->
+## ★ Insight
+The mutation harness earned its keep on this round. My P1 fix looked correct and all 102 tests passed — but **both P1 mutants survived**, because the rule only existed inside a function that spawns a process and probes a live port. A test can't reach in there, so nothing was actually pinning the behavior.
+
+---
+
 <!-- insight:2a80b54640a9 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T02:03:13.530Z -->
 ## ★ Insight
 The advisor caught something my tests structurally could not: **`on_before_exit` is Windows-only despite its platform-neutral name.** Its sole call site in `tauri-plugin-updater` 2.10.1 sits inside the `cfg(windows)` `install_inner`; the macOS and Linux implementations never invoke it.

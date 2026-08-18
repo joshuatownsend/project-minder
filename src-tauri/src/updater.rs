@@ -201,14 +201,13 @@ async fn run_check<R: Runtime>(
     // only logs its failure reproduces exactly the silent stale-payload outcome
     // this change exists to remove.
     //
-    // Gated on ATTACH mode, which makes the ordering hazard structural rather
-    // than sequential: attach means the server on the port is not ours and our
-    // supervisor has no child, so the helper cannot possibly find our own
-    // sidecar and hard-kill it. In spawn mode the port-holder IS our child, the
-    // service is not holding it, and the graceful-shutdown-then-stop ordering in
-    // the hooks below covers the remainder.
-    let stopped_before_download = match (&handoff, supervisor.is_attached()) {
-        (Some(handoff), true) => {
+    // Whether to run it is `should_stop_before_download`'s call, not attach
+    // mode's: a service installed on its own port runs entirely independently of
+    // whether the tray attached, and can hold our files while we are happily
+    // spawning on a different port. The one case that must be skipped is the
+    // narrow one where our own sidecar is the only thing the helper could find.
+    let stopped_before_download = match &handoff {
+        Some(handoff) if handoff.should_stop_before_download(supervisor.is_attached()) => {
             handoff.stop()?;
             true
         }
