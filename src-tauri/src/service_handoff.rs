@@ -266,7 +266,24 @@ fn extract_declared_port(text: &str, format: RegistrationFormat) -> Option<u16> 
 /// false positive is stopping a Minder service we did not strictly have to;
 /// the cost of the false negative it prevents — on the case-insensitive
 /// platform where the whole locked-file problem lives — is a failed update.
-pub fn normalize_path_text(text: &str) -> String {
+pub fn starts_at_boundary(haystack: &str, at: usize) -> bool {
+    if at == 0 {
+        return true;
+    }
+    let Some(prev) = haystack[..at].chars().next_back() else {
+        return true;
+    };
+    // Reject only characters that make the match a continuation of a longer
+    // path — a separator, or any character a path segment is spelled with.
+    // Everything else (a quote, `=`, `>`, whitespace, `[`) is a container the
+    // path is embedded in, and those are how every registration format we read
+    // actually delimits it. Deliberately permissive in that direction: a false
+    // negative here skips the hand-off entirely and breaks the update, which is
+    // strictly worse than the false positive it guards against.
+    !(prev == '/' || prev.is_alphanumeric() || matches!(prev, '.' | '-' | '_' | '~'))
+}
+
+fn normalize_path_text(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut last_was_sep = false;
     for ch in text.chars() {
@@ -350,7 +367,14 @@ pub fn registration_references(registration: &str, dir: &str, format: Registrati
         // Anything inside the directory continues with a separator. A bare
         // reference to the directory itself is not a file we can lock, and a
         // longer name that merely starts with it is a different directory.
-        if haystack[at + needle.len()..].starts_with('/') {
+        //
+        // The START boundary matters just as much as the end, and checking only
+        // the end was wrong: `/opt/Minder` occurs inside
+        // `/backup/opt/Minder/server.js`, so a backup copy's registration read
+        // as our own bundle. We would then stop that unrelated service — and,
+        // since a committed update deliberately does not restart it, leave it
+        // down until the user's next logon.
+        if starts_at_boundary(&haystack, at) && haystack[at + needle.len()..].starts_with('/') {
             return true;
         }
         // Advance by one CHARACTER, not one byte. `at` is a char boundary (both
@@ -370,13 +394,35 @@ pub fn registration_references(registration: &str, dir: &str, format: Registrati
 /// "the only thing on that port is our own sidecar".
 fn find_registration(home: &Path, resource_dir: &Path) -> Option<(PathBuf, Option<u16>)> {
     let dir = resource_dir.to_string_lossy().to_string();
-    registration_files(home).into_iter().find_map(|(path, format)| {
-        let text = std::fs::read_to_string(&path).ok()?;
-        if !registration_references(&text, &dir, format) {
-            return None;
-        }
-        Some((path, extract_declared_port(&text, format)))
-    })
+    let files: Vec<(PathBuf, RegistrationFormat, String)> = registration_files(home)
+        .into_iter()
+        .filter_map(|(path, format)| {
+            let text = std::fs::read_to_string(&path).ok()?;
+            Some((path, format, text))
+        })
+        .collect();
+
+    let (evidence, _, _) = files
+        .iter()
+        .find(|(_, format, text)| registration_references(text, &dir, *format))?;
+
+    // The port is resolved across ALL registration files, in the same order and
+    // with the same precedence as `resolveInstalledPort` in
+    // `scripts/service/lib.mjs` — manifest first, then the VBS — and
+    // deliberately NOT restricted to whichever file matched the path.
+    //
+    // A Windows manifest written before the `port` field existed still names
+    // the bundle, so it matches; reading the port from it alone yields `None`,
+    // we fall back to the default 4100, and a service actually installed on
+    // 4199 (recorded only in run-hidden.vbs) gets predicted as 4100. With the
+    // tray holding 4100 and unattached, the gate then skips the one stop whose
+    // failure can abort the update — the round-2 bug, reopened for exactly the
+    // older installs the VBS fallback exists to support.
+    let port = files
+        .iter()
+        .find_map(|(_, format, text)| extract_declared_port(text, *format));
+
+    Some((evidence.clone(), port))
 }
 
 /// Whether the pre-download stop — the only one whose failure can still abort
@@ -808,6 +854,44 @@ mod tests {
         assert!(!registration_references("éax", "éa", JSON));
     }
 
+    /// Round 6, Codex P2 (missed on an earlier round): the end-only boundary
+    /// check let our bundle path match as a SUFFIX of an unrelated absolute
+    /// path. A backup copy's registration would then read as our own, and we
+    /// would stop that service — and, since a committed update deliberately
+    /// never restarts it, leave someone else's service down until next logon.
+    #[test]
+    fn our_bundle_path_appearing_inside_another_absolute_path_is_not_ours() {
+        let unit = "ExecStart=/usr/bin/node /backup/opt/Minder/minder-server/server.js";
+        assert!(!registration_references(unit, "/opt/Minder", UNIT));
+        // …while the genuine article still matches.
+        let ours = "ExecStart=/usr/bin/node /opt/Minder/minder-server/server.js";
+        assert!(registration_references(ours, "/opt/Minder", UNIT));
+    }
+
+    /// The start-boundary rule must stay permissive about the *containers* a
+    /// path is embedded in, or it would reject every real registration: each
+    /// format wraps the path in quotes, `=` or XML tags. A false negative here
+    /// skips the hand-off and breaks the update, which is worse than the false
+    /// positive the rule guards against.
+    #[test]
+    fn the_start_boundary_still_accepts_every_real_registration_wrapper() {
+        assert!(registration_references(
+            r#"{"args":["C:\\Apps\\Minder\\server.js"]}"#,
+            r"C:\Apps\Minder",
+            JSON
+        ));
+        assert!(registration_references(
+            "<string>/opt/Minder/server.js</string>",
+            "/opt/Minder",
+            PLIST
+        ));
+        assert!(registration_references(
+            "ExecStart=/opt/Minder/server.js",
+            "/opt/Minder",
+            UNIT
+        ));
+    }
+
     /// A reference to the directory with nothing under it names no file we
     /// could be holding open.
     #[test]
@@ -1068,6 +1152,65 @@ mod tests {
             take_restore().is_none(),
             "a committed update must leave nothing to put back"
         );
+    }
+
+    /// Round 6, Codex P1 (missed on an earlier round): the port must be
+    /// resolved with the helper's own precedence — manifest, then VBS — and not
+    /// only from whichever file happened to match the path.
+    ///
+    /// A Windows manifest written before the `port` field existed still names
+    /// the bundle, so it matches; reading the port from it alone gives `None`,
+    /// which falls back to 4100. A service actually installed on 4199, recorded
+    /// only in `run-hidden.vbs`, is then predicted as 4100 — and with the tray
+    /// holding 4100 unattached, the gate skips the one stop whose failure can
+    /// abort the update. Windows-only because it is the only platform with two
+    /// registration files to disagree.
+    #[cfg(windows)]
+    #[test]
+    fn the_port_falls_through_a_portless_manifest_to_the_vbs() {
+        use super::{find_registration, should_stop_before_download};
+        let base = std::env::temp_dir().join("minder-handoff-vbs-port-test");
+        let home = base.join("home");
+        let resources = base.join("Project Minder Tray");
+        let dir = home.join(".minder").join("service");
+        std::fs::create_dir_all(&dir).expect("create service dir");
+        std::fs::create_dir_all(&resources).expect("create resource dir");
+
+        let server = resources.join("minder-server").join("server.js");
+        // Pre-`port` manifest: names the bundle, records no port.
+        std::fs::write(
+            dir.join("service-manifest.json"),
+            format!(
+                "{{\"mode\":\"standalone\",\"args\":[{:?}]}}",
+                server.to_string_lossy()
+            ),
+        )
+        .expect("write manifest");
+        // …while the VBS the task actually launches records 4199.
+        std::fs::write(
+            dir.join("run-hidden.vbs"),
+            format!(
+                "WshEnv(\"PORT\") = \"4199\"\r\nWshShell.Run \"{}\", 0, False\r\n",
+                server.to_string_lossy()
+            ),
+        )
+        .expect("write vbs");
+
+        let (_, port) = find_registration(&home, &resources).expect("the manifest names our bundle");
+        assert_eq!(
+            port,
+            Some(4199),
+            "the port must fall through to the VBS, as resolveInstalledPort does"
+        );
+        // …which is what keeps the gate from skipping the stop on a tray that
+        // holds the default port.
+        assert!(should_stop_before_download(
+            false,
+            super::helper_target_port(port),
+            4100
+        ));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// A dev build has no bundle for a service to lock, so there is nothing to
