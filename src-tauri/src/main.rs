@@ -11,6 +11,7 @@
 mod config;
 mod health;
 mod notify;
+mod service_handoff;
 mod supervisor;
 mod tray;
 mod updater;

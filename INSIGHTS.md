@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:0930a349db47 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T01:21:13.526Z -->
+## ★ Insight
+The fix turned a *latch* into a *lease*. The old code asked "is this question settled?" and, once yes, stopped asking forever. But `Foreign` isn't a property of the port — it's a claim about **who holds it right now**, and holders change. The new `next_verdict` encodes two asymmetric rules that fall straight out of `health.rs`'s existing `is_conclusive`: an unbound port *voids* every verdict (the owner it described is gone), while an inconclusive probe *never downgrades* one (a timeout is evidence of nothing, in either direction).
+
+---
+
 <!-- insight:00352f40650e | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-17T20:14:42.677Z -->
 ## ★ Insight
 The mtime mutation is the one worth noting: dropping mtime from the binding still passed **30 of 31** tests. Size alone catches a growing index, which is the common case — but not an in-place rewrite at identical length, which is exactly what a crash mid-write produces. A test suite that only exercised the common case would have ratified a marker that trusts a torn file.

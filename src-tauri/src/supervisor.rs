@@ -406,11 +406,71 @@ fn run_supervisor(
     }
 }
 
+/// What a single re-probe tick observed about the port.
+///
+/// Split from the verdict itself because "nobody is listening" and "somebody
+/// answered like this" are different kinds of fact, and [`next_verdict`] treats
+/// them differently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Observation {
+    /// The port is no longer bound by anyone.
+    Unbound,
+    /// Something holds the port; this is how it answered (or failed to).
+    Probed(ServerStatus),
+}
+
+/// The verdict to hold after a re-probe tick — pure, so the two rules below are
+/// testable without a live server.
+///
+/// 1. **A released port voids whatever we concluded about its previous holder.**
+///    The verdict describes *who owns the port*, not the port, so once nobody
+///    owns it the answer is unknown again and the next process to bind it is a
+///    fresh question.
+/// 2. **An inconclusive probe never downgrades a conclusive verdict.** This is
+///    the mirror of the rule in [`crate::health`]: a timeout is not evidence of
+///    foreignness, and equally it is not evidence *against* a foreignness we
+///    already proved. Only an actual answer can overturn an actual answer.
+fn next_verdict(current: AttachVerdict, observation: Observation) -> AttachVerdict {
+    match observation {
+        Observation::Unbound => AttachVerdict::Pending,
+        Observation::Probed(status) => match classify_attach(status) {
+            AttachVerdict::Pending => current,
+            observed => observed,
+        },
+    }
+}
+
+/// How long to wait before re-probing, given the verdict currently on display.
+/// `None` means the question is settled for good and the observe loop may block
+/// indefinitely on the command channel.
+///
+/// `Foreign` re-probes — slowly, at the cap — because "foreign" is a fact about
+/// who holds the port *right now*, not a property of the port. The foreign
+/// server can exit and Minder can take its place, and a verdict that never asks
+/// again leaves the tray showing "port in use (foreign) — observing" beside a
+/// status line reading "running": the same self-contradicting pair that the
+/// `Pending` state was introduced to remove, one path over. Polling at
+/// [`RECLASSIFY_MAX`] bounds that disagreement to a minute instead of the life
+/// of the process, at one cheap loopback probe a minute.
+///
+/// `Minder` deliberately does **not** re-probe. It is the steady state of every
+/// ordinary attach; blocking there costs zero wakeups, and a stale "attached to
+/// existing service" is at worst out of date. It is never an accusation against
+/// our own server, which is the failure this whole mechanism exists to prevent.
+fn reprobe_interval(verdict: AttachVerdict, pending_delay: Duration) -> Option<Duration> {
+    match verdict {
+        AttachVerdict::Pending => Some(pending_delay),
+        AttachVerdict::Foreign => Some(RECLASSIFY_MAX),
+        AttachVerdict::Minder => None,
+    }
+}
+
 /// Observe-only loop: wait for a shutdown command and never touch the server.
 /// Used for a startup attach and after a post-crash attach switch alike.
 ///
-/// When `verdict` is [`AttachVerdict::Pending`] the loop also re-probes the port
-/// on a backoff until the question settles, then updates the tray note in place.
+/// While the verdict is anything other than [`AttachVerdict::Minder`] the loop
+/// also re-probes the port on the cadence [`reprobe_interval`] gives, updating
+/// the tray note in place as the answer changes.
 ///
 /// **The re-probe has no expiry.** An earlier design let a grace period lapse
 /// and then declared "foreign", which just moved the original bug down a layer:
@@ -424,25 +484,26 @@ fn observe_until_shutdown(
     attach_note: &Arc<Mutex<Option<String>>>,
     verdict: AttachVerdict,
 ) {
-    let mut pending = verdict == AttachVerdict::Pending;
+    let mut verdict = verdict;
     let mut delay = RECLASSIFY_BASE;
-    // Which unsettled situation the note currently describes, so a transition
-    // between them rewrites it and a steady state doesn't churn the mutex.
-    let mut pending_note_is_unbound = false;
+    // Whether the note currently describes an *unbound* port rather than a
+    // claim about who owns one. Tracked as state rather than by comparing note
+    // strings, so the richer notes the post-crash paths set ("…after spawn
+    // conflict") survive until the verdict itself actually changes.
+    let mut unbound = false;
     loop {
-        // Settled verdicts have nothing to re-probe, so block indefinitely —
+        // A settled `Minder` has nothing left to ask, so block indefinitely —
         // identical to the pre-existing behavior and free of wakeups.
-        let cmd = if pending {
-            match rx.recv_timeout(delay) {
+        let cmd = match reprobe_interval(verdict, delay) {
+            Some(wait) => match rx.recv_timeout(wait) {
                 Ok(cmd) => Some(cmd),
                 Err(RecvTimeoutError::Timeout) => None,
                 Err(RecvTimeoutError::Disconnected) => return,
-            }
-        } else {
-            match rx.recv() {
+            },
+            None => match rx.recv() {
                 Ok(cmd) => Some(cmd),
                 Err(_) => return,
-            }
+            },
         };
 
         match cmd {
@@ -455,7 +516,7 @@ fn observe_until_shutdown(
                 log("observe mode: restart requested — ignored (not our process)");
                 let _ = ack.send(());
             }
-            // Re-probe tick. Only reachable while `pending`.
+            // Re-probe tick.
             None => {
                 // A port that has since been released is still not ours to take:
                 // this loop is entered only after we've decided not to own the
@@ -464,45 +525,63 @@ fn observe_until_shutdown(
                 // responding" describes a port that is no longer bound, and
                 // leaving it up is the same stale-note bug in miniature.
                 if !health::port_is_bound(cfg.port) {
-                    if !pending_note_is_unbound {
+                    if unbound {
+                        delay = next_reclassify_delay(delay);
+                    } else {
                         set_note(attach_note, PENDING_UNBOUND_NOTE);
                         log(&format!(
                             "port {} is no longer bound — the server we were observing has \
                              stopped; still not respawning (not our process), still watching",
                             cfg.port
                         ));
-                        pending_note_is_unbound = true;
+                        unbound = true;
+                        verdict = next_verdict(verdict, Observation::Unbound);
+                        // The delay may be parked at the Foreign cap, and the
+                        // next process to bind this port deserves a prompt
+                        // answer rather than up to a minute of silence.
+                        delay = RECLASSIFY_BASE;
                     }
-                    delay = next_reclassify_delay(delay);
                     continue;
                 }
                 // Bound again after a gap: restore the "bound but silent" note
                 // before we know any more than that.
-                if pending_note_is_unbound {
+                if unbound {
                     set_note(attach_note, AttachVerdict::Pending.note());
-                    pending_note_is_unbound = false;
+                    unbound = false;
+                    delay = RECLASSIFY_BASE;
                 }
                 let status = health::probe(cfg.port);
-                let settled = classify_attach(status);
-                if settled == AttachVerdict::Pending {
+                let settled = next_verdict(verdict, Observation::Probed(status));
+                if settled == verdict {
+                    // No new information — ask again later, less often.
                     delay = next_reclassify_delay(delay);
                     continue;
                 }
                 set_note(attach_note, settled.note());
-                match settled {
-                    AttachVerdict::Minder => log(&format!(
+                match (verdict, settled) {
+                    (AttachVerdict::Foreign, AttachVerdict::Minder) => log(&format!(
+                        "port {} is now serving Minder ({status:?}) — whatever foreign process \
+                         held it has gone; now attached",
+                        cfg.port
+                    )),
+                    (_, AttachVerdict::Minder) => log(&format!(
                         "port {} answered /api/health ({status:?}) after all — it is Minder, \
                          not a foreign process; now attached",
                         cfg.port
                     )),
-                    AttachVerdict::Foreign => log(&format!(
+                    (_, AttachVerdict::Foreign) => log(&format!(
                         "port {} answered with a non-Minder response — confirmed foreign, \
                          observing",
                         cfg.port
                     )),
-                    AttachVerdict::Pending => unreachable!("handled above"),
+                    // `next_verdict` only yields `Pending` for an unbound port
+                    // (handled above) or when it was already the current
+                    // verdict (equal, so returned above).
+                    (_, AttachVerdict::Pending) => {
+                        unreachable!("Pending never replaces a different verdict")
+                    }
                 }
-                pending = false;
+                verdict = settled;
             }
         }
     }
@@ -972,6 +1051,127 @@ mod crash_decision_tests {
             d = next;
         }
         assert_eq!(d, RECLASSIFY_MAX, "backoff should reach the cap");
+    }
+
+    /// The residual this rework closes: a proven-`Foreign` verdict used to end
+    /// the re-probing for the life of the tray process, so a foreign server
+    /// that later exited and was replaced by Minder left the note reading
+    /// "port in use (foreign) — observing" beside a status line reading
+    /// "running". `Foreign` must keep asking.
+    #[test]
+    fn a_settled_foreign_verdict_keeps_re_probing() {
+        use super::{reprobe_interval, RECLASSIFY_BASE, RECLASSIFY_MAX};
+        assert_eq!(
+            reprobe_interval(AttachVerdict::Foreign, RECLASSIFY_BASE),
+            Some(RECLASSIFY_MAX),
+            "Foreign must re-probe — slowly, but it must not latch"
+        );
+    }
+
+    /// …and it does so at the slow end only. The fast backoff belongs to
+    /// `Pending`, where an answer is expected imminently; `Foreign` has an
+    /// answer already and is only watching for it to stop being true.
+    #[test]
+    fn foreign_re_probes_at_the_cap_not_the_pending_backoff() {
+        use super::{reprobe_interval, RECLASSIFY_BASE, RECLASSIFY_MAX};
+        assert_ne!(RECLASSIFY_BASE, RECLASSIFY_MAX, "test would be vacuous");
+        assert_eq!(
+            reprobe_interval(AttachVerdict::Pending, RECLASSIFY_BASE),
+            Some(RECLASSIFY_BASE),
+            "Pending re-probes on its own backoff"
+        );
+        assert_eq!(
+            reprobe_interval(AttachVerdict::Foreign, RECLASSIFY_BASE),
+            Some(RECLASSIFY_MAX),
+            "Foreign ignores the fast backoff even when it is passed one"
+        );
+    }
+
+    /// `Minder` is the deliberate exception: the steady state of every ordinary
+    /// attach blocks forever on the command channel, costing zero wakeups.
+    #[test]
+    fn an_attached_minder_blocks_instead_of_polling() {
+        use super::{reprobe_interval, RECLASSIFY_BASE};
+        assert_eq!(reprobe_interval(AttachVerdict::Minder, RECLASSIFY_BASE), None);
+    }
+
+    /// A released port voids whatever we had proved about its previous holder —
+    /// the verdict is a claim about an owner, and that owner is gone. Without
+    /// this, a foreign process exiting would leave `Foreign` in place to be
+    /// re-applied to whoever binds the port next.
+    #[test]
+    fn an_unbound_port_voids_every_settled_verdict() {
+        use super::{next_verdict, Observation};
+        for current in [
+            AttachVerdict::Minder,
+            AttachVerdict::Foreign,
+            AttachVerdict::Pending,
+        ] {
+            assert_eq!(
+                next_verdict(current, Observation::Unbound),
+                AttachVerdict::Pending,
+                "{current:?} must revert to Pending once nobody holds the port"
+            );
+        }
+    }
+
+    /// The mirror of `health`'s rule. A timeout is not evidence of foreignness;
+    /// equally it is not evidence against a foreignness already proved. Only an
+    /// answer can overturn an answer — otherwise one slow response would flip a
+    /// settled verdict back to "not responding" and churn the tray note.
+    #[test]
+    fn an_inconclusive_probe_never_downgrades_a_settled_verdict() {
+        use super::{next_verdict, Observation};
+        for current in [AttachVerdict::Minder, AttachVerdict::Foreign] {
+            assert_eq!(
+                next_verdict(current, Observation::Probed(ServerStatus::Unreachable)),
+                current,
+                "{current:?} must survive a probe that told us nothing"
+            );
+        }
+    }
+
+    /// The fix's payload: a foreign holder replaced by Minder is noticed, and
+    /// the note stops accusing our own server.
+    #[test]
+    fn a_conclusive_answer_does_overturn_a_settled_verdict() {
+        use super::{next_verdict, Observation};
+        for status in [ServerStatus::Up, ServerStatus::Degraded] {
+            assert_eq!(
+                next_verdict(AttachVerdict::Foreign, Observation::Probed(status)),
+                AttachVerdict::Minder,
+                "a Minder answering on a port we had called foreign must re-attach"
+            );
+        }
+        assert_eq!(
+            next_verdict(
+                AttachVerdict::Pending,
+                Observation::Probed(ServerStatus::Foreign)
+            ),
+            AttachVerdict::Foreign,
+            "and an unknown holder that answers as non-Minder still settles"
+        );
+    }
+
+    /// Every note the observe loop can display must describe what it actually
+    /// knows. `Pending` claiming foreignness is the original bug; the unbound
+    /// note claiming an owner would be the same bug on a port with none.
+    #[test]
+    fn no_polling_verdict_outlives_the_evidence_for_it() {
+        use super::{next_verdict, reprobe_interval, Observation, RECLASSIFY_BASE};
+        // Anything the loop still polls is, by definition, revisable — so no
+        // note it shows can be permanent. Only Minder is allowed to be final.
+        for verdict in [AttachVerdict::Pending, AttachVerdict::Foreign] {
+            assert!(
+                reprobe_interval(verdict, RECLASSIFY_BASE).is_some(),
+                "{verdict:?} must remain open to revision"
+            );
+            assert_eq!(
+                next_verdict(verdict, Observation::Probed(ServerStatus::Up)),
+                AttachVerdict::Minder,
+                "{verdict:?} must yield to a Minder that answers"
+            );
+        }
     }
 }
 

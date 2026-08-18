@@ -24,10 +24,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_updater::UpdaterExt;
 
+use crate::service_handoff::ServiceHandoff;
 use crate::supervisor::Supervisor;
 
 /// Health-loop ticks between automatic update checks.
@@ -83,14 +84,19 @@ fn release() {
 /// downloads and installs (the tray menu path). Tauri bundles its own async
 /// runtime, so the plugin's async API needs no extra dependency and no runtime
 /// of our own.
-pub fn spawn_check<R: Runtime>(app: AppHandle<R>, supervisor: Arc<Supervisor>, install: bool) {
+pub fn spawn_check<R: Runtime>(
+    app: AppHandle<R>,
+    supervisor: Arc<Supervisor>,
+    port: u16,
+    install: bool,
+) {
     if !try_claim() {
         crate::supervisor::log("update: a check is already running — ignoring this request");
         return;
     }
 
     tauri::async_runtime::spawn(async move {
-        match run_check(&app, supervisor, install).await {
+        match run_check(&app, supervisor, port, install).await {
             Ok(Outcome::UpToDate) => {
                 crate::supervisor::log("update: already on the latest version");
             }
@@ -99,10 +105,16 @@ pub fn spawn_check<R: Runtime>(app: AppHandle<R>, supervisor: Arc<Supervisor>, i
                 notify_available(&app, &version);
             }
             Err(e) => {
-                // A failed check must never be fatal or intrusive: the machine
-                // may be offline, behind a proxy, or the release may simply not
-                // have a manifest yet. Log and try again on the next tick.
+                // A failed *periodic* check must never be fatal or intrusive:
+                // the machine may be offline, behind a proxy, or the release may
+                // simply not have a manifest yet. Log and try again next tick.
                 crate::supervisor::log(&format!("update check failed: {e}"));
+                // An install the user asked for is different — silence there
+                // reads as "nothing happened", which is precisely wrong when the
+                // reason is a service holding the files we came to replace.
+                if install {
+                    notify_failed(&app, &e);
+                }
             }
         }
         release();
@@ -112,11 +124,34 @@ pub fn spawn_check<R: Runtime>(app: AppHandle<R>, supervisor: Arc<Supervisor>, i
 async fn run_check<R: Runtime>(
     app: &AppHandle<R>,
     supervisor: Arc<Supervisor>,
+    port: u16,
     install: bool,
 ) -> Result<Outcome, String> {
     // Cloned because the closure below must own one for the whole life of the
     // updater, while the post-install path needs one too.
     let exit_supervisor = supervisor.clone();
+
+    // Resolved BEFORE anything is downloaded. A logon service registered
+    // against this app's own bundle holds the very files the installer is about
+    // to replace (see crate::service_handoff), and if we have no way to stop it
+    // the install cannot succeed — so refuse now, at the cost of a message,
+    // rather than after a ~100 MB download and a failed replacement.
+    //
+    // `Arc` because it is needed in two places that cannot share a borrow: the
+    // Windows-only `on_before_exit` hook below, and the post-install path that
+    // only macOS and Linux ever reach. See both call sites for why neither can
+    // be dropped in favour of the other.
+    let handoff = if install {
+        ServiceHandoff::resolve(
+            app.path().home_dir().ok().as_deref(),
+            app.path().resource_dir().ok().as_deref(),
+            port,
+        )?
+        .map(Arc::new)
+    } else {
+        None
+    };
+    let exit_handoff = handoff.clone();
 
     let updater = app
         .updater_builder()
@@ -127,6 +162,25 @@ async fn run_check<R: Runtime>(
             // (bounded), which is exactly what we want here.
             crate::supervisor::log("update: stopping sidecar before installer hand-off");
             exit_supervisor.shutdown();
+            // Our own child first, the borrowed one second — and the ordering is
+            // load-bearing, not tidiness. In spawn mode the sidecar we just
+            // stopped is itself listening on the installed service's port with a
+            // command line matching the service's recorded identity, so running
+            // the stop helper first would find OUR child, kill it with
+            // `taskkill /F`, skip its disposers and forfeit the clean-shutdown
+            // marker that keeps the next boot from re-scanning the whole index.
+            // Graceful stop must win the race; by the time the helper looks, the
+            // only thing that can still hold the port is the service.
+            //
+            // This hook is WINDOWS-ONLY, despite the platform-neutral name: the
+            // plugin invokes it from exactly one place, inside its `cfg(windows)`
+            // `install_inner` (tauri-plugin-updater 2.10.1, updater.rs:837), and
+            // the macOS and Linux implementations never call it at all. That is
+            // why the same stop is repeated on the post-install path below —
+            // which is the one those platforms reach.
+            if let Some(handoff) = &exit_handoff {
+                handoff.stop();
+            }
         })
         .build()
         .map_err(|e| e.to_string())?;
@@ -151,6 +205,17 @@ async fn run_check<R: Runtime>(
     // build, still supervising a sidecar. Stop the child first so the restarted
     // instance doesn't collide with an orphan holding the port.
     supervisor.shutdown();
+    // The POSIX counterpart of the hook above, which never fires here. It also
+    // matters *more* on these platforms: the file replacement has already
+    // succeeded, so a logon service left running keeps serving the payload it
+    // loaded into memory before the swap — an update that reports success and
+    // changes nothing, which is harder to notice than Windows' loud failure on
+    // a locked file. Ordering is the same and for the same reason: our own
+    // sidecar stops gracefully first, so the helper cannot mistake it for the
+    // service and hard-kill it.
+    if let Some(handoff) = &handoff {
+        handoff.stop();
+    }
     crate::supervisor::log("update: restarting into the new version");
     app.restart();
 }
@@ -171,6 +236,25 @@ fn notify_available<R: Runtime>(app: &AppHandle<R>, version: &str) {
         .show()
     {
         crate::supervisor::log(&format!("could not show update notification: {e}"));
+    }
+}
+
+/// Toast that an explicitly-requested install did not happen, and why.
+///
+/// Only the tray-menu path reaches this. The periodic check stays silent on
+/// failure by design (see [`spawn_check`]) — but a user who clicked "Check for
+/// updates…" and got nothing has no way to tell "already up to date" from
+/// "refused because a service is holding the files", and those call for
+/// opposite responses.
+fn notify_failed<R: Runtime>(app: &AppHandle<R>, reason: &str) {
+    if let Err(e) = app
+        .notification()
+        .builder()
+        .title("Project Minder update did not complete")
+        .body(reason)
+        .show()
+    {
+        crate::supervisor::log(&format!("could not show update-failure notification: {e}"));
     }
 }
 
