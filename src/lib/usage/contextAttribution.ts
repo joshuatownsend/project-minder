@@ -278,6 +278,22 @@ export function attributeContext(
   // exactly the sessions most worth inspecting. Only ids actually
   // present are guarded, so genuinely distinct turns are all kept.
   const seenMessageIds = new Set<string>();
+  /**
+   * #453: the guard above is right about tokens and was wrong about content.
+   * Claude Code writes one JSONL line per content block, so a repeat id is
+   * usually the same message CONTINUING, and dropping the line discarded its
+   * thinking, prose and tool inputs — the very bytes this report exists to
+   * account for. Every dropped block landed in `unattributedTokens`, which read
+   * as "we cannot explain this window" when in fact we had thrown it away.
+   *
+   * Merged into the turn the id already owns, with dedupe moved to block level
+   * so the genuine re-log (which repeats its `tool_use_id` and its text) still
+   * cannot double-count.
+   */
+  const openAssistant = new Map<
+    string,
+    { pos: number; segmentIndex: number; toolUseIds: Set<string>; blockKeys: Set<string> }
+  >();
 
   let segmentTotals = emptyCategoryTokens();
   let segmentStart = 0;
@@ -310,6 +326,82 @@ export function attributeContext(
     segmentStart = endTurn + 1;
   };
 
+  /**
+   * Walk one entry's `content` into `added`.
+   *
+   * Shared by a message's first line and its continuation lines so the two
+   * cannot drift. `guards`, when present, drops blocks already counted for this
+   * message — the re-log case the `message.id` check used to cover wholesale.
+   */
+  const accumulate = (
+    content: unknown,
+    role: "user" | "assistant",
+    added: CategoryTokens,
+    guards: { toolUseIds: Set<string>; blockKeys: Set<string> } | null
+  ): void => {
+    const bytes = (s: string) => bytesToTokens(utf8Bytes(s));
+    if (typeof content === "string") {
+      const bucket: ContextCategory = isAttachedContext(content)
+        ? "attachedContext"
+        : role === "user"
+          ? "userText"
+          : "assistantText";
+      added[bucket] += bytes(content);
+      return;
+    }
+    if (!Array.isArray(content)) return;
+    for (const raw of content as Array<Record<string, unknown>>) {
+      if (!raw || typeof raw !== "object") continue;
+      switch (raw.type) {
+        case "text": {
+          const t = textOf(raw);
+          if (!t) break;
+          if (guards) {
+            if (guards.blockKeys.has(`t:${t}`)) break;
+            guards.blockKeys.add(`t:${t}`);
+          }
+          if (role === "assistant") added.assistantText += bytes(t);
+          else if (isAttachedContext(t)) added.attachedContext += bytes(t);
+          else added.userText += bytes(t);
+          break;
+        }
+        case "thinking": {
+          if (typeof raw.thinking !== "string") break;
+          if (guards) {
+            if (guards.blockKeys.has(`k:${raw.thinking}`)) break;
+            guards.blockKeys.add(`k:${raw.thinking}`);
+          }
+          added.thinking += bytes(raw.thinking);
+          break;
+        }
+        case "tool_use": {
+          if (guards && typeof raw.id === "string") {
+            if (guards.toolUseIds.has(raw.id)) break;
+            guards.toolUseIds.add(raw.id);
+          }
+          try {
+            added.toolInput += bytes(JSON.stringify(raw.input ?? {}));
+          } catch {
+            // Circular / unserializable input — skip rather than throw.
+            // Under-counting one block is strictly better than failing
+            // the whole report.
+          }
+          break;
+        }
+        case "tool_result": {
+          const rc = raw.content;
+          if (typeof rc === "string") added.toolOutput += bytes(rc);
+          else if (Array.isArray(rc)) {
+            for (const x of rc as Array<Record<string, unknown>>) {
+              if (x?.type === "text") added.toolOutput += bytes(textOf(x));
+            }
+          }
+          break;
+        }
+      }
+    }
+  };
+
   for (const e of entries) {
     if (isCompactionBoundary(e)) {
       // Close the current stretch. Cumulative context is meaningless
@@ -324,63 +416,35 @@ export function attributeContext(
     if (e.type !== "user" && e.type !== "assistant") continue;
 
     const role = e.type as "user" | "assistant";
-    if (role === "assistant") {
-      const messageId = e.message?.id ?? e.requestId;
-      if (messageId) {
-        if (seenMessageIds.has(messageId)) continue;
-        seenMessageIds.add(messageId);
-      }
-    }
-    const added = emptyCategoryTokens();
-    const content = e.message?.content;
-
-    if (typeof content === "string") {
-      const bucket: ContextCategory = isAttachedContext(content)
-        ? "attachedContext"
-        : role === "user"
-          ? "userText"
-          : "assistantText";
-      added[bucket] += bytesToTokens(utf8Bytes(content));
-    } else if (Array.isArray(content)) {
-      for (const raw of content as Array<Record<string, unknown>>) {
-        if (!raw || typeof raw !== "object") continue;
-        const bytes = (s: string) => bytesToTokens(utf8Bytes(s));
-        switch (raw.type) {
-          case "text": {
-            const t = textOf(raw);
-            if (!t) break;
-            if (role === "assistant") added.assistantText += bytes(t);
-            else if (isAttachedContext(t)) added.attachedContext += bytes(t);
-            else added.userText += bytes(t);
-            break;
-          }
-          case "thinking": {
-            if (typeof raw.thinking === "string") added.thinking += bytes(raw.thinking);
-            break;
-          }
-          case "tool_use": {
-            try {
-              added.toolInput += bytes(JSON.stringify(raw.input ?? {}));
-            } catch {
-              // Circular / unserializable input — skip rather than throw.
-              // Under-counting one block is strictly better than failing
-              // the whole report.
-            }
-            break;
-          }
-          case "tool_result": {
-            const rc = raw.content;
-            if (typeof rc === "string") added.toolOutput += bytes(rc);
-            else if (Array.isArray(rc)) {
-              for (const x of rc as Array<Record<string, unknown>>) {
-                if (x?.type === "text") added.toolOutput += bytes(textOf(x));
-              }
-            }
-            break;
-          }
+    const messageId = role === "assistant" ? e.message?.id ?? e.requestId : undefined;
+    if (messageId && seenMessageIds.has(messageId)) {
+      const open = openAssistant.get(messageId);
+      const turn = open ? turns[open.pos] : undefined;
+      // Straddle guard: a continuation that arrives after a compaction boundary
+      // belongs to a segment whose totals are already frozen. Adding to the
+      // turn but not its segment would desync the two, so drop it — the same
+      // narrow limitation ingest documents, and the old behaviour for every
+      // continuation rather than just this rare one.
+      if (open && turn && open.segmentIndex === segments.length) {
+        const extra = emptyCategoryTokens();
+        accumulate(e.message?.content, role, extra, open);
+        const extraTotal = sum(extra);
+        if (extraTotal > 0) {
+          addInto(turn.added, extra);
+          turn.addedTotal = sum(turn.added);
+          addInto(segmentTotals, extra);
         }
       }
+      continue;
     }
+    if (messageId) seenMessageIds.add(messageId);
+
+    const added = emptyCategoryTokens();
+    const guards = messageId
+      ? { pos: turns.length, segmentIndex: segments.length, toolUseIds: new Set<string>(), blockKeys: new Set<string>() }
+      : null;
+    accumulate(e.message?.content, role, added, guards);
+    if (messageId && guards) openAssistant.set(messageId, guards);
 
     const usage = e.message?.usage;
     const measuredContextTokens =

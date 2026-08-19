@@ -20,6 +20,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
   **`MINDER_USE_DB=0` is not the cause**, contrary to the issue title it was filed under. The flag has no read site anywhere in the boot path — not at today's revision and not at the one the report was written against, where its only appearance in `instrumentation-node.ts` is a comment. Both of the originally reported arms serve correctly on a current build. What the one-variable bisect isolated instead was the ingest mode: with the in-process watcher every request hangs, and with `MINDER_INDEXER=0` on the same environment every request returns. A 1-second watchdog ticked right through the hang, which is how the loop was cleared of blocking synchronously and Next identified as holding requests behind an unresolved hook. The original flag correlation is not reproducible and is most likely a confounded two-run comparison; that is a limit of the evidence, not a claim about what the reporter did.
 
+- **The file-parse backend no longer discards tool calls, and its tool numbers roughly double** (#453). Claude Code writes **one JSONL line per content block**, all sharing one `message.id`. Every assistant loop outside the SQLite index deduped by that id and `continue`d, which threw away each line after the first — and the later lines are the ones carrying `tool_use` blocks. Deduping *tokens* by `message.id` was always right (a re-logged message would double-count cost); discarding the *content* never was.
+
+  Measured on this project's own transcripts, write-class edits only, one variable changed: **1,799 of 4,472 blocks before (40.2%), 4,470 of 4,472 after (99.96%)**. The 40.2% reproduces the figure in the issue exactly. The two blocks still dropped are genuine re-logs that repeat their `tool_use_id` — deleting the guard outright would read 4,472/4,472 and be quietly over-counting, so the residual is the evidence the safety property survived.
+
+  Everything file-backed that reads `UsageTurn.toolCalls` moves with it: `topTools`, shell and MCP breakdowns, one-shot / retry detection, tool transitions and self-loops, and Hot Files / File Coupling under `MINDER_USE_DB=0`. These are **corrections, not regressions** — the index has been right since #426 and the two backends now agree.
+
+  **Three copies of the defect, not the one the issue named.** `parser.ts` runs two near-identical assistant loops (`parseSessionTurns` and `parseSessionTurnsWithMeta`) that each carried it, and `contextAttribution.ts` carried a third. Fixing one and missing its twin is precisely how this survived #426, so the merge now lives in one shared module (`src/lib/usage/assistantContinuation.ts`) that both parser loops call for the first line *and* every continuation — the continuation path cannot drift into a reduced copy that forgets tool-error lookup or slash-command matching.
+
+- **Per-turn context attribution counts thinking, prose and tool inputs that arrive on continuation lines** (#453). Under the same defect those bytes were dropped and then reported as `unattributedTokens` — the panel said "we cannot explain this part of your window" about content it had discarded. Affects both backends, since the report walks raw JSONL directly.
+
+- **A `Skill` call split onto a continuation line is attributed to its own prompt.** The slash-command window is latched when a message opens rather than read live at merge time; a continuation can arrive after later user turns, and reading the cursor then would file the call as `auto` or, worse, credit it to an unrelated later slash command. Same defect Codex and Copilot caught on the ingest path in PR #427, avoided here rather than re-introduced in miniature.
+
+  No `DERIVED_VERSION` bump: the index is untouched. This brings the file path *to* it.
+
 ## [1.12.1] - 2026-08-18
 
 *A supply-chain release, and nothing else: no new surface, no behaviour you can see. Twenty of the twenty-three open Dependabot alerts close, and the framework pin that had been holding four of them open since v1.10.1 finally comes off.*
