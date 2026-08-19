@@ -135,13 +135,16 @@ export async function startIngest(): Promise<void> {
       } catch {
         /* swallow — best-effort teardown */
       }
-      await startInProcessWatcher();
+      // Not awaited — see `startInProcessWatcher`. This is the path where it
+      // matters most: the worker just failed, and blocking here would take the
+      // server dark precisely when something is already wrong.
+      void startInProcessWatcher();
     }
     return;
   }
 
   if (mode === "in-process") {
-    await startInProcessWatcher();
+    void startInProcessWatcher();
   }
 }
 
@@ -196,6 +199,38 @@ async function registerIngestDisposer(): Promise<void> {
         import("@/lib/db/workerHost"),
         import("@/lib/db/ingestWatcher"),
       ]);
+      // DRAIN a detached start before stopping. Since #413 the watcher is
+      // launched fire-and-forget, so shutdown can arrive while it is still
+      // between `await initDb()` and publishing its globalThis handle. In that
+      // window `stopIngestWatcher()` sees nothing and returns, SQLite closes
+      // behind it, and the start then arms a watcher and begins reconciling
+      // against a closed database. Waiting for the start to settle makes it
+      // stoppable by the line below. (Codex, PR #469.)
+      //
+      // Bounded: a start can sit in chokidar's `ready` handshake for ~30 s, and
+      // shutdown must not inherit that. On timeout we stop anyway — the
+      // `isShuttingDown()` gates in `startInProcessWatcher` and inside
+      // `startIngestWatcher` are what make a late-completing start harmless, so
+      // the drain is the fast path rather than the only line of defence.
+      // The timer is cleared when the drain wins the race. `Promise.race` does
+      // not cancel the loser, so a bare `setTimeout` here would stay armed and
+      // hold the event loop open for up to WATCHER_DRAIN_TIMEOUT_MS after
+      // everything else had finished — delaying the very exit this disposer
+      // exists to make clean. (Copilot, PR #469.)
+      const inFlight = globalForWatcherStart.__minderWatcherStartInFlight;
+      if (inFlight) {
+        let drainTimer: NodeJS.Timeout | undefined;
+        try {
+          await Promise.race([
+            inFlight,
+            new Promise<void>((r) => {
+              drainTimer = setTimeout(r, WATCHER_DRAIN_TIMEOUT_MS);
+            }),
+          ]);
+        } finally {
+          if (drainTimer) clearTimeout(drainTimer);
+        }
+      }
       await stopWorker();
       await stopIngestWatcher();
     });
@@ -205,9 +240,82 @@ async function registerIngestDisposer(): Promise<void> {
   }
 }
 
-async function startInProcessWatcher(): Promise<void> {
+/**
+ * Start the in-process ingest watcher. **Callers must not await this** — it is
+ * launched with `void` from `startIngest()`.
+ *
+ * #413: Next awaits `register()` before dispatching a single request, so
+ * anything this function waits on is time the server spends accepting
+ * connections and answering none of them — static assets included, and with
+ * `MINDER_DEMO=1` set, where no backend should be consulted at all. Two
+ * separate phases were doing exactly that:
+ *
+ *   1. the initial reconcile, which ran inline (~3 hours on a 6,078-session
+ *      corpus, per #431) — now handed off via `deferInitialReconcile`, and
+ *   2. `chokidar`'s `ready` handshake, which walks the whole projects tree and
+ *      was measured hitting its own 30 s timeout on this corpus.
+ *
+ * Deferring only the reconcile left phase 2 blocking, which is why the fix is
+ * here rather than only in the options below: ingest startup is background work
+ * and the request path must never be sequenced behind it. Errors are still
+ * surfaced — the body is wholly wrapped in try/catch and logs — they are simply
+ * reported rather than awaited.
+ *
+ * **Serialized against itself** by the in-flight promise below. Not awaiting
+ * opened a window that awaiting had kept shut: `startIngestWatcher` publishes
+ * `globalThis.__minderIngestWatcher` only *after* `await stopIngestWatcher()`
+ * and `await initDb()` (`ingestWatcher.ts:197-229`), so two entries landing in
+ * that gap would each see no existing watcher, each arm a chokidar instance,
+ * and leave the earlier one unreachable by `stopIngestWatcher()` — a duplicate
+ * reconcile writer that shutdown can never dispose. `register()` can run more
+ * than once under dev/HMR, which is exactly how a second entry gets there.
+ * (Codex, PR #469.)
+ *
+ * The guard lives on `globalThis` rather than module scope for the same reason
+ * every other singleton here does: HMR reloads the module and a module-level
+ * variable would be a fresh `undefined` each time. It is cleared once the start
+ * settles, so this serializes concurrent starts without blocking a later,
+ * legitimate restart — notably the worker-failure fallback.
+ */
+const globalForWatcherStart = globalThis as unknown as {
+  __minderWatcherStartInFlight?: Promise<void>;
+};
+
+/**
+ * How long shutdown will wait for a detached watcher start to settle before
+ * stopping anyway. Short on purpose: the correctness guarantee is the
+ * `isShuttingDown()` gate, not this wait.
+ */
+const WATCHER_DRAIN_TIMEOUT_MS = 2_000;
+
+function startInProcessWatcher(): Promise<void> {
+  const existing = globalForWatcherStart.__minderWatcherStartInFlight;
+  if (existing) return existing;
+  const started: Promise<void> = doStartInProcessWatcher().finally(() => {
+    // Identity-checked so a start that has already been superseded cannot clear
+    // its successor's slot.
+    if (globalForWatcherStart.__minderWatcherStartInFlight === started) {
+      globalForWatcherStart.__minderWatcherStartInFlight = undefined;
+    }
+  });
+  globalForWatcherStart.__minderWatcherStartInFlight = started;
+  return started;
+}
+
+async function doStartInProcessWatcher(): Promise<void> {
   try {
     const { startIngestWatcher } = await import("@/lib/db/ingestWatcher");
+    // Same gate `runBootstrap()` applies to every one of its boot steps: if a
+    // signal arrived while this detached start was still importing, do not go
+    // on to open fs.watch handles and a reconcile writer that the disposers
+    // have already run past. Checked AFTER the import, which is the await most
+    // likely to straddle the signal.
+    const { isShuttingDown } = await import("@/lib/lifecycle");
+    if (isShuttingDown()) {
+      // eslint-disable-next-line no-console
+      console.info("[ingest-watcher] shutdown in progress; not starting.");
+      return;
+    }
     // Pass `bypassEnvFlag: true` because we only reach this function
     // after the parent `instrumentation.ts` runtime/test gate passes
     // AND `startIngest()` above has handled the `MINDER_INDEXER*` mode
@@ -217,12 +325,42 @@ async function startInProcessWatcher(): Promise<void> {
     // `MINDER_INDEXER=1`. The watcher's own NODE_ENV=test guard is
     // also bypassed by this option — defense-in-depth lives at the
     // top of `instrumentation.ts` instead.
-    const status = await startIngestWatcher({ bypassEnvFlag: true });
+    // `deferInitialReconcile: true` — the reconcile runs in the BACKGROUND and
+    // this returns as soon as chokidar is armed.
+    //
+    // #413: Next awaits `register()` before dispatching a single request, and
+    // the inline reconcile ran to completion inside it — so until the whole
+    // corpus had been re-parsed the server accepted connections and answered
+    // none of them, static assets included. Measured at ~3 hours on a
+    // 6,078-session corpus (#431), and reproduced here at 45 s timeouts on
+    // `/favicon.ico`. The event loop was never blocked (a 1 s watchdog ticked
+    // right through it) — Next was simply holding every request behind a hook
+    // that had not resolved, which is why nothing appeared in the logs.
+    //
+    // This mirrors what the worker host already does with `awaitStart: false`.
+    // The worker default (#431) had masked the bug for the packaged server, but
+    // only masked it: `MINDER_INDEXER_WORKER=0` is a documented opt-out, source
+    // checkouts land here by default, and the worker-start failure path in
+    // `startIngest()` falls back to exactly this function — turning "the worker
+    // could not start" into "the server goes dark", precisely when things are
+    // already going wrong.
+    const status = await startIngestWatcher({
+      bypassEnvFlag: true,
+      deferInitialReconcile: true,
+      // `status.initialReconcileMs` is null at return now, so completion is
+      // reported from the callback instead. A multi-hour re-parse after a
+      // DERIVED_VERSION bump has to stay visible rather than silent.
+      onInitialReconcile: ({ ms, error }) => {
+        // eslint-disable-next-line no-console
+        console.info(
+          `[ingest-watcher] initial reconcile finished in ${ms} ms` +
+            (error ? ` (error: ${error})` : "")
+        );
+      },
+    });
     if (status.running) {
       // eslint-disable-next-line no-console
-      console.info(
-        `[ingest-watcher] started; initial reconcile took ${status.initialReconcileMs ?? "?"} ms`
-      );
+      console.info("[ingest-watcher] started; initial reconcile running in background");
     }
   } catch (err) {
     // eslint-disable-next-line no-console

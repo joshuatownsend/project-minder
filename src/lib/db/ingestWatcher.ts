@@ -10,6 +10,7 @@ import {
   refreshDailyCosts,
 } from "./ingest";
 import { getDb, getDbSync } from "./connection";
+import { isShuttingDown } from "@/lib/lifecycle";
 
 // chokidar-driven incremental ingest.
 //
@@ -205,6 +206,20 @@ export async function startIngestWatcher(
     console.warn(
       `[ingest-watcher] DB unavailable (${init.error?.message ?? "unknown"}); watcher not started.`
     );
+    return idleStatus();
+  }
+
+  // Both awaits above (`stopIngestWatcher`, `initDb`) can straddle a shutdown
+  // signal, and until the assignment below there is no published handle for
+  // `stopIngestWatcher()` to find — so a start caught here would arm chokidar
+  // and a reconcile writer *after* the ingest and SQLite disposers had already
+  // run, writing into a closing database. Callers gate too, but only this check
+  // sits after the last await, which is what makes it the guarantee rather than
+  // a narrowing. Harmless in the worker thread, where lifecycle state is its own
+  // module instance and this is always false. (Codex, PR #469.)
+  if (isShuttingDown()) {
+    // eslint-disable-next-line no-console
+    console.info("[ingest-watcher] shutdown began during startup; not arming.");
     return idleStatus();
   }
 
