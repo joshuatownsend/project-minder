@@ -278,19 +278,57 @@ export function attributeContext(
   // exactly the sessions most worth inspecting. Only ids actually
   // present are guarded, so genuinely distinct turns are all kept.
   const seenMessageIds = new Set<string>();
+  /**
+   * #453: the guard above is right about tokens and was wrong about content.
+   * Claude Code writes one JSONL line per content block, so a repeat id is
+   * usually the same message CONTINUING, and dropping the line discarded its
+   * thinking, prose and tool inputs — the very bytes this report exists to
+   * account for. Every dropped block landed in `unattributedTokens`, which read
+   * as "we cannot explain this window" when in fact we had thrown it away.
+   *
+   * Merged into the turn the id already owns, with dedupe moved to block level
+   * so the genuine re-log (which repeats its `tool_use_id` and its text) still
+   * cannot double-count.
+   */
+  const openAssistant = new Map<
+    string,
+    { pos: number; segmentIndex: number; toolUseIds: Set<string>; blockKeys: Set<string> }
+  >();
 
   let segmentTotals = emptyCategoryTokens();
   let segmentStart = 0;
   let segmentPeak: number | null = null;
-  // Cumulative attributed tokens at the moment `segmentPeak` was observed,
-  // excluding the peak turn's own output. See `unattributedTokens`.
-  let segmentAttributedAtPeak: number | null = null;
+  /**
+   * Which turn measured `segmentPeak` — not the byte total at that instant.
+   *
+   * `attributedAtPeak` is derived from this at segment close instead of being
+   * snapshotted live, because a detached continuation can merge bytes into an
+   * EARLIER turn after a later turn has already set the peak. Those bytes were
+   * part of the window fed to the peak turn — they belong to a turn that
+   * preceded it — so a live snapshot omits them and inflates
+   * `unattributedTokens` by exactly that amount. Deriving from turn order is
+   * immune to when the line carrying them happened to arrive. (Codex, PR #468.)
+   *
+   * Safe to defer: a continuation is only merged while its segment is still the
+   * open one, so every turn in a closed segment is final. Same set of turns the
+   * live snapshot covered — `[segmentStart, peakTurn)` — just totalled later.
+   */
+  let segmentPeakTurn: number | null = null;
   let pendingCompaction = false;
   let turnIndex = 0;
 
   const closeSegment = (endTurn: number) => {
     const attributedTotal = sum(segmentTotals);
-    const atPeak = segmentAttributedAtPeak;
+    let atPeak: number | null = null;
+    if (segmentPeakTurn !== null) {
+      atPeak = 0;
+      // Every turn of this segment BEFORE the peak turn; the peak turn's own
+      // reply, thinking and tool calls are output, not part of the input window
+      // that produced its measurement.
+      for (let i = segmentStart; i < segmentPeakTurn; i++) {
+        atPeak += turns[i]?.addedTotal ?? 0;
+      }
+    }
     segments.push({
       index: segments.length,
       startTurn: segmentStart,
@@ -306,8 +344,123 @@ export function attributeContext(
     });
     segmentTotals = emptyCategoryTokens();
     segmentPeak = null;
-    segmentAttributedAtPeak = null;
-    segmentStart = endTurn + 1;
+    segmentPeakTurn = null;
+    // Clamped to `turnIndex` — the index the next turn will actually take.
+    //
+    // An EMPTY segment (a compaction marker before any turn, or two markers in
+    // a row) closes with `endTurn` already at or past `segmentStart`, so
+    // `endTurn + 1` would put the next segment's lower bound one past the turn
+    // that then opens it. Nothing noticed while `attributedAtPeak` was a running
+    // total, but deriving it from `[segmentStart, peakTurn)` does: a session
+    // opening on a compaction boundary would report none of the prompt that
+    // followed as attributed, inflating `unattributedTokens` by exactly that
+    // turn. A regression from that derivation, not a pre-existing bug.
+    // (Codex, PR #468.)
+    segmentStart = Math.min(endTurn + 1, turnIndex);
+  };
+
+  /**
+   * Walk one entry's `content` into `added`.
+   *
+   * Shared by a message's first line and its continuation lines so the two
+   * cannot drift. `guards`, when present, drops blocks already counted for this
+   * message — the re-log case the `message.id` check used to cover wholesale.
+   */
+  const accumulate = (
+    content: unknown,
+    role: "user" | "assistant",
+    added: CategoryTokens,
+    guards: { toolUseIds: Set<string>; blockKeys: Set<string> } | null
+  ): void => {
+    const bytes = (s: string) => bytesToTokens(utf8Bytes(s));
+    if (typeof content === "string") {
+      // Guarded like the block branch below. Claude Code's assistant entries are
+      // usually a block array, but the plain-string shape is supported and does
+      // occur — and a genuine re-log of one would otherwise be added to the turn
+      // a second time, inflating `assistantText`, `attributedTotal` and peak
+      // attribution, while the array-shaped path stayed correctly deduped.
+      // Before continuations were merged at all the repeat line was dropped
+      // wholesale, so this is a gap the merge opened rather than a pre-existing
+      // one. (Codex, PR #468.)
+      if (guards) {
+        if (guards.blockKeys.has(`s:${content}`)) return;
+        guards.blockKeys.add(`s:${content}`);
+      }
+      const bucket: ContextCategory = isAttachedContext(content)
+        ? "attachedContext"
+        : role === "user"
+          ? "userText"
+          : "assistantText";
+      added[bucket] += bytes(content);
+      return;
+    }
+    if (!Array.isArray(content)) return;
+    for (const raw of content as Array<Record<string, unknown>>) {
+      if (!raw || typeof raw !== "object") continue;
+      switch (raw.type) {
+        case "text": {
+          const t = textOf(raw);
+          if (!t) break;
+          if (guards) {
+            if (guards.blockKeys.has(`t:${t}`)) break;
+            guards.blockKeys.add(`t:${t}`);
+          }
+          if (role === "assistant") added.assistantText += bytes(t);
+          else if (isAttachedContext(t)) added.attachedContext += bytes(t);
+          else added.userText += bytes(t);
+          break;
+        }
+        case "thinking": {
+          if (typeof raw.thinking !== "string") break;
+          if (guards) {
+            if (guards.blockKeys.has(`k:${raw.thinking}`)) break;
+            guards.blockKeys.add(`k:${raw.thinking}`);
+          }
+          added.thinking += bytes(raw.thinking);
+          break;
+        }
+        case "tool_use": {
+          // Serialised once and reused as both the dedupe key and the measured
+          // payload, so the two cannot disagree about what this block is.
+          let serialised: string | null = null;
+          try {
+            serialised = JSON.stringify(raw.input ?? {}) ?? "{}";
+          } catch {
+            // Circular / unserializable input — skip rather than throw.
+            // Under-counting one block is strictly better than failing
+            // the whole report.
+          }
+          if (guards) {
+            // An id-less `tool_use` is a supported shape, and guarding only on
+            // `raw.id` left it with no dedupe at all — so a genuine re-log
+            // added its input again to the turn AND to `segmentTotals`,
+            // inflating `toolInput`, `attributedTotal` and potentially
+            // `attributedAtPeak`. Third implementation of this dedupe in the
+            // PR and the third place the id-less case had to be handled;
+            // matches the fallback key `assistantContinuation` and
+            // `exportReader` use. (Codex, PR #468.)
+            const key =
+              typeof raw.id === "string"
+                ? `u:${raw.id}`
+                : `b:${typeof raw.name === "string" ? raw.name : ""}:${serialised ?? "<unserialisable>"}`;
+            if (guards.toolUseIds.has(key)) break;
+            guards.toolUseIds.add(key);
+          }
+          if (serialised !== null) added.toolInput += bytes(serialised);
+          break;
+        }
+        case "tool_result": {
+          const rc = raw.content;
+          if (typeof rc === "string") added.toolOutput += bytes(rc);
+          else if (Array.isArray(rc)) {
+            for (const x of rc as Array<Record<string, unknown>>) {
+              if (x?.type === "text") added.toolOutput += bytes(textOf(x));
+            }
+          }
+          break;
+        }
+      }
+    }
   };
 
   for (const e of entries) {
@@ -324,63 +477,35 @@ export function attributeContext(
     if (e.type !== "user" && e.type !== "assistant") continue;
 
     const role = e.type as "user" | "assistant";
-    if (role === "assistant") {
-      const messageId = e.message?.id ?? e.requestId;
-      if (messageId) {
-        if (seenMessageIds.has(messageId)) continue;
-        seenMessageIds.add(messageId);
-      }
-    }
-    const added = emptyCategoryTokens();
-    const content = e.message?.content;
-
-    if (typeof content === "string") {
-      const bucket: ContextCategory = isAttachedContext(content)
-        ? "attachedContext"
-        : role === "user"
-          ? "userText"
-          : "assistantText";
-      added[bucket] += bytesToTokens(utf8Bytes(content));
-    } else if (Array.isArray(content)) {
-      for (const raw of content as Array<Record<string, unknown>>) {
-        if (!raw || typeof raw !== "object") continue;
-        const bytes = (s: string) => bytesToTokens(utf8Bytes(s));
-        switch (raw.type) {
-          case "text": {
-            const t = textOf(raw);
-            if (!t) break;
-            if (role === "assistant") added.assistantText += bytes(t);
-            else if (isAttachedContext(t)) added.attachedContext += bytes(t);
-            else added.userText += bytes(t);
-            break;
-          }
-          case "thinking": {
-            if (typeof raw.thinking === "string") added.thinking += bytes(raw.thinking);
-            break;
-          }
-          case "tool_use": {
-            try {
-              added.toolInput += bytes(JSON.stringify(raw.input ?? {}));
-            } catch {
-              // Circular / unserializable input — skip rather than throw.
-              // Under-counting one block is strictly better than failing
-              // the whole report.
-            }
-            break;
-          }
-          case "tool_result": {
-            const rc = raw.content;
-            if (typeof rc === "string") added.toolOutput += bytes(rc);
-            else if (Array.isArray(rc)) {
-              for (const x of rc as Array<Record<string, unknown>>) {
-                if (x?.type === "text") added.toolOutput += bytes(textOf(x));
-              }
-            }
-            break;
-          }
+    const messageId = role === "assistant" ? e.message?.id ?? e.requestId : undefined;
+    if (messageId && seenMessageIds.has(messageId)) {
+      const open = openAssistant.get(messageId);
+      const turn = open ? turns[open.pos] : undefined;
+      // Straddle guard: a continuation that arrives after a compaction boundary
+      // belongs to a segment whose totals are already frozen. Adding to the
+      // turn but not its segment would desync the two, so drop it — the same
+      // narrow limitation ingest documents, and the old behaviour for every
+      // continuation rather than just this rare one.
+      if (open && turn && open.segmentIndex === segments.length) {
+        const extra = emptyCategoryTokens();
+        accumulate(e.message?.content, role, extra, open);
+        const extraTotal = sum(extra);
+        if (extraTotal > 0) {
+          addInto(turn.added, extra);
+          turn.addedTotal = sum(turn.added);
+          addInto(segmentTotals, extra);
         }
       }
+      continue;
     }
+    if (messageId) seenMessageIds.add(messageId);
+
+    const added = emptyCategoryTokens();
+    const guards = messageId
+      ? { pos: turns.length, segmentIndex: segments.length, toolUseIds: new Set<string>(), blockKeys: new Set<string>() }
+      : null;
+    accumulate(e.message?.content, role, added, guards);
+    if (messageId && guards) openAssistant.set(messageId, guards);
 
     const usage = e.message?.usage;
     const measuredContextTokens =
@@ -392,10 +517,13 @@ export function attributeContext(
     if (measuredContextTokens !== null) {
       if (segmentPeak === null || measuredContextTokens > segmentPeak) {
         segmentPeak = measuredContextTokens;
-        // Snapshot BEFORE `addInto` below: this turn's own reply, thinking,
-        // and tool calls are output, not part of the input window that
-        // produced `measuredContextTokens`.
-        segmentAttributedAtPeak = sum(segmentTotals);
+        // Record WHICH turn, not the running total. `closeSegment` totals the
+        // turns before this one at close time, so bytes a detached continuation
+        // folds into an earlier turn later still land on the correct side of
+        // the measurement. This turn's own reply, thinking and tool calls stay
+        // excluded — they are output, not part of the window that produced
+        // `measuredContextTokens`.
+        segmentPeakTurn = turnIndex;
       }
     }
 

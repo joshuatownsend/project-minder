@@ -335,6 +335,108 @@ describe("readJsonlMessages — dedup and cap accounting", () => {
     expect(result.duplicates).toBe(2);
   });
 
+  // #453 — Claude Code writes one JSONL line per content block, all sharing one
+  // `message.id`. Collapsing by that id used to DISCARD the trailing lines, and
+  // those are the ones carrying the tool calls. The export lost them and then
+  // counted the loss as `duplicates`, which reads as tidying rather than as
+  // content going missing.
+  it("merges a multi-line assistant message instead of dropping its tool calls", async () => {
+    const file = await writeJsonl([
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "msg_1", content: [{ type: "text", text: "on it" }] },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          id: "msg_1",
+          content: [{ type: "tool_use", id: "tu_1", name: "Edit", input: { file_path: "a.ts" } }],
+        },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          id: "msg_1",
+          content: [{ type: "tool_use", id: "tu_2", name: "Bash", input: { command: "pnpm test" } }],
+        },
+      }),
+    ]);
+    const result = await readJsonlMessages(file);
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0].blocks.map((b) => b.kind)).toEqual([
+      "text",
+      "tool_use",
+      "tool_use",
+    ]);
+    expect(result.messages[0].blocks.map((b) => b.toolName)).toEqual([
+      undefined,
+      "Edit",
+      "Bash",
+    ]);
+    // Nothing was collapsed — every line carried new content.
+    expect(result.duplicates).toBe(0);
+  });
+
+  it("still collapses a re-log inside a multi-line message, and counts only that", async () => {
+    const first = JSON.stringify({
+      type: "assistant",
+      message: { id: "msg_1", content: [{ type: "text", text: "on it" }] },
+    });
+    const tool = JSON.stringify({
+      type: "assistant",
+      message: {
+        id: "msg_1",
+        content: [{ type: "tool_use", id: "tu_1", name: "Edit", input: {} }],
+      },
+    });
+    const result = await readJsonlMessages(await writeJsonl([first, tool, tool, first]));
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0].blocks).toHaveLength(2);
+    // The two verbatim re-emissions, and only those.
+    expect(result.duplicates).toBe(2);
+  });
+
+  it("finishes reading a split message whose first line hit the cap", async () => {
+    // Codex, PR #468. The cap counts MESSAGES, and a continuation is not one —
+    // it is more of a message already inside the cap. Checked in the wrong
+    // order, a split message whose first line lands on the 20,000th slot keeps
+    // that line and routes the rest through the unread branch: the retained
+    // message silently loses its tool calls, and each dropped block inflates
+    // `unread` as though it were its own message.
+    //
+    // 20k filler lines rather than a lowered constant: MAX_MESSAGES has no test
+    // seam, and adding one to prove a boundary is a change to the thing under
+    // test. The file is ~2 MB and the read is well inside the suite's budget.
+    const filler: string[] = [];
+    for (let i = 0; i < 19_999; i++) {
+      filler.push(JSON.stringify({ type: "user", message: { content: `filler ${i}` } }));
+    }
+    const file = await writeJsonl([
+      ...filler,
+      // The 20,000th retained message — and only the first line of one.
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "msg_last", content: [{ type: "text", text: "on it" }] },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          id: "msg_last",
+          content: [{ type: "tool_use", id: "tu_1", name: "Edit", input: {} }],
+        },
+      }),
+    ]);
+    const result = await readJsonlMessages(file);
+
+    expect(result.messages).toHaveLength(20_000);
+    const last = result.messages[19_999];
+    expect(last.blocks.map((b) => b.kind)).toEqual(["text", "tool_use"]);
+    // And the continuation was not miscounted as a message we left out.
+    expect(result.unread).toBe(0);
+  });
+
   it("falls back to requestId when message.id is absent", async () => {
     const dup = JSON.stringify({
       type: "assistant",
