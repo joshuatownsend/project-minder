@@ -363,6 +363,18 @@ export function attributeContext(
   ): void => {
     const bytes = (s: string) => bytesToTokens(utf8Bytes(s));
     if (typeof content === "string") {
+      // Guarded like the block branch below. Claude Code's assistant entries are
+      // usually a block array, but the plain-string shape is supported and does
+      // occur — and a genuine re-log of one would otherwise be added to the turn
+      // a second time, inflating `assistantText`, `attributedTotal` and peak
+      // attribution, while the array-shaped path stayed correctly deduped.
+      // Before continuations were merged at all the repeat line was dropped
+      // wholesale, so this is a gap the merge opened rather than a pre-existing
+      // one. (Codex, PR #468.)
+      if (guards) {
+        if (guards.blockKeys.has(`s:${content}`)) return;
+        guards.blockKeys.add(`s:${content}`);
+      }
       const bucket: ContextCategory = isAttachedContext(content)
         ? "attachedContext"
         : role === "user"

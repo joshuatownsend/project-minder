@@ -172,6 +172,25 @@ describe("parseSessionTurns — multi-line assistant messages (#453)", () => {
     );
   });
 
+  it("names a tool_use block that carries no name, matching the DB path", async () => {
+    // `ToolCall.name` is required; a cast used to put a literal `undefined`
+    // there, which becomes an "undefined" bucket in topTools and every other
+    // grouping. `ingest.ts` normalizes the same case to "unknown", so the two
+    // backends have to agree. (Copilot, PR #468.)
+    await withSession(
+      [
+        assistantLine("msg_a", "2026-08-19T10:00:00Z", [{ type: "text", text: "hm" }]),
+        assistantLine("msg_a", "2026-08-19T10:00:01Z", [
+          { type: "tool_use", id: "tu_1", input: {} },
+        ]),
+      ],
+      async (file) => {
+        const turns = await parseSessionTurns(file, "C--dev-proj");
+        expect(turns[0].toolCalls.map((t) => t.name)).toEqual(["unknown"]);
+      }
+    );
+  });
+
   it("does not let one message consume the slash window twice", async () => {
     await withSession(
       [
@@ -333,6 +352,31 @@ describe("attributeContext — multi-line messages (#453)", () => {
     );
     // And the tool input really is on the counted side of the measurement.
     expect(detached.segments[0].attributedAtPeak).toBeGreaterThan(1000);
+  });
+
+  it("does not re-count a re-logged bare-string assistant message", async () => {
+    // Codex, PR #468. The plain-string `message.content` shape is supported and
+    // does occur; the array-shaped path was deduped at block level but this one
+    // was not, so a genuine re-log was added to the turn twice. Before
+    // continuations were merged at all the repeat line was dropped wholesale,
+    // so the merge is what opened this.
+    const line = {
+      type: "assistant" as const,
+      timestamp: "2026-08-19T10:00:00Z",
+      requestId: "req_a",
+      message: {
+        id: "msg_a",
+        model: MODEL,
+        usage: { input_tokens: 1000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        content: "z".repeat(4000),
+      },
+    };
+    const once = attributeContext("s1", [line] as any);
+    const twice = attributeContext("s1", [line, line] as any);
+
+    expect(twice.turns).toHaveLength(1);
+    expect(twice.turns[0].addedTotal).toBe(once.turns[0].addedTotal);
+    expect(twice.totals.assistantText).toBe(once.totals.assistantText);
   });
 
   it("keeps segment totals in step with the turn it merged into", async () => {
