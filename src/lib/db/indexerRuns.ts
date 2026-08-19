@@ -1,5 +1,6 @@
 import "server-only";
 import type DatabaseT from "better-sqlite3";
+import { resolveIngestMode } from "./ingestMode";
 
 // Whether the index has finished populating, recorded as a fact in the index
 // itself rather than inferred by whoever happens to be asking.
@@ -199,5 +200,19 @@ export function recordOptionForSweep(
  * different predicate, and should not reach for this one.
  */
 export function getIndexBuildState(db: DatabaseT.Database): IndexBuildState {
+  // "Building" is a claim that something is actively reading the corpus. With
+  // `MINDER_INDEXER=0` nothing is, and nothing ever will be — so the latch would
+  // never clear and the report would be offline permanently rather than
+  // temporarily. The operator has switched ingest off and owns the index's
+  // freshness; saying "still indexing" at them would be false.
+  //
+  // This is what pays for dropping the migration backfill. Crediting an existing
+  // index with a pass nobody recorded was rejected as fabricated evidence
+  // (Codex P1, PR #471) — a killed pre-upgrade reconcile leaves a NON-EMPTY
+  // sessions table, so non-emptiness never proved a full pass finished. Without
+  // the backfill an ordinary install is briefly "building" after upgrade until
+  // its first recorded pass lands, which is honest and self-resolving; only the
+  // indexer-off configuration needed an answer, and this is it.
+  if (resolveIngestMode(process.env) === "off") return "ready";
   return hasCompletedFullReconcile(db) ? "ready" : "building";
 }

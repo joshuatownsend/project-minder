@@ -41,8 +41,11 @@ describe.skipIf(!driverAvailable)("indexer run tracking (#470)", () => {
   it("reports building on an index that has never completed a pass", async () => {
     const { conn, db, runs } = await freshDb();
     try {
-      // A fresh index has no sessions, so migration 26 credits it with nothing
-      // — which is the honest answer: nothing has read the corpus yet.
+      // Nothing is credited to an index nobody has recorded a pass against —
+      // including an existing one. Crediting a non-empty `sessions` table was
+      // tried and removed: reconcile commits per file, so a killed pass leaves
+      // rows behind and non-emptiness never proved a full pass finished.
+      // (Codex P1, PR #471.)
       expect(db.prepare("SELECT COUNT(*) AS n FROM indexer_runs").get()).toEqual({ n: 0 });
       expect(runs.getIndexBuildState(db)).toBe("building");
     } finally {
@@ -226,6 +229,55 @@ describe.skipIf(!driverAvailable)("indexer run tracking (#470)", () => {
       // zero rows per sweep rather than one every 30 seconds forever.
       expect(runs.recordOptionForSweep(db)).toEqual({});
     } finally {
+      conn.closeDb();
+    }
+  });
+
+  it("does not latch on a pass that could not enumerate a directory", async () => {
+    // Codex P1, #471. A transient readdir failure is CAUGHT — the pass returns
+    // ordinary stats rather than throwing — so without surfacing it, a run that
+    // never saw an entire Claude home recorded `aborted = 0` and permanently
+    // marked the index ready. The timecard would then return exactly the partial
+    // total this gate exists to prevent.
+    //
+    // Drives the real path rather than passing `aborted` in: an earlier version
+    // of this test called `finishIndexerRun({ aborted: true })` directly, which
+    // exercised the predicate and NOT the wiring that sets it — and passed
+    // against an implementation with that wiring deliberately removed.
+    const { conn, db, runs } = await freshDb();
+    const { reconcileAllSessions } = await import("@/lib/db/ingest");
+    const fsp = await import("fs");
+    // A regular file where a directory is expected: `readdir` throws ENOTDIR,
+    // which is caught exactly like a transient UNC error.
+    const notADir = `${tmpHome}/not-a-projects-dir`;
+    fsp.writeFileSync(notADir, "x");
+    try {
+      await reconcileAllSessions(db, { projectsDir: notADir, recordRun: "reconcile" });
+      const row = db
+        .prepare("SELECT aborted, error FROM indexer_runs")
+        .get() as { aborted: number; error: string | null };
+      expect(row.aborted).toBe(1);
+      expect(row.error).toMatch(/could not be listed/);
+      expect(runs.getIndexBuildState(db)).toBe("building");
+    } finally {
+      conn.closeDb();
+    }
+  }, 60_000);
+
+  it("does not claim to be building when the indexer is switched off", async () => {
+    // With MINDER_INDEXER=0 nothing is reading the corpus and nothing ever will,
+    // so the latch would never clear — a permanent outage rather than a wait.
+    // The operator has taken ownership of freshness; "still indexing" would be
+    // a false statement about what the process is doing.
+    const { conn, db, runs } = await freshDb();
+    const prev = process.env.MINDER_INDEXER;
+    try {
+      expect(runs.getIndexBuildState(db)).toBe("building");
+      process.env.MINDER_INDEXER = "0";
+      expect(runs.getIndexBuildState(db)).toBe("ready");
+    } finally {
+      if (prev === undefined) delete process.env.MINDER_INDEXER;
+      else process.env.MINDER_INDEXER = prev;
       conn.closeDb();
     }
   });

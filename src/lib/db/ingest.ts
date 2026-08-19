@@ -197,6 +197,20 @@ interface IngestStats {
    * while investigating why a just-shipped panel rendered nothing.
    */
   newerDerivationSkips: number;
+  /**
+   * Directories whose enumeration FAILED — a transient UNC/EIO error, a distro
+   * that stopped mid-cycle. Distinct from a home deliberately skipped by the
+   * never-wake gate, which is the user's configuration doing its job and is
+   * already carried by `unavailableDirs`.
+   *
+   * Load-bearing for readiness (#471): the pass returns ordinary stats after
+   * one of these, so without the count a run that never saw an entire home
+   * would be recorded `aborted = 0` and permanently latch the index as ready —
+   * letting the timecard return the partial total this gate exists to prevent.
+   * Codex raised it as a P1 on PR #471; the signal already existed for prune
+   * protection and simply was not surfaced.
+   */
+  enumerationFailures: number;
 }
 
 /**
@@ -3771,14 +3785,17 @@ export async function reconcileAllSessions(
       // Per-file parse errors are recorded but still count as a completed pass
       // — the index was populated. Only a throw means the pass did not finish.
       error: stats
-        ? stats.errors > 0
-          ? `${stats.errors} file(s) failed to parse`
-          : null
+        ? stats.enumerationFailures > 0
+          ? `${stats.enumerationFailures} director(ies) could not be listed`
+          : stats.errors > 0
+            ? `${stats.errors} file(s) failed to parse`
+            : null
         : "reconcile threw",
-      // No `stats` means the pass threw, so the corpus was NOT read through.
-      // Per-file parse errors are a different thing: the pass finished and the
-      // index is populated, so those stay `aborted: false` and count as ready.
-      aborted: stats === undefined,
+      // Not read through: the pass threw, OR it completed but could not
+      // enumerate some directory it was supposed to. Per-file PARSE errors are
+      // a different thing — the file was seen and the pass finished — so those
+      // stay `aborted: false` and count as ready. (#471, Codex P1.)
+      aborted: stats === undefined || stats.enumerationFailures > 0,
     });
   }
 }
@@ -3793,6 +3810,7 @@ async function runReconcileAllSessions(
     rowsWritten: 0,
     errors: 0,
     newerDerivationSkips: 0,
+    enumerationFailures: 0,
   };
 
   await loadPricing();
@@ -3880,6 +3898,9 @@ async function runReconcileAllSessions(
         if (e.isDirectory()) subdirs.push({ projectsDir: dir, dirName: e.name });
       }
     } catch {
+      // #471: an enumeration this pass was SUPPOSED to complete and could not.
+      // Not the same as a home the never-wake gate deliberately skipped.
+      stats.enumerationFailures++;
       // A projects dir that can't be listed — missing primary tree (a
       // WSL-only Claude setup, or a non-Claude user), a distro that stopped
       // mid-cycle, a transient UNC error — shields its rows from the prune
@@ -3928,6 +3949,7 @@ async function runReconcileAllSessions(
         .map((e) => path.join(dirPath, e.name));
       sessionDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
     } catch {
+      stats.enumerationFailures++;
       // A dir that LISTED in the home enumeration but fails its own readdir
       // (distro stopped mid-cycle, transient UNC/EIO error) must not read as
       // "all its sessions vanished" — shield its rows from the prune pass

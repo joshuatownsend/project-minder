@@ -142,8 +142,17 @@ midnight.
   through once, later re-reads — the ordinary sweep, or a version bump that
   re-derives existing rows — do not take the report offline, because the fields
   it reads are recorded straight from your transcripts and survive a
-  re-derivation. A pass that is interrupted before finishing does not count as
-  that first read.
+  re-derivation.
+
+  A pass only counts once it **finishes**. One that is interrupted, or that
+  cannot read some folder it was supposed to, does not — so the report keeps
+  waiting rather than answering from a corpus it only partly saw. Upgrading from
+  a version before this shipped therefore shows "still indexing" briefly, until
+  the first pass after the upgrade completes: Minder has no record of the scans
+  that filled your existing index and will not pretend otherwise. If you have
+  turned the indexer off entirely (`MINDER_INDEXER=0`) the report answers
+  normally — nothing is going to build the index, so there is nothing to wait
+  for, and freshness is yours to manage.
 - Turns are attributed to the project directory the session ran in, so work
   done for one client from another repo's directory lands on that repo.
 - Projects are identified by directory **and Claude home**, so two configured
