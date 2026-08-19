@@ -11,6 +11,7 @@ import {
 } from "./ingest";
 import { getDb, getDbSync } from "./connection";
 import { isShuttingDown } from "@/lib/lifecycle";
+import { closeOrphanedIndexerRuns } from "./indexerRuns";
 
 // chokidar-driven incremental ingest.
 //
@@ -209,6 +210,21 @@ export async function startIngestWatcher(
     return idleStatus();
   }
 
+  // #470: clear runs left open by a process that died mid-pass, before this
+  // watcher opens one of its own. Safe here specifically: `stopIngestWatcher()`
+  // above has already torn down any prior watcher and only one ingest pipeline
+  // runs at a time, so an open row at this instant is by construction a corpse
+  // rather than a live pass. Without it, one kill during a first reconcile
+  // would leave `finished_at_ms IS NULL` forever.
+  const dbForOrphans = getDbSync();
+  if (dbForOrphans) {
+    const closed = closeOrphanedIndexerRuns(dbForOrphans);
+    if (closed > 0) {
+      // eslint-disable-next-line no-console
+      console.info(`[ingest-watcher] closed ${closed} orphaned indexer run(s)`);
+    }
+  }
+
   // Both awaits above (`stopIngestWatcher`, `initDb`) can straddle a shutdown
   // signal, and until the assignment below there is no published handle for
   // `stopIngestWatcher()` to find — so a start caught here would arm chokidar
@@ -249,10 +265,13 @@ export async function startIngestWatcher(
     try {
       const db = await getDb();
       if (db) {
-        await reconcileAllSessions(
-          db,
-          state.explicitProjectsDir ? { projectsDir } : {}
-        );
+        await reconcileAllSessions(db, {
+          ...(state.explicitProjectsDir ? { projectsDir } : {}),
+          // #470: the initial pass is the one whose completion changes what the
+          // index can answer, so it is the one that gets recorded. The 30 s
+          // sweep below runs the same function and deliberately does not.
+          recordRun: "reconcile",
+        });
       }
     } catch (err) {
       error = (err as Error).message;

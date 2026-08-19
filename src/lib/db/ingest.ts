@@ -5,6 +5,11 @@ import os from "os";
 import { performance } from "perf_hooks";
 import { promises as fs } from "fs";
 import type DatabaseT from "better-sqlite3";
+import {
+  beginIndexerRun,
+  finishIndexerRun,
+  type IndexerRunKind,
+} from "./indexerRuns";
 import { canonicalizeDirName, mostFrequent } from "@/lib/usage/parser";
 import { getClaudeHomes, getReadableClaudeHomes } from "@/lib/claudeHome";
 import { normalizePathKey, sessionFileHomeKey } from "@/lib/platform";
@@ -3101,6 +3106,17 @@ export interface ReconcileOptions {
    * canned turns without a real adapter or filesystem.
    */
   parseAdapterFile?: (file: SessionFile) => Promise<UsageTurn[]>;
+  /**
+   * Record this pass in `indexer_runs`, so another process can tell whether the
+   * index has ever been read through (#470).
+   *
+   * Opt-in, and that is load-bearing: the watcher re-runs `reconcileAllSessions`
+   * on a 30 s sweep for the life of the process, so recording unconditionally
+   * would write a row every half minute forever and make any "is a pass running"
+   * reading flap. Only the INITIAL pass — the one whose completion actually
+   * changes what the index can answer — passes this.
+   */
+  recordRun?: IndexerRunKind;
 }
 
 export interface FileReconcileResult {
@@ -3734,6 +3750,36 @@ async function reconcileAdapterSessionFile(
 }
 
 export async function reconcileAllSessions(
+  db: DatabaseT.Database,
+  options: ReconcileOptions = {}
+): Promise<IngestStats> {
+  // #470: the pass records itself only when asked. See `ReconcileOptions.recordRun`
+  // for why the 30 s sweep must not.
+  const runId = options.recordRun ? beginIndexerRun(db, options.recordRun) : null;
+  let stats: IngestStats | undefined;
+  try {
+    stats = await runReconcileAllSessions(db, options);
+    return stats;
+  } finally {
+    // `finally`, not the happy path: a pass that threw still has to stop
+    // reading as in-progress, or a killed reconcile latches the row open and
+    // `closeOrphanedIndexerRuns` becomes the only thing that can clear it.
+    finishIndexerRun(db, runId, {
+      filesSeen: stats?.filesSeen,
+      filesChanged: stats?.filesChanged,
+      rowsWritten: stats?.rowsWritten,
+      // Per-file parse errors are recorded but still count as a completed pass
+      // — the index was populated. Only a throw means the pass did not finish.
+      error: stats
+        ? stats.errors > 0
+          ? `${stats.errors} file(s) failed to parse`
+          : null
+        : "reconcile threw",
+    });
+  }
+}
+
+async function runReconcileAllSessions(
   db: DatabaseT.Database,
   options: ReconcileOptions = {}
 ): Promise<IngestStats> {

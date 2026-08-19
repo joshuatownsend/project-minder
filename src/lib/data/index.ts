@@ -13,6 +13,7 @@ import {
   needsReconcileAfterV3,
 } from "./usageFromDb";
 import { loadEngagementReportFromSql } from "./engagementFromDb";
+import { getIndexBuildState } from "@/lib/db/indexerRuns";
 import type { EngagementConfig, EngagementReport } from "@/lib/engagement/types";
 import { loadSessionDetailFromDb } from "./sessionDetailFromDb";
 import { loadSessionsListFromDb } from "./sessionsListFromDb";
@@ -89,10 +90,26 @@ export function dbModeRequested(): boolean {
  * so node's default inspect / stack output includes the chained
  * underlying error consistently. Same pattern `migrations.ts` uses.
  */
+/**
+ * Why a DB-backed read could not be served.
+ *
+ * `index-building` is the odd one out and deliberately lives here rather than
+ * in a parallel channel: the route already surfaces `reason` on its 503, so a
+ * client can tell "still indexing" from "the database is off" with no new
+ * plumbing. The others mean the backend is broken; this one means it is fine
+ * and simply does not know the answer yet (#470).
+ */
+export type DbUnavailableReason =
+  | "driver-missing"
+  | "init-failed"
+  | "connection-null"
+  | "load-failed"
+  | "index-building";
+
 export class DbUnavailableError extends Error {
-  readonly reason: "driver-missing" | "init-failed" | "connection-null" | "load-failed";
+  readonly reason: DbUnavailableReason;
   constructor(
-    reason: "driver-missing" | "init-failed" | "connection-null" | "load-failed",
+    reason: DbUnavailableReason,
     message: string,
     cause?: unknown
   ) {
@@ -605,6 +622,24 @@ export async function getEngagement(
     );
   }
   const db = await getReadyDb();
+  // #470: refuse rather than under-report. Until the index has been read
+  // through once, a SQL answer here is a SUBSET of the user's work presented as
+  // the whole of it — and this is the billable-hours figure, where a low number
+  // that looks true is worse than an error. `getUsageCompare` below already
+  // takes this shape for its own (different) readiness condition.
+  //
+  // Latched on "first full pass completed", not "a pass is running": the 30 s
+  // sweep re-runs the same reconcile forever, so the live reading would flap
+  // the report in and out of availability every half minute. See
+  // `getIndexBuildState` for why a DERIVED_VERSION rebuild correctly does not
+  // gate this consumer.
+  if (getIndexBuildState(db) === "building") {
+    throw new DbUnavailableError(
+      "index-building",
+      "The engagement report is unavailable while the index finishes building — " +
+        "the figures would be a subset of your work, not a total."
+    );
+  }
   const report = await callDbLoader("getEngagement", () =>
     loadEngagementReportFromSql(db, { period, timeZone, config, project, home })
   );

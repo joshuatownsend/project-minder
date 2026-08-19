@@ -887,6 +887,39 @@ const MIGRATIONS: Migration[] = [
       // itself unmeasured rather than summing a partial tree.
     },
   },
+  {
+    version: 26,
+    name: "#470: credit an already-populated index with a completed reconcile",
+    up: (db) => {
+      // `indexer_runs` has been in the schema since v1 and was never written to.
+      // #470 starts writing it so a read can tell "still indexing" from "you
+      // really did no billable work" — but the predicate is "has a full pass
+      // ever finished", and on every index that already exists the honest answer
+      // to that is unknowable: the passes happened, nothing recorded them.
+      //
+      // Without this row, shipping the gate would put every existing user's
+      // timecard into "still building" until their next full reconcile
+      // completed — turning a fix for a wrong number into an outage for a right
+      // one. So an index that already holds sessions is credited with the pass
+      // that evidently produced them.
+      //
+      // `started_at_ms = finished_at_ms` and a stated `error` marker rather than
+      // an invented duration: this row is a record that the index was populated
+      // before run tracking existed, and it should read that way to anyone who
+      // looks. A brand-new index has no sessions, so it gets no row and
+      // correctly reports building until its first pass lands.
+      const row = db.prepare("SELECT COUNT(*) AS n FROM sessions").get() as { n: number };
+      if (row.n === 0) return;
+      const existing = db.prepare("SELECT COUNT(*) AS n FROM indexer_runs").get() as { n: number };
+      if (existing.n > 0) return;
+      const now = Date.now();
+      db.prepare(
+        `INSERT INTO indexer_runs
+           (started_at_ms, finished_at_ms, kind, files_seen, files_changed, rows_written, error)
+         VALUES (?, ?, 'reconcile', ?, 0, 0, 'backfilled: index predates run tracking')`
+      ).run(now, now, row.n);
+    },
+  },
 ];
 
 /**
