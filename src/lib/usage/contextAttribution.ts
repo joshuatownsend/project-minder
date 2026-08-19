@@ -345,7 +345,18 @@ export function attributeContext(
     segmentTotals = emptyCategoryTokens();
     segmentPeak = null;
     segmentPeakTurn = null;
-    segmentStart = endTurn + 1;
+    // Clamped to `turnIndex` — the index the next turn will actually take.
+    //
+    // An EMPTY segment (a compaction marker before any turn, or two markers in
+    // a row) closes with `endTurn` already at or past `segmentStart`, so
+    // `endTurn + 1` would put the next segment's lower bound one past the turn
+    // that then opens it. Nothing noticed while `attributedAtPeak` was a running
+    // total, but deriving it from `[segmentStart, peakTurn)` does: a session
+    // opening on a compaction boundary would report none of the prompt that
+    // followed as attributed, inflating `unattributedTokens` by exactly that
+    // turn. A regression from that derivation, not a pre-existing bug.
+    // (Codex, PR #468.)
+    segmentStart = Math.min(endTurn + 1, turnIndex);
   };
 
   /**

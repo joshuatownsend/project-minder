@@ -379,6 +379,37 @@ describe("attributeContext — multi-line messages (#453)", () => {
     expect(twice.totals.assistantText).toBe(once.totals.assistantText);
   });
 
+  it("counts a segment that opened on a leading compaction boundary", async () => {
+    // Codex, PR #468 — a regression from deriving `attributedAtPeak` from turn
+    // order rather than a running total. An EMPTY segment (a marker before any
+    // turn, or two in a row) closed with its lower bound one past the turn that
+    // then opened the next segment, so that turn fell outside `[segmentStart,
+    // peakTurn)`. A session opening on a compaction boundary reported none of
+    // the prompt that followed as attributed.
+    const prompt = "u".repeat(6000);
+    const withBoundary = attributeContext("s1", [
+      { type: "system", subtype: "compact_boundary", timestamp: "2026-08-19T10:00:00Z" },
+      { type: "user", timestamp: "2026-08-19T10:00:01Z", message: { content: prompt } },
+      {
+        type: "assistant",
+        timestamp: "2026-08-19T10:00:02Z",
+        message: {
+          id: "msg_a",
+          model: MODEL,
+          usage: { input_tokens: 90000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+          content: [{ type: "text", text: "reply" }],
+        },
+      },
+    ] as any);
+
+    const seg = withBoundary.segments[withBoundary.segments.length - 1];
+    // The prompt preceded the measured turn, so it WAS in the window the peak
+    // measured — roughly 6000 bytes of it.
+    expect(seg.attributedAtPeak).toBeGreaterThan(1000);
+    // ...and the remainder shrinks by exactly what stopped being lost.
+    expect(seg.unattributedTokens).toBe(90000 - seg.attributedAtPeak!);
+  });
+
   it("keeps segment totals in step with the turn it merged into", async () => {
     const report = attributeContext("s1", [
       entry("msg_a", "2026-08-19T10:00:00Z", [{ type: "text", text: "a".repeat(1000) }]),
