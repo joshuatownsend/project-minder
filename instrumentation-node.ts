@@ -212,10 +212,25 @@ async function registerIngestDisposer(): Promise<void> {
       // `isShuttingDown()` gates in `startInProcessWatcher` and inside
       // `startIngestWatcher` are what make a late-completing start harmless, so
       // the drain is the fast path rather than the only line of defence.
-      await Promise.race([
-        globalForWatcherStart.__minderWatcherStartInFlight ?? Promise.resolve(),
-        new Promise<void>((r) => setTimeout(r, WATCHER_DRAIN_TIMEOUT_MS)),
-      ]);
+      // The timer is cleared when the drain wins the race. `Promise.race` does
+      // not cancel the loser, so a bare `setTimeout` here would stay armed and
+      // hold the event loop open for up to WATCHER_DRAIN_TIMEOUT_MS after
+      // everything else had finished — delaying the very exit this disposer
+      // exists to make clean. (Copilot, PR #469.)
+      const inFlight = globalForWatcherStart.__minderWatcherStartInFlight;
+      if (inFlight) {
+        let drainTimer: NodeJS.Timeout | undefined;
+        try {
+          await Promise.race([
+            inFlight,
+            new Promise<void>((r) => {
+              drainTimer = setTimeout(r, WATCHER_DRAIN_TIMEOUT_MS);
+            }),
+          ]);
+        } finally {
+          if (drainTimer) clearTimeout(drainTimer);
+        }
+      }
       await stopWorker();
       await stopIngestWatcher();
     });

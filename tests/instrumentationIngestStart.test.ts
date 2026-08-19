@@ -30,20 +30,21 @@ vi.mock("@/lib/db/workerHost", () => ({
   stopWorker: vi.fn(async () => {}),
   onWorkerMessage: vi.fn(),
 }));
+/** Flips the gate that decides whether the ingest shutdown disposer registers. */
+let bootstrapRan = false;
 vi.mock("@/lib/bootstrap", () => ({
   installServiceLifecycle: vi.fn(async () => {}),
   runBootstrap: vi.fn(async () => {}),
-  // `ran: false` short-circuits the shutdown-disposer registration, which is
-  // not what these tests are about.
-  getBootstrapStatus: () => ({ ran: false }),
+  getBootstrapStatus: () => ({ ran: bootstrapRan }),
 }));
 vi.mock("@/lib/tasks/dispatcher", () => ({ initDispatcher: vi.fn() }));
 
 /** Drives the `isShuttingDown()` gate the detached start consults. */
 let shuttingDown = false;
+const onShutdown = vi.fn();
 vi.mock("@/lib/lifecycle", () => ({
   isShuttingDown: () => shuttingDown,
-  onShutdown: vi.fn(),
+  onShutdown,
 }));
 
 /** Poll until the watcher has been asked to start (it is no longer awaited). */
@@ -78,6 +79,8 @@ describe("startIngest — ingest startup must not block register() (#413)", () =
     delete process.env.MINDER_PACKAGED;
     watcherGate = Promise.resolve();
     shuttingDown = false;
+    bootstrapRan = false;
+    onShutdown.mockClear();
     // The serialization guard is a globalThis singleton (it has to survive HMR),
     // so a test that leaves a start hanging would otherwise hand the same stuck
     // promise to every test after it.
@@ -191,6 +194,46 @@ describe("startIngest — ingest startup must not block register() (#413)", () =
     await startIngest();
     await new Promise((r) => setTimeout(r, 200));
     expect(startIngestWatcher).not.toHaveBeenCalled();
+  });
+
+  it("leaves no drain timer armed when the start settles first", async () => {
+    // Copilot, #469. `Promise.race` does not cancel the loser, so the drain's
+    // `setTimeout` stays armed after the in-flight start wins — holding the
+    // event loop open for up to 2 s after everything else has finished, and
+    // delaying the very exit this disposer exists to make clean.
+    bootstrapRan = true;
+    let release!: () => void;
+    watcherGate = new Promise<void>((r) => { release = r; });
+    const { startIngest } = await import("../instrumentation-node");
+    await startIngest();
+    await waitForWatcherCall();
+
+    const disposer = onShutdown.mock.calls.find((c) => c[0] === "ingest")?.[1] as
+      | (() => Promise<void>)
+      | undefined;
+    expect(typeof disposer).toBe("function");
+
+    // Fake timers make "is a timer still armed?" directly observable, which is
+    // the property at issue — not how long shutdown happened to take.
+    vi.useFakeTimers();
+    try {
+      const running = disposer!();
+      // Let the disposer's dynamic imports settle so it actually reaches the
+      // drain. Releasing first would clear `__minderWatcherStartInFlight`
+      // before the disposer read it, the drain would be skipped entirely, and
+      // the assertion below would read 0 whether or not the timer is cleared —
+      // which is exactly how two earlier versions of this test passed against a
+      // deliberately broken implementation.
+      await vi.advanceTimersByTimeAsync(0);
+      // Sanity: the drain armed its timer, so this test is exercising it.
+      expect(vi.getTimerCount()).toBe(1);
+
+      release(); // the in-flight start now wins the race
+      await running;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("starts no watcher at all when MINDER_INDEXER=0", async () => {
