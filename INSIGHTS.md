@@ -1,5 +1,20 @@
 # Insights
 
+<!-- insight:18c958ac1f0e | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-19T11:37:19.989Z -->
+## ★ Insight
+- `src/lib/boundPort.ts` exists because of a past bug: the tray spawns the server on a fallback port when 4100 is taken, and the MCP allowlist was hardcoded to 4100 — dashboard worked, every MCP request 403'd. That fix is what now lets me smoke-test on a spare port without touching the user's running tray.
+- This is why DNS-rebinding allowlists should derive from *observed* runtime state rather than config literals: the literal is right until the one situation the protection matters in.
+
+---
+
+<!-- insight:45fe964fd58c | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-19T11:31:33.506Z -->
+## ★ Insight
+- A pnpm lockfile is a *graph*, not a version list — the same package appears at multiple versions simultaneously (`content-type@1.0.5` and `@2.1.0` coexist because different dependents pin different ranges). Any "compare old→new" script that assumes one version per name will manufacture phantom drops, exactly as mine did.
+- pnpm encodes peer resolution into the key itself: `@hono/node-server@2.1.1(hono@4.13.2)`. That's why fixing hono isn't a one-line edit — the peer-suffixed key has to re-derive, which is what makes hand-editing a lockfile a bad idea and re-resolution the correct fix.
+- The downgrade had *no constraint driving it*: `hono@^4.11.4` and peer `^4` both admit 4.13.3. It's a resolution artifact of Dependabot rebuilding the `@hono/node-server` subtree for the 1.x→2.x jump, not a dependency conflict — which is precisely why re-resolving locally can fix it without overriding anything.
+
+---
+
 <!-- insight:174cff717d61 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T22:31:47.206Z -->
 ## ★ Insight
 The durable result here isn't "16.3.1 works" — it's the *negative control*. The original 16.3.0 upgrade shipped broken through a gate that ran and passed, because nobody had shown that gate could fail. Running the known-bad version first converts an all-green result from an assumption into a measurement. That's the same discipline as mutating an implementation to confirm a test fails, applied to a framework bump instead of a unit test.
