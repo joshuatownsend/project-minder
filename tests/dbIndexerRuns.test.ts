@@ -282,6 +282,52 @@ describe.skipIf(!driverAvailable)("indexer run tracking (#470)", () => {
     }
   });
 
+  it("treats an absent projects root as empty, not as a failed read", async () => {
+    // Codex P1, #471 — a regression from the previous fix. `~/.claude/projects`
+    // is legitimately absent on a WSL-only setup with a configured extra home,
+    // and on any machine with Claude Code installed but no sessions yet.
+    // Counting ENOENT as an incomplete enumeration marked EVERY pass aborted:
+    // no completed run was ever recorded, each sweep repeated the outcome, and
+    // the timecard stayed permanently unavailable while the readable home had
+    // in fact been scanned in full.
+    const { conn, db, runs } = await freshDb();
+    const { reconcileAllSessions } = await import("@/lib/db/ingest");
+    try {
+      await reconcileAllSessions(db, {
+        projectsDir: `${tmpHome}/definitely-not-here/projects`,
+        recordRun: "reconcile",
+      });
+      const row = db
+        .prepare("SELECT aborted, error FROM indexer_runs")
+        .get() as { aborted: number; error: string | null };
+      expect(row.aborted).toBe(0);
+      expect(row.error).toBeNull();
+      // Nothing to read is not the same as failing to read: the pass completed.
+      expect(runs.getIndexBuildState(db)).toBe("ready");
+    } finally {
+      conn.closeDb();
+    }
+  }, 60_000);
+
+  it("stops recording sweeps once the aborted runs have made their point", async () => {
+    // A sweep records every 30 s while readiness is unestablished. With a
+    // persistent enumeration failure that is ~2,880 rows a day, forever. Not
+    // raised in review; a growth path this design introduced.
+    const { conn, db, runs } = await freshDb();
+    try {
+      for (let i = 0; i < 20; i++) {
+        const id = runs.beginIndexerRun(db, "reconcile");
+        runs.finishIndexerRun(db, id, { aborted: true, error: "unreadable" });
+      }
+      // Still building — the index genuinely cannot be read, which is correct.
+      expect(runs.getIndexBuildState(db)).toBe("building");
+      // ...but the table stops growing.
+      expect(runs.recordOptionForSweep(db)).toEqual({});
+    } finally {
+      conn.closeDb();
+    }
+  });
+
   it("does not gate when it cannot read its own evidence", async () => {
     // A readiness check that fails closed converts a schema problem into a
     // silent outage of a working report. It fails open instead.

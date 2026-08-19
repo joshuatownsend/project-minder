@@ -3763,6 +3763,26 @@ async function reconcileAdapterSessionFile(
   return { rowsWritten: rows, affectedDays, affectedCategoryTuples };
 }
 
+/**
+ * Does a failed `readdir` mean we were unable to read something that is there?
+ *
+ * `ENOENT` does not: the directory simply does not exist, which is a fact about
+ * the corpus rather than a failure to read it. `~/.claude/projects` is absent on
+ * a WSL-only setup with a configured extra home, and on any machine that has
+ * Claude Code installed but no sessions yet. Counting that as an incomplete
+ * enumeration marked EVERY pass aborted, so no completed run was ever recorded,
+ * every 30 s sweep repeated the outcome, and the timecard stayed permanently
+ * unavailable while the readable home had in fact been scanned in full.
+ * (Codex P1, PR #471 — a regression from the previous commit's fix.)
+ *
+ * Everything else does: EACCES, EIO, EBUSY, a transient UNC error, ENOTDIR from
+ * a path that exists but is not a directory. Those mean a corpus that may well
+ * be there was not read.
+ */
+function isMissingDirError(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException | null)?.code === "ENOENT";
+}
+
 export async function reconcileAllSessions(
   db: DatabaseT.Database,
   options: ReconcileOptions = {}
@@ -3897,10 +3917,12 @@ async function runReconcileAllSessions(
       for (const e of entries) {
         if (e.isDirectory()) subdirs.push({ projectsDir: dir, dirName: e.name });
       }
-    } catch {
+    } catch (err) {
       // #471: an enumeration this pass was SUPPOSED to complete and could not.
-      // Not the same as a home the never-wake gate deliberately skipped.
-      stats.enumerationFailures++;
+      // Not the same as a home the never-wake gate deliberately skipped, and
+      // not the same as a root that simply is not there — see
+      // `isMissingDirError`.
+      if (!isMissingDirError(err)) stats.enumerationFailures++;
       // A projects dir that can't be listed — missing primary tree (a
       // WSL-only Claude setup, or a non-Claude user), a distro that stopped
       // mid-cycle, a transient UNC error — shields its rows from the prune
@@ -3948,8 +3970,11 @@ async function runReconcileAllSessions(
         .filter((e) => e.isFile() && e.name.endsWith(".jsonl"))
         .map((e) => path.join(dirPath, e.name));
       sessionDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
-    } catch {
-      stats.enumerationFailures++;
+    } catch (err) {
+      // A project dir that vanished between the home listing and this read is
+      // the corpus changing under us, not a read we failed — the next sweep
+      // sees the true state. Only a real read failure counts.
+      if (!isMissingDirError(err)) stats.enumerationFailures++;
       // A dir that LISTED in the home enumeration but fails its own readdir
       // (distro stopped mid-cycle, transient UNC/EIO error) must not read as
       // "all its sessions vanished" — shield its rows from the prune pass

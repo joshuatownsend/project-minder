@@ -25,6 +25,13 @@ export type IndexerRunKind = "reconcile" | "rebuild";
 export type IndexBuildState = "building" | "ready";
 
 /**
+ * How many aborted passes a sweep will record before it stops trying. Enough to
+ * show a pattern in the table; small enough that a persistent failure cannot
+ * grow it without bound.
+ */
+const ABORTED_RUN_RECORD_LIMIT = 20;
+
+/**
  * Open a run row and return its id.
  *
  * Written as its own statement rather than inside the reconcile's transaction:
@@ -179,7 +186,24 @@ export function hasCompletedFullReconcile(db: DatabaseT.Database): boolean {
 export function recordOptionForSweep(
   db: DatabaseT.Database
 ): { recordRun?: IndexerRunKind } {
-  return hasCompletedFullReconcile(db) ? {} : { recordRun: "reconcile" };
+  if (hasCompletedFullReconcile(db)) return {};
+  // Bounded. A sweep records every 30 s while readiness is unestablished, which
+  // is fine for the case this exists for — one aborted initial pass, then a
+  // sweep that succeeds — but writes ~2,880 rows a day if enumeration keeps
+  // failing (a permission problem on a mount, say). After enough attempts the
+  // evidence is in and further rows add nothing: readiness stays false, which
+  // is the correct answer for an index that genuinely cannot be read, and the
+  // table stops growing. Not raised in review; a growth path this design
+  // introduced and should not ship with.
+  try {
+    const row = db
+      .prepare("SELECT COUNT(*) AS n FROM indexer_runs WHERE aborted = 1")
+      .get() as { n: number };
+    if (row.n >= ABORTED_RUN_RECORD_LIMIT) return {};
+  } catch {
+    /* unreadable evidence — fall through and record */
+  }
+  return { recordRun: "reconcile" };
 }
 
 /**
