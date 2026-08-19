@@ -135,13 +135,16 @@ export async function startIngest(): Promise<void> {
       } catch {
         /* swallow — best-effort teardown */
       }
-      await startInProcessWatcher();
+      // Not awaited — see `startInProcessWatcher`. This is the path where it
+      // matters most: the worker just failed, and blocking here would take the
+      // server dark precisely when something is already wrong.
+      void startInProcessWatcher();
     }
     return;
   }
 
   if (mode === "in-process") {
-    await startInProcessWatcher();
+    void startInProcessWatcher();
   }
 }
 
@@ -205,6 +208,27 @@ async function registerIngestDisposer(): Promise<void> {
   }
 }
 
+/**
+ * Start the in-process ingest watcher. **Callers must not await this** — it is
+ * launched with `void` from `startIngest()`.
+ *
+ * #413: Next awaits `register()` before dispatching a single request, so
+ * anything this function waits on is time the server spends accepting
+ * connections and answering none of them — static assets included, and with
+ * `MINDER_DEMO=1` set, where no backend should be consulted at all. Two
+ * separate phases were doing exactly that:
+ *
+ *   1. the initial reconcile, which ran inline (~3 hours on a 6,078-session
+ *      corpus, per #431) — now handed off via `deferInitialReconcile`, and
+ *   2. `chokidar`'s `ready` handshake, which walks the whole projects tree and
+ *      was measured hitting its own 30 s timeout on this corpus.
+ *
+ * Deferring only the reconcile left phase 2 blocking, which is why the fix is
+ * here rather than only in the options below: ingest startup is background work
+ * and the request path must never be sequenced behind it. Errors are still
+ * surfaced — the body is wholly wrapped in try/catch and logs — they are simply
+ * reported rather than awaited.
+ */
 async function startInProcessWatcher(): Promise<void> {
   try {
     const { startIngestWatcher } = await import("@/lib/db/ingestWatcher");
@@ -217,12 +241,42 @@ async function startInProcessWatcher(): Promise<void> {
     // `MINDER_INDEXER=1`. The watcher's own NODE_ENV=test guard is
     // also bypassed by this option — defense-in-depth lives at the
     // top of `instrumentation.ts` instead.
-    const status = await startIngestWatcher({ bypassEnvFlag: true });
+    // `deferInitialReconcile: true` — the reconcile runs in the BACKGROUND and
+    // this returns as soon as chokidar is armed.
+    //
+    // #413: Next awaits `register()` before dispatching a single request, and
+    // the inline reconcile ran to completion inside it — so until the whole
+    // corpus had been re-parsed the server accepted connections and answered
+    // none of them, static assets included. Measured at ~3 hours on a
+    // 6,078-session corpus (#431), and reproduced here at 45 s timeouts on
+    // `/favicon.ico`. The event loop was never blocked (a 1 s watchdog ticked
+    // right through it) — Next was simply holding every request behind a hook
+    // that had not resolved, which is why nothing appeared in the logs.
+    //
+    // This mirrors what the worker host already does with `awaitStart: false`.
+    // The worker default (#431) had masked the bug for the packaged server, but
+    // only masked it: `MINDER_INDEXER_WORKER=0` is a documented opt-out, source
+    // checkouts land here by default, and the worker-start failure path in
+    // `startIngest()` falls back to exactly this function — turning "the worker
+    // could not start" into "the server goes dark", precisely when things are
+    // already going wrong.
+    const status = await startIngestWatcher({
+      bypassEnvFlag: true,
+      deferInitialReconcile: true,
+      // `status.initialReconcileMs` is null at return now, so completion is
+      // reported from the callback instead. A multi-hour re-parse after a
+      // DERIVED_VERSION bump has to stay visible rather than silent.
+      onInitialReconcile: ({ ms, error }) => {
+        // eslint-disable-next-line no-console
+        console.info(
+          `[ingest-watcher] initial reconcile finished in ${ms} ms` +
+            (error ? ` (error: ${error})` : "")
+        );
+      },
+    });
     if (status.running) {
       // eslint-disable-next-line no-console
-      console.info(
-        `[ingest-watcher] started; initial reconcile took ${status.initialReconcileMs ?? "?"} ms`
-      );
+      console.info("[ingest-watcher] started; initial reconcile running in background");
     }
   } catch (err) {
     // eslint-disable-next-line no-console

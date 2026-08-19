@@ -1,5 +1,20 @@
 # Insights
 
+<!-- insight:d11f810981e5 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-19T13:16:21.989Z -->
+## ★ Insight
+- Same corpus, one variable: **1,799 / 4,472 write-class edits before (40.2%) → 4,470 / 4,472 after (99.96%)**. The 40.2% reproduces the issue's measured figure exactly, on a corpus that has since grown from 4,164 to 4,472 blocks.
+- The 2 blocks still dropped are the *genuine* re-logs — lines repeating an existing `tool_use_id`. That residual is the evidence the safety property survived: had I simply deleted the guard, this would read 4,472/4,472 and be silently over-counting.
+
+---
+
+<!-- insight:8048d1bc5644 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-19T13:05:08.930Z -->
+## ★ Insight
+- `parser.ts` carries the guard **twice** — `parseSessionTurns` (line 231) and `parseSessionTurnsWithMeta` (line 484) are ~240-line near-duplicate loops differing only by variable suffix. Fixing one leaves the other wrong, which is precisely how #426's fix missed this path.
+- `contextAttribution.ts:330` has a third copy, affecting **both** backends (it walks raw JSONL directly), where dropping continuation lines silently inflates the "unattributed tokens" figure the panel reports.
+- Ingest's PR #427 lesson applies in miniature: the slash-command window must be latched **per message**, not per line, or a `Skill` call on a continuation line gets attributed to whatever prompt happens to be current when it arrives.
+
+---
+
 <!-- insight:18c958ac1f0e | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-19T11:37:19.989Z -->
 ## ★ Insight
 - `src/lib/boundPort.ts` exists because of a past bug: the tray spawns the server on a fallback port when 4100 is taken, and the MCP allowlist was hardcoded to 4100 — dashboard worked, every MCP request 403'd. That fix is what now lets me smoke-test on a spare port without touching the user's running tray.

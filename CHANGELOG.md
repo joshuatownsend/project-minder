@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The server no longer goes dark while the index reconciles** (#413). Next awaits `register()` before dispatching a single request, and the in-process ingest watcher ran its full initial reconcile *inline* inside that hook. Until the whole corpus had been re-parsed, the server accepted connections and answered none of them — `/favicon.ico` and `/icon.svg` included, and with `MINDER_DEMO=1` set, where no backend should be touched at all. Measured at ~3 hours on a 6,078-session corpus (#431); reproduced here as 45-second timeouts on every route.
+
+  **Two phases were blocking, not one.** Deferring the reconcile alone (`deferInitialReconcile: true`, mirroring the worker host's `awaitStart: false`) fixed the three-hour case and left a 30-second one: `chokidar`'s `ready` handshake walks the whole projects tree, and on this corpus it ran to its own timeout — with the server still dark for all of it. That was caught by re-running the probe rather than by reasoning, which is the only reason the first fix did not ship as complete. So ingest startup is no longer awaited at all: `startIngest()` launches the watcher and returns. Errors are still logged, just reported rather than waited on, and reconcile completion is reported through `onInitialReconcile` so a long re-parse after a `DERIVED_VERSION` bump stays visible instead of silent.
+
+  **Three ways to reach the broken path**, all of them live before this: a source checkout (`next start` / `pnpm start`, where in-process is the default mode), the documented `MINDER_INDEXER_WORKER=0` opt-out, and — worst — the worker-start-failure fallback in `startIngest()`, which turned "the indexer worker could not start" into "the server serves nothing", precisely when something was already wrong. The packaged worker default from #431 masked the symptom for the common case; it never fixed it.
+
+  **`MINDER_USE_DB=0` is not the cause**, contrary to the issue title it was filed under. The flag has no read site anywhere in the boot path — not at today's revision and not at the one the report was written against, where its only appearance in `instrumentation-node.ts` is a comment. Both of the originally reported arms serve correctly on a current build. What the one-variable bisect isolated instead was the ingest mode: with the in-process watcher every request hangs, and with `MINDER_INDEXER=0` on the same environment every request returns. A 1-second watchdog ticked right through the hang, which is how the loop was cleared of blocking synchronously and Next identified as holding requests behind an unresolved hook. The original flag correlation is not reproducible and is most likely a confounded two-run comparison; that is a limit of the evidence, not a claim about what the reporter did.
+
 ## [1.12.1] - 2026-08-18
 
 *A supply-chain release, and nothing else: no new surface, no behaviour you can see. Twenty of the twenty-three open Dependabot alerts close, and the framework pin that had been holding four of them open since v1.10.1 finally comes off.*
