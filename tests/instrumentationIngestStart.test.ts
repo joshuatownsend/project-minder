@@ -70,6 +70,11 @@ describe("startIngest — ingest startup must not block register() (#413)", () =
     delete process.env.MINDER_INDEXER_WORKER;
     delete process.env.MINDER_PACKAGED;
     watcherGate = Promise.resolve();
+    // The serialization guard is a globalThis singleton (it has to survive HMR),
+    // so a test that leaves a start hanging would otherwise hand the same stuck
+    // promise to every test after it.
+    delete (globalThis as { __minderWatcherStartInFlight?: Promise<void> })
+      .__minderWatcherStartInFlight;
     startIngestWatcher.mockClear();
     startWorker.mockClear();
   });
@@ -130,6 +135,40 @@ describe("startIngest — ingest startup must not block register() (#413)", () =
     expect(raced).toBe("returned");
     const opts = await waitForWatcherCall();
     expect(opts.deferInitialReconcile).toBe(true);
+  });
+
+  it("arms only one watcher when register() runs twice concurrently", async () => {
+    // Not awaiting opened a window that awaiting had kept shut.
+    // `startIngestWatcher` publishes `globalThis.__minderIngestWatcher` only
+    // AFTER `await stopIngestWatcher()` and `await initDb()`, so two entries
+    // landing in that gap each see no existing watcher, each arm a chokidar
+    // instance, and the earlier one becomes unreachable by
+    // `stopIngestWatcher()` — a duplicate reconcile writer shutdown can never
+    // dispose. `register()` runs more than once under dev/HMR. (Codex, #469.)
+    let release!: () => void;
+    watcherGate = new Promise<void>((r) => { release = r; });
+    const { startIngest } = await import("../instrumentation-node");
+
+    await Promise.all([startIngest(), startIngest()]);
+    // Settle both fire-and-forget chains through their dynamic imports before
+    // counting. Asserting straight after `Promise.all` measures nothing: the
+    // second chain has not reached `startIngestWatcher` yet either way, so the
+    // count is 1 with the guard AND without it. (Caught by mutating the guard
+    // out and watching the test still pass.)
+    await new Promise((r) => setTimeout(r, 200));
+    // One watcher, though both entries sat inside the publish window.
+    expect(startIngestWatcher).toHaveBeenCalledTimes(1);
+
+    release();
+    await new Promise((r) => setTimeout(r, 20));
+    // And the in-flight guard cleared, so a later legitimate restart still works
+    // — the guard serializes concurrent starts, it does not latch permanently.
+    await startIngest();
+    const deadline = Date.now() + 5000;
+    while (startIngestWatcher.mock.calls.length < 2 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(startIngestWatcher).toHaveBeenCalledTimes(2);
   });
 
   it("starts no watcher at all when MINDER_INDEXER=0", async () => {

@@ -228,8 +228,42 @@ async function registerIngestDisposer(): Promise<void> {
  * and the request path must never be sequenced behind it. Errors are still
  * surfaced — the body is wholly wrapped in try/catch and logs — they are simply
  * reported rather than awaited.
+ *
+ * **Serialized against itself** by the in-flight promise below. Not awaiting
+ * opened a window that awaiting had kept shut: `startIngestWatcher` publishes
+ * `globalThis.__minderIngestWatcher` only *after* `await stopIngestWatcher()`
+ * and `await initDb()` (`ingestWatcher.ts:197-229`), so two entries landing in
+ * that gap would each see no existing watcher, each arm a chokidar instance,
+ * and leave the earlier one unreachable by `stopIngestWatcher()` — a duplicate
+ * reconcile writer that shutdown can never dispose. `register()` can run more
+ * than once under dev/HMR, which is exactly how a second entry gets there.
+ * (Codex, PR #469.)
+ *
+ * The guard lives on `globalThis` rather than module scope for the same reason
+ * every other singleton here does: HMR reloads the module and a module-level
+ * variable would be a fresh `undefined` each time. It is cleared once the start
+ * settles, so this serializes concurrent starts without blocking a later,
+ * legitimate restart — notably the worker-failure fallback.
  */
-async function startInProcessWatcher(): Promise<void> {
+const globalForWatcherStart = globalThis as unknown as {
+  __minderWatcherStartInFlight?: Promise<void>;
+};
+
+function startInProcessWatcher(): Promise<void> {
+  const existing = globalForWatcherStart.__minderWatcherStartInFlight;
+  if (existing) return existing;
+  const started: Promise<void> = doStartInProcessWatcher().finally(() => {
+    // Identity-checked so a start that has already been superseded cannot clear
+    // its successor's slot.
+    if (globalForWatcherStart.__minderWatcherStartInFlight === started) {
+      globalForWatcherStart.__minderWatcherStartInFlight = undefined;
+    }
+  });
+  globalForWatcherStart.__minderWatcherStartInFlight = started;
+  return started;
+}
+
+async function doStartInProcessWatcher(): Promise<void> {
   try {
     const { startIngestWatcher } = await import("@/lib/db/ingestWatcher");
     // Pass `bypassEnvFlag: true` because we only reach this function
