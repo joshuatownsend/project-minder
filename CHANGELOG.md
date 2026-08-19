@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **`next` un-pinned from `~16.2.12` to `~16.3.1`.** The pin was a workaround for a 16.3.0 defect that made `/api/usage`, `/api/stats`, `/api/skills` and `/api/sessions` return 500 on the first request after a cold boot — reliably enough to make all four pages unusable in practice, though a later request in the same warm process could succeed, which is exactly why the gate probes one cold boot per route: an `async` function in `src/lib/data/index.ts` returned an object that arrived at its caller as `undefined`. 16.3.1 does not exhibit it.
+
+  Verified by the four-cold-boot gate recorded on #432, run **in both directions on the same machine with only the framework version differing**. 16.3.0 reproduced all four failures with the exact TypeErrors on record; 16.3.1 returned 200 on all five routes across two independent runs — ten cold boots, zero TypeErrors, with real payloads rather than 200-shaped errors. The negative-control arm is the load-bearing half: running only the candidate version cannot distinguish "fixed" from "the harness cannot see the bug," which is precisely how the original upgrade passed its gate and shipped broken.
+
+  **The gate still governs future `next` bumps.** Nobody identified the root cause, so this is an empirical result about one version rather than a reason to trust the next one — and the two ways to make it go green while broken (a small index, or four probes after a single boot) are unchanged.
+
+### Security
+
+- **Closes the four `postcss` Dependabot alerts (#396)**, which the `next` pin had held open since v1.10.1 — the lockfile moves off `8.4.31` to `8.5.23` + `8.5.26`. The `sharp` alert is *not* closed and was never held by this pin: 16.3.1 does move Next's own `sharp` to `0.35.3`, but the vulnerable `0.34.5` reaches the tree through `@huggingface/transformers`.
+
 ## [1.12.0] - 2026-08-18
 
 *A tray-only release, and both entries are about the same subject: a server the tray did not start. 1.11.0 taught it to stop accusing its own still-booting server of being a stranger; this one closes the two remaining ways it could be wrong about a port it does not own — an update that destroys itself against a logon service holding the app's own files, and a "foreign" verdict that, once reached, was never revisited for the life of the tray.*
