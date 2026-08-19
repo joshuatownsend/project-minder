@@ -3775,6 +3775,10 @@ export async function reconcileAllSessions(
           ? `${stats.errors} file(s) failed to parse`
           : null
         : "reconcile threw",
+      // No `stats` means the pass threw, so the corpus was NOT read through.
+      // Per-file parse errors are a different thing: the pass finished and the
+      // index is populated, so those stay `aborted: false` and count as ready.
+      aborted: stats === undefined,
     });
   }
 }

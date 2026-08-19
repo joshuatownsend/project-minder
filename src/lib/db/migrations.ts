@@ -920,6 +920,29 @@ const MIGRATIONS: Migration[] = [
       ).run(now, now, row.n);
     },
   },
+  {
+    version: 27,
+    name: "#470: indexer_runs.aborted — a finished run is not always a completed one",
+    up: (db) => {
+      // Readiness asked "is `finished_at_ms` set", which a THROWN pass and an
+      // orphan closed by the next startup both satisfy — so a killed first
+      // reconcile flipped the index to ready and the engagement report went
+      // straight back to answering from a half-built index. Found independently
+      // by Codex (P1) and Copilot on PR #471.
+      //
+      // A non-null `error` cannot carry this distinction on its own: it is also
+      // set when a pass COMPLETED while individual files failed to parse, which
+      // must still count as ready — one unparseable transcript cannot hold a
+      // report offline indefinitely. Three states, so the boolean gets its own
+      // column rather than being pattern-matched out of a human-readable string.
+      //
+      // Idempotent: fresh DBs already have it from schema.sql (v1).
+      const cols = db.prepare("PRAGMA table_info(indexer_runs)").all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === "aborted")) {
+        db.exec("ALTER TABLE indexer_runs ADD COLUMN aborted INTEGER NOT NULL DEFAULT 0");
+      }
+    },
+  },
 ];
 
 /**

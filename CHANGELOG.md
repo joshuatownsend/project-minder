@@ -16,10 +16,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
   **Migration 26 credits an already-populated index with the pass that evidently produced it.** Without it, shipping the gate would put every existing user's timecard into "still building" until their next full reconcile finished — turning a fix for a wrong number into an outage for a right one. The backfilled row says so in its `error` field rather than inventing a plausible duration.
 
+  **A finished pass is not always a completed one.** A reconcile that threw, or one orphaned by a kill and closed at the next startup, both set `finished_at_ms` — so reading only that flipped the index to ready and put the report straight back to answering from a half-built index. `indexer_runs.aborted` (migration 27) carries the distinction, and it needs its own column rather than being inferred from `error`: `error` is also set when a pass *completed* while individual files failed to parse, and that case must still count as ready, or one unparseable transcript holds the report offline indefinitely.
+
   Scope: `getEngagement` only. `loadProjectFileEdits` already has a per-project freshness gate, and `getSessionCostsInWindow`'s caller documents an empty result as "cost unknown" rather than zero. The dashboard paths that fall back to file-parse are **not** covered — their empty-index gate does not fire on a *half*-built one, which is a real remaining gap noted on #470 rather than silently folded in here.
 
-
-### Fixed
 
 - **The server no longer goes dark while the index reconciles** (#413). Next awaits `register()` before dispatching a single request, and the in-process ingest watcher ran its full initial reconcile *inline* inside that hook. Until the whole corpus had been re-parsed, the server accepted connections and answered none of them — `/favicon.ico` and `/icon.svg` included, and with `MINDER_DEMO=1` set, where no backend should be touched at all. Measured at ~3 hours on a 6,078-session corpus (#431); reproduced here as 45-second timeouts on every route.
 

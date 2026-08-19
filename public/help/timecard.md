@@ -130,14 +130,20 @@ midnight.
   the period on one sorted timeline; over raw JSONL that's millions of lines
   per request.
 - **Unavailable until the index has been read through once.** The same
-  reasoning, one step further: while Minder is still building its index for the
-  first time — a new install, or a version bump that forces a full re-parse —
-  the report refuses instead of answering. Anything it could say at that point
-  is a *subset* of your work wearing the shape of a total, and a low number that
-  looks true is worse than an error on a figure you might invoice against. The
-  page distinguishes this from `MINDER_USE_DB=0`: one says "still indexing" and
-  resolves itself, the other says the index is switched off. Ordinary
-  incremental updates do not trigger it — only the first full pass counts.
+  reasoning, one step further: on a new install, while Minder is still reading
+  your transcripts for the first time, the report refuses instead of answering.
+  Anything it could say at that point is a *subset* of your work wearing the
+  shape of a total, and a low number that looks true is worse than an error on a
+  figure you might invoice against. The page distinguishes this from
+  `MINDER_USE_DB=0`: one says "still indexing" and resolves itself, the other
+  says the index is switched off.
+
+  It applies to the **first** full pass only. Once your history has been read
+  through once, later re-reads — the ordinary sweep, or a version bump that
+  re-derives existing rows — do not take the report offline, because the fields
+  it reads are recorded straight from your transcripts and survive a
+  re-derivation. A pass that is interrupted before finishing does not count as
+  that first read.
 - Turns are attributed to the project directory the session ran in, so work
   done for one client from another repo's directory lands on that repo.
 - Projects are identified by directory **and Claude home**, so two configured

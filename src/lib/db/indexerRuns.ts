@@ -54,8 +54,18 @@ export interface IndexerRunResult {
   filesSeen?: number;
   filesChanged?: number;
   rowsWritten?: number;
-  /** Non-null marks the pass as failed; it still counts as finished. */
+  /**
+   * What went wrong, if anything. Set for BOTH a pass that completed with some
+   * files unparseable and one that did not complete at all — `aborted` is what
+   * separates them.
+   */
   error?: string | null;
+  /**
+   * The pass did not finish: it threw, or the process died and a later start
+   * closed the row. Readiness turns on this, so it must not be conflated with
+   * `error` (#471, Codex P1 + Copilot).
+   */
+  aborted?: boolean;
 }
 
 /**
@@ -71,7 +81,8 @@ export function finishIndexerRun(
   try {
     db.prepare(
       `UPDATE indexer_runs
-          SET finished_at_ms = ?, files_seen = ?, files_changed = ?, rows_written = ?, error = ?
+          SET finished_at_ms = ?, files_seen = ?, files_changed = ?, rows_written = ?,
+              error = ?, aborted = ?
         WHERE id = ?`
     ).run(
       Date.now(),
@@ -79,6 +90,7 @@ export function finishIndexerRun(
       result.filesChanged ?? 0,
       result.rowsWritten ?? 0,
       result.error ?? null,
+      result.aborted ? 1 : 0,
       id
     );
   } catch {
@@ -103,7 +115,7 @@ export function closeOrphanedIndexerRuns(db: DatabaseT.Database): number {
     const info = db
       .prepare(
         `UPDATE indexer_runs
-            SET finished_at_ms = ?, error = 'orphaned'
+            SET finished_at_ms = ?, error = 'orphaned', aborted = 1
           WHERE finished_at_ms IS NULL`
       )
       .run(Date.now());
@@ -114,20 +126,27 @@ export function closeOrphanedIndexerRuns(db: DatabaseT.Database): number {
 }
 
 /**
- * Has a full-corpus pass ever finished against this index?
+ * Has a full-corpus pass ever **completed** against this index?
  *
- * A failed run still counts. `error` on a run means some files did not parse,
- * not that the pass did not happen — the index is populated either way, and
- * treating a single bad transcript as "never indexed" would hold a report
- * offline indefinitely over one unparseable file. The alternative reading was
- * considered and rejected for that reason.
+ * Finished is not the same as completed, and conflating them reintroduced the
+ * exact bug this module exists to prevent: a pass that threw, or one orphaned
+ * by a kill and closed at the next startup, both have `finished_at_ms` set — so
+ * a killed first reconcile flipped the index to ready and the engagement report
+ * went straight back to answering from a half-built index. `aborted` is the
+ * discriminator. (Codex P1 + Copilot, PR #471.)
+ *
+ * A completed run with a non-null `error` still counts. There, `error` means
+ * some individual files did not parse — the corpus was still read through, and
+ * treating one bad transcript as "never indexed" would hold the report offline
+ * indefinitely. That reading is deliberate, and it is why `aborted` needed its
+ * own column rather than being inferred from `error`.
  */
 export function hasCompletedFullReconcile(db: DatabaseT.Database): boolean {
   try {
     const row = db
       .prepare(
         `SELECT 1 AS ok FROM indexer_runs
-          WHERE finished_at_ms IS NOT NULL AND kind IN ('reconcile','rebuild')
+          WHERE finished_at_ms IS NOT NULL AND aborted = 0 AND kind IN ('reconcile','rebuild')
           LIMIT 1`
       )
       .get() as { ok?: number } | undefined;

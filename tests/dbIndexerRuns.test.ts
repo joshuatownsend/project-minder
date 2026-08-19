@@ -80,6 +80,8 @@ describe.skipIf(!driverAvailable)("indexer run tracking (#470)", () => {
     try {
       const id = runs.beginIndexerRun(db, "reconcile");
       runs.finishIndexerRun(db, id, { filesSeen: 10, error: "2 file(s) failed to parse" });
+      // Not aborted: the pass finished and the index is populated. This is the
+      // case that stops `aborted` from simply being `error IS NOT NULL`.
       expect(runs.getIndexBuildState(db)).toBe("ready");
     } finally {
       conn.closeDb();
@@ -95,14 +97,17 @@ describe.skipIf(!driverAvailable)("indexer run tracking (#470)", () => {
       expect(runs.closeOrphanedIndexerRuns(db)).toBe(1);
 
       const row = db
-        .prepare("SELECT finished_at_ms, error FROM indexer_runs")
-        .get() as { finished_at_ms: number | null; error: string };
+        .prepare("SELECT finished_at_ms, error, aborted FROM indexer_runs")
+        .get() as { finished_at_ms: number | null; error: string; aborted: number };
       expect(row.finished_at_ms).not.toBeNull();
       expect(row.error).toBe("orphaned");
+      expect(row.aborted).toBe(1);
 
       // Closing an orphan does NOT count as having read the corpus — the pass
-      // did not finish, it was interrupted.
-      expect(runs.getIndexBuildState(db)).toBe("ready");
+      // was interrupted, not completed. The original version of this test said
+      // exactly that in a comment and then asserted "ready", ratifying the
+      // defect it described. (Copilot, PR #471.)
+      expect(runs.getIndexBuildState(db)).toBe("building");
     } finally {
       conn.closeDb();
     }
@@ -151,10 +156,17 @@ describe.skipIf(!driverAvailable)("indexer run tracking (#470)", () => {
         })
       ).rejects.toThrow("config unreadable");
       const row = db
-        .prepare("SELECT finished_at_ms, error FROM indexer_runs")
-        .get() as { finished_at_ms: number | null; error: string | null } | undefined;
+        .prepare("SELECT finished_at_ms, error, aborted FROM indexer_runs")
+        .get() as
+        | { finished_at_ms: number | null; error: string | null; aborted: number }
+        | undefined;
       expect(row?.finished_at_ms).not.toBeNull();
       expect(row?.error).toBe("reconcile threw");
+      // Finished is not completed: a thrown pass never read the corpus through,
+      // so it must not satisfy the readiness latch.
+      expect(row?.aborted).toBe(1);
+      const runs = await import("@/lib/db/indexerRuns");
+      expect(runs.getIndexBuildState(db)).toBe("building");
     } finally {
       spy.mockRestore();
       conn.closeDb();
