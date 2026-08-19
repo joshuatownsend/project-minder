@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.12.1] - 2026-08-18
+
+*A supply-chain release, and nothing else: no new surface, no behaviour you can see. Twenty of the twenty-three open Dependabot alerts close, and the framework pin that had been holding four of them open since v1.10.1 finally comes off.*
+
+*The pin is the story. v1.10.0 upgraded to Next 16.3.0, which miscompiled an `async` function so that a value it provably returned reached its caller as `undefined` — four routes 500'd and v1.10.1 pinned back. That workaround cost four `postcss` alerts, and the trade was recorded rather than hidden. 16.3.1 does not exhibit the defect, established by running the gate **in both directions**: 16.3.0 was rebuilt and reproduced all four failures with their exact signatures, then 16.3.1 passed ten cold boots across two runs. Only the second half is the good news; the first half is what makes it mean anything, since a probe that has never been shown to fail cannot distinguish a fixed framework from a blind harness — which is exactly how the original upgrade shipped broken through a gate that passed.*
+
+*Nobody found the root cause, so this is a result about one version rather than a reason to relax. The cold-boot gate still governs the next `next` bump, and the plan and TODO both say so in as many words.*
+
+*No re-index — `DERIVED_VERSION` is unchanged at 20. Upgrading from 1.12.0 is a restart.*
+
 ### Changed
 
 - **`next` un-pinned from `~16.2.12` to `~16.3.1`.** The pin was a workaround for a 16.3.0 defect that made `/api/usage`, `/api/stats`, `/api/skills` and `/api/sessions` return 500 on the first request after a cold boot — reliably enough to make all four pages unusable in practice, though a later request in the same warm process could succeed, which is exactly why the gate probes one cold boot per route: an `async` function in `src/lib/data/index.ts` returned an object that arrived at its caller as `undefined`. 16.3.1 does not exhibit it.
@@ -14,9 +24,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
   **The gate still governs future `next` bumps.** Nobody identified the root cause, so this is an empirical result about one version rather than a reason to trust the next one — and the two ways to make it go green while broken (a small index, or four probes after a single boot) are unchanged.
 
+- `eslint-config-next` follows `next` to `~16.3.1`. The two ship as a lockstep pair, so leaving it behind would have had lint validating against the previous release's rules while the app built against the new one.
+
 ### Security
 
-- **Closes the four `postcss` Dependabot alerts (#396)**, which the `next` pin had held open since v1.10.1 — the lockfile moves off `8.4.31` to `8.5.23` + `8.5.26`. The `sharp` alert is *not* closed and was never held by this pin: 16.3.1 does move Next's own `sharp` to `0.35.3`, but the vulnerable `0.34.5` reaches the tree through `@huggingface/transformers`.
+- **Sixteen alerts closed by refreshing vulnerable transitives** — `hono` 4.12.25 → **4.13.3** (7 alerts), `fast-uri` 3.1.2 → **3.1.5** (3), `ip-address` 10.2.0 → **10.5.0** (3), `@hono/node-server` 1.19.14 → **1.19.17**, `nanoid` 3.3.17 → **3.3.18**, and `body-parser` 2.2.2 → **2.3.0**.
+
+  The root cause was one line: a `pnpm.overrides` entry pinning `hono` to `4.12.25`, added to pin the tree *up* to a patched version, which had since expired into pinning it *below* one. It accounted for seven alerts by itself. **The override was removed rather than re-pinned higher** — a fresh exact pin would expire into causing the same problem on the next advisory, and the MCP SDK's own range (`^4.11.4`) already admits the patched release, so nothing needed to be forced. No package upgrades were required; the lockfile simply had to be allowed to move.
+
+  On exposure, honestly: nothing under `src/` imports `hono`, `express` or `body-parser` — the MCP SDK reaches them through transports this project does not use. `ajv` and `fast-uri` *are* live, so the JSON-RPC boundary was exercised against the rebuilt server with a real `initialize` handshake, which no unit test covers.
+
+- **Closes the four `postcss` alerts (#396)**, which the `next` pin had held open since v1.10.1 — the lockfile moves off `8.4.31` to `8.5.23` + `8.5.26`.
+
+  The `sharp` alert is **not** closed, and was never held by this pin — a correction to the earlier framing. 16.3.1 does move Next's own `sharp` to `0.35.3`, but the vulnerable `0.34.5` reaches the tree through `@huggingface/transformers`. Three alerts remain after this release: `sharp`, `glib` (in `Cargo.lock`), and `adm-zip` (via `onnxruntime-node`).
 
 ## [1.12.0] - 2026-08-18
 
