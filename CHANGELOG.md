@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- **`next` un-pinned from `~16.2.12` to `~16.3.1`.** The pin was a workaround for a 16.3.0 defect that made `/api/usage`, `/api/stats`, `/api/skills` and `/api/sessions` return 500 on every request: an `async` function in `src/lib/data/index.ts` returned an object that arrived at its caller as `undefined`. 16.3.1 does not exhibit it.
+- **`next` un-pinned from `~16.2.12` to `~16.3.1`.** The pin was a workaround for a 16.3.0 defect that made `/api/usage`, `/api/stats`, `/api/skills` and `/api/sessions` return 500 on the first request after a cold boot — reliably enough to make all four pages unusable in practice, though a later request in the same warm process could succeed, which is exactly why the gate probes one cold boot per route: an `async` function in `src/lib/data/index.ts` returned an object that arrived at its caller as `undefined`. 16.3.1 does not exhibit it.
 
   Verified by the four-cold-boot gate recorded on #432, run **in both directions on the same machine with only the framework version differing**. 16.3.0 reproduced all four failures with the exact TypeErrors on record; 16.3.1 returned 200 on all five routes across two independent runs — ten cold boots, zero TypeErrors, with real payloads rather than 200-shaped errors. The negative-control arm is the load-bearing half: running only the candidate version cannot distinguish "fixed" from "the harness cannot see the bug," which is precisely how the original upgrade passed its gate and shipped broken.
 

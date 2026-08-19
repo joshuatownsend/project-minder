@@ -128,9 +128,9 @@ Current distribution — this is the table to verify against:
 | W9 | Widen `SessionAdapter` full text; approval UI + phone view; token-usage rule fields; project-scope config drift; per-task `scheduleAtQuotaReset`; quota threshold in config; embed only semantic queries | 7 |
 | ~~W10~~ | ~~Endpoint spike; fetcher + disk sync; adapter; attribution; distribution stance~~ — **all 5 archived 2026-08-15, endpoints gone** | 0 |
 | W11 | Memory Observatory M.2 | 1 |
-| **W12** | `RootLayout` leaks `devRoot`; `/stats` cross-check leaks real totals; ~18 empty screens; `/adapters` + `/config` + `/plans` leak; `/analytics` never loads; Home's `0 projects` header | 6 |
-| Housekeeping | #432 re-test gate; #284 next experiment; `instrumentation` bypass; capture `worktrees.png`; extract export-filename helpers | 5 |
-| **Total** | | **21** |  *(27 at reconciliation; W10's 5 archived 2026-08-15; the `DERIVED_VERSION` gate archived 2026-08-18)*
+| **W12** | ~18 empty screens; finish triaging the API-route tail; build a synthetic tasks DB; `/analytics` never loads; Home's `0 projects` header | 5 |
+| Housekeeping | #284 next experiment; `instrumentation` bypass; capture `worktrees.png`; extract export-filename helpers; hot-files/file-coupling cache watermark (#454) | 5 |
+| **Total** | | **20** |  *(27 at reconciliation; W10's 5 archived 2026-08-15; the `DERIVED_VERSION` gate archived 2026-08-18; the #432 re-test gate archived 2026-08-18. The W12 and Housekeeping rows were also stale against `TODO.md` independently of those archivings — W12 still listed three demo-mode leak items shipped 2026-08-16, and Housekeeping omitted the #454 watermark item; both are corrected here, which is why the row totals moved by more than the one archived gate.)*
 
 *The cloud spike moved from W1 to W10 in this table. The 2026-08-08 version counted it under W1 as a parallel side-quest; it never ran there, and it gates only W10, so it is counted where it belongs.*
 
