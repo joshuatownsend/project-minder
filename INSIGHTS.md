@@ -1,5 +1,11 @@
 # Insights
 
+<!-- insight:174cff717d61 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T22:31:47.206Z -->
+## ★ Insight
+The durable result here isn't "16.3.1 works" — it's the *negative control*. The original 16.3.0 upgrade shipped broken through a gate that ran and passed, because nobody had shown that gate could fail. Running the known-bad version first converts an all-green result from an assumption into a measurement. That's the same discipline as mutating an implementation to confirm a test fails, applied to a framework bump instead of a unit test.
+
+---
+
 <!-- insight:febb16185866 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-18T19:12:38.182Z -->
 ## ★ Insight
 There's a subtle trap in building this harness. The gate says each route must be *the first request its process ever serves* — which means I cannot detect server readiness by polling it with an HTTP request, the obvious approach. That poll would itself be request #1, and the probe would land on an already-warm process, reproducing exactly the false-green the gate exists to prevent. Readiness has to come from parsing stdout instead.
