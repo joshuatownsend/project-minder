@@ -36,7 +36,8 @@ export interface OpenAssistantMessage {
   turnIndex: number;
   /** Every distinct text block so far, joined with a newline — re-sliced on merge. */
   text: string;
-  /** `tool_use_id`s already recorded, so an exact re-log is still dropped. */
+  /** Block keys already recorded, so an exact re-log is still dropped. `u:<tool_use_id>`
+   *  where the block has one, `b:<name>:<input>` where it does not. */
   toolUseIds: Set<string>;
   /** Text bodies already recorded, same purpose for prose. */
   textKeys: Set<string>;
@@ -97,6 +98,23 @@ export function buildToolCalls(
   });
 }
 
+/**
+ * Serialise a tool block's input for use in a dedupe key.
+ *
+ * Only reached for blocks with no `tool_use_id`. Unserialisable input (circular
+ * refs) yields a sentinel rather than throwing: two such blocks then collapse
+ * into one, which matches what the message-level guard did before block-level
+ * dedupe existed, and is the safer direction — over-counting a tool call is the
+ * failure this whole guard exists to prevent.
+ */
+function stableInput(input: unknown): string {
+  try {
+    return JSON.stringify(input ?? {}) ?? "";
+  } catch {
+    return "<unserialisable>";
+  }
+}
+
 /** Open a message's state from its FIRST line, seeding the block-level guards. */
 export function openAssistantMessage(
   turnIndex: number,
@@ -115,8 +133,10 @@ export function openAssistantMessage(
     if (b?.type === "text" && typeof b.text === "string" && b.text) {
       open.textKeys.add(b.text);
       open.text = open.text ? `${open.text}\n${b.text}` : b.text;
-    } else if (b?.type === "tool_use" && typeof b.id === "string") {
-      open.toolUseIds.add(b.id);
+    } else if (b?.type === "tool_use") {
+      open.toolUseIds.add(
+        typeof b.id === "string" ? `u:${b.id}` : `b:${b.name ?? ""}:${stableInput(b.input)}`
+      );
     }
   }
   return open;
@@ -148,11 +168,18 @@ export function mergeAssistantContinuation(
     } else if (b?.type === "tool_use") {
       // The re-log this guard was written for repeats its `tool_use_id`. This
       // is where its real job survives the union.
-      const id = typeof b.id === "string" ? b.id : null;
-      if (id) {
-        if (open.toolUseIds.has(id)) continue;
-        open.toolUseIds.add(id);
-      }
+      //
+      // An id-less `tool_use` is a shape this module explicitly accepts —
+      // `buildToolCalls` normalises a missing `name` to "unknown" — and with no
+      // key it had no dedupe at all, so a re-log appended the block again and
+      // inflated tool counts in BOTH parser loops. That is strictly worse than
+      // the message-level guard it replaced, which discarded the repeat. Fall
+      // back to the block body, exactly as `exportReader.blockKey` already did.
+      // (Codex, PR #468.)
+      const key =
+        typeof b.id === "string" ? `u:${b.id}` : `b:${b.name ?? ""}:${stableInput(b.input)}`;
+      if (open.toolUseIds.has(key)) continue;
+      open.toolUseIds.add(key);
       newTools.push(b);
     }
   }

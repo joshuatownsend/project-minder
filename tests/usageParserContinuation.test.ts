@@ -101,6 +101,36 @@ describe("parseSessionTurns — multi-line assistant messages (#453)", () => {
     );
   });
 
+  it("still drops a re-logged tool block that carries no id", async () => {
+    // Codex, PR #468. An id-less `tool_use` is a shape this module accepts —
+    // `buildToolCalls` normalises a missing `name` to "unknown" — but with no
+    // key it had no dedupe at all, so a re-log appended the block again. That is
+    // strictly worse than the message-level guard it replaced, which discarded
+    // the repeat outright.
+    await withSession(
+      [
+        assistantLine("msg_a", "2026-08-19T10:00:00Z", [{ type: "text", text: "on it" }]),
+        assistantLine("msg_a", "2026-08-19T10:00:01Z", [
+          { type: "tool_use", name: "Edit", input: { file_path: "a.ts" } },
+        ]),
+        // Byte-identical re-emission, still with no id.
+        assistantLine("msg_a", "2026-08-19T10:00:02Z", [
+          { type: "tool_use", name: "Edit", input: { file_path: "a.ts" } },
+        ]),
+        // Same tool, DIFFERENT input — a real second call, not a re-log.
+        assistantLine("msg_a", "2026-08-19T10:00:03Z", [
+          { type: "tool_use", name: "Edit", input: { file_path: "b.ts" } },
+        ]),
+      ],
+      async (file) => {
+        const turns = await parseSessionTurns(file, "C--dev-proj");
+        const calls = turns[0].toolCalls;
+        expect(calls).toHaveLength(2);
+        expect(calls.map((t) => t.arguments?.file_path)).toEqual(["a.ts", "b.ts"]);
+      }
+    );
+  });
+
   it("merges prose across lines and drops a repeated text block", async () => {
     await withSession(
       [
