@@ -258,17 +258,19 @@ export async function readJsonlMessages(filePath: string): Promise<JsonlReadResu
         continue;
       }
 
-      // Keep counting past the cap rather than breaking: the whole point is
-      // to be able to say HOW MANY messages were left out, and `break` threw
-      // that number away.
-      if (capped) {
-        if (entryToMessage(entry, toolNames)) unread++;
-        continue;
-      }
-
       const identity = entry.type === "assistant" ? entry.message?.id ?? entry.requestId : undefined;
       const open = identity ? openAssistant.get(identity) : undefined;
 
+      // Resolve open identities BEFORE the cap, so a message we chose to keep
+      // is never left half-read.
+      //
+      // The cap counts MESSAGES, and a continuation is not one — it is more of
+      // a message already inside the cap. With the cap checked first, a split
+      // message whose first line happened to be the 20,000th would keep that
+      // line and route its remaining lines through the unread branch: the
+      // retained message silently loses its tool calls, and each dropped block
+      // inflates `unread` as though it were a separate message. Both numbers
+      // then misdescribe the export in the same direction. (Codex, PR #468.)
       if (open) {
         // Continuation (or re-log) of a message already emitted. Fold in only
         // the blocks it does not already have; if that is none, it really was
@@ -283,6 +285,14 @@ export async function readJsonlMessages(filePath: string): Promise<JsonlReadResu
           added++;
         }
         if (added === 0) duplicates++;
+        continue;
+      }
+
+      // Keep counting past the cap rather than breaking: the whole point is
+      // to be able to say HOW MANY messages were left out, and `break` threw
+      // that number away.
+      if (capped) {
+        if (entryToMessage(entry, toolNames)) unread++;
         continue;
       }
 
