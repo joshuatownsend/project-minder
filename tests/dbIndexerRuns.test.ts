@@ -203,6 +203,33 @@ describe.skipIf(!driverAvailable)("indexer run tracking (#470)", () => {
     }
   }, 60_000);
 
+  it("lets a later sweep establish readiness after an aborted initial pass", async () => {
+    // Copilot, #471 — the second half of Codex's P1, which the first fix missed.
+    // The initial reconcile does not retry, and sweeps normally record nothing,
+    // so an aborted initial pass would leave readiness latched off FOREVER: the
+    // engagement report 503'ing permanently on an index that sweeps had long
+    // since populated. A fix for a wrong number becoming a standing outage.
+    const { conn, db, runs } = await freshDb();
+    try {
+      // The initial pass dies mid-run and the next startup closes it.
+      runs.beginIndexerRun(db, "reconcile");
+      runs.closeOrphanedIndexerRuns(db);
+      expect(runs.getIndexBuildState(db)).toBe("building");
+
+      // A sweep in that state records, because nothing else can clear the latch.
+      expect(runs.recordOptionForSweep(db)).toEqual({ recordRun: "reconcile" });
+      const id = runs.beginIndexerRun(db, "reconcile");
+      runs.finishIndexerRun(db, id, { filesSeen: 40 });
+      expect(runs.getIndexBuildState(db)).toBe("ready");
+
+      // ...and stops recording immediately after, so the steady state is still
+      // zero rows per sweep rather than one every 30 seconds forever.
+      expect(runs.recordOptionForSweep(db)).toEqual({});
+    } finally {
+      conn.closeDb();
+    }
+  });
+
   it("does not gate when it cannot read its own evidence", async () => {
     // A readiness check that fails closed converts a schema problem into a
     // silent outage of a working report. It fails open instead.

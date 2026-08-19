@@ -160,6 +160,28 @@ export function hasCompletedFullReconcile(db: DatabaseT.Database): boolean {
 }
 
 /**
+ * What a 30 s SWEEP pass should record, if anything.
+ *
+ * Sweeps normally record nothing — they run forever, and a row every half
+ * minute is noise. But if the initial pass aborted (it threw, or the process
+ * died) then nothing else will ever establish readiness: the initial reconcile
+ * does not retry, and an unrecorded sweep cannot clear the latch. The engagement
+ * report would then 503 **permanently** on an index that sweeps had long since
+ * populated — a fix for a wrong number turning into a standing outage, which is
+ * the same trap migration 26 exists to avoid. (Copilot, PR #471; the second half
+ * of Codex's P1, which said to let a later successful sweep establish readiness
+ * and which the first fix did not implement.)
+ *
+ * Self-limiting: recording stops as soon as one non-aborted pass exists, so the
+ * steady state is still zero rows per sweep.
+ */
+export function recordOptionForSweep(
+  db: DatabaseT.Database
+): { recordRun?: IndexerRunKind } {
+  return hasCompletedFullReconcile(db) ? {} : { recordRun: "reconcile" };
+}
+
+/**
  * `'building'` until the index has completed its first full pass.
  *
  * Deliberately NOT "a reconcile is running right now". The 30 s sweep re-runs

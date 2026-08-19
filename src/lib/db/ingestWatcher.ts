@@ -11,7 +11,7 @@ import {
 } from "./ingest";
 import { getDb, getDbSync } from "./connection";
 import { isShuttingDown } from "@/lib/lifecycle";
-import { closeOrphanedIndexerRuns } from "./indexerRuns";
+import { closeOrphanedIndexerRuns, recordOptionForSweep } from "./indexerRuns";
 
 // chokidar-driven incremental ingest.
 //
@@ -630,10 +630,14 @@ function startSweep(state: WatcherState): void {
       if (state.initialReconcileInFlight) return;
       const db = getDbSync() ?? (await getDb());
       if (db) {
-        await reconcileAllSessions(
-          db,
-          state.explicitProjectsDir ? { projectsDir: state.projectsDir } : {}
-        );
+        await reconcileAllSessions(db, {
+          ...(state.explicitProjectsDir ? { projectsDir: state.projectsDir } : {}),
+          // #471: normally records nothing. Records only while no completed pass
+          // exists, so an aborted initial reconcile cannot leave readiness
+          // latched off forever with the engagement report 503'ing on an index
+          // that sweeps have since populated.
+          ...recordOptionForSweep(db),
+        });
       }
     } catch (err) {
       state.errors++;
