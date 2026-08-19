@@ -32,6 +32,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Per-turn context attribution counts thinking, prose and tool inputs that arrive on continuation lines** (#453). Under the same defect those bytes were dropped and then reported as `unattributedTokens` — the panel said "we cannot explain this part of your window" about content it had discarded. Affects both backends, since the report walks raw JSONL directly.
 
+  `attributedAtPeak` is now derived from turn order at segment close rather than snapshotted the instant the peak was measured. A continuation can arrive long after its own first line — ingest measured gaps up to 3,639 lines — and if it lands after a *later* turn set the peak, its bytes still belong to a turn that preceded that peak, so they were in the window the peak measured. The live snapshot omitted them: on a fixture with one 8,000-byte tool input, `attributedAtPeak` read **2** where it should read **2,005**, with the whole difference landing in `unattributedTokens`. Where a line happens to sit in the file no longer changes the answer.
+
 - **A `Skill` call split onto a continuation line is attributed to its own prompt.** The slash-command window is latched when a message opens rather than read live at merge time; a continuation can arrive after later user turns, and reading the cursor then would file the call as `auto` or, worse, credit it to an unrelated later slash command. Same defect Codex and Copilot caught on the ingest path in PR #427, avoided here rather than re-introduced in miniature.
 
   No `DERIVED_VERSION` bump: the index is untouched. This brings the file path *to* it.

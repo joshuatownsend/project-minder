@@ -298,15 +298,37 @@ export function attributeContext(
   let segmentTotals = emptyCategoryTokens();
   let segmentStart = 0;
   let segmentPeak: number | null = null;
-  // Cumulative attributed tokens at the moment `segmentPeak` was observed,
-  // excluding the peak turn's own output. See `unattributedTokens`.
-  let segmentAttributedAtPeak: number | null = null;
+  /**
+   * Which turn measured `segmentPeak` — not the byte total at that instant.
+   *
+   * `attributedAtPeak` is derived from this at segment close instead of being
+   * snapshotted live, because a detached continuation can merge bytes into an
+   * EARLIER turn after a later turn has already set the peak. Those bytes were
+   * part of the window fed to the peak turn — they belong to a turn that
+   * preceded it — so a live snapshot omits them and inflates
+   * `unattributedTokens` by exactly that amount. Deriving from turn order is
+   * immune to when the line carrying them happened to arrive. (Codex, PR #468.)
+   *
+   * Safe to defer: a continuation is only merged while its segment is still the
+   * open one, so every turn in a closed segment is final. Same set of turns the
+   * live snapshot covered — `[segmentStart, peakTurn)` — just totalled later.
+   */
+  let segmentPeakTurn: number | null = null;
   let pendingCompaction = false;
   let turnIndex = 0;
 
   const closeSegment = (endTurn: number) => {
     const attributedTotal = sum(segmentTotals);
-    const atPeak = segmentAttributedAtPeak;
+    let atPeak: number | null = null;
+    if (segmentPeakTurn !== null) {
+      atPeak = 0;
+      // Every turn of this segment BEFORE the peak turn; the peak turn's own
+      // reply, thinking and tool calls are output, not part of the input window
+      // that produced its measurement.
+      for (let i = segmentStart; i < segmentPeakTurn; i++) {
+        atPeak += turns[i]?.addedTotal ?? 0;
+      }
+    }
     segments.push({
       index: segments.length,
       startTurn: segmentStart,
@@ -322,7 +344,7 @@ export function attributeContext(
     });
     segmentTotals = emptyCategoryTokens();
     segmentPeak = null;
-    segmentAttributedAtPeak = null;
+    segmentPeakTurn = null;
     segmentStart = endTurn + 1;
   };
 
@@ -456,10 +478,13 @@ export function attributeContext(
     if (measuredContextTokens !== null) {
       if (segmentPeak === null || measuredContextTokens > segmentPeak) {
         segmentPeak = measuredContextTokens;
-        // Snapshot BEFORE `addInto` below: this turn's own reply, thinking,
-        // and tool calls are output, not part of the input window that
-        // produced `measuredContextTokens`.
-        segmentAttributedAtPeak = sum(segmentTotals);
+        // Record WHICH turn, not the running total. `closeSegment` totals the
+        // turns before this one at close time, so bytes a detached continuation
+        // folds into an earlier turn later still land on the correct side of
+        // the measurement. This turn's own reply, thinking and tool calls stay
+        // excluded — they are output, not part of the window that produced
+        // `measuredContextTokens`.
+        segmentPeakTurn = turnIndex;
       }
     }
 

@@ -281,6 +281,60 @@ describe("attributeContext — multi-line messages (#453)", () => {
     expect(twice.turns[0].addedTotal).toBe(once.turns[0].addedTotal);
   });
 
+  it("counts a detached continuation's bytes against the later peak that saw them", async () => {
+    // Codex, PR #468. A continuation can arrive long after its own first line —
+    // ingest measured gaps up to 3,639 lines. If it lands after a LATER turn
+    // has set the segment peak, its bytes still belong to a turn that preceded
+    // that peak, so they were in the window the peak measured. Snapshotting the
+    // running total when the peak was seen omits them and inflates
+    // `unattributedTokens` by exactly that amount; deriving from turn order at
+    // segment close does not care when the line showed up.
+    const body = "y".repeat(8000);
+    const detached = attributeContext("s1", [
+      entry("msg_a", "2026-08-19T10:00:00Z", [{ type: "text", text: "starting" }]),
+      // A later turn, and the one that measures the peak window.
+      {
+        ...entry("msg_b", "2026-08-19T10:00:05Z", [{ type: "text", text: "second" }]),
+        message: {
+          id: "msg_b",
+          model: MODEL,
+          usage: { input_tokens: 90000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+          content: [{ type: "text", text: "second" }],
+        },
+      },
+      // ...and only NOW the rest of msg_a arrives.
+      entry("msg_a", "2026-08-19T10:00:09Z", [
+        { type: "tool_use", id: "tu_1", name: "Edit", input: { body } },
+      ]),
+    ] as any);
+
+    // Same content, same order of turns, but the continuation adjacent to its
+    // own first line — the arrangement whose numbers are not in dispute.
+    const adjacent = attributeContext("s1", [
+      entry("msg_a", "2026-08-19T10:00:00Z", [{ type: "text", text: "starting" }]),
+      entry("msg_a", "2026-08-19T10:00:01Z", [
+        { type: "tool_use", id: "tu_1", name: "Edit", input: { body } },
+      ]),
+      {
+        ...entry("msg_b", "2026-08-19T10:00:05Z", [{ type: "text", text: "second" }]),
+        message: {
+          id: "msg_b",
+          model: MODEL,
+          usage: { input_tokens: 90000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+          content: [{ type: "text", text: "second" }],
+        },
+      },
+    ] as any);
+
+    // Where the line happened to sit in the file must not change the answer.
+    expect(detached.segments[0].attributedAtPeak).toBe(adjacent.segments[0].attributedAtPeak);
+    expect(detached.segments[0].unattributedTokens).toBe(
+      adjacent.segments[0].unattributedTokens
+    );
+    // And the tool input really is on the counted side of the measurement.
+    expect(detached.segments[0].attributedAtPeak).toBeGreaterThan(1000);
+  });
+
   it("keeps segment totals in step with the turn it merged into", async () => {
     const report = attributeContext("s1", [
       entry("msg_a", "2026-08-19T10:00:00Z", [{ type: "text", text: "a".repeat(1000) }]),
