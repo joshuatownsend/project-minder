@@ -440,6 +440,39 @@ describe("attributeContext — multi-line messages (#453)", () => {
     expect(seg.unattributedTokens).toBe(90000 - seg.attributedAtPeak!);
   });
 
+  it("does not re-count an id-less tool block in attribution either", async () => {
+    // Codex, PR #468. Third implementation of block-level dedupe in this PR and
+    // the third place the id-less shape had to be handled. Guarding only on
+    // `raw.id` left a genuine re-log adding its input again to the turn AND to
+    // the segment, inflating `toolInput` and `attributedTotal`.
+    const body = "y".repeat(4000);
+    const block = { type: "tool_use", name: "Edit", input: { body } };
+    const once = attributeContext("s1", [
+      entry("msg_a", "2026-08-19T10:00:00Z", [{ type: "text", text: "on it" }]),
+      entry("msg_a", "2026-08-19T10:00:01Z", [block]),
+    ] as any);
+    const twice = attributeContext("s1", [
+      entry("msg_a", "2026-08-19T10:00:00Z", [{ type: "text", text: "on it" }]),
+      entry("msg_a", "2026-08-19T10:00:01Z", [block]),
+      entry("msg_a", "2026-08-19T10:00:02Z", [block]),
+    ] as any);
+
+    expect(twice.turns[0].added.toolInput).toBe(once.turns[0].added.toolInput);
+    expect(twice.attributedTotal).toBe(once.attributedTotal);
+
+    // ...but a different input is a real second call and must still be counted.
+    const distinct = attributeContext("s1", [
+      entry("msg_a", "2026-08-19T10:00:00Z", [{ type: "text", text: "on it" }]),
+      entry("msg_a", "2026-08-19T10:00:01Z", [block]),
+      entry("msg_a", "2026-08-19T10:00:02Z", [
+        { type: "tool_use", name: "Edit", input: { body: "z".repeat(4000) } },
+      ]),
+    ] as any);
+    expect(distinct.turns[0].added.toolInput).toBeGreaterThan(
+      once.turns[0].added.toolInput
+    );
+  });
+
   it("keeps segment totals in step with the turn it merged into", async () => {
     const report = attributeContext("s1", [
       entry("msg_a", "2026-08-19T10:00:00Z", [{ type: "text", text: "a".repeat(1000) }]),

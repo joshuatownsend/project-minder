@@ -420,17 +420,33 @@ export function attributeContext(
           break;
         }
         case "tool_use": {
-          if (guards && typeof raw.id === "string") {
-            if (guards.toolUseIds.has(raw.id)) break;
-            guards.toolUseIds.add(raw.id);
-          }
+          // Serialised once and reused as both the dedupe key and the measured
+          // payload, so the two cannot disagree about what this block is.
+          let serialised: string | null = null;
           try {
-            added.toolInput += bytes(JSON.stringify(raw.input ?? {}));
+            serialised = JSON.stringify(raw.input ?? {}) ?? "{}";
           } catch {
             // Circular / unserializable input — skip rather than throw.
             // Under-counting one block is strictly better than failing
             // the whole report.
           }
+          if (guards) {
+            // An id-less `tool_use` is a supported shape, and guarding only on
+            // `raw.id` left it with no dedupe at all — so a genuine re-log
+            // added its input again to the turn AND to `segmentTotals`,
+            // inflating `toolInput`, `attributedTotal` and potentially
+            // `attributedAtPeak`. Third implementation of this dedupe in the
+            // PR and the third place the id-less case had to be handled;
+            // matches the fallback key `assistantContinuation` and
+            // `exportReader` use. (Codex, PR #468.)
+            const key =
+              typeof raw.id === "string"
+                ? `u:${raw.id}`
+                : `b:${typeof raw.name === "string" ? raw.name : ""}:${serialised ?? "<unserialisable>"}`;
+            if (guards.toolUseIds.has(key)) break;
+            guards.toolUseIds.add(key);
+          }
+          if (serialised !== null) added.toolInput += bytes(serialised);
           break;
         }
         case "tool_result": {
