@@ -199,6 +199,23 @@ async function registerIngestDisposer(): Promise<void> {
         import("@/lib/db/workerHost"),
         import("@/lib/db/ingestWatcher"),
       ]);
+      // DRAIN a detached start before stopping. Since #413 the watcher is
+      // launched fire-and-forget, so shutdown can arrive while it is still
+      // between `await initDb()` and publishing its globalThis handle. In that
+      // window `stopIngestWatcher()` sees nothing and returns, SQLite closes
+      // behind it, and the start then arms a watcher and begins reconciling
+      // against a closed database. Waiting for the start to settle makes it
+      // stoppable by the line below. (Codex, PR #469.)
+      //
+      // Bounded: a start can sit in chokidar's `ready` handshake for ~30 s, and
+      // shutdown must not inherit that. On timeout we stop anyway — the
+      // `isShuttingDown()` gates in `startInProcessWatcher` and inside
+      // `startIngestWatcher` are what make a late-completing start harmless, so
+      // the drain is the fast path rather than the only line of defence.
+      await Promise.race([
+        globalForWatcherStart.__minderWatcherStartInFlight ?? Promise.resolve(),
+        new Promise<void>((r) => setTimeout(r, WATCHER_DRAIN_TIMEOUT_MS)),
+      ]);
       await stopWorker();
       await stopIngestWatcher();
     });
@@ -249,6 +266,13 @@ const globalForWatcherStart = globalThis as unknown as {
   __minderWatcherStartInFlight?: Promise<void>;
 };
 
+/**
+ * How long shutdown will wait for a detached watcher start to settle before
+ * stopping anyway. Short on purpose: the correctness guarantee is the
+ * `isShuttingDown()` gate, not this wait.
+ */
+const WATCHER_DRAIN_TIMEOUT_MS = 2_000;
+
 function startInProcessWatcher(): Promise<void> {
   const existing = globalForWatcherStart.__minderWatcherStartInFlight;
   if (existing) return existing;
@@ -266,6 +290,17 @@ function startInProcessWatcher(): Promise<void> {
 async function doStartInProcessWatcher(): Promise<void> {
   try {
     const { startIngestWatcher } = await import("@/lib/db/ingestWatcher");
+    // Same gate `runBootstrap()` applies to every one of its boot steps: if a
+    // signal arrived while this detached start was still importing, do not go
+    // on to open fs.watch handles and a reconcile writer that the disposers
+    // have already run past. Checked AFTER the import, which is the await most
+    // likely to straddle the signal.
+    const { isShuttingDown } = await import("@/lib/lifecycle");
+    if (isShuttingDown()) {
+      // eslint-disable-next-line no-console
+      console.info("[ingest-watcher] shutdown in progress; not starting.");
+      return;
+    }
     // Pass `bypassEnvFlag: true` because we only reach this function
     // after the parent `instrumentation.ts` runtime/test gate passes
     // AND `startIngest()` above has handled the `MINDER_INDEXER*` mode

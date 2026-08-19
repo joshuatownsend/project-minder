@@ -39,6 +39,13 @@ vi.mock("@/lib/bootstrap", () => ({
 }));
 vi.mock("@/lib/tasks/dispatcher", () => ({ initDispatcher: vi.fn() }));
 
+/** Drives the `isShuttingDown()` gate the detached start consults. */
+let shuttingDown = false;
+vi.mock("@/lib/lifecycle", () => ({
+  isShuttingDown: () => shuttingDown,
+  onShutdown: vi.fn(),
+}));
+
 /** Poll until the watcher has been asked to start (it is no longer awaited). */
 async function waitForWatcherCall(timeoutMs = 5000): Promise<WatcherOpts> {
   const deadline = Date.now() + timeoutMs;
@@ -70,6 +77,7 @@ describe("startIngest — ingest startup must not block register() (#413)", () =
     delete process.env.MINDER_INDEXER_WORKER;
     delete process.env.MINDER_PACKAGED;
     watcherGate = Promise.resolve();
+    shuttingDown = false;
     // The serialization guard is a globalThis singleton (it has to survive HMR),
     // so a test that leaves a start hanging would otherwise hand the same stuck
     // promise to every test after it.
@@ -169,6 +177,20 @@ describe("startIngest — ingest startup must not block register() (#413)", () =
       await new Promise((r) => setTimeout(r, 10));
     }
     expect(startIngestWatcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not arm a watcher when shutdown began during the detached start", async () => {
+    // Codex, #469. Since the start is fire-and-forget, shutdown can land while
+    // it is still between `initDb()` and publishing its globalThis handle. The
+    // disposer's `stopIngestWatcher()` finds nothing, SQLite closes behind it,
+    // and the start then arms a watcher and reconciles into a closed database.
+    // `runBootstrap()` gates every one of its boot steps on `isShuttingDown()`
+    // for exactly this reason; the detached path had no equivalent.
+    shuttingDown = true;
+    const { startIngest } = await import("../instrumentation-node");
+    await startIngest();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(startIngestWatcher).not.toHaveBeenCalled();
   });
 
   it("starts no watcher at all when MINDER_INDEXER=0", async () => {
