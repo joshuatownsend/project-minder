@@ -245,6 +245,28 @@ describe.skipIf(!driverAvailable)("data façade — half-built index gates (#472
     }
   });
 
+  it("still falls back for a Claude-scoped request when adapter sessions exist", async () => {
+    // The corpus that matters is the one the request asks for, not the one on
+    // disk. `generateUsageReport` applies the same `source` filter the SQL path
+    // does, so a Claude-scoped question is fully answerable from file-parse
+    // however many Codex transcripts sit beside it — and refusing to divert
+    // would hand back the partial SQL answer for hours over a corpus that was
+    // never part of the question. (Codex P1, PR #474.)
+    const { facade, conn } = await seedBuilding();
+    const spies = await mockDiscoverableCodexSession();
+    try {
+      expect((await facade.getUsage("all", undefined, "claude")).meta.backend).toBe("file");
+      // Unscoped still asks about everything, and so still declines.
+      expect((await facade.getUsage("all", undefined)).meta.backend).toBe("db");
+      // And a request scoped to the source file-parse cannot see must never
+      // divert: it would answer "no Codex usage" rather than "some Codex usage".
+      expect((await facade.getUsage("all", undefined, "codex")).meta.backend).toBe("db");
+    } finally {
+      spies();
+      conn.closeDb();
+    }
+  });
+
   it("still degrades the comparison for an adapter install, which needs no corpus", async () => {
     // The trap in the fix above. `getUsageCompare` degrades to "not comparable"
     // rather than falling back, so the adapter question does not arise for it —

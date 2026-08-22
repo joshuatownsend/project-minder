@@ -59,8 +59,10 @@ function getFileCache(): FileCache<UsageTurn[]> {
     // smaller and quietly stopped working once it was passed.
     //
     // It does cost memory, and the trade is deliberate. `retainOnly(liveSet)`
-    // evicts only files that have been DELETED, so steady-state residency is
-    // min(corpus, maxEntries) — which means raising the cap raises residency
+    // evicts any path absent from the sweep's live set — deleted, unreadable,
+    // or dropped by a config change such as a removed Claude home — so it never
+    // trims a file that is still being read. Steady-state residency is
+    // therefore min(corpus, maxEntries), which means raising the cap raises it
     // for every corpus above the old one, roughly +6% here (5,000 -> 5,286
     // entries) and up to 5x on a 25,000-session corpus. What is bought is the
     // 22x above. Memory proportional to corpus, against a CPU cost that is not

@@ -611,13 +611,33 @@ async function checkV3Gate(scope: string, db: DbHandle): Promise<boolean> {
  * as "does not cover" — if we cannot tell what is out there, we must not claim
  * to have read all of it.
  */
-async function fileParseCoversCorpus(): Promise<boolean> {
+async function fileParseCoversCorpus(source?: string): Promise<boolean> {
+  // A request already scoped to Claude is fully covered whatever else exists —
+  // `generateUsageReport` applies the same filter, so the adapter corpus is not
+  // part of the answer being asked for. And a request scoped to a non-Claude
+  // source is covered by nothing: file-parse would return empty, which is worse
+  // than the partial SQL result, so it must never divert. Only an unscoped
+  // request has to ask what is out there. (Codex P1, PR #474.)
+  //
+  // Deliberately source-only, though the finding also named the `home` filter.
+  // Whether an adapter session can carry a home — and what a home filter means
+  // for one — is not settled in `loadUsageReportFromSql`, and guessing at it
+  // would trade a verified narrowing for an unverified one.
+  if (source) return source === "claude";
   const cfg = await readConfig();
   if ((cfg.enabledAdapters ?? ["claude"]).every((id) => id === "claude")) return true;
   try {
     const { discoverAllSessions } = await import("@/lib/adapters");
-    const found = await discoverAllSessions(cfg);
-    return !found.some((f) => f.source !== "claude");
+    // Non-Claude adapters ONLY. `discoverAllSessions(cfg)` runs every enabled
+    // adapter's `discover()`, and Claude's walks every home's projects tree —
+    // so passing the config unfiltered would sweep the whole Claude corpus to
+    // answer a question exclusively about the other adapters, and then sweep it
+    // again in the file-parse fallback this is gating into. (Copilot, PR #474.)
+    const found = await discoverAllSessions({
+      ...cfg,
+      enabledAdapters: (cfg.enabledAdapters ?? []).filter((id) => id !== "claude"),
+    });
+    return found.length === 0;
   } catch {
     return false;
   }
@@ -626,6 +646,19 @@ async function fileParseCoversCorpus(): Promise<boolean> {
 /**
  * The build-state gate for the five loaders that answer from a corpus.
  *
+ * **Covers the first build, not a re-derivation.** `getIndexBuildState` is a
+ * lifetime latch, so a `DERIVED_VERSION` rebuild — which rewrites rows one file
+ * at a time and can therefore mix old and new derived values across an
+ * aggregate for the length of the rebuild — reads as "ready" here. That is a
+ * real defect and these five loaders do read derived columns, which is exactly
+ * the case `getIndexBuildState`'s own docstring warns off this predicate. It is
+ * also unchanged by #472: before it, `getUsage` had no gate at all and the rest
+ * had zero-rows gates, so a rebuild served mixed rows then too. Fixing it needs
+ * either an indexed staleness probe (an unindexed one measures 24 ms per
+ * request on a 6,600-session index) or a writer for the `'rebuild'` run kind
+ * that has never been written — a feature either way, tracked separately rather
+ * than folded into a review round. (Codex P1, PR #474.)
+ *
  * Composed rather than folded into `checkBuildStateGate`, because
  * `getUsageCompare` must keep gating unconditionally: it degrades to
  * "not comparable" rather than falling back, so it needs no corpus and the
@@ -633,9 +666,13 @@ async function fileParseCoversCorpus(): Promise<boolean> {
  * would silently return adapter users to comparing two DB subsets — the exact
  * defect, reintroduced by the fix for the defect.
  */
-async function checkBuildStateFallback(scope: string, db: DbHandle): Promise<boolean> {
+async function checkBuildStateFallback(
+  scope: string,
+  db: DbHandle,
+  source?: string
+): Promise<boolean> {
   if (!checkBuildStateGate(scope, db)) return false;
-  if (await fileParseCoversCorpus()) return true;
+  if (await fileParseCoversCorpus(source)) return true;
   warnOnce(
     `${scope}:adapters-enabled`,
     `[data] ${scope}: index still building, but a non-Claude adapter is enabled and ` +
@@ -709,7 +746,7 @@ export async function getUsage(
   // token/cost total as `backend: "db"` with nothing to distinguish it from a
   // complete one. The other sites under-reported in a window; this reported a
   // number that was simply wrong.
-  if (await checkBuildStateFallback("getUsage", db)) {
+  if (await checkBuildStateFallback("getUsage", db, source)) {
     return runFileUsage(period, project, source, home);
   }
   const report = await callDbLoader("getUsage", () =>
@@ -758,7 +795,8 @@ export async function getEngagement(
   // sweep re-runs the same reconcile forever, so the live reading would flap
   // the report in and out of availability every half minute. See
   // `getIndexBuildState` for why a DERIVED_VERSION rebuild correctly does not
-  // gate this consumer.
+  // gate this consumer: it reads only raw columns, which the five loaders in
+  // `checkBuildStateFallback` do NOT.
   if (getIndexBuildState(db) === "building") {
     throw new DbUnavailableError(
       "index-building",
