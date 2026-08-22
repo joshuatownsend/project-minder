@@ -145,7 +145,9 @@ async function seedBuilding() {
  * the file-parse fallback would silently drop a whole source. Returns a
  * restore function.
  */
-async function mockDiscoverableCodexSession(): Promise<() => void> {
+async function mockDiscoverableCodexSession(
+  projectDirName = "codexproj"
+): Promise<() => void> {
   const configMod = await import("@/lib/config");
   const adaptersMod = await import("@/lib/adapters");
   const base = await configMod.readConfig();
@@ -153,7 +155,7 @@ async function mockDiscoverableCodexSession(): Promise<() => void> {
     .spyOn(configMod, "readConfig")
     .mockResolvedValue({ ...base, enabledAdapters: ["claude", "codex"] });
   const discSpy = vi.spyOn(adaptersMod, "discoverAllSessions").mockResolvedValue([
-    { source: "codex", filePath: path.join(tmpHome, "codex", "s1.jsonl"), projectDirName: "codexproj" },
+    { source: "codex", filePath: path.join(tmpHome, "codex", "s1.jsonl"), projectDirName },
   ]);
   return () => {
     cfgSpy.mockRestore();
@@ -263,6 +265,40 @@ describe.skipIf(!driverAvailable)("data façade — half-built index gates (#472
       expect((await facade.getUsage("all", undefined, "codex")).meta.backend).toBe("db");
     } finally {
       spies();
+      conn.closeDb();
+    }
+  });
+
+  it("still falls back for a project whose adapter sessions are elsewhere", async () => {
+    // Same rule as the source filter, one axis over: the corpus that matters is
+    // the one the request asks for. A Codex session in another project is not
+    // part of a project-scoped answer, and suppressing the fallback over it hands
+    // back a partial SQL result for hours about a project file-parse covers in
+    // full.
+    //
+    // Safe to honour because the mapping is exact by construction —
+    // `toSlug(canonicalizeDirName(projectDirName))` is how ingest derives
+    // `sessions.project_slug`, which is the column `loadUsageReportFromSql`
+    // filters on. (Codex P1, PR #474.)
+    const { facade, conn } = await seedBuilding();
+    const { toSlug } = await import("@/lib/scanner/claudeConversations");
+    const requested = toSlug("C--dev-app-x");
+    let restore = await mockDiscoverableCodexSession("C--dev-somewhere-else");
+    try {
+      expect((await facade.getUsage("all", requested)).meta.backend).toBe("file");
+      // Unscoped still asks about the whole corpus, and still declines.
+      expect((await facade.getUsage("all", undefined)).meta.backend).toBe("db");
+    } finally {
+      restore();
+    }
+
+    // And when the adapter session IS in the requested project, it is part of
+    // the answer — so the fallback must not divert and drop it.
+    restore = await mockDiscoverableCodexSession("C--dev-app-x");
+    try {
+      expect((await facade.getUsage("all", requested)).meta.backend).toBe("db");
+    } finally {
+      restore();
       conn.closeDb();
     }
   });

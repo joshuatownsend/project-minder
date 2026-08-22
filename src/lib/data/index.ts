@@ -1,7 +1,7 @@
 import "server-only";
 import { generateUsageReport, augmentPortfolioYield } from "@/lib/usage/aggregator";
-import { getJsonlMaxMtime } from "@/lib/usage/parser";
-import { scanAllSessions, scanSessionDetail } from "@/lib/scanner/claudeConversations";
+import { getJsonlMaxMtime, canonicalizeDirName } from "@/lib/usage/parser";
+import { scanAllSessions, scanSessionDetail, toSlug } from "@/lib/scanner/claudeConversations";
 import { getSessionMeta } from "@/lib/scanner/claudeStats";
 import { getDb, isDriverLoaded } from "@/lib/db/connection";
 import { initDb, type InitResult } from "@/lib/db/migrations";
@@ -422,11 +422,18 @@ export function getInitStatus(): InitStatus {
 }
 
 // Light, throttled logging for the two INTENTIONAL fall-through
-// cases (v3-catch-up, empty-index). These are not bugs — they're
-// expected during migration windows and brand-new installs — but
-// surfacing them once per process helps an operator spot a stuck
-// reconcile or a cold indexer. Distinct map per case so each kind
-// of fall-through gets logged once even if the others fire too.
+// cases. These are not bugs — they're expected during migration
+// windows, brand-new installs and first builds — but surfacing them
+// once per process helps an operator spot a stuck reconcile or a cold
+// indexer. Keyed per case so each kind gets logged once even if the
+// others fire too.
+//
+// Six kinds now share this set, and three of them do NOT describe a
+// fall-through: v3-catch-up, empty-index, and first-build all divert to
+// file-parse, but the adapter/source/project decline keeps the SQL
+// answer, and `getUsageCompare` suppresses its comparison instead. Read
+// each message rather than assuming the shared set means a shared
+// outcome — the messages were the whole finding. (Copilot, PR #474.)
 const fallthroughLoggedFor = new Set<string>();
 
 /** Emit `message` the first time `key` is seen in this process, then never again. */
@@ -611,18 +618,36 @@ async function checkV3Gate(scope: string, db: DbHandle): Promise<boolean> {
  * as "does not cover" — if we cannot tell what is out there, we must not claim
  * to have read all of it.
  */
-async function fileParseCoversCorpus(source?: string): Promise<boolean> {
-  // A request already scoped to Claude is fully covered whatever else exists —
-  // `generateUsageReport` applies the same filter, so the adapter corpus is not
-  // part of the answer being asked for. And a request scoped to a non-Claude
-  // source is covered by nothing: file-parse would return empty, which is worse
-  // than the partial SQL result, so it must never divert. Only an unscoped
-  // request has to ask what is out there. (Codex P1, PR #474.)
+async function fileParseCoversCorpus(source?: string, project?: string): Promise<boolean> {
+  // **The asymmetry that governs every narrowing below.** A false "not covered"
+  // costs nothing new: the SQL answer is what shipped before #472 either way. A
+  // false "covered" reintroduces the original defect and drops a whole source in
+  // correctness's name. So a filter is honoured here only when the mapping is
+  // exact BY CONSTRUCTION — the same derivation the ingest path uses — never
+  // when it merely looks equivalent.
   //
-  // Deliberately source-only, though the finding also named the `home` filter.
-  // Whether an adapter session can carry a home — and what a home filter means
-  // for one — is not settled in `loadUsageReportFromSql`, and guessing at it
-  // would trade a verified narrowing for an unverified one.
+  // `source` qualifies by string equality. A request already scoped to Claude is
+  // covered whatever else exists, since `generateUsageReport` applies the same
+  // filter and the adapter corpus is not part of the answer being asked for. One
+  // scoped to a non-Claude source is covered by nothing — file-parse would
+  // return empty, which is worse than a partial SQL result — so it never
+  // diverts. (Codex P1, PR #474.)
+  //
+  // `project` qualifies because `toSlug(canonicalizeDirName(projectDirName))` is
+  // literally how ingest derives `sessions.project_slug`, and
+  // `loadUsageReportFromSql` filters on that column — so the predicate and the
+  // SQL it is standing in for agree by construction rather than by coincidence.
+  // Codex adapter files in OTHER projects are therefore not part of a
+  // project-scoped answer and must not suppress the fallback. (Codex P1.)
+  //
+  // Two filters are deliberately NOT honoured, both for the same reason.
+  // `home`: whether an adapter session can carry one, and what a home filter
+  // means for it, is unsettled in `loadUsageReportFromSql`. And
+  // `getClaudeUsage`'s project scope, which Codex named alongside this one: it
+  // is keyed on `encodePath`-encoded Claude paths, while an adapter's
+  // `projectDirName` is whatever that adapter chose, so matching them is a
+  // resemblance rather than a derivation. Both stay corpus-global, which is the
+  // conservative direction.
   if (source) return source === "claude";
   const cfg = await readConfig();
   if ((cfg.enabledAdapters ?? ["claude"]).every((id) => id === "claude")) return true;
@@ -637,7 +662,10 @@ async function fileParseCoversCorpus(source?: string): Promise<boolean> {
       ...cfg,
       enabledAdapters: (cfg.enabledAdapters ?? []).filter((id) => id !== "claude"),
     });
-    return found.length === 0;
+    if (!project) return found.length === 0;
+    return !found.some(
+      (f) => toSlug(canonicalizeDirName(f.projectDirName)) === project
+    );
   } catch {
     return false;
   }
@@ -669,10 +697,11 @@ async function fileParseCoversCorpus(source?: string): Promise<boolean> {
 async function checkBuildStateFallback(
   scope: string,
   db: DbHandle,
-  source?: string
+  source?: string,
+  project?: string
 ): Promise<boolean> {
   if (!isIndexBuilding(db)) return false;
-  if (await fileParseCoversCorpus(source)) {
+  if (await fileParseCoversCorpus(source, project)) {
     logIntentionalFallthrough(scope, BUILDING_REASON);
     return true;
   }
@@ -759,7 +788,7 @@ export async function getUsage(
   // token/cost total as `backend: "db"` with nothing to distinguish it from a
   // complete one. The other sites under-reported in a window; this reported a
   // number that was simply wrong.
-  if (await checkBuildStateFallback("getUsage", db, source)) {
+  if (await checkBuildStateFallback("getUsage", db, source, project)) {
     return runFileUsage(period, project, source, home);
   }
   const report = await callDbLoader("getUsage", () =>
