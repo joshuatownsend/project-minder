@@ -187,6 +187,20 @@ export function entryToMessage(
   };
 }
 
+/**
+ * Identity of one export block, for collapsing a genuine re-log.
+ *
+ * `tool_use` keys on `tool_use_id` where present — the measured re-emissions on
+ * the ingest path repeat theirs, which is what makes block-level dedupe a
+ * sufficient replacement for dropping the whole line. Everything else keys on
+ * its body, since two distinct blocks with identical text are indistinguishable
+ * and collapsing them is the same call the message-level guard already made.
+ */
+function blockKey(b: ExportBlock): string {
+  if (b.kind === "tool_use" && b.toolUseId) return `u:${b.toolUseId}`;
+  return `${b.kind}:${b.toolName ?? ""}:${b.text ?? ""}:${b.input ? JSON.stringify(b.input) : ""}`;
+}
+
 export interface JsonlReadResult {
   messages: ExportMessage[];
   /**
@@ -195,23 +209,38 @@ export interface JsonlReadResult {
    * silently made a truncated export read as a whole one.
    */
   unread: number;
-  /** Duplicate re-emissions of an assistant message that were collapsed. */
+  /**
+   * Genuine re-emissions of an assistant message that were collapsed — lines
+   * whose every block was already present. A continuation line carrying new
+   * content is merged instead and does NOT count here.
+   */
   duplicates: number;
 }
 
 /**
  * Read and parse a session JSONL into export messages.
  *
- * Assistant messages are deduplicated by `message.id` (falling back to
- * `requestId`), which is the same identity rule `parseSessionTurns` applies:
- * Claude Code re-logs an assistant message on a retry or a resumed-session
- * re-emit, and without this the export repeats the reply and its tool calls,
+ * Assistant lines are grouped by `message.id` (falling back to `requestId`),
+ * which is the same identity rule `parseSessionTurns` applies. Claude Code
+ * re-logs an assistant message on a retry or a resumed-session re-emit, and
+ * without collapsing those the export repeats the reply and its tool calls,
  * inflates its own message count, and burns through the read cap early.
+ *
+ * #453: grouping is not the same as *discarding*, and this used to discard.
+ * Claude Code writes one JSONL line per content block, so a repeat id is far
+ * more often the same message CONTINUING than a re-log — and the trailing lines
+ * are the ones carrying `tool_use` blocks. Dropping them cost the export its
+ * tool calls and any prose that arrived after the first block, then reported
+ * the loss as `duplicates`, which read as "we tidied a re-log up for you"
+ * rather than "content is missing". Blocks are therefore merged into the
+ * message the id already owns, deduped at block level so a real re-log still
+ * collapses and the counter keeps meaning what it says.
  */
 export async function readJsonlMessages(filePath: string): Promise<JsonlReadResult> {
   const messages: ExportMessage[] = [];
   const toolNames = new Map<string, string>();
-  const seenAssistant = new Set<string>();
+  /** `message.id` → where that message's blocks live, and what it already has. */
+  const openAssistant = new Map<string, { index: number; blockKeys: Set<string> }>();
   let unread = 0;
   let duplicates = 0;
   let capped = false;
@@ -229,6 +258,36 @@ export async function readJsonlMessages(filePath: string): Promise<JsonlReadResu
         continue;
       }
 
+      const identity = entry.type === "assistant" ? entry.message?.id ?? entry.requestId : undefined;
+      const open = identity ? openAssistant.get(identity) : undefined;
+
+      // Resolve open identities BEFORE the cap, so a message we chose to keep
+      // is never left half-read.
+      //
+      // The cap counts MESSAGES, and a continuation is not one — it is more of
+      // a message already inside the cap. With the cap checked first, a split
+      // message whose first line happened to be the 20,000th would keep that
+      // line and route its remaining lines through the unread branch: the
+      // retained message silently loses its tool calls, and each dropped block
+      // inflates `unread` as though it were a separate message. Both numbers
+      // then misdescribe the export in the same direction. (Codex, PR #468.)
+      if (open) {
+        // Continuation (or re-log) of a message already emitted. Fold in only
+        // the blocks it does not already have; if that is none, it really was
+        // a re-emission and the counter says so.
+        const more = entryToMessage(entry, toolNames);
+        let added = 0;
+        for (const block of more?.blocks ?? []) {
+          const key = blockKey(block);
+          if (open.blockKeys.has(key)) continue;
+          open.blockKeys.add(key);
+          messages[open.index].blocks.push(block);
+          added++;
+        }
+        if (added === 0) duplicates++;
+        continue;
+      }
+
       // Keep counting past the cap rather than breaking: the whole point is
       // to be able to say HOW MANY messages were left out, and `break` threw
       // that number away.
@@ -237,18 +296,15 @@ export async function readJsonlMessages(filePath: string): Promise<JsonlReadResu
         continue;
       }
 
-      const identity = entry.type === "assistant" ? entry.message?.id ?? entry.requestId : undefined;
-      if (identity) {
-        if (seenAssistant.has(identity)) {
-          duplicates++;
-          continue;
-        }
-        seenAssistant.add(identity);
-      }
-
       const message = entryToMessage(entry, toolNames);
       if (!message) continue;
       messages.push(message);
+      if (identity) {
+        openAssistant.set(identity, {
+          index: messages.length - 1,
+          blockKeys: new Set(message.blocks.map(blockKey)),
+        });
+      }
       if (messages.length >= MAX_MESSAGES) capped = true;
     }
   } finally {

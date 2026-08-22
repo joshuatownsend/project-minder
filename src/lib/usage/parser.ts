@@ -12,7 +12,12 @@ import {
   extractToolResultEntries,
   extractCommandNames,
 } from "./contentBlocks";
-import { categorizeToolError } from "./toolErrorCategorizer";
+import {
+  buildToolCalls,
+  mergeAssistantContinuation,
+  openAssistantMessage,
+  type OpenAssistantMessage,
+} from "./assistantContinuation";
 import { extractCacheCreate1hTokens } from "./cacheTtl";
 import { resolveSessionJsonl } from "./sessionPath";
 import { readConfig } from "@/lib/config";
@@ -184,7 +189,13 @@ export async function parseSessionTurns(
   // session. Claude Code can re-log a message (retry / resumed-session re-emit);
   // summing every line would double-count tokens/cost. Only guards ids that are
   // actually present, so genuinely distinct turns (each a unique id) are kept.
+  //
+  // #453: the guard covers TOKENS only. A repeat id is far more often the same
+  // message continuing onto another line than a re-log, so its content blocks
+  // are merged into the turn the id already owns rather than discarded — see
+  // `assistantContinuation.ts`. Block-level dedupe keeps the re-log case safe.
   const seenMessageIds = new Set<string>();
+  const openMessages = new Map<string, OpenAssistantMessage>();
 
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
@@ -227,10 +238,25 @@ export async function parseSessionTurns(
       const messageId =
         (entry.message as { id?: string } | undefined)?.id ??
         (entry as { requestId?: string }).requestId;
-      if (messageId) {
-        if (seenMessageIds.has(messageId)) continue;
-        seenMessageIds.add(messageId);
+      // #453: a repeat id CONTINUES the message rather than re-logging it.
+      // Merge the line's blocks into the turn that id already owns and skip
+      // everything token-bearing below — the first line carried the whole
+      // message's `usage`.
+      if (messageId && seenMessageIds.has(messageId)) {
+        const open = openMessages.get(messageId);
+        const turn = open ? turns[open.turnIndex] : undefined;
+        if (open && turn) {
+          const merged = mergeAssistantContinuation(
+            open,
+            entry.message?.content,
+            errorByToolUseId
+          );
+          if (merged.toolCalls.length > 0) turn.toolCalls.push(...merged.toolCalls);
+          if (merged.text !== null) turn.assistantText = merged.text.slice(0, 500) || undefined;
+        }
+        continue;
       }
+      if (messageId) seenMessageIds.add(messageId);
 
       const usage = entry.message?.usage ?? {};
       const inputTokens = usage.input_tokens ?? 0;
@@ -242,27 +268,17 @@ export async function parseSessionTurns(
       const rawContent = entry.message?.content;
       const content = Array.isArray(rawContent) ? rawContent : [];
       const slashCmds = prevUserTimestamp ? slashCommandsByTimestamp.get(prevUserTimestamp) : undefined;
-      let slashWindowConsumed = false;
-      const toolCalls = (content as any[])
-        .filter((b: any) => b.type === "tool_use")
-        .map((b: any) => {
-          const id: string | undefined = b.id;
-          const errEntry = id ? errorByToolUseId.get(id) : undefined;
-          const tcIsError = errEntry?.isError ?? false;
-          const tcErrorCategory = tcIsError ? categorizeToolError(errEntry?.content ?? "") : undefined;
-          const skillName = b.name === "Skill" && typeof b.input?.skill === "string"
-            ? b.input.skill : undefined;
-          const isSlashMatch = !slashWindowConsumed && !!slashCmds && !!skillName && slashCmds.has(skillName);
-          if (isSlashMatch) slashWindowConsumed = true;
-          return {
-            name: b.name,
-            id,
-            arguments: b.input,
-            isError: tcIsError || undefined,
-            errorCategory: tcErrorCategory,
-            invocationSource: isSlashMatch ? "slash_command" : "auto",
-          };
-        });
+      // The slash window is latched onto the message here, not re-read per
+      // line: a continuation can land after later user turns, and reading the
+      // live cursor then would file a split `Skill` call under an unrelated
+      // prompt (the ingest-path defect caught in PR #427).
+      const open = openAssistantMessage(turns.length, content as any[], slashCmds);
+      const toolCalls = buildToolCalls(
+        (content as any[]).filter((b: any) => b.type === "tool_use"),
+        errorByToolUseId,
+        open
+      );
+      if (messageId) openMessages.set(messageId, open);
 
       const assistantText = extractText(content) || undefined;
 
@@ -419,7 +435,10 @@ export async function parseSessionTurnsWithMeta(
   // branch below) and stamped onto every turn once the file is fully read.
   let sessionEntrypoint: string | undefined;
   let sessionKindValue: string | undefined;
+  // #453: same split as `parseSessionTurns` — the id guard covers tokens, and
+  // a repeat id's content blocks merge into the turn that id already owns.
   const seenMessageIdsMeta = new Set<string>();
+  const openMessagesMeta = new Map<string, OpenAssistantMessage>();
 
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
@@ -480,10 +499,29 @@ export async function parseSessionTurnsWithMeta(
       const messageId =
         (entry.message as { id?: string } | undefined)?.id ??
         (entry as { requestId?: string }).requestId;
-      if (messageId) {
-        if (seenMessageIdsMeta.has(messageId)) continue;
-        seenMessageIdsMeta.add(messageId);
+      // #453: continuation of a message already turned, not a re-log.
+      if (messageId && seenMessageIdsMeta.has(messageId)) {
+        const open = openMessagesMeta.get(messageId);
+        const turn = open ? turns[open.turnIndex] : undefined;
+        if (open && turn) {
+          const merged = mergeAssistantContinuation(
+            open,
+            entry.message?.content,
+            errorByToolUseIdMeta
+          );
+          if (merged.toolCalls.length > 0) turn.toolCalls.push(...merged.toolCalls);
+          if (merged.text !== null) turn.assistantText = merged.text.slice(0, 500) || undefined;
+          // A message can open with text and think on a later line; without
+          // this the session would report no thinking at all.
+          if (!hasThinking && Array.isArray(entry.message?.content)) {
+            for (const b of entry.message.content as any[]) {
+              if (b?.type === "thinking") { hasThinking = true; break; }
+            }
+          }
+        }
+        continue;
       }
+      if (messageId) seenMessageIdsMeta.add(messageId);
 
       const usage = entry.message?.usage ?? {};
       const inputTokens = usage.input_tokens ?? 0;
@@ -497,28 +535,13 @@ export async function parseSessionTurnsWithMeta(
       const slashCmdsMeta = prevUserTimestampMeta
         ? slashCommandsByTimestampMeta.get(prevUserTimestampMeta)
         : undefined;
-      let slashWindowConsumedMeta = false;
-      const toolCalls = (content as any[])
-        .filter((b: any) => b.type === "tool_use")
-        .map((b: any) => {
-          const id: string | undefined = b.id;
-          const errEntry = id ? errorByToolUseIdMeta.get(id) : undefined;
-          const tcIsError = errEntry?.isError ?? false;
-          const tcErrorCategory = tcIsError ? categorizeToolError(errEntry?.content ?? "") : undefined;
-          const skillName = b.name === "Skill" && typeof b.input?.skill === "string"
-            ? b.input.skill : undefined;
-          const isSlashMatch =
-            !slashWindowConsumedMeta && !!slashCmdsMeta && !!skillName && slashCmdsMeta.has(skillName);
-          if (isSlashMatch) slashWindowConsumedMeta = true;
-          return {
-            name: b.name,
-            id,
-            arguments: b.input,
-            isError: tcIsError || undefined,
-            errorCategory: tcErrorCategory,
-            invocationSource: isSlashMatch ? "slash_command" : "auto",
-          };
-        });
+      const openMeta = openAssistantMessage(turns.length, content as any[], slashCmdsMeta);
+      const toolCalls = buildToolCalls(
+        (content as any[]).filter((b: any) => b.type === "tool_use"),
+        errorByToolUseIdMeta,
+        openMeta
+      );
+      if (messageId) openMessagesMeta.set(messageId, openMeta);
 
       const assistantText = extractText(content) || undefined;
       const isError = entry.isApiErrorMessage === true;
