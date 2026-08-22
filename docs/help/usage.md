@@ -61,7 +61,19 @@ Click **Compare** in the toolbar to overlay a delta strip above the summary card
 - **Volume metrics** (cost, tokens, sessions) show the relative change as a percentage, in a neutral tone — more or less activity is neither inherently good nor bad. A metric with no activity in the prior window is marked **new**.
 - **Quality metrics** (cache hit, one-shot rate) show the change in *percentage points* and are colored green when improving, red when regressing.
 
-The comparison always uses windows of **equal elapsed length**. For **Today** this means the current partial day is compared against the same number of hours ending at midnight — not against a full previous day — so the delta is honest first thing in the morning. Compare is unavailable for **All Time** (there is no earlier window to compare against) and requires the SQLite backend.
+The comparison always uses windows of **equal elapsed length**. For **Today** this means the current partial day is compared against the same number of hours ending at midnight — not against a full previous day — so the delta is honest first thing in the morning. Compare is unavailable for **All Time** (there is no earlier window to compare against) and requires the SQLite backend. It is also unavailable while the index is being read through for the first time — both windows would be partial, which makes the delta between them meaningless rather than merely imprecise.
+
+## While the index is still building
+
+The first time Minder reads your history through, it can only see the part it
+has already ingested. Rather than showing you a total computed from a subset —
+which would look exactly like a real total, only lower — the usage, sessions,
+agents and skills pages fall back to reading your transcripts directly for the
+duration of that first pass. The numbers are right; the pages are slower, and
+they speed up once the pass finishes. Nothing is required of you.
+
+If you have turned the indexer off entirely (`MINDER_INDEXER=0`), this does not
+apply: nothing is going to build the index, so there is nothing to wait for.
 
 ## Daily Cost Chart
 
