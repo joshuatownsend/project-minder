@@ -233,6 +233,7 @@ describe.skipIf(!driverAvailable)("byEntrypoint — file-parse vs SQLite parity"
       const ingest = await import("@/lib/db/ingest");
       await ingest.reconcileAllSessions(db!, {
         projectsDir: path.join(tmpHome, ".claude", "projects"),
+        recordRun: "reconcile",
       });
     }
     const data = await import("@/lib/data");

@@ -243,8 +243,16 @@ function pruneAbortedRuns(db: DatabaseT.Database): void {
  * `loadEngagementReportFromSql` reads only raw columns (`ts`, `role`,
  * `text_preview`, `tool_result_preview`, `entrypoint`, `is_sidechain`), all of
  * which survive a re-derivation. A rebuild changes derived values; it does not
- * empty the table. Any future consumer that reads *derived* columns needs a
- * different predicate, and should not reach for this one.
+ * empty the table.
+ *
+ * **A consumer that reads *derived* columns is only half-covered by this.** It
+ * still answers "is the corpus fully ingested", which is what the first-build
+ * case needs — but not "are the derived values consistent", which a rebuild
+ * breaks by rewriting rows one file at a time. #472 attached five such
+ * consumers in `data/index.ts` knowingly: the first-build gap was live and this
+ * closes it, while the rebuild gap is unchanged from before them and needs a
+ * predicate that does not exist yet. Do not read their use of this as evidence
+ * that a rebuild is covered. Tracked as #478. (Codex P1, PR #474.)
  */
 export function getIndexBuildState(db: DatabaseT.Database): IndexBuildState {
   // "Building" is a claim that something is actively reading the corpus. With

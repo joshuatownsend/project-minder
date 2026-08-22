@@ -1,7 +1,7 @@
 import "server-only";
 import { generateUsageReport, augmentPortfolioYield } from "@/lib/usage/aggregator";
 import { getJsonlMaxMtime } from "@/lib/usage/parser";
-import { scanAllSessions, scanSessionDetail } from "@/lib/scanner/claudeConversations";
+import { scanAllSessions, scanSessionDetail, toSlug } from "@/lib/scanner/claudeConversations";
 import { getSessionMeta } from "@/lib/scanner/claudeStats";
 import { getDb, isDriverLoaded } from "@/lib/db/connection";
 import { initDb, type InitResult } from "@/lib/db/migrations";
@@ -421,19 +421,31 @@ export function getInitStatus(): InitStatus {
   }
 }
 
-// Light, throttled logging for the two INTENTIONAL fall-through
-// cases (v3-catch-up, empty-index). These are not bugs — they're
-// expected during migration windows and brand-new installs — but
-// surfacing them once per process helps an operator spot a stuck
-// reconcile or a cold indexer. Distinct map per case so each kind
-// of fall-through gets logged once even if the others fire too.
+// Light, throttled logging for the INTENTIONAL non-SQL outcomes. These are not bugs — they're expected during migration
+// windows, brand-new installs and first builds — but surfacing them
+// once per process helps an operator spot a stuck reconcile or a cold
+// indexer. Keyed per case so each kind gets logged once even if the
+// others fire too.
+//
+// Six kinds now share this set, and three of them do NOT describe a
+// fall-through: v3-catch-up, empty-index, and first-build all divert to
+// file-parse, but the adapter/source/project decline keeps the SQL
+// answer, and `getUsageCompare` suppresses its comparison instead. Read
+// each message rather than assuming the shared set means a shared
+// outcome — the messages were the whole finding. (Copilot, PR #474.)
 const fallthroughLoggedFor = new Set<string>();
-function logIntentionalFallthrough(scope: string, reason: string): void {
-  const key = `${scope}:${reason}`;
+
+/** Emit `message` the first time `key` is seen in this process, then never again. */
+function warnOnce(key: string, message: string): void {
   if (fallthroughLoggedFor.has(key)) return;
   fallthroughLoggedFor.add(key);
   // eslint-disable-next-line no-console
-  console.warn(
+  console.warn(message);
+}
+
+function logIntentionalFallthrough(scope: string, reason: string): void {
+  warnOnce(
+    `${scope}:${reason}`,
     `[data] ${scope}: DB-backed path fell back to file-parse (${reason}). This is expected during migration / cold-indexer windows; a 500 from the route would mean the DB itself is unhealthy.`
   );
 }
@@ -542,6 +554,201 @@ async function checkV3Gate(scope: string, db: DbHandle): Promise<boolean> {
 }
 
 /**
+ * Has the index not yet been read through even once?
+ *
+ * #472. `reconcileAllSessions` commits per file, so a first pass spends nearly
+ * all of its duration with a row count that is non-zero and *rising*. Every
+ * cross-corpus aggregate below therefore had a gate that could not see the
+ * condition it was written for: "zero rows" catches an index that has not
+ * started, never one that is part-way through. In that window a SQL answer is
+ * computed correctly over a SUBSET and returned as `backend: "db"` with nothing
+ * marking it partial — a session list, a usage total and an agent table that
+ * quietly under-report until the pass lands.
+ *
+ * Single-row lookups (`getSessionDetail`) are exempt by construction: a session
+ * is committed whole or not at all, so a hit is complete and a miss already
+ * falls through.
+ *
+ * **Strictly additive — it does not replace the zero-rows checks.** With
+ * `MINDER_INDEXER=0` nothing will ever record a pass, so `getIndexBuildState`
+ * reports "ready" permanently (see `indexerRuns.ts`) and the zero-rows
+ * fall-through is the only thing keeping those pages populated. Removing it
+ * would empty the dashboard for exactly the operators who switched ingest off.
+ *
+ * Unlike `getEngagement`, which refuses with a 503, these fall back to
+ * file-parse: they already have a working file path, and for a dashboard a
+ * slower correct answer beats both a fast wrong one and an error page. The
+ * cost of that is a full JSONL walk for the duration of the first pass —
+ * measured, and bounded by the 2-minute route caches over `/api/usage`,
+ * `/api/agents` and `/api/skills` (30 s for `/api/sessions`).
+ */
+/**
+ * Does the file-parse path see the same corpus the SQL path does?
+ *
+ * It does not, whenever a non-Claude adapter is enabled. `discoverAllSessions`
+ * — the thing that finds Codex and Gemini transcripts — is imported by
+ * `db/ingest.ts` and by nothing else; every file-parse entry point walks
+ * `<claude-home>/projects/**` and stops there. That is an architectural
+ * boundary of the file backend, not a regression, and it long predates #472.
+ *
+ * It matters here because #472's gates exist to stop a subset being presented
+ * as a total, and diverting an adapter-enabled install to file-parse would do
+ * exactly that in a different direction: the SQL answer during the first pass
+ * is a partial view of every source, while the file answer is a complete view
+ * of Claude and a total absence of the rest. Dropping a source entirely is the
+ * more distorting of the two, and it would be done in correctness's name.
+ *
+ * So where adapter sessions actually exist the gate declines to divert and the
+ * pre-#472 behaviour stands. That leaves those users with the original defect,
+ * which is worse than fixing it and better than pretending to. Closing it means
+ * giving the file backend adapter discovery, which is a feature rather than a
+ * review fix, and is tracked separately. (Codex P1, PR #474.)
+ *
+ * The test is whether adapter sessions are DISCOVERABLE, not whether an adapter
+ * is enabled. Those differ, and by a lot: this repo's own config has enabled
+ * `codex` for months against an index holding 6,600 Claude sessions and zero
+ * Codex ones, so keying on the flag would have switched the whole of #472 off
+ * for the machine it was written on, to protect a corpus that does not exist.
+ * A predicate that is cheap and wrong is not cheaper than the walk.
+ *
+ * Ordered so the walk is skipped in the common case: a claude-only config
+ * answers from the config alone, and the discovery below runs only while the
+ * index is building AND an adapter is enabled. A discovery that throws counts
+ * as "does not cover" — if we cannot tell what is out there, we must not claim
+ * to have read all of it.
+ */
+async function fileParseCoversCorpus(source?: string, project?: string): Promise<boolean> {
+  // **The asymmetry that governs every narrowing below.** A false "not covered"
+  // costs nothing new: the SQL answer is what shipped before #472 either way. A
+  // false "covered" reintroduces the original defect and drops a whole source in
+  // correctness's name. So a filter is honoured here only when the mapping is
+  // exact BY CONSTRUCTION — the same derivation the ingest path uses — never
+  // when it merely looks equivalent.
+  //
+  // `source` qualifies by string equality. A request already scoped to Claude is
+  // covered whatever else exists, since `generateUsageReport` applies the same
+  // filter and the adapter corpus is not part of the answer being asked for. One
+  // scoped to a non-Claude source is covered by nothing — file-parse would
+  // return empty, which is worse than a partial SQL result — so it never
+  // diverts. (Codex P1, PR #474.)
+  //
+  // `project` qualifies because `toSlug(projectDirName)` is how ingest stores
+  // `sessions.project_slug` FOR AN ADAPTER SESSION, and `loadUsageReportFromSql`
+  // filters on that column — so the predicate and the SQL it is standing in for
+  // agree by construction rather than by coincidence. Adapter files are the only
+  // thing this predicate ever inspects, so the adapter derivation is the right
+  // one; the Claude path's extra `canonicalizeDirName` step does not apply and
+  // using it here was a real bug (see below).
+  // Codex adapter files in OTHER projects are therefore not part of a
+  // project-scoped answer and must not suppress the fallback. (Codex P1.)
+  //
+  // Two filters are deliberately NOT honoured, both for the same reason.
+  // `home`: whether an adapter session can carry one, and what a home filter
+  // means for it, is unsettled in `loadUsageReportFromSql`. And
+  // `getClaudeUsage`'s project scope, which Codex named alongside this one: it
+  // is keyed on `encodePath`-encoded Claude paths, while an adapter's
+  // `projectDirName` is whatever that adapter chose, so matching them is a
+  // resemblance rather than a derivation. Both stay corpus-global, which is the
+  // conservative direction.
+  if (source) return source === "claude";
+  const cfg = await readConfig();
+  if ((cfg.enabledAdapters ?? ["claude"]).every((id) => id === "claude")) return true;
+  try {
+    const { discoverAllSessions } = await import("@/lib/adapters");
+    // Non-Claude adapters ONLY. `discoverAllSessions(cfg)` runs every enabled
+    // adapter's `discover()`, and Claude's walks every home's projects tree —
+    // so passing the config unfiltered would sweep the whole Claude corpus to
+    // answer a question exclusively about the other adapters, and then sweep it
+    // again in the file-parse fallback this is gating into. (Copilot, PR #474.)
+    const found = await discoverAllSessions({
+      ...cfg,
+      enabledAdapters: (cfg.enabledAdapters ?? []).filter((id) => id !== "claude"),
+    });
+    if (!project) return found.length === 0;
+    // `toSlug` alone — NOT `toSlug(canonicalizeDirName(...))`, which is the
+    // CLAUDE derivation (`ingest.ts`, via `canonicalDir`). Adapters do not
+    // canonicalize: `codex.ts` and `gemini.ts` both stamp their turns with a
+    // plain `toSlug(projectDirName)`, and `buildAdapterParsedSession` keeps that
+    // slug rather than recomputing one. Since `canonicalizeDirName` strips a
+    // worktree suffix, borrowing the Claude derivation here would compute the
+    // PARENT slug for a worktree-encoded adapter dir while the index stored the
+    // worktree slug — and a mismatch reads as "not in this project", i.e. a
+    // false "covered", which drops that session for the length of the first
+    // reconcile. Exactly the failure the asymmetry above exists to prevent, and
+    // committed while claiming exactness. Match the identity that is stored, not
+    // the one a sibling code path happens to build. (Codex P1, PR #474.)
+    return !found.some((f) => toSlug(f.projectDirName) === project);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The build-state gate for the five loaders that answer from a corpus.
+ *
+ * **Covers the first build, not a re-derivation.** `getIndexBuildState` is a
+ * lifetime latch, so a `DERIVED_VERSION` rebuild — which rewrites rows one file
+ * at a time and can therefore mix old and new derived values across an
+ * aggregate for the length of the rebuild — reads as "ready" here. That is a
+ * real defect and these five loaders do read derived columns, which is exactly
+ * the case `getIndexBuildState`'s own docstring warns off this predicate. It is
+ * also unchanged by #472: before it, `getUsage` had no gate at all and the rest
+ * had zero-rows gates, so a rebuild served mixed rows then too. Fixing it needs
+ * either an indexed staleness probe (an unindexed one measures 24 ms per
+ * request on a 6,600-session index) or a writer for the `'rebuild'` run kind
+ * that has never been written — a feature either way, tracked as #478 rather
+ * than folded into a review round. (Codex P1, PR #474.)
+ *
+ * Composed rather than folded into `isIndexBuilding`, because
+ * `getUsageCompare` must keep gating unconditionally: it degrades to
+ * "not comparable" rather than falling back, so it needs no corpus and the
+ * adapter question does not arise. Putting the check in the shared predicate
+ * would silently return adapter users to comparing two DB subsets — the exact
+ * defect, reintroduced by the fix for the defect.
+ */
+async function checkBuildStateFallback(
+  scope: string,
+  db: DbHandle,
+  source?: string,
+  project?: string
+): Promise<boolean> {
+  if (!isIndexBuilding(db)) return false;
+  if (await fileParseCoversCorpus(source, project)) {
+    logIntentionalFallthrough(scope, BUILDING_REASON);
+    return true;
+  }
+  warnOnce(
+    `${scope}:adapters-enabled`,
+    `[data] ${scope}: index still building, but a non-Claude adapter is enabled and ` +
+      "file-parse cannot see adapter sessions — serving the SQL answer rather than " +
+      "trading a partial view of every source for a complete view of one."
+  );
+  return false;
+}
+
+function isIndexBuilding(db: DbHandle): boolean {
+  // `getIndexBuildState` swallows its own read errors and fails open to
+  // "ready", so unlike `checkV3Gate` this needs no `callDbLoader` wrapper —
+  // a readiness check must never convert a schema fault into an outage.
+  return getIndexBuildState(db) === "building";
+}
+
+/**
+ * Deliberately silent, and its callers are not.
+ *
+ * This used to log "fell back to file-parse" itself, which put the message
+ * before the decision: `checkBuildStateFallback` can go on to decline the
+ * diversion when adapter sessions exist, and `getUsageCompare` never diverts at
+ * all — so an operator reading the log during exactly the window this feature
+ * exists for was told a fallback had happened in two cases where it had not.
+ * A diagnostic that reports the branch it was hoping for rather than the branch
+ * taken is worse than none. Each caller now logs its own outcome. (Copilot,
+ * PR #474.)
+ */
+const BUILDING_REASON =
+  "index still building (no full pass recorded yet) — a SQL answer here would be a subset of the corpus presented as the whole of it";
+
+/**
  * File-parse usage path. Used when `MINDER_USE_DB=0` (explicit
  * opt-out) or when the v3-readiness gate says the DB rows are mid-
  * migration.
@@ -565,6 +772,8 @@ async function runFileUsage(
  * - `MINDER_USE_DB=0`: file-parse, returns immediately.
  * - DB mode + healthy DB + reconcile complete: SQL-backed.
  * - DB mode + v3-catch-up window: file-parse fallback (correctness).
+ * - DB mode + first reconcile still running: file-parse fallback (#472 —
+ *   a SQL total over a partly-ingested corpus is simply a wrong number).
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
 export async function getUsage(
@@ -584,6 +793,14 @@ export async function getUsage(
       "getUsage",
       "DB awaiting v3 reconcile (cost_usd / category_costs not yet populated)"
     );
+    return runFileUsage(period, project, source, home);
+  }
+  // #472. This one had no cold-index gate at ALL — not even the zero-rows
+  // check its neighbours carry — so a first-pass read returned a partial
+  // token/cost total as `backend: "db"` with nothing to distinguish it from a
+  // complete one. The other sites under-reported in a window; this reported a
+  // number that was simply wrong.
+  if (await checkBuildStateFallback("getUsage", db, source, project)) {
     return runFileUsage(period, project, source, home);
   }
   const report = await callDbLoader("getUsage", () =>
@@ -632,7 +849,8 @@ export async function getEngagement(
   // sweep re-runs the same reconcile forever, so the live reading would flap
   // the report in and out of availability every half minute. See
   // `getIndexBuildState` for why a DERIVED_VERSION rebuild correctly does not
-  // gate this consumer.
+  // gate this consumer: it reads only raw columns, which the five loaders in
+  // `checkBuildStateFallback` do NOT.
   if (getIndexBuildState(db) === "building") {
     throw new DbUnavailableError(
       "index-building",
@@ -659,6 +877,8 @@ export interface UsageCompareResult {
  * - `MINDER_USE_DB=0`: not comparable (comparison requires the SQL backend).
  * - DB mode + v3-catch-up: not comparable (cost columns not yet populated —
  *   running anyway would report misleading ~0 cost deltas).
+ * - DB mode + first reconcile still running: not comparable (#472 — both
+ *   windows would be subsets, making the delta between them arbitrary).
  * - DB mode + healthy DB: SQL-backed `compareUsageFromSql`.
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  *
@@ -705,6 +925,26 @@ export async function getUsageCompare(
     };
   }
 
+  // #472. There is no file-parse compare path, so this degrades rather than
+  // falls back — the same shape the v3 gate above already uses. Comparing two
+  // windows of a half-built index is worse than comparing nothing: both sides
+  // are subsets, and the *ratio* between them is arbitrary, so the delta would
+  // read as a real week-over-week swing.
+  if (isIndexBuilding(db)) {
+    warnOnce(
+      `getUsageCompare:${BUILDING_REASON}`,
+      `[data] getUsageCompare: comparison suppressed (${BUILDING_REASON}). ` +
+        "This one degrades to a not-comparable result rather than falling back — " +
+        "there is no file-parse compare path, and two subsets make an arbitrary delta."
+    );
+    return {
+      comparison: buildNotComparable(
+        period,
+        "Period comparison is unavailable until the index has been read through once."
+      ),
+      meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) },
+    };
+  }
   const comparison = await callDbLoader("getUsageCompare", () =>
     compareUsageFromSql(db, period, project, source, home)
   );
@@ -834,8 +1074,11 @@ export interface SessionsListResult {
  * - DB mode + healthy DB + reconcile complete + non-empty index:
  *   SQL-backed.
  * - DB mode + v3-catch-up: file-parse (correctness).
+ * - DB mode + first reconcile still running: file-parse (#472 — the list
+ *   would otherwise show whichever subset had been ingested so far).
  * - DB mode + empty index: file-parse (UX — brand-new install
- *   still surfaces sessions while the indexer warms up).
+ *   still surfaces sessions while the indexer warms up, and the only
+ *   fallback left when `MINDER_INDEXER=0` makes "building" unreachable).
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  *
  * Project filtering is intentionally NOT pushed into this layer —
@@ -853,6 +1096,9 @@ export async function getSessionsList(): Promise<SessionsListResult> {
       "getSessionsList",
       "DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)"
     );
+    return runFileSessionsList();
+  }
+  if (await checkBuildStateFallback("getSessionsList", db)) {
     return runFileSessionsList();
   }
   const sessions = await callDbLoader("getSessionsList", () =>
@@ -901,6 +1147,8 @@ export interface AgentUsageResult {
  * - `MINDER_USE_DB=0`: file-parse.
  * - DB mode + healthy DB + non-empty Agent rows: SQL-backed. No v3
  *   gate — this path doesn't read `cost_usd` or one-shot counts.
+ * - DB mode + first reconcile still running: file-parse fallback, for
+ *   every period (#472).
  * - DB mode + zero Agent rows: file-parse fallback (UX — keeps the
  *   agents page populated until the indexer catches up).
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
@@ -930,6 +1178,15 @@ export async function getAgentUsage(period: Period = "all"): Promise<AgentUsageR
   }
 
   const db = await getReadyDb();
+  // Before the query, and — unlike the zero-rows guard below — for EVERY
+  // period. The Codex P1 that made that guard all-time-only reasoned that an
+  // empty bounded window is a legitimate "no recent invocations" answer. True,
+  // and untouched. But an index that has never been read through cannot answer
+  // a 7-day question either; the two conditions are orthogonal.
+  if (await checkBuildStateFallback("getAgentUsage", db)) {
+    const { stats: fileStats, meta } = await runFileAgentUsage(period);
+    return withCost(fileStats, meta);
+  }
   const sinceIso = getPeriodStart(period)?.toISOString();
   const stats = await callDbLoader("getAgentUsage", () => loadAgentUsageFromDb(db, sinceIso));
   // Cold-index fall-through ONLY applies to the all-time window. With
@@ -984,6 +1241,8 @@ export interface SkillUsageResult {
  * - DB mode + healthy DB + reconcile complete + non-empty rows: SQL-backed.
  * - DB mode + v3-catch-up: file-parse (correctness — A4 made this a
  *   `cost_usd` reader; see the gate below).
+ * - DB mode + first reconcile still running: file-parse fallback, for
+ *   every period (#472).
  * - DB mode + zero rows: file-parse fallback (UX).
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
@@ -1004,6 +1263,10 @@ export async function getSkillUsage(period: Period = "all"): Promise<SkillUsageR
       "getSkillUsage",
       "DB awaiting v3 reconcile (attributed cost_usd not yet populated)"
     );
+    return runFileSkillUsage(period);
+  }
+  // Every period, for the same reason as `getAgentUsage` above.
+  if (await checkBuildStateFallback("getSkillUsage", db)) {
     return runFileSkillUsage(period);
   }
   const sinceIso = getPeriodStart(period)?.toISOString();
@@ -1068,6 +1331,7 @@ export interface ClaudeUsageResult {
  * - DB mode + healthy DB + reconcile complete + non-empty conversations:
  *   SQL-backed.
  * - DB mode + v3-catch-up: file-parse (correctness — reads `cost_usd`).
+ * - DB mode + first reconcile still running: file-parse fallback (#472).
  * - DB mode + zero conversations for the filter set: file-parse (UX).
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
@@ -1095,6 +1359,9 @@ export async function getClaudeUsage(projectPaths: string[]): Promise<ClaudeUsag
       "getClaudeUsage",
       "DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)"
     );
+    return runFileClaudeUsage(expandedPaths);
+  }
+  if (await checkBuildStateFallback("getClaudeUsage", db)) {
     return runFileClaudeUsage(expandedPaths);
   }
   const stats = await callDbLoader("getClaudeUsage", () =>

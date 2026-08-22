@@ -80,6 +80,7 @@ describe.runIf(driverAvailable)("C3 — OTEL correlation", () => {
     const ingest = await import("@/lib/db/ingest");
     await ingest.reconcileAllSessions(db!, {
       projectsDir: path.join(tmpHome, ".claude", "projects"),
+      recordRun: "reconcile",
     });
     return db!;
   }
@@ -151,6 +152,7 @@ describe.runIf(driverAvailable)("C3 — OTEL correlation", () => {
     const ingest = await import("@/lib/db/ingest");
     await ingest.reconcileAllSessions(db!, {
       projectsDir: path.join(tmpHome, ".claude", "projects"),
+      recordRun: "reconcile",
     });
 
     const sub = db!

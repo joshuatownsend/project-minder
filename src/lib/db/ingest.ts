@@ -3129,6 +3129,14 @@ export interface ReconcileOptions {
    * would write a row every half minute forever and make any "is a pass running"
    * reading flap. Only the INITIAL pass — the one whose completion actually
    * changes what the index can answer — passes this.
+   *
+   * **Tests that intend to read through `@/lib/data` must pass it too.** The
+   * cross-corpus aggregates there gate on `getIndexBuildState` (#472), so a
+   * test that seeds its index without this produces something production never
+   * does — a corpus that HAS been read through with no evidence of it — and the
+   * façade correctly serves file-parse instead. The failure then surfaces as a
+   * backend-parity divergence rather than as "the index was not ready", which
+   * is the same trap `tests/_helpers/reconcile.ts` documents for the v3 gate.
    */
   recordRun?: IndexerRunKind;
 }

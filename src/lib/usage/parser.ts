@@ -45,7 +45,37 @@ const globalForParser = globalThis as unknown as {
 
 function getFileCache(): FileCache<UsageTurn[]> {
   if (!globalForParser.__usageFileCache) {
-    globalForParser.__usageFileCache = new FileCache<UsageTurn[]>({ maxEntries: 5000 });
+    // Must exceed the session corpus, and by a wide margin. This is an LRU
+    // over a workload that sweeps every file in the same order on every call —
+    // LRU's worst case. Below the corpus size the hit rate does not degrade
+    // gracefully, it collapses to ~0: each sweep evicts precisely the entries
+    // the next sweep asks for first.
+    //
+    // Measured on a 5,286-session corpus (2026-08-22), warm `parseAllSessions`:
+    //   maxEntries 5,000 (corpus + 286) -> 47.8s
+    //   maxEntries 20,000               ->  2.2s
+    // A 22x cliff, with the boundary crossed silently and no symptom other than
+    // "the dashboard got slow". The old value was set when the corpus was far
+    // smaller and quietly stopped working once it was passed.
+    //
+    // It does cost memory, and the trade is deliberate. `retainOnly(liveSet)`
+    // evicts any path absent from the sweep's live set — deleted, unreadable,
+    // or dropped by a config change such as a removed Claude home — so it never
+    // trims a file that is still being read. Steady-state residency is
+    // therefore min(corpus, maxEntries), which means raising the cap raises it
+    // for every corpus above the old one, roughly +6% here (5,000 -> 5,286
+    // entries) and up to 5x on a 25,000-session corpus. What is bought is the
+    // 22x above. Memory proportional to corpus, against a CPU cost that is not
+    // proportional to anything — it is a cliff, and on the wrong side of it
+    // every read of the dashboard re-parses the entire history.
+    //
+    // An entry count was never a memory bound in the first place: a slot holds
+    // one session's whole `UsageTurn[]`, so 5,000 large transcripts could
+    // already exceed 25,000 small ones. Bounding this by retained bytes or
+    // turns would be a real improvement over both numbers; it is a different
+    // change from removing the cliff, and is tracked separately rather than
+    // done here. (Codex P2, PR #474.)
+    globalForParser.__usageFileCache = new FileCache<UsageTurn[]>({ maxEntries: 25_000 });
   }
   return globalForParser.__usageFileCache;
 }

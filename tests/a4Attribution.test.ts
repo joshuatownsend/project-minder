@@ -210,6 +210,7 @@ describe.skipIf(!driverAvailable)("A4 attribution — file-parse vs SQLite parit
       const ingest = await import("@/lib/db/ingest");
       await ingest.reconcileAllSessions(db!, {
         projectsDir: path.join(tmpHome, ".claude", "projects"),
+        recordRun: "reconcile",
       });
     }
     const data = await import("@/lib/data");
@@ -354,6 +355,7 @@ describe.skipIf(!driverAvailable)("skill attribution on the /skills catalog", ()
       const ingest = await import("@/lib/db/ingest");
       await ingest.reconcileAllSessions(db!, {
         projectsDir: path.join(tmpHome, ".claude", "projects"),
+        recordRun: "reconcile",
       });
     }
     const data = await import("@/lib/data");
@@ -472,6 +474,7 @@ describe.skipIf(!driverAvailable)("A4 review follow-ups", () => {
     const ingest = await import("@/lib/db/ingest");
     await ingest.reconcileAllSessions(db!, {
       projectsDir: path.join(tmpHome, ".claude", "projects"),
+      recordRun: "reconcile",
     });
     return db!;
   }
