@@ -299,6 +299,20 @@ describe.skipIf(!driverAvailable)("data façade — half-built index gates (#472
       expect((await facade.getUsage("all", requested)).meta.backend).toBe("db");
     } finally {
       restore();
+    }
+
+    // A WORKTREE-encoded adapter dir, which is where the two derivations part.
+    // Claude ingest canonicalizes (stripping the worktree suffix so a worktree's
+    // sessions group with the parent); the adapters do not, and stamp the raw
+    // `toSlug(projectDirName)`. Matching with the Claude derivation here computes
+    // the parent slug, fails to match the stored worktree slug, and so calls the
+    // request covered — silently dropping this session. (Codex P1, PR #474.)
+    const worktreeDir = "C--dev-app-x--claude-worktrees-feature";
+    restore = await mockDiscoverableCodexSession(worktreeDir);
+    try {
+      expect((await facade.getUsage("all", toSlug(worktreeDir))).meta.backend).toBe("db");
+    } finally {
+      restore();
       conn.closeDb();
     }
   });

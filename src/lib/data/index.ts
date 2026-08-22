@@ -1,6 +1,6 @@
 import "server-only";
 import { generateUsageReport, augmentPortfolioYield } from "@/lib/usage/aggregator";
-import { getJsonlMaxMtime, canonicalizeDirName } from "@/lib/usage/parser";
+import { getJsonlMaxMtime } from "@/lib/usage/parser";
 import { scanAllSessions, scanSessionDetail, toSlug } from "@/lib/scanner/claudeConversations";
 import { getSessionMeta } from "@/lib/scanner/claudeStats";
 import { getDb, isDriverLoaded } from "@/lib/db/connection";
@@ -421,8 +421,7 @@ export function getInitStatus(): InitStatus {
   }
 }
 
-// Light, throttled logging for the two INTENTIONAL fall-through
-// cases. These are not bugs — they're expected during migration
+// Light, throttled logging for the INTENTIONAL non-SQL outcomes. These are not bugs — they're expected during migration
 // windows, brand-new installs and first builds — but surfacing them
 // once per process helps an operator spot a stuck reconcile or a cold
 // indexer. Keyed per case so each kind gets logged once even if the
@@ -633,10 +632,13 @@ async function fileParseCoversCorpus(source?: string, project?: string): Promise
   // return empty, which is worse than a partial SQL result — so it never
   // diverts. (Codex P1, PR #474.)
   //
-  // `project` qualifies because `toSlug(canonicalizeDirName(projectDirName))` is
-  // literally how ingest derives `sessions.project_slug`, and
-  // `loadUsageReportFromSql` filters on that column — so the predicate and the
-  // SQL it is standing in for agree by construction rather than by coincidence.
+  // `project` qualifies because `toSlug(projectDirName)` is how ingest stores
+  // `sessions.project_slug` FOR AN ADAPTER SESSION, and `loadUsageReportFromSql`
+  // filters on that column — so the predicate and the SQL it is standing in for
+  // agree by construction rather than by coincidence. Adapter files are the only
+  // thing this predicate ever inspects, so the adapter derivation is the right
+  // one; the Claude path's extra `canonicalizeDirName` step does not apply and
+  // using it here was a real bug (see below).
   // Codex adapter files in OTHER projects are therefore not part of a
   // project-scoped answer and must not suppress the fallback. (Codex P1.)
   //
@@ -663,9 +665,19 @@ async function fileParseCoversCorpus(source?: string, project?: string): Promise
       enabledAdapters: (cfg.enabledAdapters ?? []).filter((id) => id !== "claude"),
     });
     if (!project) return found.length === 0;
-    return !found.some(
-      (f) => toSlug(canonicalizeDirName(f.projectDirName)) === project
-    );
+    // `toSlug` alone — NOT `toSlug(canonicalizeDirName(...))`, which is the
+    // CLAUDE derivation (`ingest.ts`, via `canonicalDir`). Adapters do not
+    // canonicalize: `codex.ts` and `gemini.ts` both stamp their turns with a
+    // plain `toSlug(projectDirName)`, and `buildAdapterParsedSession` keeps that
+    // slug rather than recomputing one. Since `canonicalizeDirName` strips a
+    // worktree suffix, borrowing the Claude derivation here would compute the
+    // PARENT slug for a worktree-encoded adapter dir while the index stored the
+    // worktree slug — and a mismatch reads as "not in this project", i.e. a
+    // false "covered", which drops that session for the length of the first
+    // reconcile. Exactly the failure the asymmetry above exists to prevent, and
+    // committed while claiming exactness. Match the identity that is stored, not
+    // the one a sibling code path happens to build. (Codex P1, PR #474.)
+    return !found.some((f) => toSlug(f.projectDirName) === project);
   } catch {
     return false;
   }
