@@ -8,7 +8,7 @@ import { promises as fs } from "fs";
 // RELATIONSHIP TO `isolatedState.ts`
 //
 // Two isolation helpers live here on purpose. `isolatedState.ts` (#331) is the
-// general one: temp home, homedir spy, `MINDER_STATE_DIR` deletion, module
+// general one: temp home, homedir spy, `MINDER_STATE_DIR` pinning, module
 // reset. **New tests that touch `~/.minder` should use that one.**
 //
 // This file is an MCP-specific SUPERSET, and the extra behaviour is the reason
@@ -81,14 +81,26 @@ export function installMcpIsolation(
   let tmpHome = "";
   let originalHome: string | undefined;
   let originalUserProfile: string | undefined;
+  let originalStateDir: string | undefined;
 
   const setup = async (): Promise<void> => {
     originalHome = process.env.HOME;
     originalUserProfile = process.env.USERPROFILE;
+    originalStateDir = process.env.MINDER_STATE_DIR;
     tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-mcp-"));
     await fs.mkdir(path.join(tmpHome, ".claude", "projects"), { recursive: true });
     process.env.HOME = tmpHome;
     process.env.USERPROFILE = tmpHome;
+    // Load-bearing since #477. `tests/setup/isolateStateDir.ts` now SETS
+    // `MINDER_STATE_DIR` (to a per-fork throwaway dir) instead of deleting it,
+    // and that variable is checked BEFORE `os.homedir()` in `DB_DIR` /
+    // `TASKS_DB_DIR` — so without this line the spy below would be outranked
+    // and every MCP test would share one database with the rest of its fork.
+    // `<tmpHome>/.minder` is what the spy itself produces, so pinning it here
+    // restores agreement rather than introducing a second source of truth.
+    // It also points `resolveStateDir()` at the temp home, which is what stops
+    // `readConfig()` reading the developer's real `.minder.json`.
+    process.env.MINDER_STATE_DIR = path.join(tmpHome, ".minder");
     vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
 
     // Drop globalThis singletons that the DB/usage/scan layers cache
@@ -145,6 +157,8 @@ export function installMcpIsolation(
     else process.env.HOME = originalHome;
     if (originalUserProfile === undefined) delete process.env.USERPROFILE;
     else process.env.USERPROFILE = originalUserProfile;
+    if (originalStateDir === undefined) delete process.env.MINDER_STATE_DIR;
+    else process.env.MINDER_STATE_DIR = originalStateDir;
     try {
       await fs.rm(tmpHome, { recursive: true, force: true });
     } catch {

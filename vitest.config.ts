@@ -15,12 +15,13 @@ export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
     // Runs before each test file is imported — the only point early enough to
-    // affect the module-level DB path constants. See the file for why the
-    // suite must not inherit a MINDER_STATE_DIR from the developer's shell.
-    // Order matters: `pinPricing` explains itself in terms of what
-    // `clearStateDirEnv` does to the pricing cache path, and both must run
-    // before any test module is imported.
-    setupFiles: ["tests/setup/clearStateDirEnv.ts", "tests/setup/pinPricing.ts"],
+    // affect the module-level DB and state path constants. See the file for why
+    // the suite must neither inherit a MINDER_STATE_DIR from the developer's
+    // shell nor fall through to `process.cwd()` without one.
+    // Order matters: `pinPricing` explains itself in terms of where
+    // `isolateStateDir` puts the pricing cache, and both must run before any
+    // test module is imported.
+    setupFiles: ["tests/setup/isolateStateDir.ts", "tests/setup/pinPricing.ts"],
     // Pin the hook order this suite depends on rather than inheriting it.
     //
     // `stack` runs `beforeEach` in registration order and `afterEach` in
