@@ -659,7 +659,7 @@ async function fileParseCoversCorpus(source?: string): Promise<boolean> {
  * that has never been written — a feature either way, tracked as #478 rather
  * than folded into a review round. (Codex P1, PR #474.)
  *
- * Composed rather than folded into `checkBuildStateGate`, because
+ * Composed rather than folded into `isIndexBuilding`, because
  * `getUsageCompare` must keep gating unconditionally: it degrades to
  * "not comparable" rather than falling back, so it needs no corpus and the
  * adapter question does not arise. Putting the check in the shared predicate
@@ -671,8 +671,11 @@ async function checkBuildStateFallback(
   db: DbHandle,
   source?: string
 ): Promise<boolean> {
-  if (!checkBuildStateGate(scope, db)) return false;
-  if (await fileParseCoversCorpus(source)) return true;
+  if (!isIndexBuilding(db)) return false;
+  if (await fileParseCoversCorpus(source)) {
+    logIntentionalFallthrough(scope, BUILDING_REASON);
+    return true;
+  }
   warnOnce(
     `${scope}:adapters-enabled`,
     `[data] ${scope}: index still building, but a non-Claude adapter is enabled and ` +
@@ -682,17 +685,27 @@ async function checkBuildStateFallback(
   return false;
 }
 
-function checkBuildStateGate(scope: string, db: DbHandle): boolean {
+function isIndexBuilding(db: DbHandle): boolean {
   // `getIndexBuildState` swallows its own read errors and fails open to
   // "ready", so unlike `checkV3Gate` this needs no `callDbLoader` wrapper —
   // a readiness check must never convert a schema fault into an outage.
-  if (getIndexBuildState(db) !== "building") return false;
-  logIntentionalFallthrough(
-    scope,
-    "index still building (no full pass recorded yet) — a SQL answer here would be a subset of the corpus presented as the whole of it"
-  );
-  return true;
+  return getIndexBuildState(db) === "building";
 }
+
+/**
+ * Deliberately silent, and its callers are not.
+ *
+ * This used to log "fell back to file-parse" itself, which put the message
+ * before the decision: `checkBuildStateFallback` can go on to decline the
+ * diversion when adapter sessions exist, and `getUsageCompare` never diverts at
+ * all — so an operator reading the log during exactly the window this feature
+ * exists for was told a fallback had happened in two cases where it had not.
+ * A diagnostic that reports the branch it was hoping for rather than the branch
+ * taken is worse than none. Each caller now logs its own outcome. (Copilot,
+ * PR #474.)
+ */
+const BUILDING_REASON =
+  "index still building (no full pass recorded yet) — a SQL answer here would be a subset of the corpus presented as the whole of it";
 
 /**
  * File-parse usage path. Used when `MINDER_USE_DB=0` (explicit
@@ -876,7 +889,13 @@ export async function getUsageCompare(
   // windows of a half-built index is worse than comparing nothing: both sides
   // are subsets, and the *ratio* between them is arbitrary, so the delta would
   // read as a real week-over-week swing.
-  if (checkBuildStateGate("getUsageCompare", db)) {
+  if (isIndexBuilding(db)) {
+    warnOnce(
+      `getUsageCompare:${BUILDING_REASON}`,
+      `[data] getUsageCompare: comparison suppressed (${BUILDING_REASON}). ` +
+        "This one degrades to a not-comparable result rather than falling back — " +
+        "there is no file-parse compare path, and two subsets make an arbitrary delta."
+    );
     return {
       comparison: buildNotComparable(
         period,

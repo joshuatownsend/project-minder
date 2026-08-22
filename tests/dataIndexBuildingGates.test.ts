@@ -319,6 +319,43 @@ describe.skipIf(!driverAvailable)("data façade — half-built index gates (#472
     }
   });
 
+  it("logs the branch it took, not the branch it hoped for", async () => {
+    // The predicate used to log "fell back to file-parse" before its callers had
+    // decided anything, so the two paths that do NOT fall back — an adapter
+    // install, and the comparison — both claimed one in the log. During the
+    // first-build window, which is the only time an operator reads these lines,
+    // that is worse than logging nothing. (Copilot, PR #474.)
+    const { facade, conn } = await seedBuilding();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // Ordinary case: it really does fall back, and says so.
+      await facade.getSessionsList();
+      expect(warn.mock.calls.flat().join("\n")).toContain("fell back to file-parse");
+
+      warn.mockClear();
+      // Compare degrades instead — no fallback claim.
+      await facade.getUsageCompare("7d");
+      const compareLog = warn.mock.calls.flat().join("\n");
+      expect(compareLog).toContain("comparison suppressed");
+      expect(compareLog).not.toContain("fell back to file-parse");
+
+      warn.mockClear();
+      const spies = await mockDiscoverableCodexSession();
+      try {
+        // Declines to divert — must not claim it did.
+        await facade.getUsage("all", undefined);
+        const adapterLog = warn.mock.calls.flat().join("\n");
+        expect(adapterLog).not.toContain("fell back to file-parse");
+        expect(adapterLog).toContain("serving the SQL answer");
+      } finally {
+        spies();
+      }
+    } finally {
+      warn.mockRestore();
+      conn.closeDb();
+    }
+  });
+
   it("keeps the zero-rows fallback alive when the indexer is switched off", async () => {
     // The trap in making this gate a REPLACEMENT rather than an addition. With
     // `MINDER_INDEXER=0` nothing will ever record a pass, so
