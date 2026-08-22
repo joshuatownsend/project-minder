@@ -241,6 +241,7 @@ describe.skipIf(!driverAvailable)("byCategory — file-parse vs SQLite parity", 
       const ingest = await import("@/lib/db/ingest");
       await ingest.reconcileAllSessions(db!, {
         projectsDir: path.join(tmpHome, ".claude", "projects"),
+        recordRun: "reconcile",
       });
     }
     const data = await import("@/lib/data");
@@ -291,6 +292,7 @@ describe.skipIf(!driverAvailable)("byCategory — file-parse vs SQLite parity", 
     const ingest = await import("@/lib/db/ingest");
     await ingest.reconcileAllSessions(db!, {
       projectsDir: path.join(tmpHome, ".claude", "projects"),
+      recordRun: "reconcile",
     });
 
     const data = await import("@/lib/data");
@@ -326,6 +328,7 @@ describe.skipIf(!driverAvailable)("byCategory — file-parse vs SQLite parity", 
     const ingest = await import("@/lib/db/ingest");
     await ingest.reconcileAllSessions(db, {
       projectsDir: path.join(tmpHome, ".claude", "projects"),
+      recordRun: "reconcile",
     });
 
     const cols = (db.prepare("PRAGMA table_info(turns)").all() as Array<{ name: string }>)

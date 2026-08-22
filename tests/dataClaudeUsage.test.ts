@@ -162,7 +162,15 @@ describe.skipIf(!driverAvailable)("data façade — getClaudeUsage backend parit
     const { facade: dbFacade, conn, mig, ingest } = await reloadModules();
     const init = await mig.initDb();
     expect(init.available).toBe(true);
-    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
+    assertReconcileClean(
+      await ingest.reconcileAllSessions((await conn.getDb())!, {
+        projectsDir,
+        // Mirrors production's initial pass, which records itself so the index
+        // can prove it has been read through. Without it the #472 gates read
+        // this seeded DB as "still building" and serve file-parse.
+        recordRun: "reconcile",
+      })
+    );
     const dbResult = await dbFacade.getClaudeUsage(projectPaths);
     expect(dbResult.meta.backend).toBe("db");
 

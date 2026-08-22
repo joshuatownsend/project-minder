@@ -542,6 +542,47 @@ async function checkV3Gate(scope: string, db: DbHandle): Promise<boolean> {
 }
 
 /**
+ * Has the index not yet been read through even once?
+ *
+ * #472. `reconcileAllSessions` commits per file, so a first pass spends nearly
+ * all of its duration with a row count that is non-zero and *rising*. Every
+ * cross-corpus aggregate below therefore had a gate that could not see the
+ * condition it was written for: "zero rows" catches an index that has not
+ * started, never one that is part-way through. In that window a SQL answer is
+ * computed correctly over a SUBSET and returned as `backend: "db"` with nothing
+ * marking it partial — a session list, a usage total and an agent table that
+ * quietly under-report until the pass lands.
+ *
+ * Single-row lookups (`getSessionDetail`) are exempt by construction: a session
+ * is committed whole or not at all, so a hit is complete and a miss already
+ * falls through.
+ *
+ * **Strictly additive — it does not replace the zero-rows checks.** With
+ * `MINDER_INDEXER=0` nothing will ever record a pass, so `getIndexBuildState`
+ * reports "ready" permanently (see `indexerRuns.ts`) and the zero-rows
+ * fall-through is the only thing keeping those pages populated. Removing it
+ * would empty the dashboard for exactly the operators who switched ingest off.
+ *
+ * Unlike `getEngagement`, which refuses with a 503, these fall back to
+ * file-parse: they already have a working file path, and for a dashboard a
+ * slower correct answer beats both a fast wrong one and an error page. The
+ * cost of that is a full JSONL walk for the duration of the first pass —
+ * measured, and bounded by the 2-minute route caches over `/api/usage`,
+ * `/api/agents` and `/api/skills` (30 s for `/api/sessions`).
+ */
+function checkBuildStateGate(scope: string, db: DbHandle): boolean {
+  // `getIndexBuildState` swallows its own read errors and fails open to
+  // "ready", so unlike `checkV3Gate` this needs no `callDbLoader` wrapper —
+  // a readiness check must never convert a schema fault into an outage.
+  if (getIndexBuildState(db) !== "building") return false;
+  logIntentionalFallthrough(
+    scope,
+    "index still building (no full pass recorded yet) — a SQL answer here would be a subset of the corpus presented as the whole of it"
+  );
+  return true;
+}
+
+/**
  * File-parse usage path. Used when `MINDER_USE_DB=0` (explicit
  * opt-out) or when the v3-readiness gate says the DB rows are mid-
  * migration.
@@ -565,6 +606,8 @@ async function runFileUsage(
  * - `MINDER_USE_DB=0`: file-parse, returns immediately.
  * - DB mode + healthy DB + reconcile complete: SQL-backed.
  * - DB mode + v3-catch-up window: file-parse fallback (correctness).
+ * - DB mode + first reconcile still running: file-parse fallback (#472 —
+ *   a SQL total over a partly-ingested corpus is simply a wrong number).
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
 export async function getUsage(
@@ -584,6 +627,14 @@ export async function getUsage(
       "getUsage",
       "DB awaiting v3 reconcile (cost_usd / category_costs not yet populated)"
     );
+    return runFileUsage(period, project, source, home);
+  }
+  // #472. This one had no cold-index gate at ALL — not even the zero-rows
+  // check its neighbours carry — so a first-pass read returned a partial
+  // token/cost total as `backend: "db"` with nothing to distinguish it from a
+  // complete one. The other sites under-reported in a window; this reported a
+  // number that was simply wrong.
+  if (checkBuildStateGate("getUsage", db)) {
     return runFileUsage(period, project, source, home);
   }
   const report = await callDbLoader("getUsage", () =>
@@ -659,6 +710,8 @@ export interface UsageCompareResult {
  * - `MINDER_USE_DB=0`: not comparable (comparison requires the SQL backend).
  * - DB mode + v3-catch-up: not comparable (cost columns not yet populated —
  *   running anyway would report misleading ~0 cost deltas).
+ * - DB mode + first reconcile still running: not comparable (#472 — both
+ *   windows would be subsets, making the delta between them arbitrary).
  * - DB mode + healthy DB: SQL-backed `compareUsageFromSql`.
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  *
@@ -705,6 +758,20 @@ export async function getUsageCompare(
     };
   }
 
+  // #472. There is no file-parse compare path, so this degrades rather than
+  // falls back — the same shape the v3 gate above already uses. Comparing two
+  // windows of a half-built index is worse than comparing nothing: both sides
+  // are subsets, and the *ratio* between them is arbitrary, so the delta would
+  // read as a real week-over-week swing.
+  if (checkBuildStateGate("getUsageCompare", db)) {
+    return {
+      comparison: buildNotComparable(
+        period,
+        "Period comparison is unavailable until the index has been read through once."
+      ),
+      meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) },
+    };
+  }
   const comparison = await callDbLoader("getUsageCompare", () =>
     compareUsageFromSql(db, period, project, source, home)
   );
@@ -834,8 +901,11 @@ export interface SessionsListResult {
  * - DB mode + healthy DB + reconcile complete + non-empty index:
  *   SQL-backed.
  * - DB mode + v3-catch-up: file-parse (correctness).
+ * - DB mode + first reconcile still running: file-parse (#472 — the list
+ *   would otherwise show whichever subset had been ingested so far).
  * - DB mode + empty index: file-parse (UX — brand-new install
- *   still surfaces sessions while the indexer warms up).
+ *   still surfaces sessions while the indexer warms up, and the only
+ *   fallback left when `MINDER_INDEXER=0` makes "building" unreachable).
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  *
  * Project filtering is intentionally NOT pushed into this layer —
@@ -853,6 +923,9 @@ export async function getSessionsList(): Promise<SessionsListResult> {
       "getSessionsList",
       "DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)"
     );
+    return runFileSessionsList();
+  }
+  if (checkBuildStateGate("getSessionsList", db)) {
     return runFileSessionsList();
   }
   const sessions = await callDbLoader("getSessionsList", () =>
@@ -901,6 +974,8 @@ export interface AgentUsageResult {
  * - `MINDER_USE_DB=0`: file-parse.
  * - DB mode + healthy DB + non-empty Agent rows: SQL-backed. No v3
  *   gate — this path doesn't read `cost_usd` or one-shot counts.
+ * - DB mode + first reconcile still running: file-parse fallback, for
+ *   every period (#472).
  * - DB mode + zero Agent rows: file-parse fallback (UX — keeps the
  *   agents page populated until the indexer catches up).
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
@@ -930,6 +1005,15 @@ export async function getAgentUsage(period: Period = "all"): Promise<AgentUsageR
   }
 
   const db = await getReadyDb();
+  // Before the query, and — unlike the zero-rows guard below — for EVERY
+  // period. The Codex P1 that made that guard all-time-only reasoned that an
+  // empty bounded window is a legitimate "no recent invocations" answer. True,
+  // and untouched. But an index that has never been read through cannot answer
+  // a 7-day question either; the two conditions are orthogonal.
+  if (checkBuildStateGate("getAgentUsage", db)) {
+    const { stats: fileStats, meta } = await runFileAgentUsage(period);
+    return withCost(fileStats, meta);
+  }
   const sinceIso = getPeriodStart(period)?.toISOString();
   const stats = await callDbLoader("getAgentUsage", () => loadAgentUsageFromDb(db, sinceIso));
   // Cold-index fall-through ONLY applies to the all-time window. With
@@ -984,6 +1068,8 @@ export interface SkillUsageResult {
  * - DB mode + healthy DB + reconcile complete + non-empty rows: SQL-backed.
  * - DB mode + v3-catch-up: file-parse (correctness — A4 made this a
  *   `cost_usd` reader; see the gate below).
+ * - DB mode + first reconcile still running: file-parse fallback, for
+ *   every period (#472).
  * - DB mode + zero rows: file-parse fallback (UX).
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
@@ -1004,6 +1090,10 @@ export async function getSkillUsage(period: Period = "all"): Promise<SkillUsageR
       "getSkillUsage",
       "DB awaiting v3 reconcile (attributed cost_usd not yet populated)"
     );
+    return runFileSkillUsage(period);
+  }
+  // Every period, for the same reason as `getAgentUsage` above.
+  if (checkBuildStateGate("getSkillUsage", db)) {
     return runFileSkillUsage(period);
   }
   const sinceIso = getPeriodStart(period)?.toISOString();
@@ -1068,6 +1158,7 @@ export interface ClaudeUsageResult {
  * - DB mode + healthy DB + reconcile complete + non-empty conversations:
  *   SQL-backed.
  * - DB mode + v3-catch-up: file-parse (correctness — reads `cost_usd`).
+ * - DB mode + first reconcile still running: file-parse fallback (#472).
  * - DB mode + zero conversations for the filter set: file-parse (UX).
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  */
@@ -1095,6 +1186,9 @@ export async function getClaudeUsage(projectPaths: string[]): Promise<ClaudeUsag
       "getClaudeUsage",
       "DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)"
     );
+    return runFileClaudeUsage(expandedPaths);
+  }
+  if (checkBuildStateGate("getClaudeUsage", db)) {
     return runFileClaudeUsage(expandedPaths);
   }
   const stats = await callDbLoader("getClaudeUsage", () =>

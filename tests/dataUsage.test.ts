@@ -180,7 +180,15 @@ describe.skipIf(!driverAvailable)("data façade — getUsage backend parity", ()
     process.env.MINDER_USE_DB = "1";
     const { facade: dbFacade, conn, mig, ingest } = await reloadModules();
     await mig.initDb();
-    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
+    assertReconcileClean(
+      await ingest.reconcileAllSessions((await conn.getDb())!, {
+        projectsDir,
+        // Mirrors production's initial pass, which records itself so the index
+        // can prove it has been read through. Without it the #472 gates read
+        // this seeded DB as "still building" and serve file-parse.
+        recordRun: "reconcile",
+      })
+    );
     const dbR = (await dbFacade.getUsage("all", undefined)).report;
 
     // Subagent tokens broken out and folded into the totals.
@@ -211,7 +219,15 @@ describe.skipIf(!driverAvailable)("data façade — getUsage backend parity", ()
     const { facade: dbFacade, conn, mig, ingest } = await reloadModules();
     const init = await mig.initDb();
     expect(init.available).toBe(true);
-    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
+    assertReconcileClean(
+      await ingest.reconcileAllSessions((await conn.getDb())!, {
+        projectsDir,
+        // Mirrors production's initial pass, which records itself so the index
+        // can prove it has been read through. Without it the #472 gates read
+        // this seeded DB as "still building" and serve file-parse.
+        recordRun: "reconcile",
+      })
+    );
     const dbResult = await dbFacade.getUsage("all", undefined);
     expect(dbResult.meta.backend).toBe("db");
 
@@ -315,7 +331,15 @@ describe.skipIf(!driverAvailable)("data façade — getUsage backend parity", ()
     const { facade, conn, mig, ingest } = await reloadModules();
     const init = await mig.initDb();
     expect(init.available).toBe(true);
-    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
+    assertReconcileClean(
+      await ingest.reconcileAllSessions((await conn.getDb())!, {
+        projectsDir,
+        // Mirrors production's initial pass, which records itself so the index
+        // can prove it has been read through. Without it the #472 gates read
+        // this seeded DB as "still building" and serve file-parse.
+        recordRun: "reconcile",
+      })
+    );
 
     // Reconcile clears the v3 readiness flag on success — re-set it to
     // simulate a process that's been restarted between migration apply
@@ -339,7 +363,15 @@ describe.skipIf(!driverAvailable)("data façade — getUsage backend parity", ()
     const { facade, conn, mig, ingest } = await reloadModules();
     const init = await mig.initDb();
     expect(init.available).toBe(true);
-    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
+    assertReconcileClean(
+      await ingest.reconcileAllSessions((await conn.getDb())!, {
+        projectsDir,
+        // Mirrors production's initial pass, which records itself so the index
+        // can prove it has been read through. Without it the #472 gates read
+        // this seeded DB as "still building" and serve file-parse.
+        recordRun: "reconcile",
+      })
+    );
 
     const result = await facade.getUsage("all", undefined);
     expect(result.meta.backend).toBe("db");

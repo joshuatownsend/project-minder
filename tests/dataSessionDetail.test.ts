@@ -183,7 +183,15 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
     const { facade: dbFacade, conn, mig, ingest } = await reloadModules();
     const init = await mig.initDb();
     expect(init.available).toBe(true);
-    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
+    assertReconcileClean(
+      await ingest.reconcileAllSessions((await conn.getDb())!, {
+        projectsDir,
+        // Mirrors production's initial pass, which records itself so the index
+        // can prove it has been read through. Without it the #472 gates read
+        // this seeded DB as "still building" and serve file-parse.
+        recordRun: "reconcile",
+      })
+    );
     const dbResult = await dbFacade.getSessionDetail(SESSION_ID);
     expect(dbResult.meta.backend).toBe("db");
     expect(dbResult.detail).not.toBeNull();
@@ -321,7 +329,15 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
     const { facade, conn, mig, ingest } = await reloadModules();
     await mig.initDb();
     const projectsDir = path.join(tmpHome, ".claude", "projects");
-    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
+    assertReconcileClean(
+      await ingest.reconcileAllSessions((await conn.getDb())!, {
+        projectsDir,
+        // Mirrors production's initial pass, which records itself so the index
+        // can prove it has been read through. Without it the #472 gates read
+        // this seeded DB as "still building" and serve file-parse.
+        recordRun: "reconcile",
+      })
+    );
 
     const result = await facade.getSessionDetail("../../../etc/passwd");
     expect(result.detail).toBeNull();
@@ -359,7 +375,15 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
     process.env.MINDER_USE_DB = "1";
     const { facade, conn, mig, ingest } = await reloadModules();
     await mig.initDb();
-    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
+    assertReconcileClean(
+      await ingest.reconcileAllSessions((await conn.getDb())!, {
+        projectsDir,
+        // Mirrors production's initial pass, which records itself so the index
+        // can prove it has been read through. Without it the #472 gates read
+        // this seeded DB as "still building" and serve file-parse.
+        recordRun: "reconcile",
+      })
+    );
 
     const result = await facade.getSessionDetail(SLUG);
     expect(result.meta.backend).toBe("db");
@@ -382,7 +406,15 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
     process.env.MINDER_USE_DB = "1";
     const { facade, conn, mig, ingest } = await reloadModules();
     await mig.initDb();
-    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
+    assertReconcileClean(
+      await ingest.reconcileAllSessions((await conn.getDb())!, {
+        projectsDir,
+        // Mirrors production's initial pass, which records itself so the index
+        // can prove it has been read through. Without it the #472 gates read
+        // this seeded DB as "still building" and serve file-parse.
+        recordRun: "reconcile",
+      })
+    );
 
     const result = await facade.getSessionDetail(HEX_ID);
     expect(result.meta.backend).toBe("db");

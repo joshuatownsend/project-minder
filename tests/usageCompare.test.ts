@@ -277,7 +277,15 @@ describe.skipIf(!driverAvailable)("getUsageCompare — façade not-comparable br
     const { facade, conn, mig, ingest } = await reloadModules();
     const init = await mig.initDb();
     expect(init.available).toBe(true);
-    assertReconcileClean(await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir }));
+    assertReconcileClean(
+      await ingest.reconcileAllSessions((await conn.getDb())!, {
+        projectsDir,
+        // Mirrors production's initial pass, which records itself so the index
+        // can prove it has been read through. Without it the #472 gates read
+        // this seeded DB as "still building" and serve file-parse.
+        recordRun: "reconcile",
+      })
+    );
 
     const { comparison, meta } = await facade.getUsageCompare("7d", undefined);
     expect(meta.backend).toBe("db");

@@ -272,6 +272,7 @@ describe.runIf(driverAvailable)("A5 — provenance survives the SQLite round tri
     const ingest = await import("@/lib/db/ingest");
     await ingest.reconcileAllSessions(db!, {
       projectsDir: path.join(tmpHome, ".claude", "projects"),
+      recordRun: "reconcile",
     });
 
     // Assert against the table first: if the rows are missing the read-path
@@ -327,6 +328,7 @@ describe.runIf(driverAvailable)("A5 — provenance survives the SQLite round tri
     const ingest = await import("@/lib/db/ingest");
     await ingest.reconcileAllSessions(db!, {
       projectsDir: path.join(tmpHome, ".claude", "projects"),
+      recordRun: "reconcile",
     });
 
     const stmt = db!.prepare(

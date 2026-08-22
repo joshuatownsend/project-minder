@@ -356,6 +356,7 @@ describe.skipIf(!driverAvailable)("task_outcome across a tail-append", () => {
     const ingest = await import("@/lib/db/ingest");
     await ingest.reconcileAllSessions(db, {
       projectsDir: path.join(tmpHome, ".claude", "projects"),
+      recordRun: "reconcile",
     });
     return db
       .prepare(
@@ -472,6 +473,7 @@ describe.skipIf(!driverAvailable)("byEffort — adapter (non-Claude) sessions", 
 
     await ingest.reconcileAllSessions(db, {
       projectsDir: path.join(tmpHome, "no-claude-tree"),
+      recordRun: "reconcile",
       config: { statuses: {}, hidden: [], portOverrides: {}, devRoot: tmpHome, enabledAdapters: ["claude", "codex"] },
       adapterSessions: [{ source: "codex", filePath: adapterFile, projectDirName: "codexproj" }],
       // A complete Edit -> verify -> passing-result -> no-re-edit cycle: one
@@ -528,6 +530,7 @@ describe.skipIf(!driverAvailable)("byEffort — file-parse vs SQLite parity", ()
       const ingest = await import("@/lib/db/ingest");
       await ingest.reconcileAllSessions(db!, {
         projectsDir: path.join(tmpHome, ".claude", "projects"),
+        recordRun: "reconcile",
       });
     }
     const data = await import("@/lib/data");

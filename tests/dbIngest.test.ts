@@ -2244,6 +2244,9 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions — non-Claude adapter p
       projectsDir, config: cfg(["claude", "codex"]),
       adapterSessions: [{ source: "codex", filePath: codexFile, projectDirName: "codexproj" }],
       parseAdapterFile: async () => [uAsst("2026-05-01T10:00:01Z", "gpt-5", "do work", "cx-1")],
+      // This test reads through `getUsage`, so the index has to be able to
+      // prove it has been read through — see #472.
+      recordRun: "reconcile",
     });
 
     const sumTurns = (cats: Array<{ turns: number }>) => cats.reduce((n, c) => n + c.turns, 0);
