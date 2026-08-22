@@ -75,6 +75,14 @@ they speed up once the pass finishes. Nothing is required of you.
 If you have turned the indexer off entirely (`MINDER_INDEXER=0`), this does not
 apply: nothing is going to build the index, so there is nothing to wait for.
 
+Two exceptions, both narrow. If you use a **non-Claude coding agent** (Codex,
+Gemini) and Minder can find its sessions, the pages keep their old behaviour
+during that window and may under-report: reading transcripts directly only
+covers Claude, so the swap would trade an incomplete view of every agent for a
+complete view of one. And the **Sessions** page reads every Claude home you have
+configured, not just the default one — if a secondary or WSL home is missing
+from the list, that is a bug rather than this behaviour.
+
 ## Daily Cost Chart
 
 A bar chart showing daily spending across the selected period. Hover over bars to see exact cost, turn count, and token totals for each day. Days are bucketed by your **local** calendar date, so the daily bars, the "Today" total, and the contribution calendar all agree.

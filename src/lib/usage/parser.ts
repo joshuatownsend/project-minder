@@ -58,10 +58,21 @@ function getFileCache(): FileCache<UsageTurn[]> {
     // "the dashboard got slow". The old value was set when the corpus was far
     // smaller and quietly stopped working once it was passed.
     //
-    // Raising it costs no steady-state memory: `retainOnly(liveSet)` prunes to
-    // the live file set on every sweep, so residency is min(corpus, maxEntries)
-    // either way. The cap is a runaway backstop, not the working bound — which
-    // is why setting it near the corpus size bought nothing and cost 45s.
+    // It does cost memory, and the trade is deliberate. `retainOnly(liveSet)`
+    // evicts only files that have been DELETED, so steady-state residency is
+    // min(corpus, maxEntries) — which means raising the cap raises residency
+    // for every corpus above the old one, roughly +6% here (5,000 -> 5,286
+    // entries) and up to 5x on a 25,000-session corpus. What is bought is the
+    // 22x above. Memory proportional to corpus, against a CPU cost that is not
+    // proportional to anything — it is a cliff, and on the wrong side of it
+    // every read of the dashboard re-parses the entire history.
+    //
+    // An entry count was never a memory bound in the first place: a slot holds
+    // one session's whole `UsageTurn[]`, so 5,000 large transcripts could
+    // already exceed 25,000 small ones. Bounding this by retained bytes or
+    // turns would be a real improvement over both numbers; it is a different
+    // change from removing the cliff, and is tracked separately rather than
+    // done here. (Codex P2, PR #474.)
     globalForParser.__usageFileCache = new FileCache<UsageTurn[]>({ maxEntries: 25_000 });
   }
   return globalForParser.__usageFileCache;

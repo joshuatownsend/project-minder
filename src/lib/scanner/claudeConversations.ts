@@ -651,16 +651,49 @@ async function scanSessionFile(
  * Scan all sessions across all projects. Returns lightweight summaries.
  */
 export async function scanAllSessions(): Promise<SessionSummary[]> {
-  const projectsDir = path.join(os.homedir(), ".claude", "projects");
+  // Sweep every readable Claude home, not just the primary tree — the same
+  // set the indexer walks and the same set `parseAllSessions` and
+  // `scanClaudeConversationsForProjects` already sweep. This scanner was the
+  // last one still hard-coded to `os.homedir()`, so a secondary or WSL home's
+  // sessions were missing from the list whenever it served: under
+  // `MINDER_USE_DB=0`, during v3 catch-up, on an empty index — and, once #472
+  // began diverting here, for the whole of the first reconcile. A fallback
+  // that cannot see the same corpus as the path it replaces is not a fallback.
+  // (Codex P1, PR #474.)
+  const { readConfig } = await import("../config");
+  const { getReadableClaudeHomes } = await import("../claudeHome");
+  const config = await readConfig();
+  const homes = await getReadableClaudeHomes(config);
+
   const sessions: SessionSummary[] = [];
 
-  let dirs: string[];
-  try {
-    dirs = await fs.readdir(projectsDir);
-  } catch {
-    return sessions;
+  for (const home of homes) {
+    const projectsDir = path.join(home, "projects");
+    let dirs: string[];
+    try {
+      dirs = await fs.readdir(projectsDir);
+    } catch {
+      // No projects tree in this home — the next one may still have one.
+      continue;
+    }
+    await scanOneHome(projectsDir, dirs, sessions);
   }
 
+  // Sort by most recent activity (endTime) so active sessions appear first
+  sessions.sort((a, b) => {
+    const ta = a.endTime ? new Date(a.endTime).getTime() : 0;
+    const tb = b.endTime ? new Date(b.endTime).getTime() : 0;
+    return tb - ta;
+  });
+
+  return sessions;
+}
+
+async function scanOneHome(
+  projectsDir: string,
+  dirs: string[],
+  sessions: SessionSummary[]
+): Promise<void> {
   for (const dir of dirs) {
     const dirPath = path.join(projectsDir, dir);
     try {
@@ -697,15 +730,6 @@ export async function scanAllSessions(): Promise<SessionSummary[]> {
       // Skip inaccessible directories
     }
   }
-
-  // Sort by most recent activity (endTime) so active sessions appear first
-  sessions.sort((a, b) => {
-    const ta = a.endTime ? new Date(a.endTime).getTime() : 0;
-    const tb = b.endTime ? new Date(b.endTime).getTime() : 0;
-    return tb - ta;
-  });
-
-  return sessions;
 }
 
 // ─── Detailed session scan (timeline, files, subagents) ─────────────

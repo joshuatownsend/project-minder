@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "path";
 import { promises as fs } from "fs";
 import { installIsolatedState } from "./_helpers/isolatedState";
@@ -38,6 +38,7 @@ let tmpHome: string;
 
 const SESSION_A = "aaaaaaaa-1111-2222-3333-444455556666";
 const SESSION_B = "bbbbbbbb-1111-2222-3333-444455556666";
+const SESSION_C = "cccccccc-1111-2222-3333-444455556666";
 
 function userTurn(timestamp: string, text: string) {
   return { type: "user" as const, timestamp, message: { content: [{ type: "text", text }] } };
@@ -139,6 +140,27 @@ async function seedBuilding() {
   return { ...mods, db };
 }
 
+/**
+ * Make a non-Claude session both enabled AND discoverable — the state in which
+ * the file-parse fallback would silently drop a whole source. Returns a
+ * restore function.
+ */
+async function mockDiscoverableCodexSession(): Promise<() => void> {
+  const configMod = await import("@/lib/config");
+  const adaptersMod = await import("@/lib/adapters");
+  const base = await configMod.readConfig();
+  const cfgSpy = vi
+    .spyOn(configMod, "readConfig")
+    .mockResolvedValue({ ...base, enabledAdapters: ["claude", "codex"] });
+  const discSpy = vi.spyOn(adaptersMod, "discoverAllSessions").mockResolvedValue([
+    { source: "codex", filePath: path.join(tmpHome, "codex", "s1.jsonl"), projectDirName: "codexproj" },
+  ]);
+  return () => {
+    cfgSpy.mockRestore();
+    discSpy.mockRestore();
+  };
+}
+
 beforeEach(() => {
   tmpHome = state.tmpHome();
   delete process.env.MINDER_INDEXER;
@@ -203,6 +225,76 @@ describe.skipIf(!driverAvailable)("data façade — half-built index gates (#472
     const agents = await facade.getAgentUsage("24h");
     expect(agents.meta.backend).toBe("db");
     expect(agents.stats.length).toBe(0);
+  });
+
+  it("does not divert to file-parse when a non-Claude adapter is enabled", async () => {
+    // The fallback is only a fallback if it can see the same corpus.
+    // `discoverAllSessions` — which finds Codex and Gemini transcripts — is
+    // imported by `db/ingest.ts` and nothing else, so file-parse sees Claude
+    // and nothing else. Diverting an adapter install would trade a partial view
+    // of every source for a complete view of one, which is the more distorting
+    // of the two and would be done in correctness's name. (Codex P1, PR #474.)
+    const { facade, conn } = await seedBuilding();
+    const spies = await mockDiscoverableCodexSession();
+    try {
+      expect((await facade.getUsage("all", undefined)).meta.backend).toBe("db");
+      expect((await facade.getSessionsList()).meta.backend).toBe("db");
+    } finally {
+      spies();
+      conn.closeDb();
+    }
+  });
+
+  it("still degrades the comparison for an adapter install, which needs no corpus", async () => {
+    // The trap in the fix above. `getUsageCompare` degrades to "not comparable"
+    // rather than falling back, so the adapter question does not arise for it —
+    // and folding the adapter check into the shared build-state predicate would
+    // have quietly returned adapter users to comparing two DB subsets. The
+    // defect, reintroduced by the fix for the defect.
+    const { facade, conn } = await seedBuilding();
+    const spies = await mockDiscoverableCodexSession();
+    try {
+      const { comparison } = await facade.getUsageCompare("7d");
+      expect(comparison.comparable).toBe(false);
+    } finally {
+      spies();
+      conn.closeDb();
+    }
+  });
+
+  it("sweeps every configured Claude home when it falls back to file-parse", async () => {
+    // `scanAllSessions` was hard-coded to `os.homedir()/.claude/projects` while
+    // the indexer walked every configured home, so the fallback served a
+    // secondary or WSL home's user an incomplete list — under `MINDER_USE_DB=0`
+    // and during v3 catch-up before #472, and for the whole first reconcile
+    // after it. (Codex P1, PR #474.)
+    await setupFixture();
+    const secondHome = path.join(tmpHome, "second-home", ".claude");
+    await writeJsonl(
+      path.join(secondHome, "projects", "C--dev-elsewhere", `${SESSION_C}.jsonl`),
+      [
+        userTurn("2026-04-17T12:00:00Z", "work in the other home"),
+        assistantTurn("2026-04-17T12:00:01Z", "claude-sonnet-4-5", "On it"),
+      ]
+    );
+
+    process.env.MINDER_USE_DB = "0";
+    const { facade } = await reloadModules();
+    const configMod = await import("@/lib/config");
+    const base = await configMod.readConfig();
+    const spy = vi
+      .spyOn(configMod, "readConfig")
+      .mockResolvedValue({ ...base, claudeHomes: [secondHome] });
+    try {
+      const result = await facade.getSessionsList();
+      expect(result.meta.backend).toBe("file");
+      // Both homes, not just the primary one.
+      expect(result.sessions.map((s) => s.sessionId).sort()).toEqual(
+        [SESSION_A, SESSION_B, SESSION_C].sort()
+      );
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("keeps the zero-rows fallback alive when the indexer is switched off", async () => {

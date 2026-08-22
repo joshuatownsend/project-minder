@@ -428,12 +428,18 @@ export function getInitStatus(): InitStatus {
 // reconcile or a cold indexer. Distinct map per case so each kind
 // of fall-through gets logged once even if the others fire too.
 const fallthroughLoggedFor = new Set<string>();
-function logIntentionalFallthrough(scope: string, reason: string): void {
-  const key = `${scope}:${reason}`;
+
+/** Emit `message` the first time `key` is seen in this process, then never again. */
+function warnOnce(key: string, message: string): void {
   if (fallthroughLoggedFor.has(key)) return;
   fallthroughLoggedFor.add(key);
   // eslint-disable-next-line no-console
-  console.warn(
+  console.warn(message);
+}
+
+function logIntentionalFallthrough(scope: string, reason: string): void {
+  warnOnce(
+    `${scope}:${reason}`,
     `[data] ${scope}: DB-backed path fell back to file-parse (${reason}). This is expected during migration / cold-indexer windows; a 500 from the route would mean the DB itself is unhealthy.`
   );
 }
@@ -570,6 +576,75 @@ async function checkV3Gate(scope: string, db: DbHandle): Promise<boolean> {
  * measured, and bounded by the 2-minute route caches over `/api/usage`,
  * `/api/agents` and `/api/skills` (30 s for `/api/sessions`).
  */
+/**
+ * Does the file-parse path see the same corpus the SQL path does?
+ *
+ * It does not, whenever a non-Claude adapter is enabled. `discoverAllSessions`
+ * — the thing that finds Codex and Gemini transcripts — is imported by
+ * `db/ingest.ts` and by nothing else; every file-parse entry point walks
+ * `<claude-home>/projects/**` and stops there. That is an architectural
+ * boundary of the file backend, not a regression, and it long predates #472.
+ *
+ * It matters here because #472's gates exist to stop a subset being presented
+ * as a total, and diverting an adapter-enabled install to file-parse would do
+ * exactly that in a different direction: the SQL answer during the first pass
+ * is a partial view of every source, while the file answer is a complete view
+ * of Claude and a total absence of the rest. Dropping a source entirely is the
+ * more distorting of the two, and it would be done in correctness's name.
+ *
+ * So where adapter sessions actually exist the gate declines to divert and the
+ * pre-#472 behaviour stands. That leaves those users with the original defect,
+ * which is worse than fixing it and better than pretending to. Closing it means
+ * giving the file backend adapter discovery, which is a feature rather than a
+ * review fix, and is tracked separately. (Codex P1, PR #474.)
+ *
+ * The test is whether adapter sessions are DISCOVERABLE, not whether an adapter
+ * is enabled. Those differ, and by a lot: this repo's own config has enabled
+ * `codex` for months against an index holding 6,600 Claude sessions and zero
+ * Codex ones, so keying on the flag would have switched the whole of #472 off
+ * for the machine it was written on, to protect a corpus that does not exist.
+ * A predicate that is cheap and wrong is not cheaper than the walk.
+ *
+ * Ordered so the walk is skipped in the common case: a claude-only config
+ * answers from the config alone, and the discovery below runs only while the
+ * index is building AND an adapter is enabled. A discovery that throws counts
+ * as "does not cover" — if we cannot tell what is out there, we must not claim
+ * to have read all of it.
+ */
+async function fileParseCoversCorpus(): Promise<boolean> {
+  const cfg = await readConfig();
+  if ((cfg.enabledAdapters ?? ["claude"]).every((id) => id === "claude")) return true;
+  try {
+    const { discoverAllSessions } = await import("@/lib/adapters");
+    const found = await discoverAllSessions(cfg);
+    return !found.some((f) => f.source !== "claude");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The build-state gate for the five loaders that answer from a corpus.
+ *
+ * Composed rather than folded into `checkBuildStateGate`, because
+ * `getUsageCompare` must keep gating unconditionally: it degrades to
+ * "not comparable" rather than falling back, so it needs no corpus and the
+ * adapter question does not arise. Putting the check in the shared predicate
+ * would silently return adapter users to comparing two DB subsets — the exact
+ * defect, reintroduced by the fix for the defect.
+ */
+async function checkBuildStateFallback(scope: string, db: DbHandle): Promise<boolean> {
+  if (!checkBuildStateGate(scope, db)) return false;
+  if (await fileParseCoversCorpus()) return true;
+  warnOnce(
+    `${scope}:adapters-enabled`,
+    `[data] ${scope}: index still building, but a non-Claude adapter is enabled and ` +
+      "file-parse cannot see adapter sessions — serving the SQL answer rather than " +
+      "trading a partial view of every source for a complete view of one."
+  );
+  return false;
+}
+
 function checkBuildStateGate(scope: string, db: DbHandle): boolean {
   // `getIndexBuildState` swallows its own read errors and fails open to
   // "ready", so unlike `checkV3Gate` this needs no `callDbLoader` wrapper —
@@ -634,7 +709,7 @@ export async function getUsage(
   // token/cost total as `backend: "db"` with nothing to distinguish it from a
   // complete one. The other sites under-reported in a window; this reported a
   // number that was simply wrong.
-  if (checkBuildStateGate("getUsage", db)) {
+  if (await checkBuildStateFallback("getUsage", db)) {
     return runFileUsage(period, project, source, home);
   }
   const report = await callDbLoader("getUsage", () =>
@@ -925,7 +1000,7 @@ export async function getSessionsList(): Promise<SessionsListResult> {
     );
     return runFileSessionsList();
   }
-  if (checkBuildStateGate("getSessionsList", db)) {
+  if (await checkBuildStateFallback("getSessionsList", db)) {
     return runFileSessionsList();
   }
   const sessions = await callDbLoader("getSessionsList", () =>
@@ -1010,7 +1085,7 @@ export async function getAgentUsage(period: Period = "all"): Promise<AgentUsageR
   // empty bounded window is a legitimate "no recent invocations" answer. True,
   // and untouched. But an index that has never been read through cannot answer
   // a 7-day question either; the two conditions are orthogonal.
-  if (checkBuildStateGate("getAgentUsage", db)) {
+  if (await checkBuildStateFallback("getAgentUsage", db)) {
     const { stats: fileStats, meta } = await runFileAgentUsage(period);
     return withCost(fileStats, meta);
   }
@@ -1093,7 +1168,7 @@ export async function getSkillUsage(period: Period = "all"): Promise<SkillUsageR
     return runFileSkillUsage(period);
   }
   // Every period, for the same reason as `getAgentUsage` above.
-  if (checkBuildStateGate("getSkillUsage", db)) {
+  if (await checkBuildStateFallback("getSkillUsage", db)) {
     return runFileSkillUsage(period);
   }
   const sinceIso = getPeriodStart(period)?.toISOString();
@@ -1188,7 +1263,7 @@ export async function getClaudeUsage(projectPaths: string[]): Promise<ClaudeUsag
     );
     return runFileClaudeUsage(expandedPaths);
   }
-  if (checkBuildStateGate("getClaudeUsage", db)) {
+  if (await checkBuildStateFallback("getClaudeUsage", db)) {
     return runFileClaudeUsage(expandedPaths);
   }
   const stats = await callDbLoader("getClaudeUsage", () =>
