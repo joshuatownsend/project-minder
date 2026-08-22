@@ -252,8 +252,7 @@ function pruneAbortedRuns(db: DatabaseT.Database): void {
  * consumers in `data/index.ts` knowingly: the first-build gap was live and this
  * closes it, while the rebuild gap is unchanged from before them and needs a
  * predicate that does not exist yet. Do not read their use of this as evidence
- * that a rebuild is covered; `checkBuildStateFallback` names the tracking
- * issue. (Codex P1, PR #474.)
+ * that a rebuild is covered. Tracked as #478. (Codex P1, PR #474.)
  */
 export function getIndexBuildState(db: DatabaseT.Database): IndexBuildState {
   // "Building" is a claim that something is actively reading the corpus. With

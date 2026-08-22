@@ -656,7 +656,7 @@ async function fileParseCoversCorpus(source?: string): Promise<boolean> {
  * had zero-rows gates, so a rebuild served mixed rows then too. Fixing it needs
  * either an indexed staleness probe (an unindexed one measures 24 ms per
  * request on a 6,600-session index) or a writer for the `'rebuild'` run kind
- * that has never been written — a feature either way, tracked separately rather
+ * that has never been written — a feature either way, tracked as #478 rather
  * than folded into a review round. (Codex P1, PR #474.)
  *
  * Composed rather than folded into `checkBuildStateGate`, because
