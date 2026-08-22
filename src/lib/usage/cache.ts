@@ -25,7 +25,15 @@ interface CacheSlot<T> {
 }
 
 export interface FileCacheOptions {
-  /** Maximum entries before LRU eviction kicks in. Default: 5000. */
+  /**
+   * Maximum entries before LRU eviction kicks in. Default: 5000.
+   *
+   * Size it comfortably ABOVE the file set you expect to sweep. Callers that
+   * walk every file on each pass hit LRU's worst case the moment the set
+   * exceeds this: the sweep evicts exactly what the next sweep wants first, so
+   * the hit rate falls off a cliff to ~0 rather than degrading. See the comment
+   * at the `parseAllSessions` cache in `usage/parser.ts` for a measured 22x.
+   */
   maxEntries?: number;
 }
 
