@@ -25,11 +25,20 @@ export type IndexerRunKind = "reconcile" | "rebuild";
 export type IndexBuildState = "building" | "ready";
 
 /**
- * How many aborted passes a sweep will record before it stops trying. Enough to
- * show a pattern in the table; small enough that a persistent failure cannot
- * grow it without bound.
+ * How many aborted rows the table keeps while readiness is unestablished.
+ * Enough to show a pattern to anyone who looks; small enough that a persistent
+ * failure cannot grow the table without bound.
+ *
+ * Bounds the TABLE, not the recording — those are different things, and the
+ * first version of this bounded the wrong one. Capping recording meant that
+ * after 20 aborted sweeps no *further* sweep was recorded at all, including the
+ * one that finally succeeded once the underlying fault (a permission problem on
+ * a mount, a distro that came back) was fixed. Readiness could then never latch
+ * within the process's lifetime, which is precisely the standing outage
+ * `recordOptionForSweep` was added to prevent. Pruning instead keeps the
+ * recovery path open forever at a fixed storage cost.
  */
-const ABORTED_RUN_RECORD_LIMIT = 20;
+const ABORTED_RUN_KEEP_LIMIT = 20;
 
 /**
  * Open a run row and return its id.
@@ -176,9 +185,10 @@ export function hasCompletedFullReconcile(db: DatabaseT.Database): boolean {
  * does not retry, and an unrecorded sweep cannot clear the latch. The engagement
  * report would then 503 **permanently** on an index that sweeps had long since
  * populated — a fix for a wrong number turning into a standing outage, which is
- * the same trap migration 26 exists to avoid. (Copilot, PR #471; the second half
- * of Codex's P1, which said to let a later successful sweep establish readiness
- * and which the first fix did not implement.)
+ * the same trap the withdrawn migration backfill was reaching for and got wrong
+ * in the other direction. (Copilot, PR #471; the second half of Codex's P1,
+ * which said to let a later successful sweep establish readiness and which the
+ * first fix did not implement.)
  *
  * Self-limiting: recording stops as soon as one non-aborted pass exists, so the
  * steady state is still zero rows per sweep.
@@ -187,23 +197,36 @@ export function recordOptionForSweep(
   db: DatabaseT.Database
 ): { recordRun?: IndexerRunKind } {
   if (hasCompletedFullReconcile(db)) return {};
-  // Bounded. A sweep records every 30 s while readiness is unestablished, which
-  // is fine for the case this exists for — one aborted initial pass, then a
-  // sweep that succeeds — but writes ~2,880 rows a day if enumeration keeps
-  // failing (a permission problem on a mount, say). After enough attempts the
-  // evidence is in and further rows add nothing: readiness stays false, which
-  // is the correct answer for an index that genuinely cannot be read, and the
-  // table stops growing. Not raised in review; a growth path this design
-  // introduced and should not ship with.
-  try {
-    const row = db
-      .prepare("SELECT COUNT(*) AS n FROM indexer_runs WHERE aborted = 1")
-      .get() as { n: number };
-    if (row.n >= ABORTED_RUN_RECORD_LIMIT) return {};
-  } catch {
-    /* unreadable evidence — fall through and record */
-  }
+  // Bounded — by pruning, not by giving up. A sweep records every 30 s while
+  // readiness is unestablished, which is ~2,880 rows a day if enumeration keeps
+  // failing. Dropping all but the newest `ABORTED_RUN_KEEP_LIMIT` aborted rows
+  // holds the table flat while leaving every future sweep free to record, so
+  // the sweep that finally succeeds still clears the latch however long the
+  // fault lasted. See `ABORTED_RUN_KEEP_LIMIT` for why capping the recording
+  // instead was wrong.
+  pruneAbortedRuns(db);
   return { recordRun: "reconcile" };
+}
+
+/**
+ * Keep only the newest `ABORTED_RUN_KEEP_LIMIT` aborted rows.
+ *
+ * Never touches a completed row: those are the readiness evidence, and there is
+ * at most one that matters anyway (recording stops the moment one exists).
+ */
+function pruneAbortedRuns(db: DatabaseT.Database): void {
+  try {
+    db.prepare(
+      `DELETE FROM indexer_runs
+        WHERE aborted = 1
+          AND id NOT IN (
+            SELECT id FROM indexer_runs WHERE aborted = 1
+             ORDER BY id DESC LIMIT ?
+          )`
+    ).run(ABORTED_RUN_KEEP_LIMIT);
+  } catch {
+    /* housekeeping must not destabilize ingest */
+  }
 }
 
 /**

@@ -264,6 +264,35 @@ describe.skipIf(!driverAvailable)("indexer run tracking (#470)", () => {
     }
   }, 60_000);
 
+  it("does not latch on a pass whose adapter discovery failed", async () => {
+    // The same class as a failed `readdir`, one level up: discovery covers an
+    // ENTIRE harness, so a pass that lost it never saw that corpus at all — yet
+    // the failure is caught, the pass returns ordinary stats, and without
+    // counting it the run records `aborted = 0` and permanently marks the index
+    // ready. The Claude walk succeeding is not evidence the Codex/Gemini one did.
+    const { conn, db, runs } = await freshDb();
+    const { reconcileAllSessions } = await import("@/lib/db/ingest");
+    const adapters = await import("@/lib/adapters");
+    const spy = vi
+      .spyOn(adapters, "discoverAllSessions")
+      .mockRejectedValue(new Error("adapter discovery exploded"));
+    try {
+      await reconcileAllSessions(db, {
+        projectsDir: `${tmpHome}/.claude/projects`,
+        recordRun: "reconcile",
+      });
+      const row = db
+        .prepare("SELECT aborted, error FROM indexer_runs")
+        .get() as { aborted: number; error: string | null };
+      expect(row.aborted).toBe(1);
+      expect(row.error).toMatch(/could not be listed/);
+      expect(runs.getIndexBuildState(db)).toBe("building");
+    } finally {
+      spy.mockRestore();
+      conn.closeDb();
+    }
+  }, 60_000);
+
   it("does not claim to be building when the indexer is switched off", async () => {
     // With MINDER_INDEXER=0 nothing is reading the corpus and nothing ever will,
     // so the latch would never clear — a permanent outage rather than a wait.
@@ -309,19 +338,40 @@ describe.skipIf(!driverAvailable)("indexer run tracking (#470)", () => {
     }
   }, 60_000);
 
-  it("stops recording sweeps once the aborted runs have made their point", async () => {
+  it("bounds the aborted-run table without ever giving up on recording", async () => {
     // A sweep records every 30 s while readiness is unestablished. With a
-    // persistent enumeration failure that is ~2,880 rows a day, forever. Not
-    // raised in review; a growth path this design introduced.
+    // persistent enumeration failure that is ~2,880 rows a day, forever — so
+    // the table has to be bounded.
+    //
+    // It must be bounded by PRUNING, not by declining to record. An earlier
+    // version capped the recording: after 20 aborted rows, `recordOptionForSweep`
+    // returned {} for every subsequent sweep — including the one that finally
+    // succeeded once the underlying fault was fixed. Readiness could then never
+    // latch for the life of the process, which is the standing outage this
+    // function exists to prevent. The old test asserted exactly that {} and so
+    // ratified the defect it was meant to guard.
     const { conn, db, runs } = await freshDb();
     try {
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 60; i++) {
+        expect(runs.recordOptionForSweep(db)).toEqual({ recordRun: "reconcile" });
         const id = runs.beginIndexerRun(db, "reconcile");
         runs.finishIndexerRun(db, id, { aborted: true, error: "unreadable" });
       }
       // Still building — the index genuinely cannot be read, which is correct.
       expect(runs.getIndexBuildState(db)).toBe("building");
-      // ...but the table stops growing.
+      // The table is flat, not growing with every sweep.
+      const { n } = db
+        .prepare("SELECT COUNT(*) AS n FROM indexer_runs")
+        .get() as { n: number };
+      expect(n).toBeLessThanOrEqual(21);
+
+      // ...and the recovery path is still open: a sweep that finally reads the
+      // corpus through clears the latch no matter how long the fault lasted.
+      expect(runs.recordOptionForSweep(db)).toEqual({ recordRun: "reconcile" });
+      const good = runs.beginIndexerRun(db, "reconcile");
+      runs.finishIndexerRun(db, good, { filesSeen: 40 });
+      expect(runs.getIndexBuildState(db)).toBe("ready");
+      // And now it stops recording, so the steady state is zero rows per sweep.
       expect(runs.recordOptionForSweep(db)).toEqual({});
     } finally {
       conn.closeDb();

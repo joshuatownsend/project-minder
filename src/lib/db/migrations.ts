@@ -888,7 +888,17 @@ const MIGRATIONS: Migration[] = [
     },
   },
   {
-    version: 26,
+    // 27, NOT 26 — and the gap is deliberate. An earlier commit on this branch
+    // shipped `version: 26` as a *different* migration ("credit an
+    // already-populated index with a completed reconcile"), which was then
+    // rejected as fabricated evidence and deleted. Any database that ran that
+    // intermediate build is already stamped 26, so redefining 26 would never
+    // run here: `aborted` would never be added, and every statement in
+    // `indexerRuns.ts` that touches the column would throw into a deliberately
+    // swallowed catch — a silent, permanent fail-open of the very gate this
+    // migration exists to make trustworthy. Reusing a version number is only
+    // ever safe when nothing has run the old one; that is not the case here.
+    version: 27,
     name: "#470: indexer_runs.aborted — a finished run is not always a completed one",
     up: (db) => {
       // Readiness asked "is `finished_at_ms` set", which a THROWN pass and an
@@ -908,6 +918,15 @@ const MIGRATIONS: Migration[] = [
       if (!cols.some((c) => c.name === "aborted")) {
         db.exec("ALTER TABLE indexer_runs ADD COLUMN aborted INTEGER NOT NULL DEFAULT 0");
       }
+      // Retract the withdrawn backfill. A DB that ran the intermediate v26
+      // carries a row asserting a full pass that nobody observed; with
+      // `aborted` now defaulting to 0 that row reads as completed and latches
+      // readiness on exactly the partly-filled index the gate exists to catch.
+      // Keyed on the marker string the withdrawn migration wrote, so it can
+      // only ever match a row this project fabricated.
+      db.prepare("DELETE FROM indexer_runs WHERE error = ?").run(
+        "backfilled: index predates run tracking"
+      );
     },
   },
 ];

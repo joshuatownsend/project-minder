@@ -180,8 +180,11 @@ export async function GET(request: NextRequest) {
     ({ report } = await getEngagement(period, timeZone, config, project, home));
   } catch (error) {
     if (error instanceof DbUnavailableError) {
+      // `reason` too, exactly as `/api/engagement` returns it: "still indexing"
+      // and "the index is switched off" are different answers to "why is there
+      // no CSV", and a caller that can only read the prose has to guess (#470).
       return NextResponse.json(
-        { error: "engagement-unavailable", message: error.message },
+        { error: "engagement-unavailable", message: error.message, reason: error.reason },
         { status: 503 }
       );
     }

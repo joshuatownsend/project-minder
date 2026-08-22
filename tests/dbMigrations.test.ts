@@ -60,8 +60,8 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     // but each still bumps the schema_version stamp. Note that v3
     // ALSO sets `meta.needs_reconcile_after_v3 = 1` even on fresh DBs;
     // that's harmless because the indexer's first reconcile clears it.
-    expect(result.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]);
-    expect(result.schemaVersion).toBe(26);
+    expect(result.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27]);
+    expect(result.schemaVersion).toBe(27);
 
     const db = await conn.getDb();
     expect(db).not.toBeNull();
@@ -84,7 +84,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
     expect(result.appliedMigrations).toEqual([]);
-    expect(result.schemaVersion).toBe(26);
+    expect(result.schemaVersion).toBe(27);
     second.conn.closeDb();
   });
 
@@ -114,7 +114,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
 
     expect(result.available).toBe(true);
     expect(result.quarantined).not.toBeNull();
-    expect(result.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]);
+    expect(result.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27]);
 
     // The schema ran on the rebuilt empty DB.
     const db = await conn.getDb();
@@ -144,7 +144,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     expect(result.error).toBeNull();
     expect(result.available).toBe(true);
     expect(result.quarantined).not.toBeNull();
-    expect(result.schemaVersion).toBe(26);
+    expect(result.schemaVersion).toBe(27);
     second.conn.closeDb();
   });
 
@@ -198,8 +198,8 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const second = await reloadModulesPointingAt(tmpHome);
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.appliedMigrations).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]);
-    expect(result.schemaVersion).toBe(26);
+    expect(result.appliedMigrations).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27]);
+    expect(result.schemaVersion).toBe(27);
 
     const db2 = await second.conn.getDb();
     const colsRecovered = db2!
@@ -234,8 +234,8 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const second = await reloadModulesPointingAt(tmpHome);
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.appliedMigrations).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]);
-    expect(result.schemaVersion).toBe(26);
+    expect(result.appliedMigrations).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27]);
+    expect(result.schemaVersion).toBe(27);
 
     const db2 = await second.conn.getDb();
     expect(db2).not.toBeNull();
@@ -264,7 +264,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const reloaded = await reloadModulesPointingAt(tmpHome);
     const result = await reloaded.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.schemaVersion).toBe(26);
+    expect(result.schemaVersion).toBe(27);
 
     const db = await reloaded.conn.getDb();
     expect(db).not.toBeNull();
@@ -288,7 +288,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const reloaded = await reloadModulesPointingAt(tmpHome);
     const result = await reloaded.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.schemaVersion).toBe(26);
+    expect(result.schemaVersion).toBe(27);
 
     const db = await reloaded.conn.getDb();
     expect(db).not.toBeNull();
@@ -330,8 +330,8 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const second = await reloadModulesPointingAt(tmpHome);
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.appliedMigrations).toEqual([18, 19, 20, 21, 22, 23, 24, 25, 26]);
-    expect(result.schemaVersion).toBe(26);
+    expect(result.appliedMigrations).toEqual([18, 19, 20, 21, 22, 23, 24, 25, 27]);
+    expect(result.schemaVersion).toBe(27);
 
     const db2 = await second.conn.getDb();
     const rows = db2!
@@ -352,6 +352,66 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     expect(byId.get("s-codex")).toBeNull();
     // No /projects/ segment → left NULL rather than guessed.
     expect(byId.get("s-orphan")).toBeNull();
+    second.conn.closeDb();
+  });
+
+  it("v27 reaches a DB stamped 26 by the withdrawn backfill, and retracts its row (#470)", async () => {
+    // The one migration path that actually bit this branch. An earlier commit
+    // shipped `version: 26` as a DIFFERENT migration — one that credited an
+    // already-populated index with a completed reconcile — which was then
+    // rejected as fabricated evidence and deleted. Any DB that ran that build
+    // is stamped 26 and carries the fabricated row.
+    //
+    // Two things must hold. The `aborted` column has to still arrive, which is
+    // why the replacement is 27 and not a redefinition of 26: reusing the
+    // number would skip it, and every statement in `indexerRuns.ts` that reads
+    // the column throws into a deliberately swallowed catch — a silent,
+    // permanent fail-open of the gate. And the fabricated row has to go, or
+    // with `aborted` defaulting to 0 it reads as a completed pass and latches
+    // readiness on exactly the partly-filled index the gate exists to catch.
+    const reloaded = await reloadModulesPointingAt(tmpHome);
+    await reloaded.mig.initDb();
+    const db = await reloaded.conn.getDb();
+    expect(db).not.toBeNull();
+
+    db!.exec("ALTER TABLE indexer_runs DROP COLUMN aborted");
+    const now = Date.now();
+    db!
+      .prepare(
+        `INSERT INTO indexer_runs
+           (started_at_ms, finished_at_ms, kind, files_seen, files_changed, rows_written, error)
+         VALUES (?, ?, 'reconcile', 12, 0, 0, 'backfilled: index predates run tracking')`
+      )
+      .run(now, now);
+    // A genuine run recorded afterwards must survive the retraction.
+    db!
+      .prepare(
+        `INSERT INTO indexer_runs
+           (started_at_ms, finished_at_ms, kind, files_seen, files_changed, rows_written, error)
+         VALUES (?, ?, 'reconcile', 40, 0, 0, NULL)`
+      )
+      .run(now, now);
+    db!.prepare("UPDATE meta SET value = '26' WHERE key = 'schema_version'").run();
+    reloaded.conn.closeDb();
+
+    const second = await reloadModulesPointingAt(tmpHome);
+    const result = await second.mig.initDb();
+    expect(result.error).toBeNull();
+    // 27 runs even though the stamp is already 26 — the point of the gap.
+    expect(result.appliedMigrations).toEqual([27]);
+    expect(result.schemaVersion).toBe(27);
+
+    const db2 = await second.conn.getDb();
+    const cols = (
+      db2!.prepare("PRAGMA table_info(indexer_runs)").all() as Array<{ name: string }>
+    ).map((c) => c.name);
+    expect(cols).toContain("aborted");
+
+    const rows = db2!
+      .prepare("SELECT files_seen, error FROM indexer_runs")
+      .all() as Array<{ files_seen: number; error: string | null }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].files_seen).toBe(40);
     second.conn.closeDb();
   });
 });

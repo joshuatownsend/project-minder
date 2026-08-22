@@ -3783,6 +3783,16 @@ function isMissingDirError(err: unknown): boolean {
   return (err as NodeJS.ErrnoException | null)?.code === "ENOENT";
 }
 
+/** Human-readable `indexer_runs.error` for a pass that completed (or half did). */
+function describeRunError(stats: IngestStats): string | null {
+  const parts: string[] = [];
+  if (stats.enumerationFailures > 0) {
+    parts.push(`${stats.enumerationFailures} director(ies) could not be listed`);
+  }
+  if (stats.errors > 0) parts.push(`${stats.errors} file(s) failed to parse`);
+  return parts.length > 0 ? parts.join("; ") : null;
+}
+
 export async function reconcileAllSessions(
   db: DatabaseT.Database,
   options: ReconcileOptions = {}
@@ -3804,13 +3814,10 @@ export async function reconcileAllSessions(
       rowsWritten: stats?.rowsWritten,
       // Per-file parse errors are recorded but still count as a completed pass
       // — the index was populated. Only a throw means the pass did not finish.
-      error: stats
-        ? stats.enumerationFailures > 0
-          ? `${stats.enumerationFailures} director(ies) could not be listed`
-          : stats.errors > 0
-            ? `${stats.errors} file(s) failed to parse`
-            : null
-        : "reconcile threw",
+      // Both counts, not the first one that happens to be non-zero: a pass can
+      // fail an enumeration AND hit unparseable files, and reporting only the
+      // former discards the diagnostic the `error` column exists to carry.
+      error: stats ? describeRunError(stats) : "reconcile threw",
       // Not read through: the pass threw, OR it completed but could not
       // enumerate some directory it was supposed to. Per-file PARSE errors are
       // a different thing — the file was seen and the pass finished — so those
@@ -3896,6 +3903,14 @@ async function runReconcileAllSessions(
   } catch (err) {
     adapterSessions = [];
     adapterDiscoveryFailed = true;
+    // Same class as a failed `readdir`, and load-bearing for readiness for the
+    // same reason: discovery covers an entire harness, so a pass that lost it
+    // never saw that corpus at all — yet it returns ordinary stats and would
+    // otherwise record itself `aborted = 0` and latch the index ready. The
+    // individual adapters already swallow their own missing/unreadable dirs
+    // (see `claude.ts` `discover()`), so reaching here means something
+    // genuinely unexpected failed, not that a directory is absent.
+    stats.enumerationFailures++;
     // eslint-disable-next-line no-console
     console.warn(
       `[ingest] adapter discovery failed: ${(err as Error).message}; preserving existing non-Claude sessions.`
@@ -3996,8 +4011,14 @@ async function runReconcileAllSessions(
         for (const f of subEntries) {
           if (f.endsWith(".jsonl")) filePaths.push(path.join(subagentsDir, f));
         }
-      } catch {
-        /* no subagents dir for this session — the common case */
+      } catch (err) {
+        // No `subagents/` dir is the common case and reads as ENOENT — nothing
+        // to read, not a read that failed. Anything else (EACCES on a mount,
+        // EIO, a plain file sitting where the dir should be) means transcripts
+        // that ARE there went unseen, and a pass that never saw them must not
+        // record itself as having read the corpus through. Same predicate as
+        // the two enumeration loops above (#471).
+        if (!isMissingDirError(err)) stats.enumerationFailures++;
       }
     }
     for (const filePath of filePaths) {
