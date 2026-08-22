@@ -595,7 +595,13 @@ CREATE TABLE indexer_runs (
   files_seen    INTEGER NOT NULL DEFAULT 0,
   files_changed INTEGER NOT NULL DEFAULT 0,
   rows_written  INTEGER NOT NULL DEFAULT 0,
-  error         TEXT
+  error         TEXT,
+  -- 1 when the pass did NOT finish: it threw, or the process died and a later
+  -- start closed the row. Distinct from a non-null `error`, which also covers a
+  -- pass that completed while some individual files failed to parse. Readiness
+  -- turns on this column, so the two cases must not share a representation
+  -- (#470).
+  aborted       INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX indexer_runs_by_started ON indexer_runs(started_at_ms DESC);

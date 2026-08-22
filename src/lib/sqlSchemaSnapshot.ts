@@ -1,4 +1,4 @@
-// Last verified: schema version 25 (src/lib/db/schema.sql + migrations v1-v25)
+// Last verified: schema version 27 (src/lib/db/schema.sql + migrations v1-v27)
 // Re-verify with `tests/sqlSchemaSnapshot.test.ts` after any migration.
 //
 // Column ORDER here is not meaningful — the live check compares both
@@ -146,6 +146,8 @@ export const SQL_SCHEMA: TableSchema[] = [
     columns: [
       "id", "started_at_ms", "finished_at_ms", "kind", "files_seen",
       "files_changed", "rows_written", "error",
+      // v27 (#470)
+      "aborted",
     ],
   },
   {

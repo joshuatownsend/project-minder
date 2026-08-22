@@ -887,6 +887,48 @@ const MIGRATIONS: Migration[] = [
       // itself unmeasured rather than summing a partial tree.
     },
   },
+  {
+    // 27, NOT 26 — and the gap is deliberate. An earlier commit on this branch
+    // shipped `version: 26` as a *different* migration ("credit an
+    // already-populated index with a completed reconcile"), which was then
+    // rejected as fabricated evidence and deleted. Any database that ran that
+    // intermediate build is already stamped 26, so redefining 26 would never
+    // run here: `aborted` would never be added, and every statement in
+    // `indexerRuns.ts` that touches the column would throw into a deliberately
+    // swallowed catch — a silent, permanent fail-open of the very gate this
+    // migration exists to make trustworthy. Reusing a version number is only
+    // ever safe when nothing has run the old one; that is not the case here.
+    version: 27,
+    name: "#470: indexer_runs.aborted — a finished run is not always a completed one",
+    up: (db) => {
+      // Readiness asked "is `finished_at_ms` set", which a THROWN pass and an
+      // orphan closed by the next startup both satisfy — so a killed first
+      // reconcile flipped the index to ready and the engagement report went
+      // straight back to answering from a half-built index. Found independently
+      // by Codex (P1) and Copilot on PR #471.
+      //
+      // A non-null `error` cannot carry this distinction on its own: it is also
+      // set when a pass COMPLETED while individual files failed to parse, which
+      // must still count as ready — one unparseable transcript cannot hold a
+      // report offline indefinitely. Three states, so the boolean gets its own
+      // column rather than being pattern-matched out of a human-readable string.
+      //
+      // Idempotent: fresh DBs already have it from schema.sql (v1).
+      const cols = db.prepare("PRAGMA table_info(indexer_runs)").all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === "aborted")) {
+        db.exec("ALTER TABLE indexer_runs ADD COLUMN aborted INTEGER NOT NULL DEFAULT 0");
+      }
+      // Retract the withdrawn backfill. A DB that ran the intermediate v26
+      // carries a row asserting a full pass that nobody observed; with
+      // `aborted` now defaulting to 0 that row reads as completed and latches
+      // readiness on exactly the partly-filled index the gate exists to catch.
+      // Keyed on the marker string the withdrawn migration wrote, so it can
+      // only ever match a row this project fabricated.
+      db.prepare("DELETE FROM indexer_runs WHERE error = ?").run(
+        "backfilled: index predates run tracking"
+      );
+    },
+  },
 ];
 
 /**

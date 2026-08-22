@@ -5,6 +5,11 @@ import os from "os";
 import { performance } from "perf_hooks";
 import { promises as fs } from "fs";
 import type DatabaseT from "better-sqlite3";
+import {
+  beginIndexerRun,
+  finishIndexerRun,
+  type IndexerRunKind,
+} from "./indexerRuns";
 import { canonicalizeDirName, mostFrequent } from "@/lib/usage/parser";
 import { getClaudeHomes, getReadableClaudeHomes } from "@/lib/claudeHome";
 import { normalizePathKey, sessionFileHomeKey } from "@/lib/platform";
@@ -192,6 +197,20 @@ interface IngestStats {
    * while investigating why a just-shipped panel rendered nothing.
    */
   newerDerivationSkips: number;
+  /**
+   * Directories whose enumeration FAILED — a transient UNC/EIO error, a distro
+   * that stopped mid-cycle. Distinct from a home deliberately skipped by the
+   * never-wake gate, which is the user's configuration doing its job and is
+   * already carried by `unavailableDirs`.
+   *
+   * Load-bearing for readiness (#471): the pass returns ordinary stats after
+   * one of these, so without the count a run that never saw an entire home
+   * would be recorded `aborted = 0` and permanently latch the index as ready —
+   * letting the timecard return the partial total this gate exists to prevent.
+   * Codex raised it as a P1 on PR #471; the signal already existed for prune
+   * protection and simply was not surfaced.
+   */
+  enumerationFailures: number;
 }
 
 /**
@@ -3101,6 +3120,17 @@ export interface ReconcileOptions {
    * canned turns without a real adapter or filesystem.
    */
   parseAdapterFile?: (file: SessionFile) => Promise<UsageTurn[]>;
+  /**
+   * Record this pass in `indexer_runs`, so another process can tell whether the
+   * index has ever been read through (#470).
+   *
+   * Opt-in, and that is load-bearing: the watcher re-runs `reconcileAllSessions`
+   * on a 30 s sweep for the life of the process, so recording unconditionally
+   * would write a row every half minute forever and make any "is a pass running"
+   * reading flap. Only the INITIAL pass — the one whose completion actually
+   * changes what the index can answer — passes this.
+   */
+  recordRun?: IndexerRunKind;
 }
 
 export interface FileReconcileResult {
@@ -3733,7 +3763,71 @@ async function reconcileAdapterSessionFile(
   return { rowsWritten: rows, affectedDays, affectedCategoryTuples };
 }
 
+/**
+ * Does a failed `readdir` mean we were unable to read something that is there?
+ *
+ * `ENOENT` does not: the directory simply does not exist, which is a fact about
+ * the corpus rather than a failure to read it. `~/.claude/projects` is absent on
+ * a WSL-only setup with a configured extra home, and on any machine that has
+ * Claude Code installed but no sessions yet. Counting that as an incomplete
+ * enumeration marked EVERY pass aborted, so no completed run was ever recorded,
+ * every 30 s sweep repeated the outcome, and the timecard stayed permanently
+ * unavailable while the readable home had in fact been scanned in full.
+ * (Codex P1, PR #471 — a regression from the previous commit's fix.)
+ *
+ * Everything else does: EACCES, EIO, EBUSY, a transient UNC error, ENOTDIR from
+ * a path that exists but is not a directory. Those mean a corpus that may well
+ * be there was not read.
+ */
+function isMissingDirError(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException | null)?.code === "ENOENT";
+}
+
+/** Human-readable `indexer_runs.error` for a pass that completed (or half did). */
+function describeRunError(stats: IngestStats): string | null {
+  const parts: string[] = [];
+  if (stats.enumerationFailures > 0) {
+    parts.push(`${stats.enumerationFailures} director(ies) could not be listed`);
+  }
+  if (stats.errors > 0) parts.push(`${stats.errors} file(s) failed to parse`);
+  return parts.length > 0 ? parts.join("; ") : null;
+}
+
 export async function reconcileAllSessions(
+  db: DatabaseT.Database,
+  options: ReconcileOptions = {}
+): Promise<IngestStats> {
+  // #470: the pass records itself only when asked. See `ReconcileOptions.recordRun`
+  // for why the 30 s sweep must not.
+  const runId = options.recordRun ? beginIndexerRun(db, options.recordRun) : null;
+  let stats: IngestStats | undefined;
+  try {
+    stats = await runReconcileAllSessions(db, options);
+    return stats;
+  } finally {
+    // `finally`, not the happy path: a pass that threw still has to stop
+    // reading as in-progress, or a killed reconcile latches the row open and
+    // `closeOrphanedIndexerRuns` becomes the only thing that can clear it.
+    finishIndexerRun(db, runId, {
+      filesSeen: stats?.filesSeen,
+      filesChanged: stats?.filesChanged,
+      rowsWritten: stats?.rowsWritten,
+      // Per-file parse errors are recorded but still count as a completed pass
+      // — the index was populated. Only a throw means the pass did not finish.
+      // Both counts, not the first one that happens to be non-zero: a pass can
+      // fail an enumeration AND hit unparseable files, and reporting only the
+      // former discards the diagnostic the `error` column exists to carry.
+      error: stats ? describeRunError(stats) : "reconcile threw",
+      // Not read through: the pass threw, OR it completed but could not
+      // enumerate some directory it was supposed to. Per-file PARSE errors are
+      // a different thing — the file was seen and the pass finished — so those
+      // stay `aborted: false` and count as ready. (#471, Codex P1.)
+      aborted: stats === undefined || stats.enumerationFailures > 0,
+    });
+  }
+}
+
+async function runReconcileAllSessions(
   db: DatabaseT.Database,
   options: ReconcileOptions = {}
 ): Promise<IngestStats> {
@@ -3743,6 +3837,7 @@ export async function reconcileAllSessions(
     rowsWritten: 0,
     errors: 0,
     newerDerivationSkips: 0,
+    enumerationFailures: 0,
   };
 
   await loadPricing();
@@ -3808,6 +3903,14 @@ export async function reconcileAllSessions(
   } catch (err) {
     adapterSessions = [];
     adapterDiscoveryFailed = true;
+    // Same class as a failed `readdir`, and load-bearing for readiness for the
+    // same reason: discovery covers an entire harness, so a pass that lost it
+    // never saw that corpus at all — yet it returns ordinary stats and would
+    // otherwise record itself `aborted = 0` and latch the index ready. The
+    // individual adapters already swallow their own missing/unreadable dirs
+    // (see `claude.ts` `discover()`), so reaching here means something
+    // genuinely unexpected failed, not that a directory is absent.
+    stats.enumerationFailures++;
     // eslint-disable-next-line no-console
     console.warn(
       `[ingest] adapter discovery failed: ${(err as Error).message}; preserving existing non-Claude sessions.`
@@ -3829,7 +3932,12 @@ export async function reconcileAllSessions(
       for (const e of entries) {
         if (e.isDirectory()) subdirs.push({ projectsDir: dir, dirName: e.name });
       }
-    } catch {
+    } catch (err) {
+      // #471: an enumeration this pass was SUPPOSED to complete and could not.
+      // Not the same as a home the never-wake gate deliberately skipped, and
+      // not the same as a root that simply is not there — see
+      // `isMissingDirError`.
+      if (!isMissingDirError(err)) stats.enumerationFailures++;
       // A projects dir that can't be listed — missing primary tree (a
       // WSL-only Claude setup, or a non-Claude user), a distro that stopped
       // mid-cycle, a transient UNC error — shields its rows from the prune
@@ -3877,7 +3985,11 @@ export async function reconcileAllSessions(
         .filter((e) => e.isFile() && e.name.endsWith(".jsonl"))
         .map((e) => path.join(dirPath, e.name));
       sessionDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
-    } catch {
+    } catch (err) {
+      // A project dir that vanished between the home listing and this read is
+      // the corpus changing under us, not a read we failed — the next sweep
+      // sees the true state. Only a real read failure counts.
+      if (!isMissingDirError(err)) stats.enumerationFailures++;
       // A dir that LISTED in the home enumeration but fails its own readdir
       // (distro stopped mid-cycle, transient UNC/EIO error) must not read as
       // "all its sessions vanished" — shield its rows from the prune pass
@@ -3899,8 +4011,14 @@ export async function reconcileAllSessions(
         for (const f of subEntries) {
           if (f.endsWith(".jsonl")) filePaths.push(path.join(subagentsDir, f));
         }
-      } catch {
-        /* no subagents dir for this session — the common case */
+      } catch (err) {
+        // No `subagents/` dir is the common case and reads as ENOENT — nothing
+        // to read, not a read that failed. Anything else (EACCES on a mount,
+        // EIO, a plain file sitting where the dir should be) means transcripts
+        // that ARE there went unseen, and a pass that never saw them must not
+        // record itself as having read the corpus through. Same predicate as
+        // the two enumeration loops above (#471).
+        if (!isMissingDirError(err)) stats.enumerationFailures++;
       }
     }
     for (const filePath of filePaths) {
