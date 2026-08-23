@@ -15,11 +15,12 @@ import { getReadableClaudeHomes } from "@/lib/claudeHome";
 // claudeConversations.ts:502). Extracted here so the validation rules and the
 // walk pattern stay in lockstep.
 
-const SESSION_ID_RE = /^[a-f0-9-]+$/i;
-
-export function isValidSessionId(sessionId: string): boolean {
-  return SESSION_ID_RE.test(sessionId);
-}
+// Re-exported rather than redefined (#483). This module and four other sites
+// each carried their own copy of the same literal, which is how they all missed
+// `agent-<hex>` at once. `parser.ts` re-exports from here, so external callers
+// (the `/api/sessions/[sessionId]/*` routes) keep their import path.
+import { isValidSessionId } from "@/lib/sessionId";
+export { isValidSessionId };
 
 /** Walk `<home>/projects/<dir>/<sessionId>.jsonl` across every readable
  *  Claude home (primary + config.claudeHomes) until the first match.

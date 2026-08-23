@@ -1,4 +1,4 @@
-import { isValidSessionId } from "@/lib/usage/sessionPath";
+import { looksLikeSessionId } from "@/lib/sessionId";
 
 /**
  * Parent-session linkage for subagent transcripts, derived from the file path.
@@ -52,6 +52,15 @@ export function parseSubagentParentSessionId(filePath: string): string | undefin
   if (fileIdx < 2) return undefined;
   if (segments[fileIdx - 1] !== "subagents") return undefined;
   const parent = segments[fileIdx - 2];
-  if (!parent || !isValidSessionId(parent)) return undefined;
+  // `looksLikeSessionId`, NOT `isValidSessionId` (#483). This is the third
+  // question the old shared regex was answering: not "is this safe in a path"
+  // and not "id or slug", but "does this segment PLAUSIBLY name a session" —
+  // a heuristic that stops a stray `subagents/` directory anywhere in a tree
+  // from fabricating a parent id out of its parent folder's name. The
+  // traversal guard is deliberately permissive now, so it would accept
+  // `inbox` here; the narrow shape predicate is the one that means what this
+  // line needs. Pinned by `subagentTranscriptPath.test.ts`, which caught this
+  // when the guard was widened.
+  if (!parent || !looksLikeSessionId(parent)) return undefined;
   return parent;
 }

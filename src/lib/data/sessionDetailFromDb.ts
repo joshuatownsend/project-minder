@@ -6,6 +6,7 @@ import type DatabaseT from "better-sqlite3";
 import { decodeDirName } from "@/lib/platform";
 import { parseStoredArgs } from "@/lib/db/storedArgs";
 import { prepCached } from "@/lib/db/connection";
+import { isValidSessionId } from "@/lib/sessionId";
 import { isWorktreeFilePath } from "@/lib/scanner/worktreeCheck";
 import { readSubagentMetaSync } from "@/lib/scanner/subagentMeta";
 import { enrichSubagentsFromOtel } from "@/lib/scanner/subagentEnrichment";
@@ -212,9 +213,12 @@ export async function loadSessionDetailFromDb(
   db: DatabaseT.Database,
   sessionId: string
 ): Promise<SessionDetail | null> {
-  // SessionId-shape gate: same regex as `scanSessionDetail` — UUIDs and
-  // hex-only — so a path-traversal attempt can't even hit the DB.
-  if (!/^[a-f0-9-]+$/i.test(sessionId)) return null;
+  // SessionId-shape gate, so a path-traversal attempt can't even hit the DB.
+  // This comment used to say "same regex as `scanSessionDetail`", which was
+  // true and was the bug: agreement maintained by copying a literal drifts in
+  // lockstep, and all five copies rejected `agent-<hex>` together (#483). Now
+  // the same function, not the same text.
+  if (!isValidSessionId(sessionId)) return null;
 
   const session = prepCached(db,
       `SELECT session_id, project_slug, project_dir_name, file_path, file_mtime_ms,

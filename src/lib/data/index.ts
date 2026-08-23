@@ -1,6 +1,7 @@
 import "server-only";
 import { generateUsageReport, augmentPortfolioYield } from "@/lib/usage/aggregator";
 import { getJsonlMaxMtime } from "@/lib/usage/parser";
+import { looksLikeSessionId } from "@/lib/sessionId";
 import { scanAllSessions, scanSessionDetail, toSlug } from "@/lib/scanner/claudeConversations";
 import { getSessionMeta } from "@/lib/scanner/claudeStats";
 import { getDb, isDriverLoaded } from "@/lib/db/connection";
@@ -1003,8 +1004,15 @@ async function resolveSessionDetail(idOrSlug: string): Promise<SessionDetailResu
   // via slug. Claude Code's slug dictionary uses words with letters
   // past `f`, so this isn't observed in practice; documented for
   // future generators.
-  const looksLikeSessionId = /^[a-f0-9-]+$/i.test(idOrSlug);
-  const sessionId = looksLikeSessionId ? idOrSlug : resolveSlugToSessionId(db, idOrSlug);
+  //
+  // This is the one gate that must stay NARROW, and the reason #483 could not
+  // just point all five sites at `isValidSessionId`. It decides id-vs-slug, not
+  // path safety: widened to the path-safe allowlist, every slug would read as
+  // an id and `resolveSlugToSessionId` would never run. It now admits the
+  // `agent-` subagent form as well, which cannot collide with a real slug for
+  // the same reason the hex edge case doesn't.
+  const isSessionId = looksLikeSessionId(idOrSlug);
+  const sessionId = isSessionId ? idOrSlug : resolveSlugToSessionId(db, idOrSlug);
   const fallbackKey = sessionId ?? idOrSlug;
 
   if (await checkV3Gate("getSessionDetail", db)) {

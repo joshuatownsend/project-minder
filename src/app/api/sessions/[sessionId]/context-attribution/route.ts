@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import { resolveSessionJsonl } from "@/lib/usage/sessionPath";
+import { isValidSessionId } from "@/lib/sessionId";
 import {
   attributeContext,
   type AttributionEntry,
@@ -37,8 +38,9 @@ export async function GET(
 ) {
   const { sessionId } = await params;
   // Same allowlist the parser applies before touching the filesystem —
-  // blocks path-traversal characters at the boundary.
-  if (!/^[a-f0-9-]+$/i.test(sessionId)) {
+  // blocks path-traversal characters at the boundary. Now literally the same
+  // function rather than a copy of the same text (#483).
+  if (!isValidSessionId(sessionId)) {
     return NextResponse.json({ error: "Invalid session id" }, { status: 404 });
   }
 

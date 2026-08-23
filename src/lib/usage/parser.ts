@@ -134,6 +134,7 @@ export function mostFrequent<K>(m: Map<K, number>): K | null {
 // import from `@/lib/usage/parser` historically; the re-export keeps
 // those imports working without touching every callsite.
 export { isValidSessionId } from "./sessionPath";
+import { isValidSessionId } from "@/lib/sessionId";
 
 // ── Single-file parser ────────────────────────────────────────────────────────
 
@@ -876,7 +877,7 @@ export class SessionTurnsLoadError extends Error {
 export async function loadSessionTurnsBySessionId(
   sessionId: string
 ): Promise<UsageTurn[] | null> {
-  if (!/^[a-f0-9-]+$/i.test(sessionId)) return null;
+  if (!isValidSessionId(sessionId)) return null;
 
   // resolveSessionJsonl walks every readable Claude home. ENOENT is folded to
   // null inside it (legitimate: no Claude Code / fresh install → route 404s);
@@ -957,7 +958,7 @@ export async function findSessionFile(
 export async function loadSessionWithMetaBySessionId(
   sessionId: string
 ): Promise<{ turns: UsageTurn[]; meta: SessionTurnsMeta } | null> {
-  if (!/^[a-f0-9-]+$/i.test(sessionId)) return null;
+  if (!isValidSessionId(sessionId)) return null;
 
   // Same multi-home resolve + error contract as loadSessionTurnsBySessionId.
   let found: { filePath: string; projectDirName: string } | null;

@@ -23,6 +23,7 @@ import { extractTicketsFromEntries } from "../usage/ticketExtractor";
 import { readSubagentMeta } from "./subagentMeta";
 import { enrichSubagentsFromOtel } from "./subagentEnrichment";
 import { resolveSessionJsonl } from "../usage/sessionPath";
+import { isValidSessionId } from "@/lib/sessionId";
 import type { SubagentMeta } from "./subagentMeta";
 import type { UsageTurn, ToolCall as UsageToolCall } from "../usage/types";
 import {
@@ -748,8 +749,10 @@ const FILE_TOOL_OPERATIONS: Record<string, string> = {
 export async function scanSessionDetail(
   sessionId: string
 ): Promise<SessionDetail | null> {
-  // Validate sessionId to prevent path traversal — UUIDs and hex IDs only
-  if (!/^[a-f0-9-]+$/i.test(sessionId)) {
+  // Validate sessionId to prevent path traversal. Shared with every other
+  // gate (#483) — the copies of this literal are what silently excluded
+  // `agent-<hex>` subagent sessions from all five of them at once.
+  if (!isValidSessionId(sessionId)) {
     return null;
   }
 

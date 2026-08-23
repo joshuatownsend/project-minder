@@ -323,6 +323,51 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
     });
   });
 
+  it("opens an agent-* subagent session rather than 404ing on its id (#483)", async () => {
+    // The regression #483 records, end to end through the facade.
+    //
+    // Newer Claude Code writes subagent transcripts to
+    // `<project>/<session>/subagents/agent-*.jsonl`, and ingest walks them —
+    // so `loadSessionsListFromDb`, whose only predicate is `turn_count > 0`,
+    // LISTS them. Every detail loader then rejected the id at a
+    // `/^[a-f0-9-]+$/i` gate, because `g`/`n`/`t` are not hex. Measured on a
+    // real index: 1,268 of 6,656 sessions (19%) listed and unopenable, on both
+    // backends.
+    const projectsDir = await setupFixture();
+    const AGENT_ID = "agent-a38db58938dbeea68";
+    await writeJsonl(
+      path.join(projectsDir, "C--dev-app-x", SESSION_ID, "subagents", `${AGENT_ID}.jsonl`),
+      [
+        userTurn("2026-04-15T10:00:10Z", "scope the bug"),
+        assistantTurn("2026-04-15T10:00:11Z", "claude-sonnet-4-5", "Found it", [
+          { id: "tu_s1", name: "Read", input: { file_path: "/repo/parser.ts" } },
+        ]),
+      ]
+    );
+
+    process.env.MINDER_USE_DB = "1";
+    const { facade, conn, mig, ingest } = await reloadModules();
+    await mig.initDb();
+    assertReconcileClean(
+      await ingest.reconcileAllSessions((await conn.getDb())!, {
+        projectsDir,
+        recordRun: "reconcile",
+      })
+    );
+
+    // Premise guard: without this the assertion below could pass because the
+    // session was never indexed, which is a different (and silent) failure.
+    const db = (await conn.getDb())!;
+    const row = db
+      .prepare("SELECT session_id FROM sessions WHERE session_id = ?")
+      .get(AGENT_ID) as { session_id: string } | undefined;
+    expect(row?.session_id).toBe(AGENT_ID);
+
+    const result = await facade.getSessionDetail(AGENT_ID);
+    expect(result.detail).not.toBeNull();
+    expect(result.detail!.sessionId).toBe(AGENT_ID);
+  });
+
   it("rejects path-traversal-shaped sessionIds", async () => {
     await setupFixture();
     process.env.MINDER_USE_DB = "1";
