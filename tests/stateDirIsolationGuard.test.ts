@@ -105,3 +105,39 @@ describe("suite-wide state dir isolation (#477)", () => {
     });
   });
 });
+
+describe("config writes into a state dir that does not exist yet (#482)", () => {
+  const state = installIsolatedState({ prefix: "pm-cfgwrite-" });
+
+  it("creates the state dir rather than failing with ENOENT", async () => {
+    // Discriminates `ensureStateDir()` in `src/lib/config.ts`. `writeFileAtomic`
+    // writes its temp file with a plain `fs.writeFile` and creates no parent, so
+    // before that call `writeConfig()` threw ENOENT whenever nothing else had
+    // made the directory first.
+    //
+    // Production hit this too, not just tests: `initDb`'s
+    // `mkdir(DB_DIR, { recursive: true })` was what happened to create it on a
+    // normal boot, but with `MINDER_USE_DB=0` or `better-sqlite3` absent nothing
+    // does, and a fresh machine's first `setProjectStatus()` would have failed.
+    //
+    // The premise guard matters: if the directory already exists this asserts
+    // nothing at all, which is exactly how the bug hid for so long.
+    await state.reload();
+    const { writeConfig, readConfig } = await import("@/lib/config");
+    const { resolveStateDir } = await import("@/lib/serverRoot");
+
+    const stateDir = resolveStateDir();
+    expect(existsSync(stateDir)).toBe(false);
+
+    await writeConfig({
+      statuses: { demo: "active" },
+      hidden: ["x"],
+      portOverrides: {},
+      devRoot: "C:\dev",
+      pinnedSlugs: [],
+    });
+
+    expect(existsSync(path.join(stateDir, ".minder.json"))).toBe(true);
+    expect((await readConfig()).hidden).toEqual(["x"]);
+  });
+});

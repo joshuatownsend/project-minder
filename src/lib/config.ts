@@ -88,8 +88,32 @@ export async function isFirstRun(): Promise<boolean> {
   }
 }
 
+/**
+ * Create the state directory if it isn't there yet.
+ *
+ * `writeFileAtomic` writes its temp file with a plain `fs.writeFile` and never
+ * creates a parent — correct for its other callers, which write into
+ * directories that already exist and where a missing parent is a real error
+ * worth surfacing (a project's `TODO.md`, a snapshot target). The state dir is
+ * different: it is ours, and nothing else is guaranteed to have made it.
+ *
+ * `initDb` does `mkdir(DB_DIR, { recursive: true })`, which is why this never
+ * surfaced — the index is created on virtually every boot and `DB_DIR` is the
+ * same directory whenever `MINDER_STATE_DIR` is set. But that is a coincidence
+ * of ordering, not a guarantee: with `MINDER_USE_DB=0`, or with the optional
+ * `better-sqlite3` dependency absent, nothing creates it, and on a fresh
+ * machine the first `setProjectStatus()` would fail with ENOENT.
+ *
+ * Found by Codex on PR #482, where making the test state dir lazy removed the
+ * eager `mkdir` that had been masking it there too.
+ */
+async function ensureStateDir(): Promise<void> {
+  await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
+}
+
 export async function writeConfig(config: MinderConfig): Promise<void> {
   configCache = null;
+  await ensureStateDir();
   await writeFileAtomic(CONFIG_PATH, JSON.stringify(config, null, 2));
 }
 
