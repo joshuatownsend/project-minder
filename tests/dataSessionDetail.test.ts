@@ -481,6 +481,58 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
     expect(result.detail!.sessionId).toBe(SESSION_ID);
   });
 
+  it("an exact session id wins over another session's identical slug (#484)", async () => {
+    // Nothing enforces that a slug cannot equal some other session's id — the
+    // schema has no cross-column uniqueness constraint, and a hex-shaped slug
+    // is the long-documented `cafe-faded-deed` case. So when slug was probed
+    // first, `/sessions/<sessionId>` could silently open a DIFFERENT session:
+    // a wrong answer rather than a missing one, which is the worse failure.
+    //
+    // Pins the lookup ORDER (id, then slug, then shape) rather than any regex.
+    const OTHER_ID = "11112222-3333-4444-5555-666677778888";
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+
+    // Session A: the one actually being asked for, keyed by its id.
+    await writeJsonl(path.join(projectsDir, "C--dev-app", `${SESSION_ID}.jsonl`), [
+      userTurn("2026-04-15T10:00:00Z", "the session we want"),
+      assistantTurn("2026-04-15T10:00:01Z", "claude-sonnet-4-5", "A", []),
+    ]);
+    // Session B: a decoy carrying A's id as its SLUG.
+    await writeJsonl(path.join(projectsDir, "C--dev-app", `${OTHER_ID}.jsonl`), [
+      userTurn("2026-04-15T11:00:00Z", "the decoy"),
+      {
+        type: "assistant",
+        timestamp: "2026-04-15T11:00:01Z",
+        slug: SESSION_ID,
+        message: {
+          model: "claude-sonnet-4-5",
+          content: [{ type: "text", text: "B" }],
+          stop_reason: "end_turn",
+          usage: { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+        },
+      } as any,
+    ]);
+
+    process.env.MINDER_USE_DB = "1";
+    const { facade, conn, mig, ingest } = await reloadModules();
+    await mig.initDb();
+    assertReconcileClean(
+      await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir, recordRun: "reconcile" })
+    );
+
+    // Premise guard: the decoy must really carry that slug, or this asserts
+    // nothing — the id would win by default rather than by the fix.
+    const db = (await conn.getDb())!;
+    const decoy = db
+      .prepare("SELECT session_id FROM sessions WHERE slug = ?")
+      .get(SESSION_ID) as { session_id: string } | undefined;
+    expect(decoy?.session_id).toBe(OTHER_ID);
+
+    const result = await facade.getSessionDetail(SESSION_ID);
+    expect(result.detail).not.toBeNull();
+    expect(result.detail!.sessionId).toBe(SESSION_ID);
+  });
+
   it("non-canonical hex sessionIds still hit the DB loader (not slug resolution)", async () => {
     // 32-char hex without UUID dashes — valid for the loader's hex gate
     // but rejected by a strict UUID regex. Pre-PR-60-fix this would have

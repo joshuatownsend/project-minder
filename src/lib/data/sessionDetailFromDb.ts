@@ -357,9 +357,26 @@ export async function loadSessionDetailFromDb(
     key: r.ticket_key,
   }));
 
-  const jsonlPath = path.join(
-    os.homedir(), ".claude", "projects", session.project_dir_name, `${sessionId}.jsonl`
-  );
+  // The INDEXED path, not one rebuilt from the id (Copilot, PR #484). The
+  // reconstruction below it was wrong in two independent ways, and #483 made
+  // the first one reachable:
+  //
+  //   - Nested subagent transcripts live at
+  //     `<project>/<parent>/subagents/<id>.jsonl`. Rebuilding
+  //     `<project>/<id>.jsonl` names a file that cannot exist, so an
+  //     `agent-*` session that delegates further lost its subagent cards'
+  //     `.meta.json` enrichment — silently, since a missing meta file is
+  //     indistinguishable from a session that had no subagents.
+  //   - `os.homedir()` is hardcoded, so any session indexed from a SECONDARY
+  //     Claude home (`config.claudeHomes`, the WSL case) resolved against the
+  //     primary one. That predates this PR and applies to flat sessions too.
+  //
+  // `file_path` is what ingest actually wrote, so it is right for both.
+  const jsonlPath =
+    session.file_path ||
+    path.join(
+      os.homedir(), ".claude", "projects", session.project_dir_name, `${sessionId}.jsonl`
+    );
   const subagentMetaMap = readSubagentMetaSync(jsonlPath);
   const aggregates = aggregateTools(tools, subagentMetaMap);
   // OTEL-derived runtime metrics (cost, tokens, model, duration) on each

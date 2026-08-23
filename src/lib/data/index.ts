@@ -1004,17 +1004,33 @@ async function resolveSessionDetail(idOrSlug: string): Promise<SessionDetailResu
   // the pattern only moves the boundary — it is a guess about id content either
   // way, which is the same mistake #483 was about.
   //
-  // A slug lookup is a single indexed read, so there is no reason to guess:
-  // if a session actually carries this slug, that is a fact and it wins.
-  // Otherwise fall back to shape, which is all that is available for an id.
-  // This also retires the long-documented `cafe-faded-deed` edge case — a
-  // hex-only slug now resolves correctly instead of being knowingly lost.
+  // Both lookups are single indexed reads, so there is no reason to guess —
+  // and the ORDER between them is load-bearing. `session_id` is probed first:
+  // nothing enforces that a slug cannot equal some other session's id (the
+  // schema has no cross-column uniqueness constraint, and Claude Code's slug
+  // generator is free to emit a hex-shaped one — the `cafe-faded-deed` case
+  // that has been documented here for years is exactly that shape). Checking
+  // the slug first therefore let `/sessions/<sessionId>` silently open a
+  // DIFFERENT session that happened to carry that string as its slug — a wrong
+  // answer rather than a missing one, which is the worse failure (Copilot,
+  // PR #484).
   //
-  // The asymmetry that makes the fallback safe: a value wrongly treated as a
-  // slug still reaches `scanSessionDetail` below when the lookup misses, but a
-  // value wrongly treated as an id never gets a slug lookup at all.
-  const bySlug = resolveSlugToSessionId(db, idOrSlug);
-  const sessionId = bySlug ?? (looksLikeSessionId(idOrSlug) ? idOrSlug : null);
+  // Exact id → that session. Otherwise a slug that really exists → its session.
+  // Otherwise fall back to shape, which is all that is available for an id the
+  // index has not seen (the file-parse path below still handles it).
+  //
+  // This ordering also fixes what the shape test alone could not:
+  // `agent-cafe-deed` is a legitimate slug whose remainder is hex-and-dash, so
+  // once `agent-` was admitted as an id prefix it began reading as an id and
+  // 404ing. No session has that id, so the slug lookup now wins. And the
+  // `cafe-faded-deed` case is no longer "knowingly lost" either.
+  const idRow = db
+    .prepare(`SELECT session_id FROM sessions WHERE session_id = ? LIMIT 1`)
+    .get(idOrSlug) as { session_id: string } | undefined;
+  const sessionId =
+    idRow?.session_id ??
+    resolveSlugToSessionId(db, idOrSlug) ??
+    (looksLikeSessionId(idOrSlug) ? idOrSlug : null);
   const fallbackKey = sessionId ?? idOrSlug;
 
   if (await checkV3Gate("getSessionDetail", db)) {
