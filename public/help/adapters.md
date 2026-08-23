@@ -44,6 +44,12 @@ When Gemini is enabled, the global `GEMINI.md` context file (at `~/.gemini/GEMIN
 
 When you enable Codex or Gemini, their sessions are indexed into the same SQLite index Claude Code sessions use, so they appear in the sessions browser and feed the usage analytics. A few things are worth knowing about how this works:
 
+- **The index is not the only reader.** Minder falls back to reading transcripts
+  directly in a few situations — while the index is being built for the first
+  time, or when you set `MINDER_USE_DB=0` — and that path now discovers your
+  enabled adapters too, so usage, cost and activity totals stay cross-agent
+  either way. The one page still Claude-only on that path is the **Sessions**
+  list; with the index switched off, non-Claude sessions are missing from it.
 - **Opt-in.** Indexing only happens for adapters listed in `enabledAdapters`. With the default (`["claude"]`), no Codex/Gemini data is read or written — enabling an adapter is what turns its indexing on. Disabling an adapter later removes its sessions from the index on the next scan.
 - **Lean index for non-Claude.** Claude Code sessions are parsed from their raw JSONL into the richest possible record. Codex/Gemini sessions are indexed through the adapter's own parser, which yields a slightly leaner record. What you **do** get: per-session and per-turn **cost**, **token** totals, **By Source / By Model / By Project / By Category** breakdowns, **work-mode** mix, **one-shot** rate, **tool usage**, and full **session list + detail** (timeline, tools). What is currently **Claude-only**: full-text prompt search richness, PR/ticket chips, resume-anomaly and compaction-loop flags, and per-turn context-fill.
 - **Identity.** Each non-Claude session is keyed by the real session ID the harness records (Codex `session_meta.payload.id`, Gemini `record.sessionId`), not its filename — so sessions correlate correctly and never collide across harnesses.

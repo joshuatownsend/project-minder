@@ -19,6 +19,10 @@ Aggregated from conversation logs in `~/.claude/projects/`:
 - **Models** — which Claude models have been used
 - **Errors** — API error count across all conversations
 
+This card covers **Claude Code only**. If you have enabled the Codex or Gemini
+adapters, their sessions are not counted here — see the Usage page for
+cross-agent totals and the By Source breakdown.
+
 A **conversation** here means a session you started. Transcripts that Claude Code writes for the subagents a session delegates to (`<session>/subagents/agent-*.jsonl`) are not counted as conversations of their own, so a project's conversation count reflects the sessions you ran.
 
 ### Cross-check vs Claude's stats-cache

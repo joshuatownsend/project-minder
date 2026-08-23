@@ -75,13 +75,18 @@ they speed up once the pass finishes. Nothing is required of you.
 If you have turned the indexer off entirely (`MINDER_INDEXER=0`), this does not
 apply: nothing is going to build the index, so there is nothing to wait for.
 
-Two exceptions, both narrow. If you use a **non-Claude coding agent** (Codex,
-Gemini) and Minder can find its sessions, the pages keep their old behaviour
-during that window and may under-report: reading transcripts directly only
-covers Claude, so the swap would trade an incomplete view of every agent for a
-complete view of one. And the **Sessions** page reads every Claude home you have
-configured, not just the default one — if a secondary or WSL home is missing
-from the list, that is a bug rather than this behaviour.
+One exception, and it is narrow. If you use a **non-Claude coding agent**
+(Codex, Gemini) and Minder can find its sessions, the **Sessions** page keeps its
+old behaviour during that window and may under-report, because reading
+transcripts directly does not yet build session cards for non-Claude agents —
+so swapping would trade an incomplete view of every agent for a complete view of
+one. The usage, agents and skills pages no longer have this limitation: reading
+transcripts directly now covers every agent you have enabled, so they swap like
+everyone else.
+
+Separately, the **Sessions** page reads every Claude home you have configured,
+not just the default one — if a secondary or WSL home is missing from the list,
+that is a bug rather than this behaviour.
 
 ## Daily Cost Chart
 
