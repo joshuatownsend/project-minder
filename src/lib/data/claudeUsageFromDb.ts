@@ -140,6 +140,35 @@ export function loadClaudeUsageStatsFromDb(
   const allowedDirs = projectPaths.map(encodePathLite);
   const placeholders = allowedDirs.map(() => "?").join(",");
 
+  // **One SQLite snapshot for every read below** (Codex P2, PR #488). The
+  // indexer commits from a separate worker while this runs, so without a read
+  // transaction the queries here each see whatever was committed at the moment
+  // they ran. That was harmless while `conversation_count` was a column of the
+  // same aggregate as the token totals; splitting it into its own `file_path`
+  // query is what let the two describe different database states — a count that
+  // includes a session whose tokens are absent, or the reverse, then cached by
+  // `/api/stats` for ten minutes. The tool and model queries join the same
+  // transaction rather than being left as they were: they were already separate
+  // statements, and the fix is not worth doing by halves.
+  //
+  // `db.transaction()` nests through savepoints, so this is safe if a caller is
+  // already inside one.
+  return db.transaction(() => collectStats(db, stats, allowedDirs, placeholders))();
+}
+
+/**
+ * The query body of `loadClaudeUsageStatsFromDb`, extracted so it can run
+ * inside a single read transaction. Mutates and returns the `stats` object it
+ * is handed. Must stay synchronous — better-sqlite3 transaction functions
+ * cannot be async.
+ */
+function collectStats(
+  db: DatabaseT.Database,
+  stats: ClaudeUsageStats,
+  allowedDirs: string[],
+  placeholders: string
+): ClaudeUsageStats {
+
   // One prepare per call (variable-shape SQL). The route's 10-min
   // cache absorbs the per-prepare cost; under churn that's pennies.
   const totals = db
