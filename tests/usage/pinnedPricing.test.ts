@@ -16,8 +16,8 @@ import { promises as fs } from "fs";
  * raw.githubusercontent.com in one measured run. Since #477 the suite PINS the
  * variable at a per-file temp dir (`tests/setup/isolateStateDir.ts`), which
  * removes the working-tree write and makes the cache empty on every run — so
- * the re-fetch storm is now the only failure mode this pin stands between the
- * suite and.
+ * the re-fetch storm is now the only one of those two failure modes left, and
+ * this pin is the only thing standing between the suite and it.
  *
  * The property that matters most is the second test: a pin that cannot be read
  * must NOT fall through to the network. A pin that silently reaches for

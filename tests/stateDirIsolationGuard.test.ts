@@ -133,7 +133,7 @@ describe("config writes into a state dir that does not exist yet (#482)", () => 
       statuses: { demo: "active" },
       hidden: ["x"],
       portOverrides: {},
-      devRoot: "C:\dev",
+      devRoot: String.raw`C:\dev`,
       pinnedSlugs: [],
     });
 
