@@ -62,10 +62,24 @@ try {
  *
  * **Precedence matters to the test suite.** ~23 test files isolate their DB by
  * spying `os.homedir()` and re-importing this module. Because the env var is
- * checked FIRST, setting `MINDER_STATE_DIR` for a test run overrides that spy
- * and points every one of them at the same directory — measured at 24 failures
- * when tried. Don't set it in test env; isolate via the homedir spy, as the
- * existing DB tests do.
+ * checked FIRST, an ARBITRARY `MINDER_STATE_DIR` overrides that spy and points
+ * every one of them at the same directory — measured at 24 failures when a
+ * developer's shell value leaked in.
+ *
+ * The suite therefore sets it deliberately (`tests/setup/isolateStateDir.ts`,
+ * #477) rather than leaving it unset: deleting it made `resolveStateDir()` —
+ * a DIFFERENT resolver, which falls back to `process.cwd()` — read the
+ * developer's real `.minder.json` out of the repo root. What makes setting it
+ * safe is that the isolation helpers pin `<tmpHome>/.minder`, which is exactly
+ * what `path.join(os.homedir(), ".minder")` yields under the spy: the two
+ * branches below agree by construction, so neither can override the other.
+ *
+ * So the rule is not "never set it in tests" — that was the earlier wording,
+ * and following it now would reintroduce the cwd leak. The rule is that
+ * whatever sets it must agree with the homedir spy. `tests/dbWorkerHostPhase2`
+ * is the case to look at for why a spy alone is not always enough: a spawned
+ * worker resolves this line in its own process, where only the environment
+ * reaches it.
  */
 export const DB_DIR = process.env.MINDER_STATE_DIR || path.join(os.homedir(), ".minder");
 export const DB_PATH = path.join(DB_DIR, "index.db");

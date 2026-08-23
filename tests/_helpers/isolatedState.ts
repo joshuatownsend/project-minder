@@ -32,12 +32,12 @@ import { promises as fs } from "fs";
 // WHAT THIS IS NOT
 //
 // It is not a fix for the `MINDER_STATE_DIR` hazard described in #331 — that
-// one is already handled, globally, by `tests/setup/clearStateDirEnv.ts`
-// (PR #332), which deletes the variable in `setupFiles` before any test module
-// is imported. Verified while writing this: all 30 files pass with the variable
-// set in the shell. This helper re-deletes it per test anyway (see `envKeys`
-// handling below) so a file is isolated by its own construction rather than by
-// a global it doesn't reference.
+// one is already handled, globally, by `tests/setup/isolateStateDir.ts`
+// (PR #332, inverted in #477), which pins the variable to a throwaway directory
+// in `setupFiles` before any test module is imported. Verified when that landed:
+// all 30 files pass with the variable set in the shell. This helper re-pins it
+// per test anyway (see `envKeys` handling below) so a file is isolated by its
+// own construction rather than by a global it doesn't reference.
 //
 // USAGE
 //
@@ -120,8 +120,9 @@ export interface IsolatedStateHandle {
  * Install temp-home isolation for `~/.minder`-backed state.
  *
  * Setup: allocate a temp dir, point `HOME` / `USERPROFILE` / `os.homedir()` at
- * it, delete `MINDER_STATE_DIR` (which would otherwise outrank the spy), drop
- * the cached DB handle, apply any `env` overrides.
+ * it, pin `MINDER_STATE_DIR` to `<tmpHome>/.minder` (the value the spy itself
+ * produces, so the variable cannot outrank it), drop the cached DB handle,
+ * apply any `env` overrides.
  *
  * Teardown: restore mocks and every saved variable, then remove the temp dir.
  */
@@ -138,28 +139,36 @@ export function installIsolatedState(
   } = options;
 
   // `MINDER_STATE_DIR` is always managed: it takes precedence over the
-  // `os.homedir()` spy in `DB_DIR`/`TASKS_DB_DIR`, so leaving it in place would
-  // let a developer's shell silently redirect an "isolated" test at their real
-  // relocated database.
+  // `os.homedir()` spy in `DB_DIR`/`TASKS_DB_DIR`, so leaving a developer's
+  // shell value in place would silently redirect an "isolated" test at their
+  // real relocated database.
+  //
+  // It is pinned to `<tmpHome>/.minder` rather than deleted (#477). Deleting it
+  // left `resolveStateDir()` — which is `MINDER_STATE_DIR || process.cwd()` —
+  // falling through to the repo root, so every test reaching `readConfig()`
+  // read the developer's real `.minder.json`. Pinning closes that without
+  // weakening anything: `<tmpHome>/.minder` is precisely what the homedir spy
+  // produces, so the env branch and the spy branch agree by construction and
+  // there is no longer a branch to bypass. `dbMigrations.test.ts` asserts that
+  // exact path, and still passes for the same reason it did before.
   //
   // It is NOT a caller option, and passing it is an error rather than a no-op.
-  // `reload()` re-applies the isolation invariant and therefore deletes the
-  // variable again, so an `env` override would survive setup, vanish at the
-  // reload every caller has to make, and leave the test quietly exercising the
-  // `os.homedir()` fallback it was written to bypass (Codex review, PR #419).
+  // `reload()` re-applies the isolation invariant and therefore re-pins the
+  // variable, so an `env` override would survive setup, be overwritten at the
+  // reload every caller has to make, and leave the test quietly resolving state
+  // somewhere it did not choose (Codex review, PR #419).
   //
   // Supporting the override instead was considered and rejected: the whole
-  // point of deleting it is that all thirty files resolve their database the
+  // point of managing it is that all thirty files resolve their database the
   // same way, at `<tmpHome>/.minder`. Three of them used to set it to
-  // `<tmpHome>` and were migrated off precisely to remove that divergence,
-  // and `dbMigrations.test.ts` asserts the `<tmpHome>/.minder` path directly.
+  // `<tmpHome>` and were migrated off precisely to remove that divergence.
   if ("MINDER_STATE_DIR" in env) {
     throw new Error(
       "installIsolatedState: MINDER_STATE_DIR cannot be set through `env` — " +
-        "the helper deletes it on every reload() so the homedir spy stays " +
-        "authoritative. A test that needs to exercise MINDER_STATE_DIR itself " +
-        "should set it after reload() and restore it in a finally, the way " +
-        "tests/serverRoot.test.ts does."
+        "the helper re-pins it to <tmpHome>/.minder on every reload() so state " +
+        "and database both resolve under the temp home. A test that needs to " +
+        "exercise MINDER_STATE_DIR itself should set it after reload() and " +
+        "restore it in a finally, the way tests/serverRoot.test.ts does."
     );
   }
   const envKeys = Array.from(
@@ -188,7 +197,12 @@ export function installIsolatedState(
   const applyIsolationEnv = (): void => {
     process.env.HOME = tmpHome;
     process.env.USERPROFILE = tmpHome;
-    delete process.env.MINDER_STATE_DIR;
+    // Pinned, not deleted — see the long note on the guard above. This value is
+    // what `path.join(os.homedir(), ".minder")` evaluates to under the spy, so
+    // `DB_DIR` and `TASKS_DB_DIR` are unchanged, while `resolveStateDir()` stops
+    // falling through to `process.cwd()` and dragging in the repo-root
+    // `.minder.json` (#477).
+    process.env.MINDER_STATE_DIR = path.join(tmpHome, ".minder");
   };
 
   // Caller-supplied values are ordinary test setup, applied ONCE. They are

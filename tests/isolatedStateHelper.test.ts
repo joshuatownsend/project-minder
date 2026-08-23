@@ -82,24 +82,32 @@ describe("installIsolatedState", () => {
   });
 
   it("neutralises a MINDER_STATE_DIR set after setup ran", async () => {
-    // Discriminates: the `delete process.env.MINDER_STATE_DIR` in `applyEnv()`,
-    // which `reload()` re-applies. `DB_DIR` checks that variable BEFORE
+    // Discriminates: the `MINDER_STATE_DIR` pin in `applyIsolationEnv()`, which
+    // `reload()` re-applies. `DB_DIR` checks that variable BEFORE
     // `os.homedir()`, so anything that sets it outranks the spy and redirects
     // an "isolated" test at a real, possibly populated database.
     //
-    // `tests/setup/clearStateDirEnv.ts` already deletes it once per file
-    // (PR #332); this covers the case that setup file cannot — something
-    // setting it while the suite is running.
+    // The helper used to DELETE the variable here (#331/#419); since #477 it
+    // overwrites it with `<tmpHome>/.minder` instead — the same value the spy
+    // yields, so `DB_DIR` is unchanged while `resolveStateDir()` stops falling
+    // through to `process.cwd()`. Overwriting neutralises an intruder just as
+    // completely as deleting did, which is what this asserts.
+    //
+    // `tests/setup/isolateStateDir.ts` already pins it once per file (PR #332,
+    // inverted in #477); this covers the case that setup file cannot —
+    // something setting it while the suite is running.
     const intruder = path.join(os.tmpdir(), "pm-selftest-intruder");
     process.env.MINDER_STATE_DIR = intruder;
-    try {
-      await state.reload();
-      const { DB_DIR } = await import("@/lib/db/connection");
-      expect(DB_DIR).toBe(path.join(state.tmpHome(), ".minder"));
-      expect(DB_DIR).not.toBe(intruder);
-    } finally {
-      delete process.env.MINDER_STATE_DIR;
-    }
+    await state.reload();
+    const { DB_DIR } = await import("@/lib/db/connection");
+    expect(DB_DIR).toBe(path.join(state.tmpHome(), ".minder"));
+    expect(DB_DIR).not.toBe(intruder);
+    expect(process.env.MINDER_STATE_DIR).toBe(path.join(state.tmpHome(), ".minder"));
+    // No `finally` restoring the variable any more: teardown saves and restores
+    // it like every other managed key, and deleting it here would leave the
+    // NEXT file in this fork without the suite-wide pin that
+    // `tests/setup/isolateStateDir.ts` set (setup files do not re-run mid-fork
+    // for an already-loaded module graph).
   });
 
   it("drops the cached DB handle and the declared extra caches", async () => {
@@ -118,7 +126,7 @@ describe("installIsolatedState", () => {
 
   it("re-applies the isolation env on reload but not the caller's own", async () => {
     // Pins the distinction the helper draws. HOME / USERPROFILE / the
-    // MINDER_STATE_DIR deletion are invariants and must survive a reload,
+    // MINDER_STATE_DIR pin are invariants and must survive a reload,
     // because a reload is when path constants get recaptured. A caller's `env`
     // value is ordinary setup, and a test is entitled to change it and reload
     // to watch the effect — `gradeSnapshot.test.ts` sets MINDER_USE_DB=0
@@ -136,10 +144,10 @@ describe("installIsolatedState", () => {
   });
 
   it("rejects MINDER_STATE_DIR as a caller option instead of silently dropping it", () => {
-    // `reload()` re-applies the isolation invariant, which deletes this
-    // variable — so an `env` override would hold through setup and vanish at
-    // the reload every caller has to make, leaving the test exercising the
-    // homedir fallback it was written to bypass. Failing loudly at install is
+    // `reload()` re-applies the isolation invariant, which re-pins this
+    // variable — so an `env` override would hold through setup and be
+    // overwritten at the reload every caller has to make, leaving the test
+    // resolving state somewhere it did not choose. Failing loudly at install is
     // the only version of that a caller can notice (Codex review, PR #419).
     expect(() =>
       installIsolatedState({ prefix: "pm-reject-", env: { MINDER_STATE_DIR: "/tmp/x" } })
@@ -152,7 +160,7 @@ describe("installIsolatedState", () => {
     // file in the same worker process.
     expect(process.env.HOME).toBe(state.tmpHome());
     expect(process.env.USERPROFILE).toBe(state.tmpHome());
-    expect(process.env.MINDER_STATE_DIR).toBeUndefined();
+    expect(process.env.MINDER_STATE_DIR).toBe(path.join(state.tmpHome(), ".minder"));
     // Back to "1" — the previous test set it to "0" and teardown restored the
     // pre-test value, which setup then overwrote with the caller's again.
     expect(process.env.MINDER_SELFTEST_FLAG).toBe("1");

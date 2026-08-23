@@ -2,16 +2,21 @@
  * Pin model pricing to a committed fixture for the whole suite.
  *
  * Without this, `loadPricing()` resolves its disk cache under
- * `resolveStateDir()`, which falls back to `process.cwd()` — and since
- * `clearStateDirEnv.ts` deletes `MINDER_STATE_DIR`, that is the repo root. Two
- * consequences, both measured rather than assumed:
+ * `resolveStateDir()`. That used to be the repo root: `clearStateDirEnv.ts`
+ * deleted `MINDER_STATE_DIR`, leaving the `process.cwd()` fall-through. Since
+ * #477 `isolateStateDir.ts` pins the variable at a per-fork temp dir instead,
+ * so the cache would land there — out of the working tree, but also empty on
+ * every run, which makes the second consequence below WORSE rather than better.
+ * Two consequences, both measured rather than assumed:
  *
  *   - Locally the suite read (and the fetch path *wrote*) a 1.2 MB
  *     `.cache/litellm-pricing.json` inside the working tree.
- *   - Anywhere that file is absent — every CI runner, and locally once its 24h
- *     TTL lapses — each `vi.resetModules()` created a fresh module with a fresh
- *     single-flight promise and re-fetched. A full run made **221** requests to
- *     raw.githubusercontent.com.
+ *   - Anywhere that file is absent — every CI runner, locally once its 24h TTL
+ *     lapses, and now every run everywhere given the temp state dir — each
+ *     `vi.resetModules()` created a fresh module with a fresh single-flight
+ *     promise and re-fetched. A full run made **221** requests to
+ *     raw.githubusercontent.com. This pin is what stops that, and #477 removed
+ *     the accidental disk cache that was also masking it.
  *
  * So test pricing depended on a third-party endpoint answering, identically,
  * 221 times under 8 parallel forks. When it didn't, `getModelPricing` quietly
