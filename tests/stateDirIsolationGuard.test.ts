@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import path from "path";
 import os from "os";
-import { promises as fs } from "fs";
+import { existsSync, promises as fs } from "fs";
 import { resolveStateDir } from "@/lib/serverRoot";
 import { installIsolatedState } from "./_helpers/isolatedState";
 
@@ -44,14 +44,31 @@ describe("suite-wide state dir isolation (#477)", () => {
 
   it("reads default config, not the developer's .minder.json", async () => {
     // The end-to-end consequence, asserted through the real entry point rather
-    // than through the env var. `hidden` is a good probe: the default is empty
-    // and any real working config has entries, so this fails on a machine that
-    // has one the moment isolation regresses. It cannot false-positive on a
-    // clean checkout, because there the two agree anyway.
+    // than through the env var.
+    //
+    // `enabledAdapters` is asserted FIRST and matters most: it is the field
+    // that actually changed outcomes in #474, and it is absent from
+    // `DEFAULT_CONFIG` entirely, so `undefined` here means no file was read.
+    // An earlier draft of this guard checked only `hidden` and `statuses` —
+    // which a real `.minder.json` carrying nothing but `enabledAdapters` would
+    // have passed, i.e. it would have missed the exact leak it was written for
+    // (Copilot, PR #482). A guard aimed at the wrong field is worse than none,
+    // because it reads as coverage.
     const { readConfig } = await import("@/lib/config");
     const cfg = await readConfig();
+    expect(cfg.enabledAdapters).toBeUndefined();
     expect(cfg.hidden).toEqual([]);
     expect(cfg.statuses).toEqual({});
+  });
+
+  it("resolves a config path that does not exist", async () => {
+    // The structural half of the assertion above, and the one that cannot go
+    // vacuous. On a clean checkout with no `.minder.json` anywhere, every
+    // field-level assertion passes whether isolation works or not; this one
+    // still fails, because the repo root is not where an isolated run should be
+    // looking. Together they cover both a machine that has a config and one
+    // that does not.
+    expect(existsSync(path.join(resolveStateDir(), ".minder.json"))).toBe(false);
   });
 
   it("writes state under the pinned dir, not into the working tree", async () => {

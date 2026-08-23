@@ -9,11 +9,15 @@ import { promises as fs } from "fs";
  *
  * It exists because the pricing disk cache resolves under
  * `resolveStateDir()`, which is `MINDER_STATE_DIR || process.cwd()`. The suite
- * deletes `MINDER_STATE_DIR`, so under vitest that was the repo root: tests
- * read and wrote a 1.2 MB `.cache/litellm-pricing.json` in the working tree,
- * and wherever it was absent (every CI runner) each `vi.resetModules()` made a
- * fresh single-flight promise and re-fetched — 221 requests to
- * raw.githubusercontent.com in one measured run.
+ * used to DELETE `MINDER_STATE_DIR`, so under vitest that was the repo root:
+ * tests read and wrote a 1.2 MB `.cache/litellm-pricing.json` in the working
+ * tree, and wherever it was absent (every CI runner) each `vi.resetModules()`
+ * made a fresh single-flight promise and re-fetched — 221 requests to
+ * raw.githubusercontent.com in one measured run. Since #477 the suite PINS the
+ * variable at a per-file temp dir (`tests/setup/isolateStateDir.ts`), which
+ * removes the working-tree write and makes the cache empty on every run — so
+ * the re-fetch storm is now the only failure mode this pin stands between the
+ * suite and.
  *
  * The property that matters most is the second test: a pin that cannot be read
  * must NOT fall through to the network. A pin that silently reaches for

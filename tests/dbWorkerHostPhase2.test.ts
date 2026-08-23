@@ -35,6 +35,7 @@ const buildScript = path.join(repoRoot, "scripts", "build-worker.mjs");
 let tmpHome: string;
 let originalHome: string | undefined;
 let originalUserProfile: string | undefined;
+let originalStateDir: string | undefined;
 
 async function reloadHost() {
   vi.resetModules();
@@ -70,6 +71,8 @@ afterEach(async () => {
   else process.env.HOME = originalHome;
   if (originalUserProfile === undefined) delete process.env.USERPROFILE;
   else process.env.USERPROFILE = originalUserProfile;
+  if (originalStateDir === undefined) delete process.env.MINDER_STATE_DIR;
+  else process.env.MINDER_STATE_DIR = originalStateDir;
 });
 
 describe.skipIf(!driverAvailable)("workerHost + real bundle (phase 2)", () => {
@@ -78,9 +81,22 @@ describe.skipIf(!driverAvailable)("workerHost + real bundle (phase 2)", () => {
     // instead of touching the real ~/.minder/index.db.
     originalHome = process.env.HOME;
     originalUserProfile = process.env.USERPROFILE;
+    originalStateDir = process.env.MINDER_STATE_DIR;
     tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-phase2-"));
     process.env.HOME = tmpHome;
     process.env.USERPROFILE = tmpHome;
+    // `HOME` alone is not enough, and this is the one file in the suite where
+    // that is true. The worker is a REAL child process, so it resolves its own
+    // `DB_DIR` from its own environment — `MINDER_STATE_DIR || homedir()/.minder`
+    // — and an `os.homedir()` spy could not reach it even if this file had one.
+    // Since #477 the suite always SETS `MINDER_STATE_DIR` (per-file temp dir),
+    // and that branch is checked FIRST, so without this line the worker would
+    // write its `index.db` into the shared suite state dir rather than the temp
+    // home two lines up. Not hypothetical: it is what the first draft of #477
+    // did, and it is the one case the blast-radius grep for `spyOn(os,
+    // "homedir")` could not see, because a child inherits the environment but
+    // not a spy (Copilot, PR #482).
+    process.env.MINDER_STATE_DIR = path.join(tmpHome, ".minder");
 
     const projectsDir = path.join(tmpHome, "projects");
     await fs.mkdir(projectsDir, { recursive: true });

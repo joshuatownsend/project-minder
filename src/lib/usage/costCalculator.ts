@@ -356,10 +356,13 @@ export async function loadPricing(): Promise<void> {
     // no network, no cache write.
     //
     // This exists because the disk cache lives at `resolveStateDir()/.cache`,
-    // and `resolveStateDir()` falls back to `process.cwd()`. Under vitest the
-    // suite deletes `MINDER_STATE_DIR` (tests/setup/clearStateDirEnv.ts), so
-    // that resolved to the repo root: the suite read — and wrote — a 1.2 MB
-    // `.cache/litellm-pricing.json` next to the source. Where it was absent
+    // and `resolveStateDir()` falls back to `process.cwd()`. The suite used to
+    // delete `MINDER_STATE_DIR`, so that resolved to the repo root: the suite
+    // read — and wrote — a 1.2 MB `.cache/litellm-pricing.json` next to the
+    // source. Since #477 `tests/setup/isolateStateDir.ts` pins the variable at
+    // a per-file temp dir, so the cache lands there instead — out of the tree,
+    // but empty every run, which makes this pin MORE load-bearing rather than
+    // less. Where it was absent
     // (any CI runner) every `vi.resetModules()` produced a fresh module with a
     // fresh single-flight promise, measured at **221 requests** to
     // raw.githubusercontent.com in one run. Those forks race a rate limiter,
