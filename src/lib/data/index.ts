@@ -2,7 +2,7 @@ import "server-only";
 import { generateUsageReport, augmentPortfolioYield } from "@/lib/usage/aggregator";
 import { getJsonlMaxMtime } from "@/lib/usage/parser";
 import { looksLikeSessionId } from "@/lib/sessionId";
-import { scanAllSessions, scanSessionDetail, toSlug } from "@/lib/scanner/claudeConversations";
+import { scanAllSessions, scanSessionDetail } from "@/lib/scanner/claudeConversations";
 import { getSessionMeta } from "@/lib/scanner/claudeStats";
 import { getDb, isDriverLoaded } from "@/lib/db/connection";
 import { initDb, type InitResult } from "@/lib/db/migrations";
@@ -599,59 +599,48 @@ async function checkV3Gate(scope: string, db: DbHandle): Promise<boolean> {
  * of Claude and a total absence of the rest. Dropping a source entirely is the
  * more distorting of the two, and it would be done in correctness's name.
  *
- * So where adapter sessions actually exist the gate declines to divert and the
- * pre-#472 behaviour stands. That leaves those users with the original defect,
- * which is worse than fixing it and better than pretending to. Closing it means
- * giving the file backend adapter discovery, which is a feature rather than a
- * review fix, and is tracked separately. (Codex P1, PR #474.)
+ * **#475 closed most of this, and this predicate is what is left.** The file
+ * pipeline now has adapter discovery: `buildAllSessions` merges every enabled
+ * non-Claude adapter's sessions into the same map, so `getUsage`,
+ * `getAgentUsage` and `getSkillUsage` see the whole corpus on both backends and
+ * no longer consult this at all. `getClaudeUsage` was equalized from the other
+ * side — its SQL now filters `source = 'claude'`, matching a file path that is
+ * Claude-only by construction, because that surface's question is single-source.
  *
- * The test is whether adapter sessions are DISCOVERABLE, not whether an adapter
- * is enabled. Those differ, and by a lot: this repo's own config has enabled
- * `codex` for months against an index holding 6,600 Claude sessions and zero
- * Codex ones, so keying on the flag would have switched the whole of #472 off
- * for the machine it was written on, to protect a corpus that does not exist.
- * A predicate that is cheap and wrong is not cheaper than the walk.
+ * `getSessionsList` is the sole remaining caller, and the only loader whose file
+ * path is still Claude-only: `scanAllSessions` builds `SessionSummary` objects
+ * (initial prompt, status, model list, per-tool counts) with no derivation from
+ * an adapter's `UsageTurn[]`, which is a feature rather than a merge. Until that
+ * lands, an adapter user's session list keeps the #472 defect — served from a
+ * partly-ingested index rather than diverted to a fallback that would show them
+ * Claude only. That is worse than fixing it and better than pretending to.
  *
- * Ordered so the walk is skipped in the common case: a claude-only config
- * answers from the config alone, and the discovery below runs only while the
- * index is building AND an adapter is enabled. A discovery that throws counts
- * as "does not cover" — if we cannot tell what is out there, we must not claim
- * to have read all of it.
+ * The source/project qualification this predicate used to carry was deleted with
+ * the loaders that used it. It existed so a Claude-scoped or project-scoped
+ * `getUsage` could still divert while adapter sessions sat elsewhere on disk;
+ * `getUsage` no longer asks, and `getSessionsList` takes no filters, so every
+ * branch of it was unreachable. Kept-but-unreachable code with a page of
+ * rationale reads as live behaviour to the next person. (Codex P1, PR #474;
+ * narrowed in #475.)
  */
-async function fileParseCoversCorpus(source?: string, project?: string): Promise<boolean> {
-  // **The asymmetry that governs every narrowing below.** A false "not covered"
-  // costs nothing new: the SQL answer is what shipped before #472 either way. A
-  // false "covered" reintroduces the original defect and drops a whole source in
-  // correctness's name. So a filter is honoured here only when the mapping is
-  // exact BY CONSTRUCTION — the same derivation the ingest path uses — never
-  // when it merely looks equivalent.
+async function fileParseCoversCorpus(): Promise<boolean> {
+  // **The asymmetry that governs this predicate.** A false "not covered" costs
+  // nothing new: the SQL answer is what shipped before #472 either way. A false
+  // "covered" reintroduces the original defect and drops a whole source in
+  // correctness's name. So a discovery that throws counts as "does not cover" —
+  // if we cannot tell what is out there, we must not claim to have read all of
+  // it.
   //
-  // `source` qualifies by string equality. A request already scoped to Claude is
-  // covered whatever else exists, since `generateUsageReport` applies the same
-  // filter and the adapter corpus is not part of the answer being asked for. One
-  // scoped to a non-Claude source is covered by nothing — file-parse would
-  // return empty, which is worse than a partial SQL result — so it never
-  // diverts. (Codex P1, PR #474.)
+  // The test is whether adapter sessions are DISCOVERABLE, not whether an
+  // adapter is enabled. Those differ, and by a lot: this repo's own config has
+  // enabled `codex` for months against an index holding 6,799 Claude sessions
+  // and zero Codex ones, so keying on the flag would have switched the whole of
+  // #472 off for the machine it was written on, to protect a corpus that does
+  // not exist. A predicate that is cheap and wrong is not cheaper than the walk.
   //
-  // `project` qualifies because `toSlug(projectDirName)` is how ingest stores
-  // `sessions.project_slug` FOR AN ADAPTER SESSION, and `loadUsageReportFromSql`
-  // filters on that column — so the predicate and the SQL it is standing in for
-  // agree by construction rather than by coincidence. Adapter files are the only
-  // thing this predicate ever inspects, so the adapter derivation is the right
-  // one; the Claude path's extra `canonicalizeDirName` step does not apply and
-  // using it here was a real bug (see below).
-  // Codex adapter files in OTHER projects are therefore not part of a
-  // project-scoped answer and must not suppress the fallback. (Codex P1.)
-  //
-  // Two filters are deliberately NOT honoured, both for the same reason.
-  // `home`: whether an adapter session can carry one, and what a home filter
-  // means for it, is unsettled in `loadUsageReportFromSql`. And
-  // `getClaudeUsage`'s project scope, which Codex named alongside this one: it
-  // is keyed on `encodePath`-encoded Claude paths, while an adapter's
-  // `projectDirName` is whatever that adapter chose, so matching them is a
-  // resemblance rather than a derivation. Both stay corpus-global, which is the
-  // conservative direction.
-  if (source) return source === "claude";
+  // Ordered so the walk is skipped in the common case: a Claude-only config
+  // answers from the config alone, and the discovery below runs only while the
+  // index is building AND an adapter is enabled.
   const cfg = await readConfig();
   if ((cfg.enabledAdapters ?? ["claude"]).every((id) => id === "claude")) return true;
   try {
@@ -665,20 +654,7 @@ async function fileParseCoversCorpus(source?: string, project?: string): Promise
       ...cfg,
       enabledAdapters: (cfg.enabledAdapters ?? []).filter((id) => id !== "claude"),
     });
-    if (!project) return found.length === 0;
-    // `toSlug` alone — NOT `toSlug(canonicalizeDirName(...))`, which is the
-    // CLAUDE derivation (`ingest.ts`, via `canonicalDir`). Adapters do not
-    // canonicalize: `codex.ts` and `gemini.ts` both stamp their turns with a
-    // plain `toSlug(projectDirName)`, and `buildAdapterParsedSession` keeps that
-    // slug rather than recomputing one. Since `canonicalizeDirName` strips a
-    // worktree suffix, borrowing the Claude derivation here would compute the
-    // PARENT slug for a worktree-encoded adapter dir while the index stored the
-    // worktree slug — and a mismatch reads as "not in this project", i.e. a
-    // false "covered", which drops that session for the length of the first
-    // reconcile. Exactly the failure the asymmetry above exists to prevent, and
-    // committed while claiming exactness. Match the identity that is stored, not
-    // the one a sibling code path happens to build. (Codex P1, PR #474.)
-    return !found.some((f) => toSlug(f.projectDirName) === project);
+    return found.length === 0;
   } catch {
     return false;
   }
@@ -710,11 +686,15 @@ async function fileParseCoversCorpus(source?: string, project?: string): Promise
 async function checkBuildStateFallback(
   scope: string,
   db: DbHandle,
-  source?: string,
-  project?: string
+  /**
+   * Set ONLY by a loader whose file-parse path cannot see adapter sessions.
+   * Since #475 that is `getSessionsList` alone; every other caller's fallback
+   * covers the whole corpus and diverts unconditionally while the index builds.
+   */
+  fileParseIsClaudeOnly = false
 ): Promise<boolean> {
   if (!isIndexBuilding(db)) return false;
-  if (await fileParseCoversCorpus(source, project)) {
+  if (!fileParseIsClaudeOnly || (await fileParseCoversCorpus())) {
     logIntentionalFallthrough(scope, BUILDING_REASON);
     return true;
   }
@@ -801,7 +781,7 @@ export async function getUsage(
   // token/cost total as `backend: "db"` with nothing to distinguish it from a
   // complete one. The other sites under-reported in a window; this reported a
   // number that was simply wrong.
-  if (await checkBuildStateFallback("getUsage", db, source, project)) {
+  if (await checkBuildStateFallback("getUsage", db)) {
     return runFileUsage(period, project, source, home);
   }
   const report = await callDbLoader("getUsage", () =>
@@ -1124,7 +1104,7 @@ export async function getSessionsList(): Promise<SessionsListResult> {
     );
     return runFileSessionsList();
   }
-  if (await checkBuildStateFallback("getSessionsList", db)) {
+  if (await checkBuildStateFallback("getSessionsList", db, true)) {
     return runFileSessionsList();
   }
   const sessions = await callDbLoader("getSessionsList", () =>

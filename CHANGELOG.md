@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **The file-parse backend can now see non-Claude sessions** (#475). `discoverAllSessions` — the thing that finds Codex and Gemini transcripts — was imported by the SQLite indexer and by nothing else. Every file-parse entry point walked `<claude-home>/projects/**` and stopped, so the two backends were never equivalent: the index held every enabled adapter, the fallback held Claude. `buildAllSessions` now merges each enabled non-Claude adapter's sessions into the same map, keyed by the id its own turns carry rather than the filename, and the aggregator was already source-aware from the other end.
+
+  **For adapter users this is the #472 fix finally arriving, and it is a behaviour change.** #474 had to make the half-built-index gate *refuse* to divert whenever adapter sessions were discoverable — diverting would have traded a partial view of every source for a complete view of one — which left exactly those users with the defect the gate existed to fix. Their usage, agent and skill pages now fall back to file-parse during a first reconcile, where before they were served a partial SQL answer labelled `backend: "db"`.
+
+  Enabling an adapter also now changes what `/usage` reads, so the single-flight sweep key includes `enabledAdapters`; without that a toggle in Settings appeared to do nothing until the process restarted.
+
+### Fixed
+
+- **"Claude Code Usage" counted other harnesses' sessions** (#475). The SQL behind that card filtered by project and not by source, while its file-parse counterpart reads `<claude-home>/projects/**` and is Claude-only by construction. On a machine with Codex or Gemini sessions indexed, their tokens, tools and models were folded into a Claude-labelled figure under the DB backend and absent under the file one. Every query on that path now filters `source = 'claude'`.
+
+  This is the opposite direction from the four loaders above, deliberately: they answer about the whole corpus and were equalized by widening the walk; this one's *question* is single-source, so it is equalized by narrowing the SQL.
+
 ### Fixed
 
 - **Portfolio stats counted subagent transcripts as conversations** (#480). Under the SQLite backend, a project's reported conversation count included every nested `<project>/<session>/subagents/agent-*.jsonl` transcript — rows that contribute **zero** turns and **zero** tokens to the very same figures, because ingest derives a session row's aggregates from primary turns only (`is_sidechain = 0`). On the reference index that is 1,268 of 6,799 rows: **18.6% portfolio-wide, and up to 94% for a single project**, which reported 69 conversations where 4 had been held. Turning the index off changed the number, because file-parse reads immediate `.jsonl` entries only and never sees these files.
