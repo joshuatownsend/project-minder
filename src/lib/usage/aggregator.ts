@@ -106,23 +106,6 @@ export async function generateUsageReport(
 }
 
 /**
- * Augment a UsageReport with portfolio-level yield data in-place.
- * Exported so the DB-backed path in `data/index.ts` can call it after
- * loading the SQL report — the augmentation is identical regardless of
- * which backend produced the base report.
- *
- * Calls parseAllSessions() internally (mtime-keyed FileCache; cold call
- * sweeps ~/.claude/projects/). On the file-parse path the cache is already
- * warm; on the DB path it adds one sweep per cold cache hit.
- *
- * Yield is computed from full session history regardless of the report's
- * period filter — by design, matching the Activity section. Yield is a
- * long-term productivity signal, not a point-in-time metric.
- *
- * No-ops when getCachedScan() returns null (scan cache cold) or when
- * the report has no project details.
- */
-/**
  * Restrict a session map to one `source`, or return it unchanged when no source
  * scope applies.
  *
@@ -147,6 +130,23 @@ export function scopeSessionMapToSource(
   );
 }
 
+/**
+ * Augment a UsageReport with portfolio-level yield data in-place.
+ * Exported so the DB-backed path in `data/index.ts` can call it after
+ * loading the SQL report — the augmentation is identical regardless of
+ * which backend produced the base report.
+ *
+ * Calls parseAllSessions() internally (mtime-keyed FileCache; cold call
+ * sweeps ~/.claude/projects/). On the file-parse path the cache is already
+ * warm; on the DB path it adds one sweep per cold cache hit.
+ *
+ * Yield is computed from full session history regardless of the report's
+ * period filter — by design, matching the Activity section. Yield is a
+ * long-term productivity signal, not a point-in-time metric.
+ *
+ * No-ops when getCachedScan() returns null (scan cache cold) or when
+ * the report has no project details.
+ */
 export async function augmentPortfolioYield(
   report: UsageReport,
   /**

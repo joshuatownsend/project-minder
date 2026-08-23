@@ -52,6 +52,50 @@ function patchRequest(body: unknown): NextRequest {
   });
 }
 
+describe("PATCH /api/config — cache invalidation on a corpus change", () => {
+  // Grades and the Claude-usage rollup are computed from the file-parse sweep,
+  // so a patch that changes WHICH SESSIONS that sweep returns has to drop them
+  // or they describe the previous corpus for the rest of their TTLs.
+  //
+  // `enabledAdapters` did not qualify until #475 taught `parseAllSessions` to
+  // merge non-Claude adapters. Now it changes the corpus exactly the way adding
+  // a Claude home does — so a user could enable Codex and go on seeing grades
+  // computed without it for five minutes. (Codex P2, PR #490.)
+  beforeEach(async () => {
+    stored = { ...BASE_CONFIG };
+    const adapters = await import("@/lib/adapters");
+    vi.mocked(adapters.listAdapters).mockReturnValue([
+      { id: "claude" },
+      { id: "codex" },
+    ] as never);
+    const grades = await import("@/lib/efficiencyGradeCache");
+    vi.mocked(grades.efficiencyGradeCache.invalidateGrades).mockClear();
+    const stats = await import("@/lib/server/queries/stats");
+    vi.mocked(stats.invalidateClaudeUsageCache).mockClear();
+  });
+
+  it("drops the grade and usage caches when enabledAdapters changes", async () => {
+    const res = await PATCH(patchRequest({ enabledAdapters: ["claude", "codex"] }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).config.enabledAdapters).toEqual(["claude", "codex"]);
+
+    const grades = await import("@/lib/efficiencyGradeCache");
+    const stats = await import("@/lib/server/queries/stats");
+    expect(grades.efficiencyGradeCache.invalidateGrades).toHaveBeenCalled();
+    expect(stats.invalidateClaudeUsageCache).toHaveBeenCalled();
+  });
+
+  it("leaves them alone for a patch that does not change the corpus", async () => {
+    // The counterpart assertion: without it, invalidating unconditionally would
+    // also pass, and the caches would exist for nothing.
+    const res = await PATCH(patchRequest({ port: 4200 }));
+    expect(res.status).toBe(200);
+
+    const grades = await import("@/lib/efficiencyGradeCache");
+    expect(grades.efficiencyGradeCache.invalidateGrades).not.toHaveBeenCalled();
+  });
+});
+
 describe("PATCH /api/config — port", () => {
   beforeEach(() => {
     stored = { ...BASE_CONFIG };

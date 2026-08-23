@@ -55,9 +55,17 @@ type Patch = (config: MinderConfig) => void;
 
 export async function PATCH(request: NextRequest) {
   const body = await request.json();
-  // Set when claudeHomes/pathMappings are being patched: grades are computed
-  // from turn sets that depend on both, so cached grades must drop with them.
-  let multiHomeChanged = false;
+  // Set when a patch changes WHICH SESSIONS the file-parse sweep returns.
+  // Grades and the Claude-usage rollup are computed from that turn set, so
+  // cached results must drop with it or they describe the previous corpus for
+  // the rest of their TTLs (5 min / 10 min).
+  //
+  // `claudeHomes` and `pathMappings` have always qualified. `enabledAdapters`
+  // qualifies as of #475, which taught `parseAllSessions` to merge non-Claude
+  // adapters: toggling one now changes the corpus exactly the way adding a home
+  // does, and leaving it out meant a user could enable Codex and go on seeing
+  // grades computed without it. (Codex P2, PR #490.)
+  let corpusShapeChanged = false;
   const patches: Patch[] = [];
 
   // S5 — widening devRoots is a sensitive write (it gates validateProjectPath /
@@ -85,7 +93,7 @@ export async function PATCH(request: NextRequest) {
     }
     const homes = (body.claudeHomes as string[]).map((h) => h.trim()).filter(Boolean);
     patches.push((c) => { c.claudeHomes = homes; });
-    multiHomeChanged = true;
+    corpusShapeChanged = true;
   }
 
   // Cross-environment path prefix mappings ({from, to} pairs, both non-empty).
@@ -103,7 +111,7 @@ export async function PATCH(request: NextRequest) {
     const mappings = (body.pathMappings as { from: string; to: string }[])
       .map((m) => ({ from: m.from.trim(), to: m.to.trim() }));
     patches.push((c) => { c.pathMappings = mappings; });
-    multiHomeChanged = true;
+    corpusShapeChanged = true;
   }
 
   if (typeof body.scanBatchSize === "number") {
@@ -401,6 +409,9 @@ export async function PATCH(request: NextRequest) {
       }, { status: 400 });
     }
     patches.push((c) => { c.enabledAdapters = ids; });
+    // See `corpusShapeChanged` above: since #475 this changes what the sweep
+    // returns, so it invalidates the same caches a home change does.
+    corpusShapeChanged = true;
   }
 
   const VALID_TIERS: SubscriptionTier[] = ["pro", "max5x", "max20x", "api"];
@@ -478,10 +489,10 @@ export async function PATCH(request: NextRequest) {
   });
   if (newPricingRules !== undefined) setPricingRules(newPricingRules);
   invalidateAll();
-  // Grades and the portfolio usage slot depend on the multi-home sweep; drop
-  // both so the next request recomputes with the new homes/mappings instead
-  // of serving the old data for the rest of their TTLs (5 min / 10 min).
-  if (multiHomeChanged) {
+  // Grades and the portfolio usage slot depend on the file-parse sweep; drop
+  // both so the next request recomputes over the new corpus instead of serving
+  // the old data for the rest of their TTLs (5 min / 10 min).
+  if (corpusShapeChanged) {
     efficiencyGradeCache.invalidateGrades();
     invalidateClaudeUsageCache();
   }
