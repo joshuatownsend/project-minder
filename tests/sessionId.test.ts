@@ -75,10 +75,17 @@ describe("looksLikeSessionId — id-vs-slug discriminator", () => {
     expect(looksLikeSessionId("temporal-crane")).toBe(false);
   });
 
-  it("keeps the documented hex-slug edge case unchanged", () => {
-    // Pre-existing and knowingly accepted: a slug made only of hex letters
-    // reads as an id. Recorded here so a future change to the slug dictionary
-    // has something to fail against rather than a comment to overlook.
+  it("cannot separate an agent-prefixed slug from an id, and says so", () => {
+    // The collision Copilot found on PR #484, pinned as a KNOWN LIMIT of this
+    // predicate rather than papered over. `agent-cafe-deed` is a legitimate
+    // slug whose remainder is hex-and-dash, so shape alone reads it as an id.
+    //
+    // Tightening the pattern only moves the boundary — it would be another
+    // guess about id content. The real fix is in `getSessionDetail`, which asks
+    // the index first and only falls back to this test; see
+    // `dataSessionDetail.test.ts` for the case that pins it.
+    expect(looksLikeSessionId("agent-cafe-deed")).toBe(true);
+    // Same shape, same limit, pre-dating the `agent-` prefix entirely.
     expect(looksLikeSessionId("cafe-faded-deed")).toBe(true);
   });
 });

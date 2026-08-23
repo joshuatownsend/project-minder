@@ -53,14 +53,54 @@ export function isValidSessionId(sessionId: string): boolean {
  * So it admits exactly the two id shapes Claude Code actually writes: a hex
  * session id, and the `agent-` prefixed subagent form.
  *
- * The pre-existing edge case is unchanged and still worth knowing: a slug made
- * only of hex letters (e.g. `cafe-faded-deed`) would be read as an id and miss
- * the loader. Claude Code's slug dictionary uses words with letters past `f`,
- * so it is not observed in practice. `agent-` cannot collide for the same
- * reason — a real slug would need every remaining character in `[a-f0-9-]`.
+ * **This predicate cannot separate the two spaces on its own, and must not be
+ * asked to.** An earlier draft of #483 claimed `agent-` could not collide with
+ * a real slug. That was wrong: `agent-cafe-deed` is a perfectly good slug whose
+ * remainder is hex-and-dash, so admitting the prefix made such a slug read as
+ * an id (Copilot, PR #484). Tightening the pattern — requiring a dash-free
+ * suffix, or a length floor — only moves the boundary, and is another guess
+ * about id content, which is the mistake this module exists to stop making.
+ *
+ * So `getSessionDetail` no longer relies on it alone: it asks the index whether
+ * any session carries the string as a slug, and only falls back to this shape
+ * test when none does. That is also why the long-documented `cafe-faded-deed`
+ * edge case is gone rather than merely documented.
+ *
+ * What remains genuinely shape-only is `parseSubagentParentSessionId`, which
+ * has no index to consult — it is reading a path segment. There the narrowness
+ * is the whole point: the permissive traversal guard would let a stray
+ * `subagents/` directory fabricate a parent id from its folder's name.
  */
 const SESSION_ID_SHAPE_RE = /^(agent-)?[a-f0-9-]+$/i;
 
 export function looksLikeSessionId(idOrSlug: string): boolean {
   return SESSION_ID_SHAPE_RE.test(idOrSlug);
+}
+
+/**
+ * Does this id name a nested subagent transcript?
+ *
+ * An OPTIMIZATION guard, not a correctness gate, and the distinction is the
+ * whole reason it is allowed to be a guess about content. `resolveSessionJsonl`
+ * probes `<dir>/<parent>/subagents/<id>.jsonl` only after its flat pass misses,
+ * and that walk is not cheap: measured on a reference tree, 80 project
+ * directories holding 3,279 session subdirectories, of which **127 (3.9%)**
+ * actually contain a `subagents/` directory. Running it on every miss put a
+ * 1.4s readdir sweep and 3,279 `access` calls in front of every unresolvable
+ * id — which is the ordinary 404 path for any bad session URL, and timed out a
+ * test at 30s under parallel load.
+ *
+ * The asymmetry that makes the guess safe: skipping the walk for an id that is
+ * NOT `agent-` prefixed costs nothing new, because such a file did not resolve
+ * before this probe existed either. Running the walk for every miss is a broad
+ * regression on the common path. So the guard may be wrong only in the
+ * direction that restores the previous behaviour.
+ *
+ * Claude Code names these files `agent-*.jsonl`; 400 of 400 sampled from a real
+ * index match. Ingest itself accepts any `.jsonl` under `subagents/`, so if
+ * that ever stops holding, the symptom is a nested transcript that will not
+ * open — not a wrong answer.
+ */
+export function isSubagentSessionId(sessionId: string): boolean {
+  return /^agent-/i.test(sessionId);
 }

@@ -436,6 +436,51 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
     expect(result.detail!.sessionId).toBe(SESSION_ID);
   });
 
+  it("resolves an agent-prefixed SLUG rather than reading it as an id (#484)", async () => {
+    // The collision Copilot found. `agent-cafe-deed` matches the id shape test
+    // — `agent-` prefix, hex-and-dash remainder — so once #483 admitted that
+    // prefix, a session carrying this slug started 404ing: shape said "id",
+    // slug resolution never ran, and no session has that id.
+    //
+    // Fixed by asking the index BEFORE falling back to shape. Shape cannot
+    // separate these two spaces at all, and tightening the pattern would only
+    // move the boundary, so the test pins the lookup order rather than a regex.
+    const SLUG = "agent-cafe-deed";
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+    await writeJsonl(path.join(projectsDir, "C--dev-app", `${SESSION_ID}.jsonl`), [
+      userTurn("2026-04-15T10:00:00Z", "hi"),
+      {
+        type: "assistant",
+        timestamp: "2026-04-15T10:00:01Z",
+        slug: SLUG,
+        message: {
+          model: "claude-sonnet-4-5",
+          content: [{ type: "text", text: "hello" }],
+          stop_reason: "end_turn",
+          usage: {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+        },
+      } as any,
+    ]);
+    process.env.MINDER_USE_DB = "1";
+    const { facade, conn, mig, ingest } = await reloadModules();
+    await mig.initDb();
+    assertReconcileClean(
+      await ingest.reconcileAllSessions((await conn.getDb())!, {
+        projectsDir,
+        recordRun: "reconcile",
+      })
+    );
+
+    const result = await facade.getSessionDetail(SLUG);
+    expect(result.detail).not.toBeNull();
+    expect(result.detail!.sessionId).toBe(SESSION_ID);
+  });
+
   it("non-canonical hex sessionIds still hit the DB loader (not slug resolution)", async () => {
     // 32-char hex without UUID dashes — valid for the loader's hex gate
     // but rejected by a strict UUID regex. Pre-PR-60-fix this would have

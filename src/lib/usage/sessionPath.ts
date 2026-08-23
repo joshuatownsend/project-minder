@@ -19,7 +19,7 @@ import { getReadableClaudeHomes } from "@/lib/claudeHome";
 // each carried their own copy of the same literal, which is how they all missed
 // `agent-<hex>` at once. `parser.ts` re-exports from here, so external callers
 // (the `/api/sessions/[sessionId]/*` routes) keep their import path.
-import { isValidSessionId } from "@/lib/sessionId";
+import { isValidSessionId, isSubagentSessionId } from "@/lib/sessionId";
 export { isValidSessionId };
 
 /** Walk `<home>/projects/<dir>/<sessionId>.jsonl` across every readable
@@ -63,6 +63,54 @@ export async function resolveSessionJsonl(
         return { filePath: candidate, projectDirName: dir };
       } catch {
         // Not in this dir — keep walking.
+      }
+    }
+  }
+
+  // Nested subagent transcripts: `<dir>/<parent-session>/subagents/<id>.jsonl`.
+  //
+  // Runs only after the flat pass misses, so the common case pays nothing. It
+  // has to exist because #483 widened the id gate above to admit `agent-<hex>`,
+  // and a gate that admits an id the resolver cannot find just converts
+  // "invalid id" into "not found" — every per-session endpoint that resolves
+  // through here (`/quality`, `/handoff`, `/context-attribution`, and the
+  // network/delegation routes) would still 404 on exactly the sessions the
+  // main detail route had just started opening. Raised by both reviewers on
+  // PR #484, and correct: the DB path serves detail from indexed columns, but
+  // these routes read the transcript off disk.
+  //
+  // `projectDirName` is the PROJECT directory, not the parent-session
+  // directory, matching how ingest attributes these files
+  // (`src/lib/db/ingest.ts`) and how `usage/parser.ts` already walks them.
+  //
+  // Gated on the id shape because this walk is expensive and the miss path is
+  // the common one. Measured: 80 project dirs / 3,279 session subdirs, of which
+  // 127 hold a `subagents/` directory — so an ungated version put a 1.4s sweep
+  // and 3,279 `access` calls in front of every unresolvable id, and timed out a
+  // test at 30s under parallel load. See `isSubagentSessionId` for why guessing
+  // is safe HERE specifically: being wrong only restores the old behaviour.
+  if (!isSubagentSessionId(sessionId)) return null;
+
+  for (const { projectsDir, dirs } of scanned) {
+    const root = path.resolve(projectsDir);
+    for (const dir of dirs) {
+      let sessionDirs: string[];
+      try {
+        const entries = await fs.readdir(path.join(root, dir), { withFileTypes: true });
+        sessionDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+      } catch {
+        // Unreadable project dir — the flat pass above already tolerated it.
+        continue;
+      }
+      for (const sessionDir of sessionDirs) {
+        const candidate = path.resolve(root, dir, sessionDir, "subagents", `${sessionId}.jsonl`);
+        if (!candidate.startsWith(root + path.sep)) continue;
+        try {
+          await fs.access(candidate);
+          return { filePath: candidate, projectDirName: dir };
+        } catch {
+          // Not here — keep walking.
+        }
       }
     }
   }

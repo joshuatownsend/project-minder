@@ -990,29 +990,31 @@ async function resolveSessionDetail(idOrSlug: string): Promise<SessionDetailResu
 
   const db = await getReadyDb();
 
-  // Disambiguate sessionId vs slug by shape. Hex-and-dash matches the
-  // same gate `loadSessionDetailFromDb` and `scanSessionDetail` use
-  // for sessionIds; anything containing letters past `f` is necessarily
-  // a slug. Resolution runs BEFORE the v3-catch-up gate so
-  // /sessions/<slug> URLs still resolve during the migration window
-  // (the v3 gate falls back to file-parse but file-parse rejects
-  // non-hex inputs; pre-resolving slug → canonical sessionId is what
-  // bridges that).
+  // Disambiguate sessionId vs slug by ASKING THE INDEX, then falling back to
+  // shape. Resolution runs BEFORE the v3-catch-up gate so /sessions/<slug>
+  // URLs still resolve during the migration window (the v3 gate falls back to
+  // file-parse, and file-parse cannot resolve a slug at all; pre-resolving
+  // slug → canonical sessionId is what bridges that).
   //
-  // Edge case: a hex-only slug (e.g. `cafe-faded-deed`) would slip
-  // through as a sessionId and miss the loader rather than resolving
-  // via slug. Claude Code's slug dictionary uses words with letters
-  // past `f`, so this isn't observed in practice; documented for
-  // future generators.
+  // The order matters and is the fix for a collision #483 introduced. This used
+  // to be a pure shape test, and shape alone cannot separate the two spaces:
+  // `agent-cafe-deed` is a perfectly good slug whose remainder is hex-and-dash,
+  // so once `agent-` was admitted as an id prefix that slug started reading as
+  // an id, skipping slug resolution and 404ing (Copilot, PR #484). Tightening
+  // the pattern only moves the boundary — it is a guess about id content either
+  // way, which is the same mistake #483 was about.
   //
-  // This is the one gate that must stay NARROW, and the reason #483 could not
-  // just point all five sites at `isValidSessionId`. It decides id-vs-slug, not
-  // path safety: widened to the path-safe allowlist, every slug would read as
-  // an id and `resolveSlugToSessionId` would never run. It now admits the
-  // `agent-` subagent form as well, which cannot collide with a real slug for
-  // the same reason the hex edge case doesn't.
-  const isSessionId = looksLikeSessionId(idOrSlug);
-  const sessionId = isSessionId ? idOrSlug : resolveSlugToSessionId(db, idOrSlug);
+  // A slug lookup is a single indexed read, so there is no reason to guess:
+  // if a session actually carries this slug, that is a fact and it wins.
+  // Otherwise fall back to shape, which is all that is available for an id.
+  // This also retires the long-documented `cafe-faded-deed` edge case — a
+  // hex-only slug now resolves correctly instead of being knowingly lost.
+  //
+  // The asymmetry that makes the fallback safe: a value wrongly treated as a
+  // slug still reaches `scanSessionDetail` below when the lookup misses, but a
+  // value wrongly treated as an id never gets a slug lookup at all.
+  const bySlug = resolveSlugToSessionId(db, idOrSlug);
+  const sessionId = bySlug ?? (looksLikeSessionId(idOrSlug) ? idOrSlug : null);
   const fallbackKey = sessionId ?? idOrSlug;
 
   if (await checkV3Gate("getSessionDetail", db)) {
