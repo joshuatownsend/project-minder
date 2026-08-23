@@ -204,6 +204,24 @@ describe.skipIf(!driverAvailable)("data façade — getClaudeUsage backend parit
         recordRun: "reconcile",
       })
     );
+    // **The premise, asserted before anything is concluded from it.**
+    // `conversationCount === 2` is true in two different worlds: the nested
+    // transcript was indexed and then excluded from the count (the behaviour
+    // under test), or it was never indexed at all — if the reconciler stopped
+    // walking `subagents/`, the DB would hold only the two top-level rows and
+    // every assertion below would still pass while the fixture had quietly
+    // stopped exercising anything. The mutation check on the query cannot see
+    // that, because the premise it depends on lives in ingest. (Copilot, PR
+    // #488.)
+    const nested = (await conn.getDb())!
+      .prepare("SELECT session_id, turn_count FROM sessions WHERE session_id = ?")
+      .get(AGENT_SESSION) as { session_id: string; turn_count: number } | undefined;
+    expect(nested).toBeDefined();
+    // And stored the way the fix reasons about: a sidechain-only transcript
+    // carries zero primary turns, which is why counting it as a conversation
+    // was incoherent rather than merely inconsistent.
+    expect(nested!.turn_count).toBe(0);
+
     const dbResult = await dbFacade.getClaudeUsage(projectPaths);
     expect(dbResult.meta.backend).toBe("db");
 
