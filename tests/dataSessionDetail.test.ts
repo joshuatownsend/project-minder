@@ -323,6 +323,51 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
     });
   });
 
+  it("opens an agent-* subagent session rather than 404ing on its id (#483)", async () => {
+    // The regression #483 records, end to end through the facade.
+    //
+    // Newer Claude Code writes subagent transcripts to
+    // `<project>/<session>/subagents/agent-*.jsonl`, and ingest walks them —
+    // so `loadSessionsListFromDb`, whose only predicate is `turn_count > 0`,
+    // LISTS them. Every detail loader then rejected the id at a
+    // `/^[a-f0-9-]+$/i` gate, because `g`/`n`/`t` are not hex. Measured on a
+    // real index: 1,268 of 6,656 sessions (19%) listed and unopenable, on both
+    // backends.
+    const projectsDir = await setupFixture();
+    const AGENT_ID = "agent-a38db58938dbeea68";
+    await writeJsonl(
+      path.join(projectsDir, "C--dev-app-x", SESSION_ID, "subagents", `${AGENT_ID}.jsonl`),
+      [
+        userTurn("2026-04-15T10:00:10Z", "scope the bug"),
+        assistantTurn("2026-04-15T10:00:11Z", "claude-sonnet-4-5", "Found it", [
+          { id: "tu_s1", name: "Read", input: { file_path: "/repo/parser.ts" } },
+        ]),
+      ]
+    );
+
+    process.env.MINDER_USE_DB = "1";
+    const { facade, conn, mig, ingest } = await reloadModules();
+    await mig.initDb();
+    assertReconcileClean(
+      await ingest.reconcileAllSessions((await conn.getDb())!, {
+        projectsDir,
+        recordRun: "reconcile",
+      })
+    );
+
+    // Premise guard: without this the assertion below could pass because the
+    // session was never indexed, which is a different (and silent) failure.
+    const db = (await conn.getDb())!;
+    const row = db
+      .prepare("SELECT session_id FROM sessions WHERE session_id = ?")
+      .get(AGENT_ID) as { session_id: string } | undefined;
+    expect(row?.session_id).toBe(AGENT_ID);
+
+    const result = await facade.getSessionDetail(AGENT_ID);
+    expect(result.detail).not.toBeNull();
+    expect(result.detail!.sessionId).toBe(AGENT_ID);
+  });
+
   it("rejects path-traversal-shaped sessionIds", async () => {
     await setupFixture();
     process.env.MINDER_USE_DB = "1";
@@ -387,6 +432,103 @@ describe.skipIf(!driverAvailable)("data façade — getSessionDetail backend par
 
     const result = await facade.getSessionDetail(SLUG);
     expect(result.meta.backend).toBe("db");
+    expect(result.detail).not.toBeNull();
+    expect(result.detail!.sessionId).toBe(SESSION_ID);
+  });
+
+  it("resolves an agent-prefixed SLUG rather than reading it as an id (#484)", async () => {
+    // The collision Copilot found. `agent-cafe-deed` matches the id shape test
+    // — `agent-` prefix, hex-and-dash remainder — so once #483 admitted that
+    // prefix, a session carrying this slug started 404ing: shape said "id",
+    // slug resolution never ran, and no session has that id.
+    //
+    // Fixed by asking the index BEFORE falling back to shape. Shape cannot
+    // separate these two spaces at all, and tightening the pattern would only
+    // move the boundary, so the test pins the lookup order rather than a regex.
+    const SLUG = "agent-cafe-deed";
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+    await writeJsonl(path.join(projectsDir, "C--dev-app", `${SESSION_ID}.jsonl`), [
+      userTurn("2026-04-15T10:00:00Z", "hi"),
+      {
+        type: "assistant",
+        timestamp: "2026-04-15T10:00:01Z",
+        slug: SLUG,
+        message: {
+          model: "claude-sonnet-4-5",
+          content: [{ type: "text", text: "hello" }],
+          stop_reason: "end_turn",
+          usage: {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+        },
+      } as any,
+    ]);
+    process.env.MINDER_USE_DB = "1";
+    const { facade, conn, mig, ingest } = await reloadModules();
+    await mig.initDb();
+    assertReconcileClean(
+      await ingest.reconcileAllSessions((await conn.getDb())!, {
+        projectsDir,
+        recordRun: "reconcile",
+      })
+    );
+
+    const result = await facade.getSessionDetail(SLUG);
+    expect(result.detail).not.toBeNull();
+    expect(result.detail!.sessionId).toBe(SESSION_ID);
+  });
+
+  it("an exact session id wins over another session's identical slug (#484)", async () => {
+    // Nothing enforces that a slug cannot equal some other session's id — the
+    // schema has no cross-column uniqueness constraint, and a hex-shaped slug
+    // is the long-documented `cafe-faded-deed` case. So when slug was probed
+    // first, `/sessions/<sessionId>` could silently open a DIFFERENT session:
+    // a wrong answer rather than a missing one, which is the worse failure.
+    //
+    // Pins the lookup ORDER (id, then slug, then shape) rather than any regex.
+    const OTHER_ID = "11112222-3333-4444-5555-666677778888";
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+
+    // Session A: the one actually being asked for, keyed by its id.
+    await writeJsonl(path.join(projectsDir, "C--dev-app", `${SESSION_ID}.jsonl`), [
+      userTurn("2026-04-15T10:00:00Z", "the session we want"),
+      assistantTurn("2026-04-15T10:00:01Z", "claude-sonnet-4-5", "A", []),
+    ]);
+    // Session B: a decoy carrying A's id as its SLUG.
+    await writeJsonl(path.join(projectsDir, "C--dev-app", `${OTHER_ID}.jsonl`), [
+      userTurn("2026-04-15T11:00:00Z", "the decoy"),
+      {
+        type: "assistant",
+        timestamp: "2026-04-15T11:00:01Z",
+        slug: SESSION_ID,
+        message: {
+          model: "claude-sonnet-4-5",
+          content: [{ type: "text", text: "B" }],
+          stop_reason: "end_turn",
+          usage: { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+        },
+      } as any,
+    ]);
+
+    process.env.MINDER_USE_DB = "1";
+    const { facade, conn, mig, ingest } = await reloadModules();
+    await mig.initDb();
+    assertReconcileClean(
+      await ingest.reconcileAllSessions((await conn.getDb())!, { projectsDir, recordRun: "reconcile" })
+    );
+
+    // Premise guard: the decoy must really carry that slug, or this asserts
+    // nothing — the id would win by default rather than by the fix.
+    const db = (await conn.getDb())!;
+    const decoy = db
+      .prepare("SELECT session_id FROM sessions WHERE slug = ?")
+      .get(SESSION_ID) as { session_id: string } | undefined;
+    expect(decoy?.session_id).toBe(OTHER_ID);
+
+    const result = await facade.getSessionDetail(SESSION_ID);
     expect(result.detail).not.toBeNull();
     expect(result.detail!.sessionId).toBe(SESSION_ID);
   });

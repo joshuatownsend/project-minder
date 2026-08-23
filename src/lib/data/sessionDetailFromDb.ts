@@ -6,6 +6,7 @@ import type DatabaseT from "better-sqlite3";
 import { decodeDirName } from "@/lib/platform";
 import { parseStoredArgs } from "@/lib/db/storedArgs";
 import { prepCached } from "@/lib/db/connection";
+import { isValidSessionId } from "@/lib/sessionId";
 import { isWorktreeFilePath } from "@/lib/scanner/worktreeCheck";
 import { readSubagentMetaSync } from "@/lib/scanner/subagentMeta";
 import { enrichSubagentsFromOtel } from "@/lib/scanner/subagentEnrichment";
@@ -212,9 +213,12 @@ export async function loadSessionDetailFromDb(
   db: DatabaseT.Database,
   sessionId: string
 ): Promise<SessionDetail | null> {
-  // SessionId-shape gate: same regex as `scanSessionDetail` — UUIDs and
-  // hex-only — so a path-traversal attempt can't even hit the DB.
-  if (!/^[a-f0-9-]+$/i.test(sessionId)) return null;
+  // SessionId-shape gate, so a path-traversal attempt can't even hit the DB.
+  // This comment used to say "same regex as `scanSessionDetail`", which was
+  // true and was the bug: agreement maintained by copying a literal drifts in
+  // lockstep, and all five copies rejected `agent-<hex>` together (#483). Now
+  // the same function, not the same text.
+  if (!isValidSessionId(sessionId)) return null;
 
   const session = prepCached(db,
       `SELECT session_id, project_slug, project_dir_name, file_path, file_mtime_ms,
@@ -353,9 +357,26 @@ export async function loadSessionDetailFromDb(
     key: r.ticket_key,
   }));
 
-  const jsonlPath = path.join(
-    os.homedir(), ".claude", "projects", session.project_dir_name, `${sessionId}.jsonl`
-  );
+  // The INDEXED path, not one rebuilt from the id (Copilot, PR #484). The
+  // reconstruction below it was wrong in two independent ways, and #483 made
+  // the first one reachable:
+  //
+  //   - Nested subagent transcripts live at
+  //     `<project>/<parent>/subagents/<id>.jsonl`. Rebuilding
+  //     `<project>/<id>.jsonl` names a file that cannot exist, so an
+  //     `agent-*` session that delegates further lost its subagent cards'
+  //     `.meta.json` enrichment — silently, since a missing meta file is
+  //     indistinguishable from a session that had no subagents.
+  //   - `os.homedir()` is hardcoded, so any session indexed from a SECONDARY
+  //     Claude home (`config.claudeHomes`, the WSL case) resolved against the
+  //     primary one. That predates this PR and applies to flat sessions too.
+  //
+  // `file_path` is what ingest actually wrote, so it is right for both.
+  const jsonlPath =
+    session.file_path ||
+    path.join(
+      os.homedir(), ".claude", "projects", session.project_dir_name, `${sessionId}.jsonl`
+    );
   const subagentMetaMap = readSubagentMetaSync(jsonlPath);
   const aggregates = aggregateTools(tools, subagentMetaMap);
   // OTEL-derived runtime metrics (cost, tokens, model, duration) on each

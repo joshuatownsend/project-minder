@@ -214,6 +214,26 @@ Continuation linking requires the SQLite index. Under `MINDER_USE_DB=0` the slug
 
 Note: a session created seconds before you visit `/sessions/<slug>` may 404 until the indexer's next sweep picks it up. Use the UUID URL (`/sessions/<sessionId>`) as a fallback during that window — UUIDs always resolve via direct file-parse even when un-indexed.
 
+### Subagent transcripts in the list
+
+Newer Claude Code versions write each spawned subagent's transcript to its own
+file, under `<project>/<session>/subagents/`. Minder indexes those as sessions
+in their own right, so they appear in this list alongside ordinary ones. Their
+ids start with `agent-` rather than being plain hex.
+
+**These were listed but could not be opened until recently.** Every
+session-detail path checked the id against a hex-only pattern, which the
+`agent-` prefix fails, so clicking one returned "session not available" — on a
+reference history that was 1,268 of 6,656 sessions, about one in five. Switching
+the index off (`MINDER_USE_DB=0`) did not help, because the file-parse path
+applied the same check. They now open normally.
+
+One caveat while this settles: the file-parse backend does not yet walk the
+nested `subagents/` directories when building the list, so with the index
+switched off these sessions are missing from the list rather than unopenable.
+The SQLite index (the default) lists them.
+
+
 ## Session Detail
 
 Click a session to see the full detail view with tabs:

@@ -1,4 +1,4 @@
-import { isValidSessionId } from "@/lib/usage/sessionPath";
+import { looksLikeSessionId } from "@/lib/sessionId";
 
 /**
  * Parent-session linkage for subagent transcripts, derived from the file path.
@@ -37,13 +37,18 @@ import { isValidSessionId } from "@/lib/usage/sessionPath";
  * `undefined` on the other — which reads as "this is a root session" rather
  * than as a parse failure.
  *
- * The id check is `isValidSessionId`, the same rule the rest of the app uses,
- * rather than a stricter local one. The errors are asymmetric: rejecting a real
- * session id silently drops a whole branch of the tree, while accepting a
- * directory that is not one produces a link to a session that does not exist,
- * which matches nothing and costs nothing (Copilot review of #428). Position
- * does most of the work here anyway — the segment must sit directly above a
- * `subagents` directory.
+ * The id check is `looksLikeSessionId` — the NARROW shape predicate, not the
+ * permissive `isValidSessionId` traversal guard. It was the latter until #483
+ * split the two: that guard now admits anything path-safe, which would let a
+ * stray `subagents/` directory anywhere in a tree fabricate a parent id out of
+ * its folder's name (`/home/j/notes/inbox/subagents/…` → `"inbox"`). The test
+ * for that case is what caught it.
+ *
+ * The errors are asymmetric, and the asymmetry now points the other way from
+ * the #428 note this replaces: rejecting a real session id silently drops a
+ * branch of the tree, while accepting a directory that is not one fabricates a
+ * link. Position does most of the work regardless — the segment must sit
+ * directly above a `subagents` directory.
  */
 export function parseSubagentParentSessionId(filePath: string): string | undefined {
   const segments = filePath.split(/[\\/]/);
@@ -52,6 +57,15 @@ export function parseSubagentParentSessionId(filePath: string): string | undefin
   if (fileIdx < 2) return undefined;
   if (segments[fileIdx - 1] !== "subagents") return undefined;
   const parent = segments[fileIdx - 2];
-  if (!parent || !isValidSessionId(parent)) return undefined;
+  // `looksLikeSessionId`, NOT `isValidSessionId` (#483). This is the third
+  // question the old shared regex was answering: not "is this safe in a path"
+  // and not "id or slug", but "does this segment PLAUSIBLY name a session" —
+  // a heuristic that stops a stray `subagents/` directory anywhere in a tree
+  // from fabricating a parent id out of its parent folder's name. The
+  // traversal guard is deliberately permissive now, so it would accept
+  // `inbox` here; the narrow shape predicate is the one that means what this
+  // line needs. Pinned by `subagentTranscriptPath.test.ts`, which caught this
+  // when the guard was widened.
+  if (!parent || !looksLikeSessionId(parent)) return undefined;
   return parent;
 }

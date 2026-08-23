@@ -1,6 +1,7 @@
 import "server-only";
 import { generateUsageReport, augmentPortfolioYield } from "@/lib/usage/aggregator";
 import { getJsonlMaxMtime } from "@/lib/usage/parser";
+import { looksLikeSessionId } from "@/lib/sessionId";
 import { scanAllSessions, scanSessionDetail, toSlug } from "@/lib/scanner/claudeConversations";
 import { getSessionMeta } from "@/lib/scanner/claudeStats";
 import { getDb, isDriverLoaded } from "@/lib/db/connection";
@@ -989,22 +990,47 @@ async function resolveSessionDetail(idOrSlug: string): Promise<SessionDetailResu
 
   const db = await getReadyDb();
 
-  // Disambiguate sessionId vs slug by shape. Hex-and-dash matches the
-  // same gate `loadSessionDetailFromDb` and `scanSessionDetail` use
-  // for sessionIds; anything containing letters past `f` is necessarily
-  // a slug. Resolution runs BEFORE the v3-catch-up gate so
-  // /sessions/<slug> URLs still resolve during the migration window
-  // (the v3 gate falls back to file-parse but file-parse rejects
-  // non-hex inputs; pre-resolving slug → canonical sessionId is what
-  // bridges that).
+  // Disambiguate sessionId vs slug by ASKING THE INDEX, then falling back to
+  // shape. Resolution runs BEFORE the v3-catch-up gate so /sessions/<slug>
+  // URLs still resolve during the migration window (the v3 gate falls back to
+  // file-parse, and file-parse cannot resolve a slug at all; pre-resolving
+  // slug → canonical sessionId is what bridges that).
   //
-  // Edge case: a hex-only slug (e.g. `cafe-faded-deed`) would slip
-  // through as a sessionId and miss the loader rather than resolving
-  // via slug. Claude Code's slug dictionary uses words with letters
-  // past `f`, so this isn't observed in practice; documented for
-  // future generators.
-  const looksLikeSessionId = /^[a-f0-9-]+$/i.test(idOrSlug);
-  const sessionId = looksLikeSessionId ? idOrSlug : resolveSlugToSessionId(db, idOrSlug);
+  // The order matters and is the fix for a collision #483 introduced. This used
+  // to be a pure shape test, and shape alone cannot separate the two spaces:
+  // `agent-cafe-deed` is a perfectly good slug whose remainder is hex-and-dash,
+  // so once `agent-` was admitted as an id prefix that slug started reading as
+  // an id, skipping slug resolution and 404ing (Copilot, PR #484). Tightening
+  // the pattern only moves the boundary — it is a guess about id content either
+  // way, which is the same mistake #483 was about.
+  //
+  // Both lookups are single indexed reads, so there is no reason to guess —
+  // and the ORDER between them is load-bearing. `session_id` is probed first:
+  // nothing enforces that a slug cannot equal some other session's id (the
+  // schema has no cross-column uniqueness constraint, and Claude Code's slug
+  // generator is free to emit a hex-shaped one — the `cafe-faded-deed` case
+  // that has been documented here for years is exactly that shape). Checking
+  // the slug first therefore let `/sessions/<sessionId>` silently open a
+  // DIFFERENT session that happened to carry that string as its slug — a wrong
+  // answer rather than a missing one, which is the worse failure (Copilot,
+  // PR #484).
+  //
+  // Exact id → that session. Otherwise a slug that really exists → its session.
+  // Otherwise fall back to shape, which is all that is available for an id the
+  // index has not seen (the file-parse path below still handles it).
+  //
+  // This ordering also fixes what the shape test alone could not:
+  // `agent-cafe-deed` is a legitimate slug whose remainder is hex-and-dash, so
+  // once `agent-` was admitted as an id prefix it began reading as an id and
+  // 404ing. No session has that id, so the slug lookup now wins. And the
+  // `cafe-faded-deed` case is no longer "knowingly lost" either.
+  const idRow = db
+    .prepare(`SELECT session_id FROM sessions WHERE session_id = ? LIMIT 1`)
+    .get(idOrSlug) as { session_id: string } | undefined;
+  const sessionId =
+    idRow?.session_id ??
+    resolveSlugToSessionId(db, idOrSlug) ??
+    (looksLikeSessionId(idOrSlug) ? idOrSlug : null);
   const fallbackKey = sessionId ?? idOrSlug;
 
   if (await checkV3Gate("getSessionDetail", db)) {
