@@ -20,8 +20,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
   This is the opposite direction from the four loaders above, deliberately: they answer about the whole corpus and were equalized by widening the walk; this one's *question* is single-source, so it is equalized by narrowing the SQL.
 
-### Fixed
-
 - **Portfolio stats counted subagent transcripts as conversations** (#480). Under the SQLite backend, a project's reported conversation count included every nested `<project>/<session>/subagents/agent-*.jsonl` transcript — rows that contribute **zero** turns and **zero** tokens to the very same figures, because ingest derives a session row's aggregates from primary turns only (`is_sidechain = 0`). On the reference index that is 1,268 of 6,799 rows: **18.6% portfolio-wide, and up to 94% for a single project**, which reported 69 conversations where 4 had been held. Turning the index off changed the number, because file-parse reads immediate `.jsonl` entries only and never sees these files.
 
   The count is now taken over rows that are not nested transcripts. This is the same product decision the session list already made at its `turn_count > 0` filter, and the two now read as one decision rather than two filters that happen to agree — the exclusion uses `parseSubagentParentSessionId`, the single canonical predicate, rather than a hand-copied `LIKE '%subagents%'`. Copied agreement drifting in lockstep is precisely what #483 was.

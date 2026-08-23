@@ -246,6 +246,43 @@ describe("file-parse adapter discovery (#475)", () => {
     }
   });
 
+  it("keeps portfolio yield scoped to the requested source", async () => {
+    // `augmentPortfolioYield` re-reads the FULL session map rather than reusing
+    // the report's already-filtered turns, and `gatherProjectTurns` matches on
+    // project identity alone. That was harmless while the map only ever held
+    // Claude sessions; giving file-parse adapter discovery is what made it a
+    // leak — a `source=claude` report would classify Codex sessions into its
+    // yield while every other figure covered Claude only. (Codex P2, PR #490.)
+    //
+    // Asserted at the seam rather than through `computeProjectYield`, which
+    // shells out to git and would need a real repository: what the fix changes
+    // is which turns reach it.
+    await writeCodexSession();
+    await writeConfigFile(["claude", "codex"]);
+    await state.reload();
+    const { parseAllSessions } = await import("@/lib/usage/parser");
+    const { gatherProjectTurns } = await import("@/lib/usage/projectMatch");
+    const { scopeSessionMapToSource } = await import("@/lib/usage/aggregator");
+
+    const full = await parseAllSessions();
+    // The production helper, not a re-implementation of it — otherwise this
+    // test would pass whatever `augmentPortfolioYield` actually does.
+    const scoped = scopeSessionMapToSource(full, "claude");
+
+    // Both sessions carry the same project identity, which is what makes the
+    // leak possible at all — the filter is the only thing separating them.
+    expect(gatherProjectTurns(full, "dev-app-x", CODEX_CWD).some((t) => t.source === "codex")).toBe(
+      true
+    );
+    expect(
+      gatherProjectTurns(scoped, "dev-app-x", CODEX_CWD).some((t) => t.source === "codex")
+    ).toBe(false);
+
+    // No scope requested leaves the map alone — the unfiltered path callers
+    // take when the report covers every source.
+    expect(scopeSessionMapToSource(full, undefined)).toBe(full);
+  });
+
   it("reaches the usage report as its own source", async () => {
     // The merge is only worth anything if the aggregate reflects it. This is the
     // end-to-end assertion the map-level tests above cannot make.

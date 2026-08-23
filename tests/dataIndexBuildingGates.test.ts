@@ -277,6 +277,33 @@ describe.skipIf(!driverAvailable)("data façade — half-built index gates (#472
     }
   });
 
+  it("does not undo the session list's refusal at the zero-rows branch", async () => {
+    // The gate declines to divert `getSessionsList` for an adapter install, and
+    // then the DB query returns zero rows early in a first reconcile — at which
+    // point the `sessions.length === 0` branch used to fall back to file-parse
+    // unconditionally, handing back exactly the Claude-only list the gate had
+    // just withheld. The refusal has to hold at both branches or it holds at
+    // neither. (Copilot, PR #490.)
+    const { facade, conn, db, runs } = await seedBuilding();
+    // `seedBuilding` deliberately leaves rows present, so empty the table to
+    // reach the branch under test. Without this the earlier gate answers first
+    // and the assertion passes for the wrong reason — confirmed by mutation:
+    // with the guard disabled, the seeded version of this test still passed.
+    db.prepare("DELETE FROM sessions").run();
+    expect((db.prepare("SELECT COUNT(*) AS n FROM sessions").get() as { n: number }).n).toBe(0);
+    expect(runs.getIndexBuildState(db)).toBe("building");
+
+    const spies = await mockDiscoverableCodexSession();
+    try {
+      const result = await facade.getSessionsList();
+      expect(result.meta.backend).toBe("db");
+      expect(result.sessions).toEqual([]);
+    } finally {
+      spies();
+      conn.closeDb();
+    }
+  });
+
   it("still degrades the comparison for an adapter install, which needs no corpus", async () => {
     // The trap in the fix above. `getUsageCompare` degrades to "not comparable"
     // rather than falling back, so the adapter question does not arise for it —

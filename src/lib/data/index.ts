@@ -791,7 +791,7 @@ export async function getUsage(
   const report = await callDbLoader("getUsage", () =>
     loadUsageReportFromSql(db, period, project, source, home)
   );
-  if (!project) await augmentPortfolioYield(report);
+  if (!project) await augmentPortfolioYield(report, source);
   return { report, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
 }
 
@@ -1115,6 +1115,28 @@ export async function getSessionsList(): Promise<SessionsListResult> {
     loadSessionsListFromDb(db)
   );
   if (sessions.length === 0) {
+    // Reaching here while the index is still building means the gate above
+    // ALREADY declined to divert — the covered case returns from it — so
+    // falling back now would undo that decision one branch later and hand an
+    // adapter user the Claude-only list the gate exists to withhold. On a
+    // Codex-only install it is worse still: an empty list presented as a
+    // complete one. (Copilot, PR #490.)
+    //
+    // Deliberately keyed on `isIndexBuilding` rather than re-asking
+    // `fileParseCoversCorpus`, and not only to skip a second discovery walk:
+    // when the indexer is switched off entirely there is no prospect of the
+    // index ever filling, so declining would leave the list permanently empty.
+    // A Claude-only list beats that. The refusal is only correct while it is
+    // temporary.
+    if (isIndexBuilding(db)) {
+      warnOnce(
+        "getSessionsList:adapters-empty-index",
+        "[data] getSessionsList: index still building and empty, but a non-Claude " +
+          "adapter is enabled and file-parse cannot see adapter sessions — serving " +
+          "the empty SQL answer rather than a Claude-only list."
+      );
+      return { sessions, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
+    }
     logIntentionalFallthrough("getSessionsList", "DB index empty (indexer warming up?)");
     return runFileSessionsList();
   }
