@@ -1,6 +1,7 @@
 import "server-only";
 import type DatabaseT from "better-sqlite3";
 import type { ClaudeUsageStats } from "@/lib/types";
+import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptPath";
 
 // SQL-backed Claude conversation aggregator for `/api/stats`. Replaces
 // the `parseAllSessions` + `scanClaudeConversationsForProjects` pair in
@@ -58,9 +59,35 @@ import type { ClaudeUsageStats } from "@/lib/types";
 //    would require either tracking the original (non-canonicalized)
 //    dir name in the schema or walking the projects directory at
 //    query time to discover worktree dirs — both deferred.
+//
+// 3. **Nested subagent transcripts are excluded from
+//    `conversationCount`** (#480). Ingest indexes
+//    `<project>/<parent>/subagents/agent-*.jsonl` as its own `sessions`
+//    row so its cost reaches the daily_costs rollups, but the session
+//    row's own aggregates are primary-only (`is_sidechain = 0`, see
+//    `ingest.ts:2834`), so such a row contributes **zero** turns and
+//    zero tokens here. Counting it as a conversation was therefore
+//    incoherent even ignoring parity: on the reference index 1,268 of
+//    6,799 rows (18.6%, and up to 94% for a single project) are nested,
+//    so a project reporting 69 conversations had 4. File-parse never
+//    sees these files at all — it reads immediate `.jsonl` entries only
+//    — which is what made this a backend divergence as well as a
+//    miscount.
+//
+//    This is the same product decision `loadSessionsListFromDb` already
+//    made at its `WHERE turn_count > 0` filter ("aren't sessions the
+//    user ran"); the two exclusions are one decision, not two filters
+//    that happen to agree. Fixing it at ingest instead is wrong — the
+//    rows exist on purpose, and dropping them would break the /usage
+//    rollups that fold subagent cost in.
+//
+//    Note the /usage surface is NOT affected and needs no matching
+//    change: `usageFromDb`'s session count is over `turns`, and its
+//    file-parse counterpart (`usage/parser.ts:716`) already walks
+//    `subagents/`, so both sides include them there by design.
 
 interface TotalsRow {
-  conversation_count: number;
+  row_count: number;
   total_turns: number;
   input_tokens: number;
   output_tokens: number;
@@ -117,7 +144,7 @@ export function loadClaudeUsageStatsFromDb(
   // cache absorbs the per-prepare cost; under churn that's pennies.
   const totals = db
     .prepare(
-      `SELECT COUNT(*) AS conversation_count,
+      `SELECT COUNT(*) AS row_count,
               COALESCE(SUM(turn_count), 0) AS total_turns,
               COALESCE(SUM(input_tokens), 0) AS input_tokens,
               COALESCE(SUM(output_tokens), 0) AS output_tokens,
@@ -130,9 +157,34 @@ export function loadClaudeUsageStatsFromDb(
     )
     .get(...allowedDirs) as TotalsRow;
 
-  if (totals.conversation_count === 0) return stats;
+  // Zero indexed rows keeps the previous meaning: the façade reads a
+  // zero `conversationCount` as "indexer warming up" and falls through
+  // to file-parse. Gated on the RAW row count rather than the corrected
+  // one so the fall-through still means "nothing indexed" — a project
+  // holding only nested transcripts legitimately has zero conversations
+  // and would otherwise be misreported as an empty index. (It falls
+  // through to file-parse anyway in that case, which finds no top-level
+  // `.jsonl` and returns the same zero shape.)
+  if (totals.row_count === 0) return stats;
 
-  stats.conversationCount = totals.conversation_count;
+  // Counted in JS with the canonical predicate rather than as a SQL
+  // `file_path NOT LIKE '%subagents%'`, deliberately. `sessionsListFromDb`
+  // already SELECTs every `file_path` and applies this same function, and a
+  // second, hand-copied definition of "is this a nested transcript" is the
+  // exact failure this wave has been unwinding: in #483 five copies of one
+  // regex agreed perfectly and were all wrong together. One predicate, one
+  // definition. (A stored column was considered and rejected in that
+  // module's docblock — a not-yet-re-derived row would silently have no
+  // link.)
+  const paths = db
+    .prepare(
+      `SELECT file_path FROM sessions
+       WHERE project_dir_name IN (${placeholders})`
+    )
+    .all(...allowedDirs) as Array<{ file_path: string }>;
+  stats.conversationCount = paths.filter(
+    (r) => parseSubagentParentSessionId(r.file_path) === undefined
+  ).length;
   stats.totalTurns = totals.total_turns;
   stats.inputTokens = totals.input_tokens;
   stats.outputTokens = totals.output_tokens;

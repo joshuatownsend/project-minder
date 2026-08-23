@@ -13,7 +13,24 @@ import { assertReconcileClean } from "./_helpers/reconcile";
 //
 // **Fixture constraint**: assistant turns specify a real model and
 // have non-zero token usage so per-model cost calculation has data
-// to chew on. No sidechain entries.
+// to chew on.
+//
+// The fixture deliberately includes a **nested subagent transcript**
+// (`<project>/<parent>/subagents/agent-*.jsonl`, sidechain-flagged,
+// carrying its own model and its own tool call). Without it this file
+// is blind to the entire class of divergence #480 was about: ingest
+// indexes those files, file-parse never sees them, and the fixture
+// that omits them ratifies whatever the backends happen to do. That is
+// the same trap PR #484's end-to-end test fell into — a fixture that
+// left out the marker every real transcript carries.
+//
+// What it pins, beyond parity:
+//   - `conversationCount` counts only real conversations (was 3 vs 2)
+//   - the nested `Grep` call does NOT reach `toolUsage`
+//   - the nested `claude-haiku-4-5` model does NOT reach `modelsUsed`
+//   - the nested turn's tokens reach NEITHER backend's totals here
+//     (ingest's session-row aggregates are primary-only)
+// Every one of those is only pinned while the nested entries exist.
 //
 // Skipped when better-sqlite3 isn't loadable.
 
@@ -58,7 +75,8 @@ function assistantTurn(
   timestamp: string,
   model: string,
   text: string,
-  toolCalls: Array<{ id?: string; name: string; input: unknown }> = []
+  toolCalls: Array<{ id?: string; name: string; input: unknown }> = [],
+  isSidechain = false
 ): JsonlEntry {
   const content: any[] = [];
   if (text) content.push({ type: "text", text });
@@ -68,6 +86,7 @@ function assistantTurn(
   return {
     type: "assistant",
     timestamp,
+    ...(isSidechain ? { isSidechain: true } : {}),
     message: {
       model,
       content,
@@ -83,6 +102,7 @@ function assistantTurn(
 
 const SESSION_A = "aaaaaaaa-4444-4444-4444-444455556666";
 const SESSION_B = "bbbbbbbb-4444-4444-4444-444455556666";
+const AGENT_SESSION = "agent-cccccccc4444444444445555";
 
 async function setupFixture(): Promise<{ projectsDir: string; projectPaths: string[] }> {
   const projectsDir = path.join(tmpHome, ".claude", "projects");
@@ -101,6 +121,17 @@ async function setupFixture(): Promise<{ projectsDir: string; projectPaths: stri
       { id: "tu_b1", name: "Bash", input: { command: "npm test" } },
     ]),
   ]);
+  // Nested subagent transcript under session A — see the header note.
+  await writeJsonl(
+    path.join(projectsDir, "C--dev-app-x", SESSION_A, "subagents", `${AGENT_SESSION}.jsonl`),
+    [
+      { type: "user", timestamp: "2026-04-15T10:00:03Z", isSidechain: true,
+        message: { content: [{ type: "text", text: "subagent prompt" }] } },
+      assistantTurn("2026-04-15T10:00:04Z", "claude-haiku-4-5", "Grepping", [
+        { id: "tu_s1", name: "Grep", input: { pattern: "foo" } },
+      ], true),
+    ]
+  );
   // Use the decoded form because `encodePath` will re-encode it inside
   // both backends — exactly mirroring the production /api/stats call shape.
   return {
@@ -137,6 +168,8 @@ describe.skipIf(!driverAvailable)("data façade — getClaudeUsage backend parit
     expect(result.stats.conversationCount).toBe(2);
     expect(result.stats.totalTurns).toBeGreaterThan(0);
     expect(result.stats.modelsUsed).toContain("claude-sonnet-4-5");
+    // The nested transcript's model is not this project's.
+    expect(result.stats.modelsUsed).not.toContain("claude-haiku-4-5");
   });
 
   it("falls back to file-parse when no matching sessions are indexed", async () => {
@@ -177,6 +210,11 @@ describe.skipIf(!driverAvailable)("data façade — getClaudeUsage backend parit
     const f = fileResult.stats;
     const d = dbResult.stats;
 
+    // Absolute, not just parity: two real conversations exist on disk.
+    // Parity alone would still pass if both backends drifted to 3 and
+    // started counting the nested transcript.
+    expect(f.conversationCount).toBe(2);
+    expect(d.conversationCount).toBe(2);
     expect(d.conversationCount).toBe(f.conversationCount);
     expect(d.totalTurns).toBe(f.totalTurns);
     expect(d.inputTokens).toBe(f.inputTokens);
