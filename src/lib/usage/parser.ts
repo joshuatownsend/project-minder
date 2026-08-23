@@ -6,6 +6,7 @@ import {
 } from "@/lib/scanner/claudeConversations";
 import type { UsageTurn } from "./types";
 import type { MinderConfig } from "@/lib/types";
+import type { SessionFile } from "@/lib/adapters/types";
 import { FileCache } from "./cache";
 import {
   extractText as extractTextRaw,
@@ -689,8 +690,6 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
       // No projects dir in this home
     }
   }
-  if (subdirs.length === 0) return new Map();
-
   const result = new Map<string, UsageTurn[]>();
   // Track every JSONL we observed during this sweep so we can evict slots for
   // files that were deleted since the last call. Without this, `maxMtimeMs()`
@@ -699,6 +698,14 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
   // session deletion even though the response body changed.
   const liveSet = new Set<string>();
 
+  // NOT `if (subdirs.length === 0) return new Map()`, which is what stood here
+  // and what this loop's condition now expresses instead. That early return
+  // predates adapter discovery and became a hole the moment the merge below was
+  // added: an installation running Codex or Gemini with no readable Claude
+  // projects tree has zero subdirs, so it returned an empty map before reaching
+  // the adapters — and the file backend reported an empty corpus for exactly the
+  // users this change exists to serve. (Codex P1, PR #490.)
+  //
   // Process subdirectories in batches of 5 to avoid overwhelming the FS.
   for (let i = 0; i < subdirs.length; i += 5) {
     const batch = subdirs.slice(i, i + 5);
@@ -840,7 +847,10 @@ async function mergeAdapterSessions(
   if (adapters.length === 0) return;
 
   for (const adapter of adapters) {
-    let files;
+    // Typed rather than inferred-to-`any` by a bare `let`: `file.filePath` and
+    // `file.projectDirName` below are the adapter contract, and an untyped
+    // binding would stop checking them against it. (Copilot, PR #490.)
+    let files: SessionFile[];
     try {
       files = await adapter.discover();
     } catch {
@@ -852,8 +862,20 @@ async function mergeAdapterSessions(
       await Promise.all(
         batch.map(async (file) => {
           liveSet.add(file.filePath);
-          const turns = await cache.getOrCompute(file.filePath, async () => {
+          const turns = await cache.getOrCompute(file.filePath, async (fp) => {
             try {
+              // The same `MAX_SESSION_FILE_SIZE` cap the Claude sweep applies
+              // above, and that `reconcileAdapterSessionFile` applies on the SQL
+              // side (`ingest.ts:3706`). Both adapter parsers read the whole
+              // file with `fs.readFile` and this loop runs five at a time, so an
+              // uncapped oversized transcript is hundreds of megabytes resident
+              // — but the reason it belongs here is narrower than memory: the
+              // SQL backend SKIPS these files, so parsing them would make the
+              // fallback include sessions the index deliberately excludes. A new
+              // divergence, introduced by the change closing one. (Codex P2 +
+              // Copilot, PR #490.)
+              const stat = await fs.stat(fp);
+              if (stat.size > MAX_SESSION_FILE_SIZE) return [];
               return await adapter.parseFile(file);
             } catch {
               return [];

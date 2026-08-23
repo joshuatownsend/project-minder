@@ -631,16 +631,20 @@ async function fileParseCoversCorpus(): Promise<boolean> {
   // if we cannot tell what is out there, we must not claim to have read all of
   // it.
   //
-  // The test is whether adapter sessions are DISCOVERABLE, not whether an
-  // adapter is enabled. Those differ, and by a lot: this repo's own config has
-  // enabled `codex` for months against an index holding 6,799 Claude sessions
-  // and zero Codex ones, so keying on the flag would have switched the whole of
-  // #472 off for the machine it was written on, to protect a corpus that does
-  // not exist. A predicate that is cheap and wrong is not cheaper than the walk.
+  // **Enablement is a necessary condition, not the answer.** Being enabled is
+  // what makes the question worth asking; whether sessions are DISCOVERABLE is
+  // what answers it. Both lines below are load-bearing and they are not the same
+  // test: a Claude-only config can answer from the config alone, because nothing
+  // else could be indexed — but an enabled adapter says nothing about whether a
+  // corpus exists. This repo's own config has enabled `codex` for months against
+  // an index holding 6,799 Claude sessions and zero Codex ones, so stopping at
+  // the flag would have switched the whole of #472 off for the machine it was
+  // written on, to protect a corpus that does not exist.
   //
-  // Ordered so the walk is skipped in the common case: a Claude-only config
-  // answers from the config alone, and the discovery below runs only while the
-  // index is building AND an adapter is enabled.
+  // Ordered so the walk is skipped in the common case, and so the discovery
+  // below runs only while the index is building AND an adapter is enabled.
+  // (Wording corrected — Copilot, PR #490 — because it read as though the flag
+  // were not consulted at all.)
   const cfg = await readConfig();
   if ((cfg.enabledAdapters ?? ["claude"]).every((id) => id === "claude")) return true;
   try {

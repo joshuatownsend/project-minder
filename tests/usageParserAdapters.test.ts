@@ -171,6 +171,61 @@ describe("file-parse adapter discovery (#475)", () => {
     expect(sessions.size).toBe(1);
   });
 
+  it("finds adapter sessions on an install with no Claude projects tree", async () => {
+    // The sweep used to `return new Map()` as soon as no Claude project
+    // directories were readable. That predated adapter discovery and became a
+    // hole the moment the merge was added: a Codex-only install has zero Claude
+    // subdirs, so it returned empty before reaching the adapters — the file
+    // backend reporting an empty corpus for precisely the users this feature
+    // exists to serve. (Codex P1, PR #490.)
+    //
+    // `beforeEach` writes a Claude session, so remove the whole tree to model
+    // the install rather than merely pointing somewhere empty.
+    await fs.rm(path.join(tmpHome, ".claude"), { recursive: true, force: true });
+    await writeCodexSession();
+    await writeConfigFile(["claude", "codex"]);
+    await state.reload();
+    const { parseAllSessions } = await import("@/lib/usage/parser");
+
+    const sessions = await parseAllSessions();
+
+    expect(sessions.has(CODEX_SESSION_ID)).toBe(true);
+    expect(sessions.has(CLAUDE_SESSION_ID)).toBe(false);
+  });
+
+  it("skips an adapter transcript over the size cap, as the index does", async () => {
+    // `MAX_SESSION_FILE_SIZE` is 50 MiB and both adapter parsers read the whole
+    // file with `fs.readFile`, five concurrently. Memory is the obvious reason
+    // for the cap, but the reason it belongs in THIS change is narrower:
+    // `reconcileAdapterSessionFile` skips oversized files on the SQL side
+    // (`ingest.ts:3706`), so parsing them here would make the fallback include
+    // sessions the index deliberately excludes — a fresh divergence introduced
+    // by the change that closes one. (Codex P2 + Copilot, PR #490.)
+    //
+    // Written as a sparse file so the test costs no real disk or time; the cap
+    // reads `stat.size`, which a sparse file reports at its full length.
+    await writeCodexSession();
+    const target = path.join(codexHome, "sessions", "2026", `${CODEX_SESSION_ID}.jsonl`);
+    const fh = await fs.open(target, "r+");
+    try {
+      await fh.truncate(51 * 1024 * 1024);
+    } finally {
+      await fh.close();
+    }
+    expect((await fs.stat(target)).size).toBeGreaterThan(50 * 1024 * 1024);
+
+    await writeConfigFile(["claude", "codex"]);
+    await state.reload();
+    const { parseAllSessions } = await import("@/lib/usage/parser");
+
+    const sessions = await parseAllSessions();
+
+    expect(sessions.has(CODEX_SESSION_ID)).toBe(false);
+    // The rest of the sweep is unaffected — an oversized file is skipped, not
+    // fatal.
+    expect(sessions.has(CLAUDE_SESSION_ID)).toBe(true);
+  });
+
   it("survives an adapter whose discovery throws", async () => {
     await writeConfigFile(["claude", "codex"]);
     await state.reload();
