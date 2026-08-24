@@ -41,6 +41,9 @@ vi.mock("@/lib/efficiencyGradeCache", () => ({
   efficiencyGradeCache: { invalidateGrades: vi.fn() },
 }));
 vi.mock("@/lib/server/queries/stats", () => ({ invalidateClaudeUsageCache: vi.fn() }));
+vi.mock("@/lib/memory/seedCategoryCounts", () => ({
+  invalidateSessionCategoryCounts: vi.fn(),
+}));
 
 import { PATCH } from "@/app/api/config/route";
 
@@ -72,6 +75,8 @@ describe("PATCH /api/config — cache invalidation on a corpus change", () => {
     vi.mocked(grades.efficiencyGradeCache.invalidateGrades).mockClear();
     const stats = await import("@/lib/server/queries/stats");
     vi.mocked(stats.invalidateClaudeUsageCache).mockClear();
+    const seed = await import("@/lib/memory/seedCategoryCounts");
+    vi.mocked(seed.invalidateSessionCategoryCounts).mockClear();
   });
 
   it("drops the grade and usage caches when enabledAdapters changes", async () => {
@@ -81,8 +86,11 @@ describe("PATCH /api/config — cache invalidation on a corpus change", () => {
 
     const grades = await import("@/lib/efficiencyGradeCache");
     const stats = await import("@/lib/server/queries/stats");
+    const seed = await import("@/lib/memory/seedCategoryCounts");
     expect(grades.efficiencyGradeCache.invalidateGrades).toHaveBeenCalled();
     expect(stats.invalidateClaudeUsageCache).toHaveBeenCalled();
+    // The one with no TTL, so the only one whose staleness is unbounded.
+    expect(seed.invalidateSessionCategoryCounts).toHaveBeenCalled();
   });
 
   it("leaves them alone for a patch that does not change the corpus", async () => {
@@ -92,7 +100,15 @@ describe("PATCH /api/config — cache invalidation on a corpus change", () => {
     expect(res.status).toBe(200);
 
     const grades = await import("@/lib/efficiencyGradeCache");
+    const stats = await import("@/lib/server/queries/stats");
+    const seed = await import("@/lib/memory/seedCategoryCounts");
     expect(grades.efficiencyGradeCache.invalidateGrades).not.toHaveBeenCalled();
+    // Every cache in the block, not just the first. Asserting one of three
+    // leaves a regression that invalidates the other two unconditionally
+    // passing — which is the same incompleteness this test exists to catch.
+    // (Copilot, PR #490.)
+    expect(stats.invalidateClaudeUsageCache).not.toHaveBeenCalled();
+    expect(seed.invalidateSessionCategoryCounts).not.toHaveBeenCalled();
   });
 });
 

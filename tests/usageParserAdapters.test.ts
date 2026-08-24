@@ -262,12 +262,12 @@ describe("file-parse adapter discovery (#475)", () => {
     await state.reload();
     const { parseAllSessions } = await import("@/lib/usage/parser");
     const { gatherProjectTurns } = await import("@/lib/usage/projectMatch");
-    const { scopeSessionMapToSource } = await import("@/lib/usage/aggregator");
+    const { scopeSessionMap } = await import("@/lib/usage/aggregator");
 
     const full = await parseAllSessions();
     // The production helper, not a re-implementation of it — otherwise this
     // test would pass whatever `augmentPortfolioYield` actually does.
-    const scoped = scopeSessionMapToSource(full, "claude");
+    const scoped = scopeSessionMap(full, { source: "claude" });
 
     // Both sessions carry the same project identity, which is what makes the
     // leak possible at all — the filter is the only thing separating them.
@@ -279,8 +279,22 @@ describe("file-parse adapter discovery (#475)", () => {
     ).toBe(false);
 
     // No scope requested leaves the map alone — the unfiltered path callers
-    // take when the report covers every source.
-    expect(scopeSessionMapToSource(full, undefined)).toBe(full);
+    // take when the report covers everything.
+    expect(scopeSessionMap(full, {})).toBe(full);
+
+    // **The home axis, which was missed on the first pass at this fix.** An
+    // adapter turn carries no `homeKey`, and the report-level filter is strict
+    // equality — "excluded rather than guessed" — so ANY home scope must drop
+    // the Codex session, not merely a mismatched one. Asserted against a home
+    // the Claude session really does carry, so this cannot pass by filtering
+    // everything away.
+    const claudeTurns = full.get(CLAUDE_SESSION_ID)!;
+    const claudeHomeKey = claudeTurns[0].homeKey;
+    expect(claudeHomeKey).toBeTruthy();
+
+    const homeScoped = scopeSessionMap(full, { home: claudeHomeKey });
+    expect(homeScoped.has(CLAUDE_SESSION_ID)).toBe(true);
+    expect(homeScoped.has(CODEX_SESSION_ID)).toBe(false);
   });
 
   it("reaches the usage report as its own source", async () => {

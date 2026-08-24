@@ -791,7 +791,7 @@ export async function getUsage(
   const report = await callDbLoader("getUsage", () =>
     loadUsageReportFromSql(db, period, project, source, home)
   );
-  if (!project) await augmentPortfolioYield(report, source);
+  if (!project) await augmentPortfolioYield(report, { source, home });
   return { report, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
 }
 

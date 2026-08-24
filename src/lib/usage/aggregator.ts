@@ -99,34 +99,56 @@ export async function generateUsageReport(
   // Augment with portfolio yield — uses getCachedScan() (no fresh scan
   // triggered) so this is a no-op when the dashboard hasn't loaded yet.
   if (!project) {
-    await augmentPortfolioYield(report, source);
+    await augmentPortfolioYield(report, { source, home });
   }
 
   return report;
 }
 
 /**
- * Restrict a session map to one `source`, or return it unchanged when no source
+ * Restrict a session map to the report's scope, or return it unchanged when no
  * scope applies.
+ *
+ * **Takes every filter axis, not one.** The first version of this took `source`
+ * alone and `home` was found missing one review round later — which is the
+ * predictable shape of the underlying problem: `augmentPortfolioYield` re-reads
+ * the full session map instead of reusing the report's already-filtered turns,
+ * so each axis has to be re-threaded by hand and each is a separate chance to
+ * forget one. A single scope object means the next axis added to
+ * `generateUsageReport` fails to compile here rather than silently leaking.
+ * (Codex P2 ×2, PR #490.)
+ *
+ * Both discriminators match the report-level filters exactly so the two cannot
+ * disagree: `t.source ?? "claude"` treats an unstamped turn as Claude, and
+ * `home` is STRICT equality on `homeKey`, which excludes adapter turns entirely
+ * because they carry no home stamp — "excluded rather than guessed", matching
+ * the DB backend's `home_key = @home`. Keyed on the head turn because a session
+ * mixes neither source nor home.
  *
  * Exported so its test exercises this function rather than a copy of the
  * expression: a test that re-implements the filter it is checking passes
- * whatever the production code does, which is the failure this PR's own review
- * has already turned up twice.
- *
- * Uses the same discriminator as the report-level filter (`t.source ?? "claude"`)
- * so the two cannot disagree about what an unstamped turn counts as, and keys on
- * the head turn because a session does not mix sources.
+ * whatever the production code does, which is a failure this PR's own review has
+ * already turned up twice.
  */
-export function scopeSessionMapToSource(
+export interface SessionMapScope {
+  source?: string;
+  home?: string;
+}
+
+export function scopeSessionMap(
   sessionMap: Map<string, UsageTurn[]>,
-  source?: string
+  scope: SessionMapScope = {}
 ): Map<string, UsageTurn[]> {
-  if (!source) return sessionMap;
+  const { source, home } = scope;
+  if (!source && !home) return sessionMap;
   return new Map(
-    [...sessionMap].filter(
-      ([, turns]) => turns.length > 0 && (turns[0].source ?? "claude") === source
-    )
+    [...sessionMap].filter(([, turns]) => {
+      if (turns.length === 0) return false;
+      const head = turns[0];
+      if (source && (head.source ?? "claude") !== source) return false;
+      if (home && head.homeKey !== home) return false;
+      return true;
+    })
   );
 }
 
@@ -150,20 +172,20 @@ export function scopeSessionMapToSource(
 export async function augmentPortfolioYield(
   report: UsageReport,
   /**
-   * The `source` the report was scoped to, if any. Must be threaded through:
-   * this function re-reads the FULL session map rather than reusing the report's
+   * The scope the report was built under. Must be threaded through: this
+   * function re-reads the FULL session map rather than reusing the report's
    * already-filtered turns, and `gatherProjectTurns` matches on project identity
    * alone. Before file-parse had adapter discovery that was harmless — the map
-   * only ever held Claude sessions — but now a `source=claude` report would
-   * classify Codex and Gemini sessions into its yield while every other figure
-   * in the response covered Claude only. (Codex P2, PR #490.)
+   * only ever held Claude sessions — but now a `source=claude` or `home=`-scoped
+   * report would classify Codex and Gemini sessions into its yield while every
+   * other figure in the response excluded them. (Codex P2 ×2, PR #490.)
    */
-  source?: string
+  scope: SessionMapScope = {}
 ): Promise<void> {
   const scan = getCachedScan();
   if (!scan || report.projectDetails.length === 0) return;
 
-  const sessionMap = scopeSessionMapToSource(await parseAllSessions(), source);
+  const sessionMap = scopeSessionMap(await parseAllSessions(), scope);
   // Key by encoded path (e.g. "C--dev-project-minder") so it matches
   // pd.projectDirName from the usage parser, not the scanner's short slug.
   // A UNC-scanned WSL project's turns carry the FOREIGN encoding (the Linux

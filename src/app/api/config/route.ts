@@ -11,6 +11,7 @@ import { VALID_CURRENCIES } from "@/lib/currencies";
 import { listAdapters } from "@/lib/adapters";
 import { efficiencyGradeCache } from "@/lib/efficiencyGradeCache";
 import { invalidateClaudeUsageCache } from "@/lib/server/queries/stats";
+import { invalidateSessionCategoryCounts } from "@/lib/memory/seedCategoryCounts";
 import { validateNotificationRules } from "@/lib/notifications/rules/validate";
 import {
   isShortcutActionId,
@@ -495,6 +496,7 @@ export async function PATCH(request: NextRequest) {
   if (corpusShapeChanged) {
     efficiencyGradeCache.invalidateGrades();
     invalidateClaudeUsageCache();
+    invalidateSessionCategoryCounts();
   }
   return NextResponse.json({ ok: true, config });
 }
