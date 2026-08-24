@@ -587,17 +587,23 @@ async function checkV3Gate(scope: string, db: DbHandle): Promise<boolean> {
  * Does the file-parse path see the same corpus the SQL path does?
  *
  * It does not, whenever a non-Claude adapter is enabled. `discoverAllSessions`
- * — the thing that finds Codex and Gemini transcripts — is imported by
- * `db/ingest.ts` and by nothing else; every file-parse entry point walks
- * `<claude-home>/projects/**` and stops there. That is an architectural
- * boundary of the file backend, not a regression, and it long predates #472.
+ * — the thing that finds Codex and Gemini transcripts — WAS imported by
+ * `db/ingest.ts` and by nothing else; every file-parse entry point walked
+ * `<claude-home>/projects/**` and stopped there. That was an architectural
+ * boundary of the file backend, not a regression, and it long predated #472.
  *
- * It matters here because #472's gates exist to stop a subset being presented
- * as a total, and diverting an adapter-enabled install to file-parse would do
- * exactly that in a different direction: the SQL answer during the first pass
- * is a partial view of every source, while the file answer is a complete view
- * of Claude and a total absence of the rest. Dropping a source entirely is the
- * more distorting of the two, and it would be done in correctness's name.
+ * It mattered here because #472's gates exist to stop a subset being presented
+ * as a total, and diverting an adapter-enabled install to file-parse would have
+ * done exactly that in a different direction: the SQL answer during the first
+ * pass is a partial view of every source, while the file answer was a complete
+ * view of Claude and a total absence of the rest. Dropping a source entirely is
+ * the more distorting of the two, and it would be done in correctness's name.
+ *
+ * **Past tense throughout the two paragraphs above, deliberately.** #475 made
+ * them false for four of the five loaders, and leaving them in the present
+ * tense described a boundary that no longer exists as though it still governed
+ * everything. What they still describe accurately is the ONE path below — the
+ * session list. (Copilot, PR #490.)
  *
  * **#475 closed most of this, and this predicate is what is left.** The file
  * pipeline now has adapter discovery: `buildAllSessions` merges every enabled
