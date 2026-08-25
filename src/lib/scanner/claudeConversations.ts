@@ -41,9 +41,10 @@ import {
   type CachedFileStats,
   type CachedModelBuckets,
 } from "../claudeStatsCache";
-import { inferSessionStatus } from "./sessionStatus";
+import { hasUnresolvedToolUse, statusFromPending } from "./sessionStatus";
 import { mostFrequent, canonicalizeDirName } from "../usage/parser";
 import { isWorktreeEncodedDir } from "./worktreeCheck";
+import { FileCache } from "../usage/cache";
 
 export interface ConversationEntry {
   type?: string;
@@ -216,14 +217,124 @@ const sessionIndex =
 
 const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 
+/**
+ * What the per-file cache stores. NOT a `SessionSummary` — see `applyLiveFields`.
+ *
+ * `summary.status` and `summary.isActive` carry placeholder values here; the
+ * two live fields are recomputed on every read from `hasPendingTools` +
+ * `mtimeMs` + the current clock.
+ */
+interface ScannedSession {
+  summary: SessionSummary;
+  hasPendingTools: boolean;
+  mtimeMs: number;
+}
+
+// Per-file mtime+size-keyed cache for session summaries (#473).
+//
+// `scanAllSessions` had no cache at all: measured on a 5,286-session corpus,
+// back-to-back calls in one process cost 26.98s cold and 25.96s warm — no reuse
+// whatsoever. It serves `/sessions` whenever the list is on file-parse
+// (`MINDER_USE_DB=0`, v3 catch-up, an empty index, and — since #472 — the whole
+// of the first reconcile), behind a deliberately short 30s route TTL. So that
+// walk ran roughly every 30 seconds, competing with the indexer for the same
+// files.
+//
+// The cap is inherited wholesale from `parseAllSessions` (#472): this is an LRU
+// over a workload that sweeps every file in the same order every time, which is
+// LRU's worst case. Below the corpus size the hit rate does not degrade, it
+// collapses to ~0 — a measured 22x there. 25,000 keeps the same headroom over
+// the same corpus. A `SessionSummary` is far smaller than the `UsageTurn[]`
+// that cache holds (bounded by the 4,000-char `searchableText`), so the memory
+// trade is cheaper here than it was there.
+const globalForScan = globalThis as unknown as {
+  __sessionScanCache?: FileCache<ScannedSession | null>;
+};
+function getScanCache(): FileCache<ScannedSession | null> {
+  if (!globalForScan.__sessionScanCache) {
+    globalForScan.__sessionScanCache = new FileCache<ScannedSession | null>({
+      maxEntries: 25_000,
+    });
+  }
+  return globalForScan.__sessionScanCache;
+}
+
+/** Drop every cached summary. For tests; nothing in `src/` calls it. */
+export function clearSessionScanCache(): void {
+  getScanCache().clear();
+}
+
+/**
+ * Number of cached entries. For tests, and specifically for the one covering
+ * `retainOnly` — a deleted transcript drops out of the RETURNED list either
+ * way, because `readdir` no longer reports it, so the returned list cannot
+ * distinguish an evicting cache from a hoarding one. Only the cache's own size
+ * can. (Found by mutation: the first version of that test passed with
+ * `retainOnly` removed.)
+ */
+export function sessionScanCacheSize(): number {
+  return getScanCache().size;
+}
+
+/**
+ * Re-derive the two clock-dependent fields onto a fresh object.
+ *
+ * Both decay monotonically against a FIXED mtime — the cache key guarantees the
+ * file has not been touched — so a warm hit is not approximating anything:
+ * `working` really does become `needs_attention` and then `idle` as an
+ * abandoned tool call ages, and `isActive` really does fall to false two
+ * minutes after the last write. Returning the cached summary verbatim would pin
+ * every session to the status it held the first time it was read, and the file
+ * stops changing precisely when the session is abandoned — the one case the
+ * age thresholds exist to detect.
+ *
+ * The copy is shallow, so the arrays inside (`toolUsage`, `prs`, `modelsUsed`,
+ * `recaps`, …) are shared with the cached entry. Every consumer —
+ * `filterSessions`, `deriveSessionsMaxMs`, the route's `jsonClone` — treats a
+ * `SessionSummary` as read-only, and this cache is why that has to stay true:
+ * an in-place edit would corrupt the entry for every later reader.
+ */
+function applyLiveFields(scanned: ScannedSession, now: number): SessionSummary {
+  const mtime = new Date(scanned.mtimeMs);
+  return {
+    ...scanned.summary,
+    status: statusFromPending(scanned.hasPendingTools, mtime, now),
+    isActive: now - scanned.mtimeMs < 2 * 60_000,
+  };
+}
+
+/**
+ * Cached parse of one transcript. Returns `null` for files that produce no
+ * summary (oversized, empty, malformed) — and caches that `null`, so a 60MB
+ * transcript costs one `stat` per sweep instead of being re-read and re-rejected
+ * every time. `undefined` means the file vanished between `readdir` and `stat`.
+ */
+async function scanSessionFileCached(
+  filePath: string,
+  projectDirName: string
+): Promise<ScannedSession | null | undefined> {
+  return getScanCache().getOrCompute(filePath, () =>
+    scanSessionFileRaw(filePath, projectDirName)
+  );
+}
+
+/** Single-file scan through the cache, with the live fields applied. */
 async function scanSessionFile(
   filePath: string,
-  projectDirName: string,
-  mtime: Date
+  projectDirName: string
 ): Promise<SessionSummary | null> {
+  const scanned = await scanSessionFileCached(filePath, projectDirName);
+  return scanned ? applyLiveFields(scanned, Date.now()) : null;
+}
+
+async function scanSessionFileRaw(
+  filePath: string,
+  projectDirName: string
+): Promise<ScannedSession | null> {
   try {
     const canonicalDirName = canonicalizeDirName(projectDirName);
     const stat = await fs.stat(filePath);
+    const mtime = stat.mtime;
     if (stat.size > MAX_SESSION_FILE_SIZE) return null;
     const content = await fs.readFile(filePath, "utf-8");
     const lines = content.split("\n").filter(Boolean);
@@ -572,10 +683,13 @@ async function scanSessionFile(
     await loadPricing();
     const costEstimate = computeCostFromPerModel(perModelTokens);
 
-    const status = inferSessionStatus(
+    // Only the cacheable half runs here. `status` and `isActive` below are
+    // placeholders — `applyLiveFields` overwrites both on every read, warm or
+    // cold, so the two paths cannot drift apart.
+    const hasPendingTools = hasUnresolvedToolUse(
       allEntries.length > 500 ? allEntries.slice(-500) : allEntries,
-      mtime,
     );
+    const status = statusFromPending(hasPendingTools, mtime);
     const isActive = Date.now() - mtime.getTime() < 2 * 60_000;
     const durationMs =
       startTime && endTime
@@ -585,7 +699,7 @@ async function scanSessionFile(
     const projectPath = decodeDirName(canonicalDirName);
     const projectSlug = toSlug(canonicalDirName);
 
-    return {
+    const summary: SessionSummary = {
       sessionId,
       projectPath,
       projectSlug,
@@ -643,6 +757,8 @@ async function scanSessionFile(
       hookRuns: hookRuns.length > 0 ? hookRuns : undefined,
       hookErrors: hookErrors.length > 0 ? hookErrors : undefined,
     };
+
+    return { summary, hasPendingTools, mtimeMs: mtime.getTime() };
   } catch {
     return null;
   }
@@ -667,6 +783,13 @@ export async function scanAllSessions(): Promise<SessionSummary[]> {
   const homes = await getReadableClaudeHomes(config);
 
   const sessions: SessionSummary[] = [];
+  // Every transcript path this sweep actually looked at, across ALL homes.
+  // Pruning per-home would let the second home's entries evict the first's.
+  const liveSet = new Set<string>();
+  // One clock reading for the whole sweep, so two sessions that are equally
+  // stale cannot be reported with different statuses because the walk between
+  // them took time.
+  const now = Date.now();
 
   for (const home of homes) {
     const projectsDir = path.join(home, "projects");
@@ -677,8 +800,14 @@ export async function scanAllSessions(): Promise<SessionSummary[]> {
       // No projects tree in this home — the next one may still have one.
       continue;
     }
-    await scanOneHome(projectsDir, dirs, sessions);
+    await scanOneHome(projectsDir, dirs, sessions, liveSet, now);
   }
+
+  // Drop cached summaries for transcripts that are gone — deleted, or no longer
+  // under any readable home after a config change. Without this a removed home
+  // keeps paying LRU rent, and `maxMtimeMs()` would keep reporting a file that
+  // no longer exists.
+  getScanCache().retainOnly(liveSet);
 
   // Sort by most recent activity (endTime) so active sessions appear first
   sessions.sort((a, b) => {
@@ -693,7 +822,9 @@ export async function scanAllSessions(): Promise<SessionSummary[]> {
 async function scanOneHome(
   projectsDir: string,
   dirs: string[],
-  sessions: SessionSummary[]
+  sessions: SessionSummary[],
+  liveSet: Set<string>,
+  now: number
 ): Promise<void> {
   for (const dir of dirs) {
     const dirPath = path.join(projectsDir, dir);
@@ -710,18 +841,23 @@ async function scanOneHome(
         const results = await Promise.all(
           batch.map(async (f) => {
             const filePath = path.join(dirPath, f);
-            const fstat = await fs.stat(filePath);
-            return scanSessionFile(filePath, dir, fstat.mtime);
+            // No `stat` here: the cache stats every file itself, and on a warm
+            // hit that single stat IS the whole cost of the file. Statting it
+            // again out here would double the syscall count of a warm sweep,
+            // which is the only cost a warm sweep has left.
+            liveSet.add(filePath);
+            return scanSessionFileCached(filePath, dir);
           })
         );
         for (let j = 0; j < results.length; j++) {
           const r = results[j];
           if (r) {
-            sessions.push(r);
-            // Populate session index for fast detail lookups
+            sessions.push(applyLiveFields(r, now));
+            // Populate session index for fast detail lookups. Runs on warm hits
+            // too — a cached summary still has to be resolvable by id.
             const fileName = batch[j];
             sessionIndex.set(
-              r.sessionId,
+              r.summary.sessionId,
               { filePath: path.join(dirPath, fileName), projectDirName: dir }
             );
           }
@@ -786,7 +922,7 @@ export async function scanSessionDetail(
 
   const fstat = await fs.stat(filePath);
   if (fstat.size > MAX_SESSION_FILE_SIZE) return null;
-  const summary = await scanSessionFile(filePath, projectDirName, fstat.mtime);
+  const summary = await scanSessionFile(filePath, projectDirName);
   if (!summary) return null;
 
   // Now do the detailed parse for timeline, file ops, subagents
