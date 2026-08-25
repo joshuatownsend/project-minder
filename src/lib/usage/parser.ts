@@ -5,6 +5,8 @@ import {
   type ConversationEntry,
 } from "@/lib/scanner/claudeConversations";
 import type { UsageTurn } from "./types";
+import type { MinderConfig } from "@/lib/types";
+import type { SessionFile } from "@/lib/adapters/types";
 import { FileCache } from "./cache";
 import {
   extractText as extractTextRaw,
@@ -688,8 +690,6 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
       // No projects dir in this home
     }
   }
-  if (subdirs.length === 0) return new Map();
-
   const result = new Map<string, UsageTurn[]>();
   // Track every JSONL we observed during this sweep so we can evict slots for
   // files that were deleted since the last call. Without this, `maxMtimeMs()`
@@ -698,6 +698,14 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
   // session deletion even though the response body changed.
   const liveSet = new Set<string>();
 
+  // NOT `if (subdirs.length === 0) return new Map()`, which is what stood here
+  // and what this loop's condition now expresses instead. That early return
+  // predates adapter discovery and became a hole the moment the merge below was
+  // added: an installation running Codex or Gemini with no readable Claude
+  // projects tree has zero subdirs, so it returned an empty map before reaching
+  // the adapters — and the file backend reported an empty corpus for exactly the
+  // users this change exists to serve. (Codex P1, PR #490.)
+  //
   // Process subdirectories in batches of 5 to avoid overwhelming the FS.
   for (let i = 0; i < subdirs.length; i += 5) {
     const batch = subdirs.slice(i, i + 5);
@@ -782,10 +790,134 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
     );
   }
 
+  // ── Non-Claude adapter sessions (#475) ────────────────────────────────
+  //
+  // Until this landed, `discoverAllSessions` was imported by `db/ingest.ts` and
+  // by nothing else: the SQL backend indexed every enabled adapter while every
+  // file-parse entry point walked `<claude-home>/projects/**` and stopped. The
+  // two backends were therefore not equivalent, and #472 made that matter by
+  // widening file-parse's serving window to the whole of the first reconcile —
+  // so `data/index.ts` had to add `fileParseCoversCorpus()` to REFUSE to divert
+  // whenever adapter sessions existed, leaving exactly those users with the
+  // original defect. This closes it for the three usage loaders.
+  //
+  // Merged after the Claude sweep and into the same map, because the aggregator
+  // is already source-aware: it filters on `t.source ?? "claude"` and builds its
+  // by-source breakdown from the same turns (`aggregator.ts:69,474`). Confirmed
+  // against that code rather than taken on the issue's word.
+  await mergeAdapterSessions(config, cache, result, liveSet);
+
   // Evict slots for files that disappeared since the last sweep. This keeps
   // `maxMtimeMs()` honest as a change signal for ETag computation.
+  //
+  // Adapter files are in `liveSet` too — `mergeAdapterSessions` adds them.
+  // Omitting them would evict every adapter slot on each sweep, so they would
+  // be re-parsed every time AND `maxMtimeMs()` would ignore adapter edits,
+  // leaving ETags claiming "unchanged" across a real change.
   cache.retainOnly(liveSet);
   return result;
+}
+
+/**
+ * Parse every enabled non-Claude adapter's sessions and merge them into the
+ * all-sessions map.
+ *
+ * **Non-Claude only.** The Claude adapter's `discover()` walks the same projects
+ * trees the sweep above just finished walking, so including it would double the
+ * work and re-parse the whole corpus through a second code path.
+ *
+ * Failures are contained at three levels, matching the Claude sweep's existing
+ * "one bad file doesn't kill the sweep" contract: a discovery that throws drops
+ * that adapter, a parse that throws drops that file, and neither can fail the
+ * usage report. The alternative — an unreadable `~/.codex` taking down /usage
+ * for a Claude corpus that parsed perfectly — is strictly worse than a report
+ * that is short by one source.
+ */
+async function mergeAdapterSessions(
+  config: MinderConfig,
+  cache: ReturnType<typeof getFileCache>,
+  result: Map<string, UsageTurn[]>,
+  liveSet: Set<string>
+): Promise<void> {
+  // Dynamic import, and it has to be: `@/lib/adapters` registers the Claude
+  // adapter, which imports `parseSessionTurns` from THIS module. A static import
+  // would close that cycle at module-evaluation time.
+  const { getEnabledAdapters } = await import("@/lib/adapters");
+  const adapters = getEnabledAdapters(config).filter((a) => a.id !== "claude");
+  if (adapters.length === 0) return;
+
+  for (const adapter of adapters) {
+    // Typed rather than inferred-to-`any` by a bare `let`: `file.filePath` and
+    // `file.projectDirName` below are the adapter contract, and an untyped
+    // binding would stop checking them against it. (Copilot, PR #490.)
+    let files: SessionFile[];
+    try {
+      files = await adapter.discover();
+    } catch {
+      continue;
+    }
+
+    for (let i = 0; i < files.length; i += 5) {
+      const batch = files.slice(i, i + 5);
+      await Promise.all(
+        batch.map(async (file) => {
+          liveSet.add(file.filePath);
+          const turns = await cache.getOrCompute(file.filePath, async (fp) => {
+            try {
+              // The same `MAX_SESSION_FILE_SIZE` cap the Claude sweep applies
+              // above, and that `reconcileAdapterSessionFile` applies on the SQL
+              // side (`ingest.ts:3706`). Both adapter parsers read the whole
+              // file with `fs.readFile` and this loop runs five at a time, so an
+              // uncapped oversized transcript is hundreds of megabytes resident
+              // — but the reason it belongs here is narrower than memory: the
+              // SQL backend SKIPS these files, so parsing them would make the
+              // fallback include sessions the index deliberately excludes. A new
+              // divergence, introduced by the change closing one. (Codex P2 +
+              // Copilot, PR #490.)
+              const stat = await fs.stat(fp);
+              if (stat.size > MAX_SESSION_FILE_SIZE) return [];
+              return await adapter.parseFile(file);
+            } catch {
+              return [];
+            }
+          });
+          if (!turns || turns.length === 0) return;
+
+          // Keyed by the turn's OWN `sessionId`, not the file's basename. Codex
+          // reads its id from the `session_meta` line and falls back to the
+          // basename only when that is absent (`codex.ts:257`), so a basename
+          // key would disagree with the id those same turns carry — and with
+          // the id ingest stores, which is what any "same corpus" claim rests
+          // on. A file with no parseable meta yields zero turns and is skipped
+          // above.
+          const sessionId = turns[0].sessionId;
+          if (!sessionId) return;
+
+          // A collision with an already-swept Claude session keeps the Claude
+          // entry. Overwriting would silently delete a real session's turns from
+          // every usage aggregate to make room for an adapter's — a worse
+          // failure than the reverse, and invisible in the totals. Adapter ids
+          // are UUIDs in practice, so this is a guard, not a live case.
+          if (result.has(sessionId)) {
+            warnOnceParser(
+              `adapter-id-collision:${sessionId}`,
+              `[usage] ${adapter.id} session ${sessionId} collides with an ` +
+                "already-parsed session id; keeping the existing entry."
+            );
+            return;
+          }
+          result.set(sessionId, turns);
+        })
+      );
+    }
+  }
+}
+
+const _warnedParser = new Set<string>();
+function warnOnceParser(key: string, message: string): void {
+  if (_warnedParser.has(key)) return;
+  _warnedParser.add(key);
+  console.warn(message);
 }
 
 export async function parseAllSessions(
@@ -799,7 +931,15 @@ export async function parseAllSessions(
   // mappings value starts a fresh sweep instead of awaiting one that was
   // resolving the old homes.
   const inFlightCfg = await readConfig();
-  const configKey = JSON.stringify([inFlightCfg.claudeHomes ?? [], inFlightCfg.pathMappings ?? []]);
+  // `enabledAdapters` is part of the key (#475): the sweep now parses adapter
+  // sessions, so a caller arriving after an adapter was toggled in Settings must
+  // start a fresh sweep rather than await one that resolved the old adapter set.
+  // Without it the toggle appears to do nothing until the process restarts.
+  const configKey = JSON.stringify([
+    inFlightCfg.claudeHomes ?? [],
+    inFlightCfg.pathMappings ?? [],
+    inFlightCfg.enabledAdapters ?? [],
+  ]);
   let slot = globalForParser.__usageAllSessionsInFlight;
   if (!slot || slot.configKey !== configKey) {
     const promise = buildAllSessions().finally(() => {

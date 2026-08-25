@@ -255,6 +255,46 @@ describe.skipIf(!driverAvailable)("data façade — getClaudeUsage backend parit
     expect(d.costEstimate).toBeCloseTo(f.costEstimate, 4);
   });
 
+  it("counts Claude sessions only, so an adapter corpus cannot inflate it (#475)", async () => {
+    // This surface is the "Claude Code Usage" card, and its file-parse
+    // counterpart reads `<claude-home>/projects/**` — Claude-only by
+    // construction. Without the SQL filter a machine with Codex or Gemini
+    // sessions indexed would see them folded into a Claude-labelled figure under
+    // one backend and not the other.
+    //
+    // The other four corpus loaders were equalized the opposite way, by giving
+    // file-parse adapter discovery. This one's *question* is single-source, so
+    // it is equalized by narrowing the SQL instead.
+    //
+    // Flipping `source` on an already-ingested row is deliberate: it changes the
+    // one column under test and nothing else, so a drop in the count cannot come
+    // from a differently-shaped fixture.
+    const { projectsDir, projectPaths } = await setupFixture();
+    process.env.MINDER_USE_DB = "1";
+    const { facade, conn, mig, ingest } = await reloadModules();
+    expect((await mig.initDb()).available).toBe(true);
+    const db = (await conn.getDb())!;
+    assertReconcileClean(
+      await ingest.reconcileAllSessions(db, { projectsDir, recordRun: "reconcile" })
+    );
+
+    const before = await facade.getClaudeUsage(projectPaths);
+    expect(before.meta.backend).toBe("db");
+    expect(before.stats.conversationCount).toBe(2);
+    expect(before.stats.totalTokens).toBeGreaterThan(0);
+
+    db.prepare("UPDATE sessions SET source = 'codex' WHERE session_id = ?").run(SESSION_B);
+    delete (globalThis as { __claudeUsageCache?: unknown }).__claudeUsageCache;
+
+    const after = await facade.getClaudeUsage(projectPaths);
+    expect(after.meta.backend).toBe("db");
+    expect(after.stats.conversationCount).toBe(1);
+    // Not just the count: the row's tokens, tools and models leave too, or the
+    // card would still be reporting adapter spend under a Claude heading.
+    expect(after.stats.totalTokens).toBeLessThan(before.stats.totalTokens);
+    expect(after.stats.toolUsage.Bash).toBeUndefined();
+  });
+
   it("returns empty stats cleanly when projectPaths is empty", async () => {
     process.env.MINDER_USE_DB = "0";
     const { facade } = await reloadModules();

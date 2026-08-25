@@ -85,6 +85,24 @@ import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptP
 //    change: `usageFromDb`'s session count is over `turns`, and its
 //    file-parse counterpart (`usage/parser.ts:716`) already walks
 //    `subagents/`, so both sides include them there by design.
+//
+// 4. **Claude sessions only** (#475). Every query here filters
+//    `source = 'claude'`. This surface is the "Claude Code Usage" card;
+//    its file-parse counterpart reads `<claude-home>/projects/**` and
+//    is Claude-only by construction, so without the filter a machine
+//    with Codex or Gemini sessions indexed would see those folded into
+//    a Claude-labelled figure under the DB backend and not under the
+//    file one.
+//
+//    This is the direction the other four corpus loaders do NOT take:
+//    they gained adapter coverage on the file side instead (#475), so
+//    they answer about every source on both backends. `getClaudeUsage`
+//    is the one whose *question* is single-source, so the two are
+//    equalized by narrowing the SQL rather than widening the walk.
+//    `sessions.source` is `TEXT NOT NULL DEFAULT 'claude'`
+//    (`migrations.ts:333`), so bare equality needs no COALESCE — checked
+//    against the schema, not against the fact that every row on the
+//    reference index happens to say `claude`.
 
 interface TotalsRow {
   row_count: number;
@@ -182,7 +200,8 @@ function collectStats(
               COALESCE(SUM(cost_usd), 0) AS cost_usd,
               COALESCE(SUM(error_count), 0) AS error_count
        FROM sessions
-       WHERE project_dir_name IN (${placeholders})`
+       WHERE project_dir_name IN (${placeholders})
+         AND source = 'claude'`
     )
     .get(...allowedDirs) as TotalsRow;
 
@@ -208,7 +227,8 @@ function collectStats(
   const paths = db
     .prepare(
       `SELECT file_path FROM sessions
-       WHERE project_dir_name IN (${placeholders})`
+       WHERE project_dir_name IN (${placeholders})
+         AND source = 'claude'`
     )
     .all(...allowedDirs) as Array<{ file_path: string }>;
   stats.conversationCount = paths.filter(
@@ -231,6 +251,7 @@ function collectStats(
        FROM tool_uses tu
        JOIN sessions s USING (session_id)
        WHERE s.project_dir_name IN (${placeholders})
+         AND s.source = 'claude'
        GROUP BY tu.tool_name`
     )
     .all(...allowedDirs) as ToolRow[];
@@ -248,6 +269,7 @@ function collectStats(
        FROM turns t
        JOIN sessions s USING (session_id)
        WHERE s.project_dir_name IN (${placeholders})
+         AND s.source = 'claude'
          AND t.role = 'assistant'
          AND t.is_sidechain = 0
          AND t.model IS NOT NULL

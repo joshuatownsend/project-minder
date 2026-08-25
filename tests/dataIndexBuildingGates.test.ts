@@ -229,17 +229,27 @@ describe.skipIf(!driverAvailable)("data façade — half-built index gates (#472
     expect(agents.stats.length).toBe(0);
   });
 
-  it("does not divert to file-parse when a non-Claude adapter is enabled", async () => {
-    // The fallback is only a fallback if it can see the same corpus.
-    // `discoverAllSessions` — which finds Codex and Gemini transcripts — is
-    // imported by `db/ingest.ts` and nothing else, so file-parse sees Claude
-    // and nothing else. Diverting an adapter install would trade a partial view
-    // of every source for a complete view of one, which is the more distorting
-    // of the two and would be done in correctness's name. (Codex P1, PR #474.)
+  it("diverts the usage loaders for an adapter install, and not the session list", async () => {
+    // This is the #475 split, and it is the whole point of that issue.
+    //
+    // BEFORE: `fileParseCoversCorpus` refused to divert ANY loader whenever
+    // adapter sessions were discoverable, because file-parse saw Claude and
+    // nothing else — so diverting would have traded a partial view of every
+    // source for a complete view of one. The cost was that adapter users kept
+    // the #472 defect on every surface.
+    //
+    // NOW: `buildAllSessions` merges enabled adapters (see
+    // `usageParserAdapters.test.ts`, which proves the turns actually arrive), so
+    // the usage loaders cover the corpus and divert like everyone else. The
+    // session list does not: `scanAllSessions` has no adapter derivation, so it
+    // still declines rather than showing an adapter user a Claude-only list.
     const { facade, conn } = await seedBuilding();
     const spies = await mockDiscoverableCodexSession();
     try {
-      expect((await facade.getUsage("all", undefined)).meta.backend).toBe("db");
+      expect((await facade.getUsage("all", undefined)).meta.backend).toBe("file");
+      expect((await facade.getAgentUsage()).meta.backend).toBe("file");
+      expect((await facade.getSkillUsage()).meta.backend).toBe("file");
+      // The one that is still Claude-only, and so still refuses.
       expect((await facade.getSessionsList()).meta.backend).toBe("db");
     } finally {
       spies();
@@ -247,72 +257,49 @@ describe.skipIf(!driverAvailable)("data façade — half-built index gates (#472
     }
   });
 
-  it("still falls back for a Claude-scoped request when adapter sessions exist", async () => {
-    // The corpus that matters is the one the request asks for, not the one on
-    // disk. `generateUsageReport` applies the same `source` filter the SQL path
-    // does, so a Claude-scoped question is fully answerable from file-parse
-    // however many Codex transcripts sit beside it — and refusing to divert
-    // would hand back the partial SQL answer for hours over a corpus that was
-    // never part of the question. (Codex P1, PR #474.)
+  it("diverts a scoped usage request too, whatever the adapter corpus is", async () => {
+    // The source/project qualification this gate used to carry existed so a
+    // Claude-scoped or project-scoped request could divert while adapter
+    // sessions sat elsewhere. Coverage makes the distinction moot: every scope
+    // of the question is now answerable from file-parse, including one scoped to
+    // the adapter's OWN source, which previously could never divert because
+    // file-parse would have answered "no Codex usage" instead of "some".
     const { facade, conn } = await seedBuilding();
-    const spies = await mockDiscoverableCodexSession();
+    const { toSlug } = await import("@/lib/scanner/claudeConversations");
+    const spies = await mockDiscoverableCodexSession("C--dev-somewhere-else");
     try {
       expect((await facade.getUsage("all", undefined, "claude")).meta.backend).toBe("file");
-      // Unscoped still asks about everything, and so still declines.
-      expect((await facade.getUsage("all", undefined)).meta.backend).toBe("db");
-      // And a request scoped to the source file-parse cannot see must never
-      // divert: it would answer "no Codex usage" rather than "some Codex usage".
-      expect((await facade.getUsage("all", undefined, "codex")).meta.backend).toBe("db");
+      expect((await facade.getUsage("all", undefined, "codex")).meta.backend).toBe("file");
+      expect((await facade.getUsage("all", toSlug("C--dev-app-x"))).meta.backend).toBe("file");
     } finally {
       spies();
       conn.closeDb();
     }
   });
 
-  it("still falls back for a project whose adapter sessions are elsewhere", async () => {
-    // Same rule as the source filter, one axis over: the corpus that matters is
-    // the one the request asks for. A Codex session in another project is not
-    // part of a project-scoped answer, and suppressing the fallback over it hands
-    // back a partial SQL result for hours about a project file-parse covers in
-    // full.
-    //
-    // Safe to honour because the mapping is exact by construction —
-    // `toSlug(canonicalizeDirName(projectDirName))` is how ingest derives
-    // `sessions.project_slug`, which is the column `loadUsageReportFromSql`
-    // filters on. (Codex P1, PR #474.)
-    const { facade, conn } = await seedBuilding();
-    const { toSlug } = await import("@/lib/scanner/claudeConversations");
-    const requested = toSlug("C--dev-app-x");
-    let restore = await mockDiscoverableCodexSession("C--dev-somewhere-else");
-    try {
-      expect((await facade.getUsage("all", requested)).meta.backend).toBe("file");
-      // Unscoped still asks about the whole corpus, and still declines.
-      expect((await facade.getUsage("all", undefined)).meta.backend).toBe("db");
-    } finally {
-      restore();
-    }
+  it("does not undo the session list's refusal at the zero-rows branch", async () => {
+    // The gate declines to divert `getSessionsList` for an adapter install, and
+    // then the DB query returns zero rows early in a first reconcile — at which
+    // point the `sessions.length === 0` branch used to fall back to file-parse
+    // unconditionally, handing back exactly the Claude-only list the gate had
+    // just withheld. The refusal has to hold at both branches or it holds at
+    // neither. (Copilot, PR #490.)
+    const { facade, conn, db, runs } = await seedBuilding();
+    // `seedBuilding` deliberately leaves rows present, so empty the table to
+    // reach the branch under test. Without this the earlier gate answers first
+    // and the assertion passes for the wrong reason — confirmed by mutation:
+    // with the guard disabled, the seeded version of this test still passed.
+    db.prepare("DELETE FROM sessions").run();
+    expect((db.prepare("SELECT COUNT(*) AS n FROM sessions").get() as { n: number }).n).toBe(0);
+    expect(runs.getIndexBuildState(db)).toBe("building");
 
-    // And when the adapter session IS in the requested project, it is part of
-    // the answer — so the fallback must not divert and drop it.
-    restore = await mockDiscoverableCodexSession("C--dev-app-x");
+    const spies = await mockDiscoverableCodexSession();
     try {
-      expect((await facade.getUsage("all", requested)).meta.backend).toBe("db");
+      const result = await facade.getSessionsList();
+      expect(result.meta.backend).toBe("db");
+      expect(result.sessions).toEqual([]);
     } finally {
-      restore();
-    }
-
-    // A WORKTREE-encoded adapter dir, which is where the two derivations part.
-    // Claude ingest canonicalizes (stripping the worktree suffix so a worktree's
-    // sessions group with the parent); the adapters do not, and stamp the raw
-    // `toSlug(projectDirName)`. Matching with the Claude derivation here computes
-    // the parent slug, fails to match the stored worktree slug, and so calls the
-    // request covered — silently dropping this session. (Codex P1, PR #474.)
-    const worktreeDir = "C--dev-app-x--claude-worktrees-feature";
-    restore = await mockDiscoverableCodexSession(worktreeDir);
-    try {
-      expect((await facade.getUsage("all", toSlug(worktreeDir))).meta.backend).toBe("db");
-    } finally {
-      restore();
+      spies();
       conn.closeDb();
     }
   });
@@ -392,11 +379,18 @@ describe.skipIf(!driverAvailable)("data façade — half-built index gates (#472
       warn.mockClear();
       const spies = await mockDiscoverableCodexSession();
       try {
-        // Declines to divert — must not claim it did.
-        await facade.getUsage("all", undefined);
+        // The session list is the loader that still declines (#475) — it must
+        // not claim a fallback it did not take.
+        await facade.getSessionsList();
         const adapterLog = warn.mock.calls.flat().join("\n");
         expect(adapterLog).not.toContain("fell back to file-parse");
         expect(adapterLog).toContain("serving the SQL answer");
+
+        warn.mockClear();
+        // And the usage loader, which now covers the corpus, really does fall
+        // back — so it must say so rather than inheriting the list's silence.
+        await facade.getUsage("all", undefined);
+        expect(warn.mock.calls.flat().join("\n")).toContain("fell back to file-parse");
       } finally {
         spies();
       }
