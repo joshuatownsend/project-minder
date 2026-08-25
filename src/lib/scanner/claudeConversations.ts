@@ -289,10 +289,14 @@ export function sessionScanCacheSize(): number {
  * age thresholds exist to detect.
  *
  * The copy is shallow, so the arrays inside (`toolUsage`, `prs`, `modelsUsed`,
- * `recaps`, …) are shared with the cached entry. Every consumer —
- * `filterSessions`, `deriveSessionsMaxMs`, the route's `jsonClone` — treats a
+ * `recaps`, …) are shared with the cached entry. Every consumer treats a
  * `SessionSummary` as read-only, and this cache is why that has to stay true:
- * an in-place edit would corrupt the entry for every later reader.
+ * an in-place edit would corrupt the entry for every later reader. Audited at
+ * the time of writing — `filterSessions`, `deriveSessionsMaxMs` and the route's
+ * `jsonClone` only read, and `scanSessionDetail` (the other caller of
+ * `scanSessionFile`, which used to get a freshly built object every time)
+ * spreads the summary into its `SessionDetail` and otherwise touches only
+ * `summary.sessionId`.
  */
 function applyLiveFields(scanned: ScannedSession, now: number): SessionSummary {
   const mtime = new Date(scanned.mtimeMs);
