@@ -428,12 +428,15 @@ export function getInitStatus(): InitStatus {
 // indexer. Keyed per case so each kind gets logged once even if the
 // others fire too.
 //
-// Six kinds now share this set, and three of them do NOT describe a
-// fall-through: v3-catch-up, empty-index, and first-build all divert to
-// file-parse, but the adapter/source/project decline keeps the SQL
-// answer, and `getUsageCompare` suppresses its comparison instead. Read
-// each message rather than assuming the shared set means a shared
+// Several kinds share this set, and not all of them describe a
+// fall-through: v3-catch-up, empty-index and first-build all divert to
+// file-parse, while `getUsageCompare` suppresses its comparison instead.
+// Read each message rather than assuming the shared set means a shared
 // outcome — the messages were the whole finding. (Copilot, PR #474.)
+//
+// The adapter decline used to be a third exception here. #489 removed it:
+// every loader's file path now covers the corpus, so nothing keeps the SQL
+// answer on the strength of what file-parse cannot see.
 const fallthroughLoggedFor = new Set<string>();
 
 /** Emit `message` the first time `key` is seen in this process, then never again. */
@@ -631,13 +634,15 @@ function isIndexBuilding(db: DbHandle): boolean {
  * Deliberately silent, and its callers are not.
  *
  * This used to log "fell back to file-parse" itself, which put the message
- * before the decision: `checkBuildStateFallback` can go on to decline the
- * diversion when adapter sessions exist, and `getUsageCompare` never diverts at
- * all — so an operator reading the log during exactly the window this feature
- * exists for was told a fallback had happened in two cases where it had not.
- * A diagnostic that reports the branch it was hoping for rather than the branch
- * taken is worse than none. Each caller now logs its own outcome. (Copilot,
- * PR #474.)
+ * before the decision: `getUsageCompare` never diverts at all, so an operator
+ * reading the log during exactly the window this feature exists for was told a
+ * fallback had happened where it had not. A diagnostic that reports the branch
+ * it was hoping for rather than the branch taken is worse than none. Each
+ * caller now logs its own outcome. (Copilot, PR #474.)
+ *
+ * `checkBuildStateFallback` used to be the second such case, declining the
+ * diversion when adapter sessions existed. #489 removed that branch, so it
+ * either diverts or does not run. (#489.)
  */
 const BUILDING_REASON =
   "index still building (no full pass recorded yet) — a SQL answer here would be a subset of the corpus presented as the whole of it";

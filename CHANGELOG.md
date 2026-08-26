@@ -14,15 +14,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
   **Adapter sessions remain unopenable from the list, deliberately.** The session-id index feeds a detail view that parses Claude JSONL entries; handing it a Codex event stream would not fail loudly, it would render a plausible empty page. They are left unregistered, so the detail route 404s instead. A per-harness detail parser is a separate change.
 
-### Removed
-
-- **`fileParseCoversCorpus` and the `fileParseIsClaudeOnly` gate parameter** (#489). Added in #474 to stop the half-built-index fallback dropping a whole source, narrowed in #475 to the session list alone, and now unnecessary: with adapter discovery on both loaders, no caller's file path is Claude-only and the build-state gate is one condition again. The zero-rows refusal it required in `getSessionsList` is gone with it — that branch existed only to keep the gate's decision from being undone one branch later.
-
 - **The file-parse backend can now see non-Claude sessions** (#475). `discoverAllSessions` — the thing that finds Codex and Gemini transcripts — was imported by the SQLite indexer and by nothing else. Every file-parse entry point walked `<claude-home>/projects/**` and stopped, so the two backends were never equivalent: the index held every enabled adapter, the fallback held Claude. `buildAllSessions` now merges each enabled non-Claude adapter's sessions into the same map, keyed by the id its own turns carry rather than the filename, and the aggregator was already source-aware from the other end.
 
   **For adapter users this is the #472 fix finally arriving, and it is a behaviour change.** #474 had to make the half-built-index gate *refuse* to divert whenever adapter sessions were discoverable — diverting would have traded a partial view of every source for a complete view of one — which left exactly those users with the defect the gate existed to fix. Their usage, agent and skill pages now fall back to file-parse during a first reconcile, where before they were served a partial SQL answer labelled `backend: "db"`.
 
   Enabling an adapter also now changes what `/usage` reads, so the single-flight sweep key includes `enabledAdapters`; without that a toggle in Settings appeared to do nothing until the process restarted.
+
+### Removed
+
+- **`fileParseCoversCorpus` and the `fileParseIsClaudeOnly` gate parameter** (#489). Added in #474 to stop the half-built-index fallback dropping a whole source, narrowed in #475 to the session list alone, and now unnecessary: with adapter discovery on both loaders, no caller's file path is Claude-only and the build-state gate is one condition again. The zero-rows refusal it required in `getSessionsList` is gone with it — that branch existed only to keep the gate's decision from being undone one branch later.
 
 ### Fixed
 
