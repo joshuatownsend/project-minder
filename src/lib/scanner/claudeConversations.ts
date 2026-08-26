@@ -1083,14 +1083,6 @@ async function buildAdapterScannedSession(
  * degrade. A real adapter detail view needs a per-harness parser and is out of
  * scope here.
  */
-/**
- * Thrown for an adapter parse that yielded no turns, to keep it OUT of the
- * cache. Not an error condition in itself — it is the absence of a usable
- * answer, and `FileCache` has exactly one way to express "do not remember
- * this", which is a rejected factory.
- */
-class AmbiguousEmptyParse extends Error {}
-
 async function mergeAdapterSessionSummaries(
   config: MinderConfig,
   sessions: SessionSummary[],
@@ -1123,43 +1115,31 @@ async function mergeAdapterSessionSummaries(
             return await getScanCache().getOrCompute(file.filePath, async (fp) => {
               const stat = await fs.stat(fp);
               if (stat.size > MAX_SESSION_FILE_SIZE) return null;
+              // Rejects on a read failure and returns `[]` only for a file it
+              // actually read — the `SessionAdapter` contract as of #498. That
+              // is what makes the `null` below safe to cache again: it is now a
+              // verdict about the transcript's contents, which stays true for
+              // as long as mtime+size do.
+              //
+              // Two earlier attempts at this are worth not repeating. A probe
+              // `fs.readFile` before the parser verified a DIFFERENT read from
+              // the one whose result was cached, so an error between the two
+              // still produced a cached `null`. Refusing to cache every empty
+              // parse closed that, but paid for it by re-parsing genuinely
+              // empty transcripts on every sweep. Fixing the contract removes
+              // the choice between them. (#495 -> #498.)
               const turns = await adapter.parseFile(file);
-              // **An empty adapter parse is ambiguous, so it is not cached.**
-              //
-              // Both adapter parsers wrap their own `readFile` in
-              // `catch { return { turns: [], ... } }`, so an EACCES, EBUSY or
-              // EIO arrives here as an empty array — identical to a genuinely
-              // empty transcript. Caching `null` for it would make a transient
-              // failure permanent: restoring permissions touches ctime, not
-              // mtime or size, so the cache key never changes and the session
-              // stays hidden until its contents do.
-              //
-              // The first attempt at this probed with an `fs.readFile` before
-              // calling the parser, and Codex was right to reject it: the probe
-              // verifies a DIFFERENT read from the one whose result is cached,
-              // so an error landing between the two still produced a cached
-              // `null`. It narrowed the window instead of closing it, and paid
-              // a full extra read of every changed transcript to do so.
-              //
-              // Refusing to cache the ambiguous answer closes it outright. The
-              // cost is that a genuinely empty or malformed adapter transcript
-              // is re-parsed on every sweep rather than being remembered — real,
-              // but bounded by how few such files exist, and the safe direction
-              // of the trade: a redundant parse is a wasted millisecond, a
-              // cached I/O error is a session that disappears until a restart.
-              //
-              // #498 widens the `SessionAdapter` contract to distinguish the
-              // two, which is what lets the empty case be cached again.
-              if (turns.length === 0) throw new AmbiguousEmptyParse();
+              if (turns.length === 0) return null;
               return buildAdapterScannedSession(
                 file, turns, stat.mtimeMs, stat.size
               );
             });
           } catch {
-            // Covers both an outright throw and the `AmbiguousEmptyParse`
-            // above. `getOrCompute` stores nothing when its factory rejects,
-            // which is the whole mechanism: no verdict recorded, next sweep
-            // tries again. (#494, #495.)
+            // A read failure, propagated by the adapter rather than laundered
+            // into `[]`. `getOrCompute` stores nothing when its factory
+            // rejects, which is the whole mechanism: no verdict recorded, next
+            // sweep tries again. Caught here rather than at the sweep because
+            // the sweep's own catch is per-DIRECTORY. (#494, #495, #498.)
             return undefined;
           }
         })

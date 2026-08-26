@@ -93,12 +93,15 @@ async function parseGeminiFileWithMeta(
   filePath: string,
   projectDirName: string
 ): Promise<{ turns: UsageTurn[]; meta: SessionTurnsMeta }> {
-  let content: string;
-  try {
-    content = await fs.readFile(filePath, "utf-8");
-  } catch {
-    return { turns: [], meta: { ...EMPTY_META } };
-  }
+  // **The read is deliberately NOT wrapped.** An `EACCES`, `EBUSY` or `EIO`
+  // rejects out of this function, because the contract is that an empty result
+  // is a verdict about the file's CONTENTS and a read failure is the absence of
+  // one. Swallowing it here returned `[]`, which callers cache under the file's
+  // mtime+size — and since restoring permissions touches ctime, not mtime or
+  // size, the session stayed hidden until its contents changed or the process
+  // restarted. The catches BELOW stay: malformed content really is a verdict,
+  // and it stays true as long as the bytes do. (#498.)
+  const content = await fs.readFile(filePath, "utf-8");
 
   let record: Record<string, unknown>;
   try {

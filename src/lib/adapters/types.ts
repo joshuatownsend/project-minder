@@ -11,7 +11,29 @@ export interface SessionAdapter {
   id: string;
   displayName: string;
   discover(): Promise<SessionFile[]>;
+  /**
+   * Parse one transcript into turns.
+   *
+   * **An empty array is a verdict about the file's contents; a rejection is the
+   * absence of one.** Implementations MUST let `EACCES` / `EBUSY` / `EIO` and
+   * every other read failure propagate, and MUST return `[]` only for a file
+   * that was read and holds nothing usable — empty, malformed, or missing the
+   * metadata the harness needs.
+   *
+   * The distinction is load-bearing wherever the result is cached, which is
+   * every caller. A verdict derived from the bytes stays valid as long as the
+   * bytes do, which is exactly what an mtime+size cache key guarantees; a
+   * failure to read says nothing about the bytes, and caching it makes a
+   * transient condition permanent — restoring permissions touches ctime, not
+   * mtime or size, so the entry is never revisited and the session stays hidden
+   * until a restart.
+   *
+   * Both implementations used to swallow their own `readFile` error and return
+   * `[]`, which produced exactly that on the session list (#495) and, unnoticed
+   * for longer, on the usage sweep (#490). (#498.)
+   */
   parseFile(file: SessionFile): Promise<UsageTurn[]>;
+  /** Same contract as {@link SessionAdapter.parseFile} for read failures. */
   parseFileWithMeta?(file: SessionFile): Promise<{ turns: UsageTurn[]; meta: SessionTurnsMeta }>;
   /**
    * Read-only view of the harness's own config home (item 1). Optional — only

@@ -54,7 +54,14 @@ const claudeAdapter: SessionAdapter = {
   },
 
   async parseFile(file: SessionFile): Promise<UsageTurn[]> {
-    const turns = await parseSessionTurns(file.filePath, file.projectDirName);
+    // `strict` rethrows the read error instead of returning `[]` for it, which
+    // is the `SessionAdapter` contract every adapter now holds (#498). Without
+    // it this one adapter would answer "not a session" for an unreadable file
+    // while the others rejected, and a contract with one exception is a
+    // contract callers cannot rely on.
+    const turns = await parseSessionTurns(file.filePath, file.projectDirName, {
+      strict: true,
+    });
     return turns.map((t) => ({ ...t, source: "claude" }));
   },
 
@@ -63,7 +70,8 @@ const claudeAdapter: SessionAdapter = {
   ): Promise<{ turns: UsageTurn[]; meta: SessionTurnsMeta }> {
     const { turns, meta } = await parseSessionTurnsWithMeta(
       file.filePath,
-      file.projectDirName
+      file.projectDirName,
+      { strict: true }
     );
     return {
       turns: turns.map((t) => ({ ...t, source: "claude" })),

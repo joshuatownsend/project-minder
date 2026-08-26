@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "path";
 import { promises as fs } from "fs";
 import { installIsolatedState } from "./_helpers/isolatedState";
@@ -317,5 +317,75 @@ describe("file-parse adapter discovery (#475)", () => {
     const codexOnly = await generateUsageReport("all", undefined, "codex");
     expect(codexOnly.totalTokens).toBeGreaterThan(0);
     expect((codexOnly.bySource ?? []).map((s) => s.source)).toEqual(["codex"]);
+  });
+});
+
+describe("adapter read failures are not cached as empty (#498)", () => {
+  /**
+   * Mock a one-shot read failure on `filePath`, letting every other read
+   * through. Returns the spy so the caller can restore WITHOUT touching the
+   * file — which is the whole point: mtime and size stay exactly as they were
+   * during the failed sweep, so anything cached then is still keyed valid.
+   */
+  function failReadsOf(filePath: string) {
+    const real = fs.readFile;
+    return vi.spyOn(fs, "readFile").mockImplementation((async (
+      p: Parameters<typeof fs.readFile>[0],
+      ...rest: unknown[]
+    ) => {
+      if (p === filePath) {
+        const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      }
+      return (real as never as (...a: unknown[]) => unknown)(p, ...rest);
+    }) as never);
+  }
+
+  it("retries an adapter transcript that was briefly unreadable", async () => {
+    // This defect had been live on the usage surface since #490 and was never
+    // reported: `mergeAdapterSessions` caught inside the cache factory, so an
+    // EACCES became a cached `[]` and the session vanished from every usage
+    // aggregate until a restart. It was found twice on the session list
+    // (#495) because a missing row there is visible; a missing session in a
+    // total is not.
+    await writeCodexSession();
+    await writeConfigFile(["claude", "codex"]);
+    await state.reload();
+    const { parseAllSessions } = await import("@/lib/usage/parser");
+    const file = path.join(codexHome, "sessions", "2026", `${CODEX_SESSION_ID}.jsonl`);
+
+    const spy = failReadsOf(file);
+    const blocked = await parseAllSessions();
+    expect(blocked.has(CODEX_SESSION_ID)).toBe(false);
+    // The Claude session is unaffected — a per-file skip, not an aborted sweep.
+    expect(blocked.has(CLAUDE_SESSION_ID)).toBe(true);
+
+    spy.mockRestore();
+    const after = await parseAllSessions();
+    expect(after.has(CODEX_SESSION_ID)).toBe(true);
+  });
+
+  it("retries a CLAUDE transcript that was briefly unreadable", async () => {
+    // The same hole on the biggest corpus in the app, and outside the
+    // `SessionAdapter` contract entirely: `parseSessionTurns` swallowed the
+    // read error on its own account, so the sweep cached `[]` for it. The
+    // `strict` option that fixes this already existed and nothing used it.
+    await writeCodexSession();
+    await writeConfigFile(["claude", "codex"]);
+    await state.reload();
+    const { parseAllSessions } = await import("@/lib/usage/parser");
+    const file = path.join(
+      tmpHome, ".claude", "projects", "C--dev-app-x", `${CLAUDE_SESSION_ID}.jsonl`
+    );
+
+    const spy = failReadsOf(file);
+    const blocked = await parseAllSessions();
+    expect(blocked.has(CLAUDE_SESSION_ID)).toBe(false);
+    expect(blocked.has(CODEX_SESSION_ID)).toBe(true);
+
+    spy.mockRestore();
+    const after = await parseAllSessions();
+    expect(after.has(CLAUDE_SESSION_ID)).toBe(true);
   });
 });

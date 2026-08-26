@@ -298,6 +298,58 @@ describe("session list adapter discovery (#489)", () => {
     expect(after.some((s) => s.sessionId === CODEX_SESSION_ID)).toBe(true);
   });
 
+  it("caches the verdict for a discovered transcript that parses to nothing", async () => {
+    // The counterpart to the transient-failure test, and the reason #498 was
+    // worth doing rather than living with the workaround.
+    //
+    // #495 could not distinguish "unreadable" from "empty", so it refused to
+    // cache EITHER — correct, but it meant every transcript that parsed to
+    // nothing was re-parsed on every sweep forever. Now that the adapter
+    // rejects on a read failure, an empty result is a verdict about the
+    // contents and is cacheable again. This test stops that compromise
+    // silently returning.
+    //
+    // **The fixture is a session_meta line and nothing else, not an empty
+    // file.** `discover()` drops any file whose meta it cannot read
+    // (`codex.ts:544`), so a truly empty file never reaches `parseFile` and a
+    // test built on one measures the discovery filter rather than the cache.
+    // The first version of this test did exactly that and passed against a
+    // deliberately broken cache — caught by mutation.
+    await writeCodexSession();
+    const nilId = "codex-session-eeee-ffff";
+    const nilFile = path.join(codexHome, "sessions", "2026", `${nilId}.jsonl`);
+    await fs.writeFile(
+      nilFile,
+      JSON.stringify({
+        type: "session_meta",
+        payload: { id: nilId, cwd: CODEX_CWD, timestamp: "2026-04-15T11:00:00Z" },
+      }) + "\n"
+    );
+    await writeConfigFile(["claude", "codex"]);
+    await state.reload();
+    const { scanAllSessions } = await import("@/lib/scanner/claudeConversations");
+
+    // Premise, asserted rather than assumed: the file really is discovered and
+    // really is read on a cold sweep. Without this the assertion below passes
+    // for any file the sweep never looks at.
+    const cold = vi.spyOn(fs, "readFile");
+    const first = await scanAllSessions();
+    expect(cold.mock.calls.filter((c) => c[0] === nilFile).length).toBeGreaterThan(0);
+    cold.mockRestore();
+
+    // It parses to nothing, so it is not a session.
+    expect(first.some((x) => x.sessionId === nilId)).toBe(false);
+    // ...and the real one still is.
+    expect(first.some((x) => x.sessionId === CODEX_SESSION_ID)).toBe(true);
+
+    // Second sweep: the file is untouched, so mtime+size still key the cached
+    // verdict and the factory must not run again.
+    const warm = vi.spyOn(fs, "readFile");
+    await scanAllSessions();
+    expect(warm.mock.calls.filter((c) => c[0] === nilFile)).toHaveLength(0);
+    warm.mockRestore();
+  });
+
   it("survives an adapter whose discovery throws", async () => {
     await writeCodexSession();
     await writeConfigFile(["claude", "codex"]);
