@@ -248,6 +248,49 @@ describe("#473 — session scan cache reuse", () => {
     expect(after?.userMessageCount).toBe(2);
   });
 
+  it("does not cache a transient read failure as 'not a session'", async () => {
+    // `null` is cached, which is what keeps a 60MB transcript cheap. That is
+    // only safe while `null` means "the bytes were read and this is not a
+    // session". If an EACCES/EBUSY/EIO from `readFile` were laundered into the
+    // same `null`, the failure would become permanent: restoring permissions
+    // touches ctime, not mtime or size, so the cache key is unchanged and the
+    // session would stay hidden until its contents changed or the process
+    // restarted. Uncached, the error cost exactly one sweep — and this test
+    // pins that it still does. (Codex P2, PR #494.)
+    await writeSession("C--dev-demo", "sess-locked", [
+      user("2026-08-01T10:00:00Z", "hi"),
+      assistantText("2026-08-01T10:00:01Z"),
+    ]);
+    const file = path.join(sessionDir("C--dev-demo"), "sess-locked.jsonl");
+
+    const mod = await import("@/lib/scanner/claudeConversations");
+
+    const real = fs.readFile;
+    const spy = vi.spyOn(fs, "readFile").mockImplementation((async (
+      p: Parameters<typeof fs.readFile>[0],
+      ...rest: unknown[]
+    ) => {
+      if (p === file) {
+        const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      }
+      return (real as never as (...a: unknown[]) => unknown)(p, ...rest);
+    }) as never);
+
+    const blocked = await mod.scanAllSessions();
+    expect(blocked.find((s) => s.sessionId === "sess-locked")).toBeUndefined();
+    // Nothing was cached, so there is no verdict to evict.
+    expect(mod.sessionScanCacheSize()).toBe(0);
+
+    // Permission restored. The FILE IS NOT TOUCHED — mtime and size are exactly
+    // what they were during the failed sweep, so a cached `null` would survive.
+    spy.mockRestore();
+
+    const after = await mod.scanAllSessions();
+    expect(after.find((s) => s.sessionId === "sess-locked")).toBeDefined();
+  });
+
   it("evicts a transcript that disappeared between sweeps", async () => {
     await writeSession("C--dev-demo", "sess-gone", [
       user("2026-08-01T10:00:00Z", "one"),

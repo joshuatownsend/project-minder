@@ -333,21 +333,36 @@ function applyLiveFields(scanned: ScannedSession, now: number): SessionSummary {
 
 /**
  * Cached parse of one transcript. Returns `null` for files that produce no
- * summary (oversized, empty, malformed) — and caches that `null`, so a 60MB
- * transcript costs one `stat` per sweep instead of being re-read and re-rejected
- * every time. `undefined` means the `stat` itself failed and the file could not
- * be classified at all — it vanished between `readdir` and `stat`, or is
- * unreadable (permissions, a broken link, an I/O error). Nothing is cached in
- * that case, so a transient failure is retried on the next sweep rather than
- * remembered. (Copilot, PR #494.)
+ * summary — and caches that `null`, so a 60MB transcript costs one `stat` per
+ * sweep instead of being re-read and re-rejected every time.
+ *
+ * **`null` is a verdict about the file; `undefined` is the absence of one.**
+ * That distinction is what makes caching `null` safe. `null` means the file was
+ * read and is genuinely not a session: oversized, empty, or unparseable. Those
+ * answers cannot change while the bytes do not, so remembering them is correct.
+ * `undefined` means the read itself failed — a vanished file, `EACCES`,
+ * `EBUSY`, `EIO` — which says nothing about the contents, so **nothing is
+ * cached** and the next sweep tries again. Conflating the two would make a
+ * transient I/O error permanent: restoring permissions typically touches only
+ * ctime, so mtime+size are unchanged and a cached `null` would keep the session
+ * hidden until its contents changed or the process restarted. Uncached, that
+ * error cost one sweep. (Codex P2, PR #494.)
  */
 async function scanSessionFileCached(
   filePath: string,
   projectDirName: string
 ): Promise<ScannedSession | null | undefined> {
-  return getScanCache().getOrCompute(filePath, () =>
-    scanSessionFileRaw(filePath, projectDirName)
-  );
+  try {
+    return await getScanCache().getOrCompute(filePath, () =>
+      scanSessionFileRaw(filePath, projectDirName)
+    );
+  } catch {
+    // `getOrCompute` stores nothing when its factory rejects, so the retry is
+    // automatic. Swallowing here rather than at the sweep is deliberate: the
+    // sweep's own catch is per-DIRECTORY, so letting this escape would drop
+    // every session in the folder because one file was briefly locked.
+    return undefined;
+  }
 }
 
 /** Single-file scan through the cache, with the live fields applied. */
@@ -367,12 +382,19 @@ async function scanSessionFileRaw(
   filePath: string,
   projectDirName: string
 ): Promise<ScannedSession | null> {
+  // Reads sit OUTSIDE the catch below on purpose, so an I/O error propagates
+  // as a rejection instead of being laundered into a cacheable `null`. See the
+  // `scanSessionFileCached` docstring: the catch below answers "is this file a
+  // session?", and only an answer derived from the bytes may be remembered.
+  const stat = await fs.stat(filePath);
+  const mtime = stat.mtime;
+  // Oversized IS a verdict — the bytes were consulted, the file is deliberately
+  // not parsed, and that stays true until the size changes. Cacheable.
+  if (stat.size > MAX_SESSION_FILE_SIZE) return null;
+  const content = await fs.readFile(filePath, "utf-8");
+
   try {
     const canonicalDirName = canonicalizeDirName(projectDirName);
-    const stat = await fs.stat(filePath);
-    const mtime = stat.mtime;
-    if (stat.size > MAX_SESSION_FILE_SIZE) return null;
-    const content = await fs.readFile(filePath, "utf-8");
     const lines = content.split("\n").filter(Boolean);
     if (lines.length === 0) return null;
 
