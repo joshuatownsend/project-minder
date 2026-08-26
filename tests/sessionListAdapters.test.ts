@@ -21,7 +21,7 @@
  * evidence, and it survives into child processes because the adapter resolves
  * the env var before `~/.codex` rather than through a homedir spy.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "path";
 import { promises as fs } from "fs";
 import { installIsolatedState } from "./_helpers/isolatedState";
@@ -46,6 +46,14 @@ let codexHome: string;
 const CODEX_SESSION_ID = "codex-session-aaaa-bbbb";
 const CODEX_CWD = "C:\\dev\\app-x";
 const CLAUDE_SESSION_ID = "aaaaaaaa-4444-4444-4444-444455556666";
+
+// A second Codex session run from inside a Claude Code worktree. This is the
+// only shape for which `canonicalizeDirName` does anything at all — with an
+// ordinary cwd the canonical and raw dir names are identical, so a parity test
+// built only on `CODEX_CWD` cannot see a canonicalization disagreement. It could
+// not, which is how the review found the hole. (Copilot, PR #495.)
+const CODEX_WT_SESSION_ID = "codex-session-cccc-dddd";
+const CODEX_WT_CWD = "C:\\dev\\app-x--claude-worktrees-featbranch";
 
 const CODEX_JSONL =
   JSON.stringify({
@@ -121,6 +129,25 @@ async function writeCodexSession(): Promise<void> {
   await fs.writeFile(path.join(dir, `${CODEX_SESSION_ID}.jsonl`), CODEX_JSONL);
 }
 
+function codexJsonl(sessionId: string, cwd: string): string {
+  return CODEX_JSONL.replace(
+    JSON.stringify({ id: CODEX_SESSION_ID }).slice(1, -1),
+    JSON.stringify({ id: sessionId }).slice(1, -1)
+  ).replace(
+    JSON.stringify({ cwd: CODEX_CWD }).slice(1, -1),
+    JSON.stringify({ cwd }).slice(1, -1)
+  );
+}
+
+async function writeCodexWorktreeSession(): Promise<void> {
+  const dir = path.join(codexHome, "sessions", "2026");
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, `${CODEX_WT_SESSION_ID}.jsonl`),
+    codexJsonl(CODEX_WT_SESSION_ID, CODEX_WT_CWD)
+  );
+}
+
 async function writeConfigFile(enabledAdapters: string[]): Promise<void> {
   const stateDir = process.env.MINDER_STATE_DIR!;
   await fs.mkdir(stateDir, { recursive: true });
@@ -138,6 +165,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   delete process.env.CODEX_HOME;
 });
 
@@ -222,6 +250,46 @@ describe("session list adapter discovery (#489)", () => {
     expect(sessions.map((s) => s.sessionId)).toEqual([CODEX_SESSION_ID]);
   });
 
+  it("does not cache a transient adapter read failure as 'not a session'", async () => {
+    // The #494 defect, on a path where it hides better. Both adapter parsers
+    // wrap their own `readFile` in `catch { return { turns: [] } }`, so an
+    // EACCES reaches the scanner as an empty parse — indistinguishable from a
+    // genuinely empty transcript, and cached under an unchanged mtime+size as a
+    // permanent "not a session". Restoring permissions touches ctime, so the
+    // entry would never be revisited. (Codex P2, PR #495.)
+    await writeCodexSession();
+    await writeConfigFile(["claude", "codex"]);
+    await state.reload();
+    const { scanAllSessions } = await import("@/lib/scanner/claudeConversations");
+    const file = path.join(codexHome, "sessions", "2026", `${CODEX_SESSION_ID}.jsonl`);
+
+    const real = fs.readFile;
+    const spy = vi.spyOn(fs, "readFile").mockImplementation((async (
+      p: Parameters<typeof fs.readFile>[0],
+      ...rest: unknown[]
+    ) => {
+      if (p === file) {
+        const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      }
+      return (real as never as (...a: unknown[]) => unknown)(p, ...rest);
+    }) as never);
+
+    const blocked = await scanAllSessions();
+    expect(blocked.some((s) => s.sessionId === CODEX_SESSION_ID)).toBe(false);
+    // The Claude session is still listed, so this asserts a per-file skip and
+    // not an aborted sweep.
+    expect(blocked.some((s) => s.sessionId === CLAUDE_SESSION_ID)).toBe(true);
+
+    // Permission restored, file untouched: mtime and size are exactly what they
+    // were during the failed sweep, so a cached verdict would survive.
+    spy.mockRestore();
+
+    const after = await scanAllSessions();
+    expect(after.some((s) => s.sessionId === CODEX_SESSION_ID)).toBe(true);
+  });
+
   it("survives an adapter whose discovery throws", async () => {
     await writeCodexSession();
     await writeConfigFile(["claude", "codex"]);
@@ -281,6 +349,7 @@ describe("session list adapter discovery (#489)", () => {
     // the failure class #483 was, so it is held here by assertion instead: the
     // same fixture goes through both loaders and the summaries are compared.
     await writeCodexSession();
+    await writeCodexWorktreeSession();
     await writeConfigFile(["claude", "codex"]);
     process.env.MINDER_USE_DB = "1";
     await state.reload();
@@ -345,6 +414,21 @@ describe("session list adapter discovery (#489)", () => {
     });
 
     expect(compare(fileSide)).toEqual(compare(dbSide));
+
+    // The worktree-cwd session, which is the only one whose canonical and raw
+    // dir names differ. Compared as a whole rather than by naming
+    // `projectSlug`, so the next field whose derivation diverges under
+    // canonicalization is caught by the same assertion.
+    const fileWt = (await scanAllSessions()).find(
+      (s) => s.sessionId === CODEX_WT_SESSION_ID
+    )!;
+    const dbWt = loadSessionsListFromDb(db).find(
+      (s) => s.sessionId === CODEX_WT_SESSION_ID
+    )!;
+    expect(fileWt).toBeDefined();
+    expect(dbWt).toBeDefined();
+    expect(compare(fileWt)).toEqual(compare(dbWt));
+
     conn.closeDb();
     }
   );

@@ -961,6 +961,21 @@ async function buildAdapterScannedSession(
   const summary: SessionSummary = {
     sessionId: parsed.sessionId,
     projectPath: decodeDirName(canonicalDirName),
+    // **Deliberately NOT `toSlug(canonicalDirName)`, which is what the Claude
+    // scanner uses.** The adapter stamps `toSlug(projectDirName)` on every turn
+    // (`codex.ts:261`) and `buildAdapterParsedSession` prefers that, so this is
+    // the value ingest stores in `sessions.project_slug` — taking the canonical
+    // one here would make the file backend disagree with the index for exactly
+    // the sessions this PR exists to make agree.
+    //
+    // It IS inconsistent with `projectPath` above, which IS canonicalized: a
+    // Codex session run inside a Claude worktree reports the parent project's
+    // path and the worktree's slug, so it groups apart from its own project
+    // while a Claude session in the same worktree groups with it. Measured, and
+    // identical on both backends. Correcting it means changing a stored derived
+    // column, which needs a `DERIVED_VERSION` bump to restamp existing rows —
+    // wider than this change and verified separately. Filed rather than folded
+    // in. (Copilot, PR #495.)
     projectSlug: parsed.projectSlug,
     projectName: parsed.projectDirName,
     startTime: parsed.startTs ?? undefined,
@@ -1100,7 +1115,28 @@ async function mergeAdapterSessionSummaries(
             return await getScanCache().getOrCompute(file.filePath, async (fp) => {
               const stat = await fs.stat(fp);
               if (stat.size > MAX_SESSION_FILE_SIZE) return null;
+              // **Read it ourselves before handing it to the adapter, and throw
+              // away what we read.** Both adapter parsers wrap their own
+              // `readFile` in `catch { return { turns: [], ... } }`, so an
+              // EACCES, EBUSY or EIO arrives here indistinguishable from a
+              // genuinely empty transcript — and the `turns.length === 0`
+              // branch below would cache that as a permanent "not a session"
+              // under an unchanged mtime+size. Restoring permissions touches
+              // ctime, so the entry would never be revisited. This read is what
+              // gives the error somewhere to surface: it rejects, nothing is
+              // cached, and the next sweep retries.
+              //
+              // It costs a second read of the file, but only on a COLD parse —
+              // the factory does not run on a cache hit — so the price is one
+              // extra read per changed adapter transcript, not per sweep. The
+              // real fix is a `SessionAdapter` contract that distinguishes
+              // "unreadable" from "empty" rather than a probe here; that is
+              // filed separately. (Codex P2, PR #495; same defect class as
+              // #494.)
+              await fs.readFile(fp);
               const turns = await adapter.parseFile(file);
+              // Reached only for a file that WAS readable, so an empty result
+              // really is a verdict about its contents and is safe to cache.
               if (turns.length === 0) return null;
               return buildAdapterScannedSession(
                 file, turns, stat.mtimeMs, stat.size
