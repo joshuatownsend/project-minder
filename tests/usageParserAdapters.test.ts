@@ -326,6 +326,13 @@ describe("adapter read failures are not cached as empty (#498)", () => {
    * through. Returns the spy so the caller can restore WITHOUT touching the
    * file — which is the whole point: mtime and size stay exactly as they were
    * during the failed sweep, so anything cached then is still keyed valid.
+   *
+   * **No `try/finally` at the call sites, deliberately.** `installIsolatedState`
+   * calls `vi.restoreAllMocks()` at the top of its `afterEach` teardown
+   * (`_helpers/isolatedState.ts:247`), which runs on every path including an
+   * assertion throwing mid-test — so a `finally` here would restore something
+   * already guaranteed to be restored. The test below asserts that rather than
+   * asking the next reader to take it on trust. (Copilot, PR #499.)
    */
   function failReadsOf(filePath: string) {
     const real = fs.readFile;
@@ -448,4 +455,32 @@ describe("adapter read failures are not cached as empty (#498)", () => {
     const after = await parseAllSessions();
     expect(after.has(CLAUDE_SESSION_ID)).toBe(true);
   });
+
+  it("leaves a spy installed, standing in for a test that throws mid-mock", () => {
+    // Deliberately does NOT restore. Every other spy test above restores itself
+    // on its last line, so in a green run the harness's safety net is never
+    // exercised and an assertion about it cannot fail — which is exactly what
+    // the first version of the test below did: it passed with
+    // `vi.restoreAllMocks()` deleted from teardown, because nothing had ever
+    // leaked. Caught by mutation.
+    //
+    // This reproduces the state Copilot's finding is about — an assertion
+    // throwing before `mockRestore()` — without needing a failing test.
+    vi.spyOn(fs, "readFile");
+    expect(vi.isMockFunction(fs.readFile)).toBe(true);
+  });
+
+  it("has no fs.readFile spy left over from the test above", () => {
+    // The isolation Copilot's finding is about, made observable — the same
+    // shape as the pricing-rules assertion in `sessionListAdapters.test.ts`.
+    // Order-dependent on purpose: order dependence is the thing under test.
+    //
+    // Fails if `installIsolatedState`'s `vi.restoreAllMocks()` is dropped from
+    // teardown (`_helpers/isolatedState.ts:247`), which is the only thing
+    // restoring a spy on the path where a test throws before its own
+    // `mockRestore()`. That is why the spy-using tests above need no
+    // `try/finally`.
+    expect(vi.isMockFunction(fs.readFile)).toBe(false);
+  });
+
 });
