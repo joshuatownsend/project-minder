@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "path";
 import { promises as fs } from "fs";
 import { installIsolatedState } from "./_helpers/isolatedState";
@@ -318,4 +318,169 @@ describe("file-parse adapter discovery (#475)", () => {
     expect(codexOnly.totalTokens).toBeGreaterThan(0);
     expect((codexOnly.bySource ?? []).map((s) => s.source)).toEqual(["codex"]);
   });
+});
+
+describe("adapter read failures are not cached as empty (#498)", () => {
+  /**
+   * Mock a one-shot read failure on `filePath`, letting every other read
+   * through. Returns the spy so the caller can restore WITHOUT touching the
+   * file — which is the whole point: mtime and size stay exactly as they were
+   * during the failed sweep, so anything cached then is still keyed valid.
+   *
+   * **No `try/finally` at the call sites, deliberately.** `installIsolatedState`
+   * calls `vi.restoreAllMocks()` at the top of its `afterEach` teardown
+   * (`_helpers/isolatedState.ts:247`), which runs on every path including an
+   * assertion throwing mid-test — so a `finally` here would restore something
+   * already guaranteed to be restored. The test below asserts that rather than
+   * asking the next reader to take it on trust. (Copilot, PR #499.)
+   */
+  function failReadsOf(filePath: string) {
+    const real = fs.readFile;
+    return vi.spyOn(fs, "readFile").mockImplementation((async (
+      p: Parameters<typeof fs.readFile>[0],
+      ...rest: unknown[]
+    ) => {
+      if (p === filePath) {
+        const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      }
+      return (real as never as (...a: unknown[]) => unknown)(p, ...rest);
+    }) as never);
+  }
+
+  it("retries an adapter transcript that was briefly unreadable", async () => {
+    // This defect had been live on the usage surface since #490 and was never
+    // reported: `mergeAdapterSessions` caught inside the cache factory, so an
+    // EACCES became a cached `[]` and the session vanished from every usage
+    // aggregate until a restart. It was found twice on the session list
+    // (#495) because a missing row there is visible; a missing session in a
+    // total is not.
+    await writeCodexSession();
+    await writeConfigFile(["claude", "codex"]);
+    await state.reload();
+    const { parseAllSessions } = await import("@/lib/usage/parser");
+    const file = path.join(codexHome, "sessions", "2026", `${CODEX_SESSION_ID}.jsonl`);
+
+    const spy = failReadsOf(file);
+    const blocked = await parseAllSessions();
+    expect(blocked.has(CODEX_SESSION_ID)).toBe(false);
+    // The Claude session is unaffected — a per-file skip, not an aborted sweep.
+    expect(blocked.has(CLAUDE_SESSION_ID)).toBe(true);
+
+    spy.mockRestore();
+    const after = await parseAllSessions();
+    expect(after.has(CODEX_SESSION_ID)).toBe(true);
+  });
+
+  it("keeps the REST of a project's transcripts when one is unreadable", async () => {
+    // The containment the catch above promises, and the case the single-file
+    // fixtures could not see. The Claude sweep's catch sits inside a per-file
+    // loop within a per-DIRECTORY callback, so `return` there abandons every
+    // transcript later in the same project — one EACCES dropping most of a
+    // project's usage totals, which is worse than the defect being fixed.
+    // Both reviewers caught it independently. (Codex P2 + Copilot, PR #499.)
+    const dir = path.join(tmpHome, ".claude", "projects", "C--dev-app-x");
+    const SIBLING = "bbbbbbbb-4444-4444-4444-444455556666";
+    await fs.writeFile(
+      path.join(dir, `${SIBLING}.jsonl`),
+      [
+        {
+          type: "user",
+          timestamp: "2026-04-15T12:00:00Z",
+          message: { content: [{ type: "text", text: "second session" }] },
+        },
+        {
+          type: "assistant",
+          timestamp: "2026-04-15T12:00:01Z",
+          message: {
+            model: "claude-sonnet-4-5",
+            content: [{ type: "text", text: "ok" }],
+            usage: { input_tokens: 7, output_tokens: 3 },
+          },
+        },
+      ]
+        .map((l) => JSON.stringify(l))
+        .join("\n") + "\n"
+    );
+    await writeConfigFile(["claude"]);
+    await state.reload();
+    const { parseAllSessions } = await import("@/lib/usage/parser");
+
+    // Premise: both live in the SAME project directory, so they share one
+    // callback and one loop. Asserted rather than assumed — in separate
+    // directories this test would pass against the broken `return`.
+    const before = await parseAllSessions();
+    expect(before.has(CLAUDE_SESSION_ID)).toBe(true);
+    expect(before.has(SIBLING)).toBe(true);
+
+    // **Reload between the premise and the measurement.** The sweep above
+    // warmed the per-file cache, and a cache hit never calls the factory — so
+    // without this the mocked read is never reached and the assertion below
+    // passes against the broken `return` as well. (Caught by the test failing
+    // for that reason on the first attempt.)
+    await state.reload();
+    const { parseAllSessions: parseAgain } = await import("@/lib/usage/parser");
+
+    // `readdir` returns these in lexical order, so failing the ORIGINAL id —
+    // which sorts before the sibling's `bbbb…` — puts the failure ahead of a
+    // file that must still be reached.
+    const spy = failReadsOf(path.join(dir, `${CLAUDE_SESSION_ID}.jsonl`));
+    const during = await parseAgain();
+    expect(during.has(CLAUDE_SESSION_ID)).toBe(false);
+    // The one AFTER it in the same directory must survive.
+    expect(during.has(SIBLING)).toBe(true);
+    spy.mockRestore();
+  });
+
+  it("retries a CLAUDE transcript that was briefly unreadable", async () => {
+    // The same hole on the biggest corpus in the app, and outside the
+    // `SessionAdapter` contract entirely: `parseSessionTurns` swallowed the
+    // read error on its own account, so the sweep cached `[]` for it. The
+    // `strict` option that fixes this already existed and nothing used it.
+    await writeCodexSession();
+    await writeConfigFile(["claude", "codex"]);
+    await state.reload();
+    const { parseAllSessions } = await import("@/lib/usage/parser");
+    const file = path.join(
+      tmpHome, ".claude", "projects", "C--dev-app-x", `${CLAUDE_SESSION_ID}.jsonl`
+    );
+
+    const spy = failReadsOf(file);
+    const blocked = await parseAllSessions();
+    expect(blocked.has(CLAUDE_SESSION_ID)).toBe(false);
+    expect(blocked.has(CODEX_SESSION_ID)).toBe(true);
+
+    spy.mockRestore();
+    const after = await parseAllSessions();
+    expect(after.has(CLAUDE_SESSION_ID)).toBe(true);
+  });
+
+  it("leaves a spy installed, standing in for a test that throws mid-mock", () => {
+    // Deliberately does NOT restore. Every other spy test above restores itself
+    // on its last line, so in a green run the harness's safety net is never
+    // exercised and an assertion about it cannot fail — which is exactly what
+    // the first version of the test below did: it passed with
+    // `vi.restoreAllMocks()` deleted from teardown, because nothing had ever
+    // leaked. Caught by mutation.
+    //
+    // This reproduces the state Copilot's finding is about — an assertion
+    // throwing before `mockRestore()` — without needing a failing test.
+    vi.spyOn(fs, "readFile");
+    expect(vi.isMockFunction(fs.readFile)).toBe(true);
+  });
+
+  it("has no fs.readFile spy left over from the test above", () => {
+    // The isolation Copilot's finding is about, made observable — the same
+    // shape as the pricing-rules assertion in `sessionListAdapters.test.ts`.
+    // Order-dependent on purpose: order dependence is the thing under test.
+    //
+    // Fails if `installIsolatedState`'s `vi.restoreAllMocks()` is dropped from
+    // teardown (`_helpers/isolatedState.ts:247`), which is the only thing
+    // restoring a spy on the path where a test throws before its own
+    // `mockRestore()`. That is why the spy-using tests above need no
+    // `try/finally`.
+    expect(vi.isMockFunction(fs.readFile)).toBe(false);
+  });
+
 });

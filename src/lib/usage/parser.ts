@@ -762,12 +762,29 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
           // before parsing — they're typically session-in-progress logs that
           // we'll re-evaluate on the next sweep when they may have been rolled.
           //
-          // The factory has its own try/catch because a file can disappear in
-          // the gap between the FileCache's outer stat and our second stat
-          // (log rotation, session pruning). Pre-P1 behavior was "one bad
-          // file doesn't kill the sweep" — keep it.
-          const turns = await cache.getOrCompute(filePath, async (fp) => {
-            try {
+          // A file can disappear in the gap between the FileCache's outer stat
+          // and our second stat (log rotation, session pruning), so one bad
+          // file must not kill the sweep — that has been the behaviour since
+          // pre-P1 and it is kept. What changed is WHERE it is caught.
+          //
+          // The catch used to be inside the factory, which converted a read
+          // failure into `[]` and CACHED it under the file's mtime+size. This
+          // is the biggest corpus in the app, and it carried the same defect
+          // #495 found twice on the adapter path: restoring permissions
+          // touches ctime, so an EACCES'd transcript stayed missing from every
+          // usage aggregate until its contents changed or the process
+          // restarted. `parseSessionTurns` swallowed the error on its own
+          // account too, hence `strict` — the option existed and nothing used
+          // it. (#498.)
+          //
+          // `getOrCompute` stores nothing when its factory rejects, so the
+          // retry is automatic and containment stays per-file.
+          let turns: UsageTurn[] | undefined;
+          try {
+            turns = await cache.getOrCompute(filePath, async (fp) => {
+              // Oversized returns `[]` rather than rejecting: the file WAS
+              // stat'd and is deliberately not parsed, which is a verdict about
+              // it and stays true until the size changes. Cacheable.
               const stat = await fs.stat(fp);
               if (stat.size > MAX_SESSION_FILE_SIZE) return [];
               // Parse WITH sidechains so the cached map carries subagent turns
@@ -775,11 +792,24 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
               // default for existing consumers; the usage aggregator opts in
               // via `{ includeSidechains: true }` to fold subagent cost into
               // the totals (A1).
-              return await parseSessionTurns(fp, dirName, { includeSidechains: true, homeKey: normalizePathKey(home) });
-            } catch {
-              return [];
-            }
-          });
+              return await parseSessionTurns(fp, dirName, {
+                includeSidechains: true,
+                homeKey: normalizePathKey(home),
+                strict: true,
+              });
+            });
+          } catch {
+            // `continue`, NOT `return`. This catch sits inside the per-file
+            // loop of a per-DIRECTORY callback, so returning would abandon
+            // every remaining transcript in the project — turning "one
+            // unreadable file is skipped" into "one unreadable file drops most
+            // of a project's usage totals", which is worse than the defect
+            // being fixed and contradicts the containment promised two comments
+            // up. The adapter merge below reads `return` because its catch is
+            // in a per-FILE `batch.map` callback; the shapes differ and the
+            // keyword has to follow the shape. (Codex P2 + Copilot, PR #499.)
+            continue;
+          }
 
           if (turns && turns.length > 0) {
             const sessionId = path.basename(filePath, ".jsonl");
@@ -862,8 +892,23 @@ async function mergeAdapterSessions(
       await Promise.all(
         batch.map(async (file) => {
           liveSet.add(file.filePath);
-          const turns = await cache.getOrCompute(file.filePath, async (fp) => {
-            try {
+          // **The catch is OUTSIDE `getOrCompute`, and that is the whole
+          // point.** It used to sit inside the factory, so a read failure was
+          // converted to `[]` and CACHED under the file's mtime+size — and
+          // restoring permissions touches ctime, so the session stayed missing
+          // from every usage aggregate until its contents changed or the
+          // process restarted. The same defect was found twice on the session
+          // list (#495); it had been sitting here since #490, unreported,
+          // because nothing on this surface makes one absent session visible.
+          //
+          // `getOrCompute` stores nothing when its factory rejects, so moving
+          // the catch out is the entire fix: no verdict recorded, next sweep
+          // retries. Containment stays per-file — this runs inside a
+          // `Promise.all` over a batch of five, and one unreadable transcript
+          // must not take the other four with it. (#498.)
+          let turns: UsageTurn[] | undefined;
+          try {
+            turns = await cache.getOrCompute(file.filePath, async (fp) => {
               // The same `MAX_SESSION_FILE_SIZE` cap the Claude sweep applies
               // above, and that `reconcileAdapterSessionFile` applies on the SQL
               // side (`ingest.ts:3706`). Both adapter parsers read the whole
@@ -874,13 +919,17 @@ async function mergeAdapterSessions(
               // fallback include sessions the index deliberately excludes. A new
               // divergence, introduced by the change closing one. (Codex P2 +
               // Copilot, PR #490.)
+              //
+              // Oversized returns `[]` rather than rejecting: the file WAS
+              // stat'd and is deliberately not parsed, which is a verdict and
+              // stays true until the size changes. Cacheable.
               const stat = await fs.stat(fp);
               if (stat.size > MAX_SESSION_FILE_SIZE) return [];
               return await adapter.parseFile(file);
-            } catch {
-              return [];
-            }
-          });
+            });
+          } catch {
+            return;
+          }
           if (!turns || turns.length === 0) return;
 
           // Keyed by the turn's OWN `sessionId`, not the file's basename. Codex
