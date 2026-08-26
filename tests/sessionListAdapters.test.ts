@@ -36,7 +36,15 @@ const state = installIsolatedState({
     "__usageCache",
     "__sessionScanCache",
     "__sessionIndex",
+    // `setPricingRules` writes here. Listed so teardown clears it on EVERY
+    // path — a `finally` in the one test that sets rules would not cover a
+    // failure thrown before the `try`, and a later file inheriting a 4000x
+    // gpt-4o rate fails somewhere with no visible connection to this one.
+    // (Copilot, PR #495.)
+    "__minderPricingRules",
   ],
+  // Restores `MINDER_USE_DB` in teardown — the parity test sets it to "1", and
+  // this is the option that keeps that from escaping the file.
   preserveEnv: ["MINDER_USE_DB"],
 });
 
@@ -336,8 +344,22 @@ describe("session list adapter discovery (#489)", () => {
     ]);
     const second = (await scanAllSessions()).find((s) => s.sessionId === CODEX_SESSION_ID);
     expect(second!.costEstimate).toBeGreaterThan(first!.costEstimate);
+    // No explicit reset: `__minderPricingRules` is cleared by the harness in
+    // teardown, which also covers the path where an assertion above throws.
+  });
 
-    setPricingRules([]);
+  it("has no pricing rules left over from the test above", () => {
+    // The isolation Copilot's finding is about, made observable. Declared
+    // immediately after the repricing test because vitest runs in declaration
+    // order, so this is the run that would inherit a leak — and a leak is
+    // otherwise invisible until some unrelated file starts failing on a 4000x
+    // gpt-4o rate with nothing pointing back here.
+    //
+    // Deliberately order-dependent: order dependence is the defect under test,
+    // so a test that avoided it would not be testing anything. Fails if
+    // `__minderPricingRules` is dropped from `extraGlobals`, which is the only
+    // thing clearing it on the path where an assertion throws first.
+    expect((globalThis as Record<string, unknown>).__minderPricingRules).toBeUndefined();
   });
 
   it.skipIf(!driverAvailable)(
