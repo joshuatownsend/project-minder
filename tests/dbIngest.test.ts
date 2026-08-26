@@ -1979,6 +1979,41 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions — non-Claude adapter p
     reloaded.conn.closeDb();
   });
 
+  it("buildAdapterParsedSession canonicalizes the slug on its no-slug fallback", async () => {
+    // #497 fixed the adapters' own derivation, which is where every real
+    // session's slug comes from. This is the OTHER branch: turns that carry no
+    // slug at all, where the converter derives one itself. Leaving that one raw
+    // would reintroduce the worktree grouping split for exactly the sessions
+    // whose turns are slug-less — narrower than the original defect, and
+    // invisible in the common case, which is why it gets its own test rather
+    // than riding on the end-to-end fixtures.
+    //
+    // The turns pass empty strings rather than omitting the fields, so the
+    // `||` falls through to `file.projectDirName` and the fallback is what
+    // actually runs. Without that, the test would measure the adapter path
+    // again and pass no matter what this line says.
+    const { reloaded } = await setup();
+    const file: SessionFile = {
+      source: "codex",
+      filePath: "/x/wt.jsonl",
+      projectDirName: "C--dev-app-x--claude-worktrees-featbranch",
+    };
+    const turns: UsageTurn[] = [
+      uUser("2026-05-01T10:00:00Z", "worktree work", "cx-wt", ""),
+      uAsst("2026-05-01T10:00:01Z", "gpt-5", "done", "cx-wt", [], ""),
+    ];
+    const parsed = reloaded.ingest.buildAdapterParsedSession(file, turns, 1, 100)!;
+    expect(parsed).not.toBeNull();
+    expect(parsed.projectSlug).toBe("dev-app-x");
+    // The raw dir name is still what gets stored — `isWorktree` is derived
+    // from it on both backends.
+    expect(parsed.projectDirName).toBe("C--dev-app-x--claude-worktrees-featbranch");
+    // And the rollup tuples are keyed on the corrected slug, which is the
+    // stored consequence a later re-derivation has to restamp.
+    expect([...parsed.affectedDays]).toContain("2026-05-01|dev-app-x|gpt-5");
+    reloaded.conn.closeDb();
+  });
+
   it("sums per-turn cost from fallback pricing for a priceable model (deterministic, offline)", async () => {
     const { reloaded } = await setup();
     const file: SessionFile = { source: "codex", filePath: "/x/r2.jsonl", projectDirName: "p" };

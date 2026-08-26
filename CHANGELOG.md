@@ -26,6 +26,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A worktree session from Codex or Gemini grouped apart from its own project** (#497). The adapters derived `projectSlug` from the raw encoded directory name while `projectPath` came from the canonicalized one, so a session run inside a Claude Code worktree reported the parent project's path and the worktree's slug. `/sessions` filters and groups on the slug, so it landed under a pseudo-project of its own — while a **Claude** session in the same directory grouped with the parent, because the Claude scanner has always canonicalized. Two harnesses in one worktree, two projects on the page. The same mismatch also kept those sessions from matching a project's `usageSlug`, which is canonical, so they were absent from its costs surfaces.
+
+  Corrected at the adapters' own derivation, which is the single site both backends read: the turns carry the slug, ingest stores it, and the file-parse sweep takes the same field — so a one-sided fix in the scanner would have recreated exactly the backend disagreement #489 closed, and was rejected by the parity test when tried.
+
+  **`projectName` deliberately keeps the raw directory name.** Both backends derive `isWorktree` from it, and an adapter transcript lives outside the worktree, so canonicalizing it too would silently mark these sessions as non-worktree — a regression the dual-backend comparison could not have reported, since both sides would have agreed on the wrong value. That is also why the new assertions are absolute rather than only cross-backend: two backends agreeing on a wrong value is how this shipped in the first place.
+
+  **`DERIVED_VERSION` moves 20 → 21**, because `sessions.project_slug` and the rollup tuples keyed on it are stored. Existing adapter rows keep the old grouping until the index re-derives them; nothing is wrong in the meantime, it is the behaviour that was there before.
+
 - **A session could vanish until a restart after a momentary read failure** (#498). Whenever a transcript was briefly unreadable — a permissions change, a file lock, an I/O blip — the parse returned "no turns", and every caller cached that under the file's mtime and size. Restoring access does not change either of those, so the cache key stayed valid and the session stayed missing from the sessions list and every usage total until its contents changed or the process restarted.
 
   It ran deepest on the Claude sweep, which is the largest corpus, and had been live on the usage surface since #475 without being noticed — a missing row in a list is visible, a missing session inside a total is not. Two review rounds on #495 caught the same defect on the session list, and the workaround shipped there (refusing to cache any empty parse, so a transcript that legitimately parses to nothing was re-read on every sweep) is removed by this.

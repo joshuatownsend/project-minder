@@ -156,6 +156,43 @@ async function writeCodexWorktreeSession(): Promise<void> {
   );
 }
 
+const CLAUDE_WT_SESSION_ID = "bbbbbbbb-4444-4444-4444-444455556666";
+
+/**
+ * A Claude transcript in the SAME worktree as {@link writeCodexWorktreeSession}.
+ * Claude's own conversation dirs carry the worktree suffix verbatim, so this is
+ * the encoded form of `CODEX_WT_CWD` - the two harnesses, one directory. (#497.)
+ */
+async function writeClaudeWorktreeSession(): Promise<void> {
+  const dir = path.join(
+    tmpHome,
+    ".claude",
+    "projects",
+    "C--dev-app-x--claude-worktrees-featbranch"
+  );
+  await fs.mkdir(dir, { recursive: true });
+  const lines = [
+    {
+      type: "user",
+      timestamp: "2026-04-15T11:00:00Z",
+      message: { content: [{ type: "text", text: "do worktree task" }] },
+    },
+    {
+      type: "assistant",
+      timestamp: "2026-04-15T11:00:01Z",
+      message: {
+        model: "claude-sonnet-4-5",
+        content: [{ type: "text", text: "done" }],
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+    },
+  ];
+  await fs.writeFile(
+    path.join(dir, `${CLAUDE_WT_SESSION_ID}.jsonl`),
+    lines.map((l) => JSON.stringify(l)).join("\n") + "\n"
+  );
+}
+
 async function writeConfigFile(enabledAdapters: string[]): Promise<void> {
   const stateDir = process.env.MINDER_STATE_DIR!;
   await fs.mkdir(stateDir, { recursive: true });
@@ -414,6 +451,37 @@ describe("session list adapter discovery (#489)", () => {
     expect((globalThis as Record<string, unknown>).__minderPricingRules).toBeUndefined();
   });
 
+  it("groups a Codex and a Claude session from the same worktree together", async () => {
+    // **The user-visible symptom of #497, which a slug assertion alone does not
+    // show.** `SessionsBrowser` filters and groups on `projectSlug`, so an
+    // adapter session carrying the raw worktree slug lands under a
+    // pseudo-project while the Claude session beside it - `scanSessionFile`
+    // uses `toSlug(canonicalDirName)` - groups with the parent. Two harnesses,
+    // one directory, two projects.
+    //
+    // Asserted as "the same slug as the Claude session in the same worktree"
+    // rather than only against a literal, because what is wrong is the
+    // DISAGREEMENT; the second assertion then pins which of the two moved.
+    await writeCodexWorktreeSession();
+    await writeClaudeWorktreeSession();
+    await writeConfigFile(["claude", "codex"]);
+    await state.reload();
+    const { scanAllSessions } = await import("@/lib/scanner/claudeConversations");
+
+    const sessions = await scanAllSessions();
+    const codexWt = sessions.find((s) => s.sessionId === CODEX_WT_SESSION_ID);
+    const claudeWt = sessions.find((s) => s.sessionId === CLAUDE_WT_SESSION_ID);
+    // Premise: both fixtures actually reached the sweep. Without this, a
+    // dropped fixture would make the comparison below vacuous rather than red.
+    expect(codexWt).toBeDefined();
+    expect(claudeWt).toBeDefined();
+
+    expect(codexWt!.projectSlug).toBe(claudeWt!.projectSlug);
+    // And both group with the PARENT, not with each other under the worktree -
+    // a fix that canonicalized neither would also satisfy the line above.
+    expect(claudeWt!.projectSlug).toBe("dev-app-x");
+  });
+
   it.skipIf(!driverAvailable)(
     "agrees with the DB backend field by field for the same adapter session",
     async () => {
@@ -506,6 +574,25 @@ describe("session list adapter discovery (#489)", () => {
     expect(fileWt).toBeDefined();
     expect(dbWt).toBeDefined();
     expect(compare(fileWt)).toEqual(compare(dbWt));
+
+    // **Absolute, on both sides, because the comparison above cannot see this
+    // class of defect.** #497 was two backends agreeing on the WRONG value: an
+    // uncanonicalized slug against a canonicalized path, identical on each, so
+    // `toEqual` passed while the session grouped under a pseudo-project of its
+    // own. Equality pins the two together; only a literal pins them to the
+    // right value.
+    expect(fileWt.projectSlug).toBe("dev-app-x");
+    expect(dbWt.projectSlug).toBe("dev-app-x");
+
+    // The other half of the decision, and the reason the fix is slug-only.
+    // `isWorktree` reads the RAW encoded dir name on both backends
+    // (`isWorktreeEncodedDir`), and an adapter transcript lives outside the
+    // worktree so the file-path marker cannot rescue it — canonicalizing
+    // `projectDirName` too would silently turn this false on both sides, which
+    // the equality comparison would again report as agreement.
+    expect(fileWt.isWorktree).toBe(true);
+    expect(dbWt.isWorktree).toBe(true);
+    expect(fileWt.projectName).toBe("C--dev-app-x--claude-worktrees-featbranch");
 
     conn.closeDb();
     }

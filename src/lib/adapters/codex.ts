@@ -5,7 +5,7 @@ import type { FileHandle } from "fs/promises";
 import { parse as parseToml } from "smol-toml";
 import type { SessionAdapter, SessionFile, HarnessConfig, HarnessConfigRule, HarnessResource } from "./types";
 import type { UsageTurn, ToolCall } from "@/lib/usage/types";
-import type { SessionTurnsMeta } from "@/lib/usage/parser";
+import { canonicalizeDirName, type SessionTurnsMeta } from "@/lib/usage/parser";
 import { encodeProjectPath } from "@/lib/usage/projectMatch";
 import { toSlug } from "@/lib/scanner/claudeConversations";
 import { TEXT_CAP, makeBaseTurn } from "./utils";
@@ -261,7 +261,23 @@ async function parseCodexFileWithMeta(
     typeof metaPayload.id === "string" ? metaPayload.id : path.basename(filePath, ".jsonl");
   const cwd = typeof metaPayload.cwd === "string" ? metaPayload.cwd : "";
   const projectDirName = cwd ? encodeProjectPath(cwd) : fallbackProjectDirName;
-  const projectSlug = toSlug(projectDirName);
+  // **Canonicalized, so a session run inside a Claude Code worktree groups with
+  // its parent project.** `projectPath` was already derived from the canonical
+  // dir name while the slug kept the `--claude-worktrees-<branch>` suffix, so a
+  // Codex session reported the parent's path and the worktree's slug and landed
+  // under a pseudo-project of its own - while a Claude session in the SAME
+  // directory grouped with the parent, because `scanSessionFile` has always
+  // used `toSlug(canonicalDirName)`. Two harnesses, one worktree, two projects.
+  //
+  // This is the single derivation site for both backends: the turns carry this
+  // value, `buildAdapterParsedSession` prefers it, ingest stores it in
+  // `sessions.project_slug`, and the file-parse sweep reads the same field - so
+  // correcting it here moves both together rather than recreating the backend
+  // disagreement #489 closed. `projectDirName` deliberately stays RAW: both
+  // backends derive `isWorktree` from it via `isWorktreeEncodedDir`, and an
+  // adapter transcript lives outside the worktree, so canonicalizing it too
+  // would silently mark these sessions as non-worktree. (#497.)
+  const projectSlug = toSlug(canonicalizeDirName(projectDirName));
 
   // Codex has no per-turn timestamps; use session creation time, falling back to file mtime
   let sessionTimestamp: string =

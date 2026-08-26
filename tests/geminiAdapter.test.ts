@@ -117,6 +117,35 @@ describe("gemini adapter", () => {
     expect(assistant!.cacheCreateTokens).toBe(0);
   });
 
+  it("parseFile() stamps a CANONICALIZED projectSlug for a worktree dir", async () => {
+    // #497. The slug was `toSlug(projectDirName)` while `projectPath` came from
+    // the canonical form, so a session run inside a Claude Code worktree
+    // grouped under a pseudo-project of its own while a Claude session in the
+    // same directory grouped with the parent.
+    //
+    // Gemini is fixed alongside Codex because a one-adapter fix only changes
+    // WHICH harness splits. It gets its own assertion for the same reason: the
+    // end-to-end parity test in `sessionListAdapters.test.ts` runs a Codex
+    // fixture, so before this test reverting the Gemini line failed nothing.
+    const { default: geminiAdapter } = await import("@/lib/adapters/gemini");
+    const filePath = path.join(TMP_DIR, PROJECT_NAME, "chats", `${SESSION_ID}.json`);
+    const file = {
+      source: "gemini",
+      filePath,
+      projectDirName: "C--dev-app-x--claude-worktrees-featbranch",
+    };
+
+    const turns = await geminiAdapter.parseFile(file);
+    expect(turns.length).toBeGreaterThan(0);
+    for (const t of turns) {
+      expect(t.projectSlug).toBe("dev-app-x");
+      // The raw dir name is passed through untouched — `isWorktree` is derived
+      // from it downstream, and a Gemini transcript lives outside the worktree
+      // so nothing else could recover the marker.
+      expect(t.projectDirName).toBe("C--dev-app-x--claude-worktrees-featbranch");
+    }
+  });
+
   it("parseFile() skips info/error/warning messages", async () => {
     const { default: geminiAdapter } = await import("@/lib/adapters/gemini");
     const filePath = path.join(TMP_DIR, PROJECT_NAME, "chats", `${SESSION_ID}.json`);

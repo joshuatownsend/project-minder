@@ -961,21 +961,21 @@ async function buildAdapterScannedSession(
   const summary: SessionSummary = {
     sessionId: parsed.sessionId,
     projectPath: decodeDirName(canonicalDirName),
-    // **Deliberately NOT `toSlug(canonicalDirName)`, which is what the Claude
-    // scanner uses.** The adapter stamps `toSlug(projectDirName)` on every turn
-    // (`codex.ts:261`) and `buildAdapterParsedSession` prefers that, so this is
-    // the value ingest stores in `sessions.project_slug` — taking the canonical
-    // one here would make the file backend disagree with the index for exactly
-    // the sessions this PR exists to make agree.
+    // **Canonical by construction, and still read from `parsed` rather than
+    // re-derived here.** The adapters stamp `toSlug(canonicalizeDirName(...))`
+    // on every turn (`codex.ts`, `gemini.ts`), `buildAdapterParsedSession`
+    // prefers that value, and ingest stores it in `sessions.project_slug` — so
+    // reading it through keeps one derivation site for both backends. Applying
+    // `toSlug(canonicalDirName)` here instead would look equivalent and would
+    // be, right up until the adapters' derivation changes on one side only.
     //
-    // It IS inconsistent with `projectPath` above, which IS canonicalized: a
-    // Codex session run inside a Claude worktree reports the parent project's
-    // path and the worktree's slug, so it groups apart from its own project
-    // while a Claude session in the same worktree groups with it. Measured, and
-    // identical on both backends. Correcting it means changing a stored derived
-    // column, which needs a `DERIVED_VERSION` bump to restamp existing rows —
-    // wider than this change and verified separately. Filed rather than folded
-    // in. (Copilot, PR #495.)
+    // It used to be the raw slug against the canonical `projectPath` above,
+    // which grouped a worktree adapter session apart from its own project
+    // while a Claude session in the same directory grouped with it (#497).
+    //
+    // `projectName` stays RAW, deliberately: the DB mapper passes
+    // `project_dir_name` through unchanged for Claude sessions too, and it is
+    // what `isWorktree` is derived from on both backends.
     projectSlug: parsed.projectSlug,
     projectName: parsed.projectDirName,
     startTime: parsed.startTs ?? undefined,
