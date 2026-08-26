@@ -411,6 +411,10 @@ describe("session list adapter discovery (#489)", () => {
       oneShotRate: s.oneShotRate,
       cacheHitRatio: s.cacheHitRatio,
       workMode: s.workMode,
+      // Added after review found it diverging (#495): the two backends read it
+      // from different columns, and a comparison that omits a field cannot
+      // report it as equal — it reports nothing at all.
+      isWorktree: s.isWorktree,
     });
 
     expect(compare(fileSide)).toEqual(compare(dbSide));

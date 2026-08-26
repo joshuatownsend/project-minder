@@ -1083,6 +1083,14 @@ async function buildAdapterScannedSession(
  * degrade. A real adapter detail view needs a per-harness parser and is out of
  * scope here.
  */
+/**
+ * Thrown for an adapter parse that yielded no turns, to keep it OUT of the
+ * cache. Not an error condition in itself — it is the absence of a usable
+ * answer, and `FileCache` has exactly one way to express "do not remember
+ * this", which is a rejected factory.
+ */
+class AmbiguousEmptyParse extends Error {}
+
 async function mergeAdapterSessionSummaries(
   config: MinderConfig,
   sessions: SessionSummary[],
@@ -1115,37 +1123,43 @@ async function mergeAdapterSessionSummaries(
             return await getScanCache().getOrCompute(file.filePath, async (fp) => {
               const stat = await fs.stat(fp);
               if (stat.size > MAX_SESSION_FILE_SIZE) return null;
-              // **Read it ourselves before handing it to the adapter, and throw
-              // away what we read.** Both adapter parsers wrap their own
-              // `readFile` in `catch { return { turns: [], ... } }`, so an
-              // EACCES, EBUSY or EIO arrives here indistinguishable from a
-              // genuinely empty transcript — and the `turns.length === 0`
-              // branch below would cache that as a permanent "not a session"
-              // under an unchanged mtime+size. Restoring permissions touches
-              // ctime, so the entry would never be revisited. This read is what
-              // gives the error somewhere to surface: it rejects, nothing is
-              // cached, and the next sweep retries.
-              //
-              // It costs a second read of the file, but only on a COLD parse —
-              // the factory does not run on a cache hit — so the price is one
-              // extra read per changed adapter transcript, not per sweep. The
-              // real fix is a `SessionAdapter` contract that distinguishes
-              // "unreadable" from "empty" rather than a probe here; that is
-              // filed separately. (Codex P2, PR #495; same defect class as
-              // #494.)
-              await fs.readFile(fp);
               const turns = await adapter.parseFile(file);
-              // Reached only for a file that WAS readable, so an empty result
-              // really is a verdict about its contents and is safe to cache.
-              if (turns.length === 0) return null;
+              // **An empty adapter parse is ambiguous, so it is not cached.**
+              //
+              // Both adapter parsers wrap their own `readFile` in
+              // `catch { return { turns: [], ... } }`, so an EACCES, EBUSY or
+              // EIO arrives here as an empty array — identical to a genuinely
+              // empty transcript. Caching `null` for it would make a transient
+              // failure permanent: restoring permissions touches ctime, not
+              // mtime or size, so the cache key never changes and the session
+              // stays hidden until its contents do.
+              //
+              // The first attempt at this probed with an `fs.readFile` before
+              // calling the parser, and Codex was right to reject it: the probe
+              // verifies a DIFFERENT read from the one whose result is cached,
+              // so an error landing between the two still produced a cached
+              // `null`. It narrowed the window instead of closing it, and paid
+              // a full extra read of every changed transcript to do so.
+              //
+              // Refusing to cache the ambiguous answer closes it outright. The
+              // cost is that a genuinely empty or malformed adapter transcript
+              // is re-parsed on every sweep rather than being remembered — real,
+              // but bounded by how few such files exist, and the safe direction
+              // of the trade: a redundant parse is a wasted millisecond, a
+              // cached I/O error is a session that disappears until a restart.
+              //
+              // #498 widens the `SessionAdapter` contract to distinguish the
+              // two, which is what lets the empty case be cached again.
+              if (turns.length === 0) throw new AmbiguousEmptyParse();
               return buildAdapterScannedSession(
                 file, turns, stat.mtimeMs, stat.size
               );
             });
           } catch {
-            // Same contract as the Claude path: an I/O or parse failure is not
-            // a verdict about the file, so `getOrCompute` cached nothing and
-            // the next sweep retries. (#494.)
+            // Covers both an outright throw and the `AmbiguousEmptyParse`
+            // above. `getOrCompute` stores nothing when its factory rejects,
+            // which is the whole mechanism: no verdict recorded, next sweep
+            // tries again. (#494, #495.)
             return undefined;
           }
         })
