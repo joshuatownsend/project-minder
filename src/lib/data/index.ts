@@ -428,12 +428,15 @@ export function getInitStatus(): InitStatus {
 // indexer. Keyed per case so each kind gets logged once even if the
 // others fire too.
 //
-// Six kinds now share this set, and three of them do NOT describe a
-// fall-through: v3-catch-up, empty-index, and first-build all divert to
-// file-parse, but the adapter/source/project decline keeps the SQL
-// answer, and `getUsageCompare` suppresses its comparison instead. Read
-// each message rather than assuming the shared set means a shared
+// Several kinds share this set, and not all of them describe a
+// fall-through: v3-catch-up, empty-index and first-build all divert to
+// file-parse, while `getUsageCompare` suppresses its comparison instead.
+// Read each message rather than assuming the shared set means a shared
 // outcome — the messages were the whole finding. (Copilot, PR #474.)
+//
+// The adapter decline used to be a third exception here. #489 removed it:
+// every loader's file path now covers the corpus, so nothing keeps the SQL
+// answer on the strength of what file-parse cannot see.
 const fallthroughLoggedFor = new Set<string>();
 
 /** Emit `message` the first time `key` is seen in this process, then never again. */
@@ -582,96 +585,8 @@ async function checkV3Gate(scope: string, db: DbHandle): Promise<boolean> {
  * cost of that is a full JSONL walk for the duration of the first pass —
  * measured, and bounded by the 2-minute route caches over `/api/usage`,
  * `/api/agents` and `/api/skills` (30 s for `/api/sessions`).
- */
-/**
- * Does the file-parse path see the same corpus the SQL path does?
  *
- * It does not, whenever a non-Claude adapter is enabled. `discoverAllSessions`
- * — the thing that finds Codex and Gemini transcripts — WAS imported by
- * `db/ingest.ts` and by nothing else; every file-parse entry point walked
- * `<claude-home>/projects/**` and stopped there. That was an architectural
- * boundary of the file backend, not a regression, and it long predated #472.
- *
- * It mattered here because #472's gates exist to stop a subset being presented
- * as a total, and diverting an adapter-enabled install to file-parse would have
- * done exactly that in a different direction: the SQL answer during the first
- * pass is a partial view of every source, while the file answer was a complete
- * view of Claude and a total absence of the rest. Dropping a source entirely is
- * the more distorting of the two, and it would be done in correctness's name.
- *
- * **Past tense throughout the two paragraphs above, deliberately.** #475 made
- * them false for four of the five loaders, and leaving them in the present
- * tense described a boundary that no longer exists as though it still governed
- * everything. What they still describe accurately is the ONE path below — the
- * session list. (Copilot, PR #490.)
- *
- * **#475 closed most of this, and this predicate is what is left.** The file
- * pipeline now has adapter discovery: `buildAllSessions` merges every enabled
- * non-Claude adapter's sessions into the same map, so `getUsage`,
- * `getAgentUsage` and `getSkillUsage` see the whole corpus on both backends and
- * no longer consult this at all. `getClaudeUsage` was equalized from the other
- * side — its SQL now filters `source = 'claude'`, matching a file path that is
- * Claude-only by construction, because that surface's question is single-source.
- *
- * `getSessionsList` is the sole remaining caller, and the only loader whose file
- * path is still Claude-only: `scanAllSessions` builds `SessionSummary` objects
- * (initial prompt, status, model list, per-tool counts) with no derivation from
- * an adapter's `UsageTurn[]`, which is a feature rather than a merge. Until that
- * lands, an adapter user's session list keeps the #472 defect — served from a
- * partly-ingested index rather than diverted to a fallback that would show them
- * Claude only. That is worse than fixing it and better than pretending to.
- *
- * The source/project qualification this predicate used to carry was deleted with
- * the loaders that used it. It existed so a Claude-scoped or project-scoped
- * `getUsage` could still divert while adapter sessions sat elsewhere on disk;
- * `getUsage` no longer asks, and `getSessionsList` takes no filters, so every
- * branch of it was unreachable. Kept-but-unreachable code with a page of
- * rationale reads as live behaviour to the next person. (Codex P1, PR #474;
- * narrowed in #475.)
- */
-async function fileParseCoversCorpus(): Promise<boolean> {
-  // **The asymmetry that governs this predicate.** A false "not covered" costs
-  // nothing new: the SQL answer is what shipped before #472 either way. A false
-  // "covered" reintroduces the original defect and drops a whole source in
-  // correctness's name. So a discovery that throws counts as "does not cover" —
-  // if we cannot tell what is out there, we must not claim to have read all of
-  // it.
-  //
-  // **Enablement is a necessary condition, not the answer.** Being enabled is
-  // what makes the question worth asking; whether sessions are DISCOVERABLE is
-  // what answers it. Both lines below are load-bearing and they are not the same
-  // test: a Claude-only config can answer from the config alone, because nothing
-  // else could be indexed — but an enabled adapter says nothing about whether a
-  // corpus exists. This repo's own config has enabled `codex` for months against
-  // an index holding 6,799 Claude sessions and zero Codex ones, so stopping at
-  // the flag would have switched the whole of #472 off for the machine it was
-  // written on, to protect a corpus that does not exist.
-  //
-  // Ordered so the walk is skipped in the common case, and so the discovery
-  // below runs only while the index is building AND an adapter is enabled.
-  // (Wording corrected — Copilot, PR #490 — because it read as though the flag
-  // were not consulted at all.)
-  const cfg = await readConfig();
-  if ((cfg.enabledAdapters ?? ["claude"]).every((id) => id === "claude")) return true;
-  try {
-    const { discoverAllSessions } = await import("@/lib/adapters");
-    // Non-Claude adapters ONLY. `discoverAllSessions(cfg)` runs every enabled
-    // adapter's `discover()`, and Claude's walks every home's projects tree —
-    // so passing the config unfiltered would sweep the whole Claude corpus to
-    // answer a question exclusively about the other adapters, and then sweep it
-    // again in the file-parse fallback this is gating into. (Copilot, PR #474.)
-    const found = await discoverAllSessions({
-      ...cfg,
-      enabledAdapters: (cfg.enabledAdapters ?? []).filter((id) => id !== "claude"),
-    });
-    return found.length === 0;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * The build-state gate for the five loaders that answer from a corpus.
+ * ── The gate itself ───────────────────────────────────────────────────────
  *
  * **Covers the first build, not a re-derivation.** `getIndexBuildState` is a
  * lifetime latch, so a `DERIVED_VERSION` rebuild — which rewrites rows one file
@@ -686,35 +601,26 @@ async function fileParseCoversCorpus(): Promise<boolean> {
  * that has never been written — a feature either way, tracked as #478 rather
  * than folded into a review round. (Codex P1, PR #474.)
  *
- * Composed rather than folded into `isIndexBuilding`, because
- * `getUsageCompare` must keep gating unconditionally: it degrades to
- * "not comparable" rather than falling back, so it needs no corpus and the
- * adapter question does not arise. Putting the check in the shared predicate
- * would silently return adapter users to comparing two DB subsets — the exact
- * defect, reintroduced by the fix for the defect.
+ * Kept separate from `isIndexBuilding` because the two answer different
+ * questions: this one decides whether to DIVERT, and `getUsageCompare` gates on
+ * the raw build state without diverting at all — it degrades to "not
+ * comparable" rather than falling back, so it needs no corpus.
+ *
+ * **This used to take a `fileParseIsClaudeOnly` flag, and #489 removed it.** The
+ * flag existed because `scanAllSessions` walked `<claude-home>/projects/**` and
+ * stopped, so diverting an adapter user here would have traded a partial view of
+ * every source for a complete view of one. `getSessionsList` was its last caller
+ * and the last loader whose file path could not see the whole corpus; with the
+ * adapter merge in `scanAllSessions` every caller's fallback covers what the
+ * index will, and the gate is one condition again.
  */
 async function checkBuildStateFallback(
   scope: string,
-  db: DbHandle,
-  /**
-   * Set ONLY by a loader whose file-parse path cannot see adapter sessions.
-   * Since #475 that is `getSessionsList` alone; every other caller's fallback
-   * covers the whole corpus and diverts unconditionally while the index builds.
-   */
-  fileParseIsClaudeOnly = false
+  db: DbHandle
 ): Promise<boolean> {
   if (!isIndexBuilding(db)) return false;
-  if (!fileParseIsClaudeOnly || (await fileParseCoversCorpus())) {
-    logIntentionalFallthrough(scope, BUILDING_REASON);
-    return true;
-  }
-  warnOnce(
-    `${scope}:adapters-enabled`,
-    `[data] ${scope}: index still building, but a non-Claude adapter is enabled and ` +
-      "file-parse cannot see adapter sessions — serving the SQL answer rather than " +
-      "trading a partial view of every source for a complete view of one."
-  );
-  return false;
+  logIntentionalFallthrough(scope, BUILDING_REASON);
+  return true;
 }
 
 function isIndexBuilding(db: DbHandle): boolean {
@@ -728,13 +634,15 @@ function isIndexBuilding(db: DbHandle): boolean {
  * Deliberately silent, and its callers are not.
  *
  * This used to log "fell back to file-parse" itself, which put the message
- * before the decision: `checkBuildStateFallback` can go on to decline the
- * diversion when adapter sessions exist, and `getUsageCompare` never diverts at
- * all — so an operator reading the log during exactly the window this feature
- * exists for was told a fallback had happened in two cases where it had not.
- * A diagnostic that reports the branch it was hoping for rather than the branch
- * taken is worse than none. Each caller now logs its own outcome. (Copilot,
- * PR #474.)
+ * before the decision: `getUsageCompare` never diverts at all, so an operator
+ * reading the log during exactly the window this feature exists for was told a
+ * fallback had happened where it had not. A diagnostic that reports the branch
+ * it was hoping for rather than the branch taken is worse than none. Each
+ * caller now logs its own outcome. (Copilot, PR #474.)
+ *
+ * `checkBuildStateFallback` used to be the second such case, declining the
+ * diversion when adapter sessions existed. #489 removed that branch, so it
+ * either diverts or does not run. (#489.)
  */
 const BUILDING_REASON =
   "index still building (no full pass recorded yet) — a SQL answer here would be a subset of the corpus presented as the whole of it";
@@ -1114,35 +1022,20 @@ export async function getSessionsList(): Promise<SessionsListResult> {
     );
     return runFileSessionsList();
   }
-  if (await checkBuildStateFallback("getSessionsList", db, true)) {
+  if (await checkBuildStateFallback("getSessionsList", db)) {
     return runFileSessionsList();
   }
   const sessions = await callDbLoader("getSessionsList", () =>
     loadSessionsListFromDb(db)
   );
   if (sessions.length === 0) {
-    // Reaching here while the index is still building means the gate above
-    // ALREADY declined to divert — the covered case returns from it — so
-    // falling back now would undo that decision one branch later and hand an
-    // adapter user the Claude-only list the gate exists to withhold. On a
-    // Codex-only install it is worse still: an empty list presented as a
-    // complete one. (Copilot, PR #490.)
-    //
-    // Deliberately keyed on `isIndexBuilding` rather than re-asking
-    // `fileParseCoversCorpus`, and not only to skip a second discovery walk:
-    // when the indexer is switched off entirely there is no prospect of the
-    // index ever filling, so declining would leave the list permanently empty.
-    // A Claude-only list beats that. The refusal is only correct while it is
-    // temporary.
-    if (isIndexBuilding(db)) {
-      warnOnce(
-        "getSessionsList:adapters-empty-index",
-        "[data] getSessionsList: index still building and empty, but a non-Claude " +
-          "adapter is enabled and file-parse cannot see adapter sessions — serving " +
-          "the empty SQL answer rather than a Claude-only list."
-      );
-      return { sessions, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
-    }
+    // Unconditional again (#489). This branch used to refuse to fall back while
+    // the index was building, because the fallback could only show Claude
+    // sessions and handing an adapter user a Claude-only list — or, on a
+    // Codex-only install, an empty one presented as complete — was worse than
+    // the partial SQL answer. `scanAllSessions` now merges every enabled
+    // adapter, so the fallback covers the same corpus the index will and there
+    // is nothing left to withhold.
     logIntentionalFallthrough("getSessionsList", "DB index empty (indexer warming up?)");
     return runFileSessionsList();
   }

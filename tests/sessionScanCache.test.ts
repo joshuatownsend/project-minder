@@ -213,8 +213,7 @@ describe("#473 — session scan cache re-derives cost from live pricing", () => 
     ]);
     const third = (await mod.scanAllSessions()).find((s) => s.sessionId === "sess-cost");
     expect(third?.costEstimate).toBeGreaterThan(first!.costEstimate);
-
-    setPricingRules([]);
+    // No explicit reset -- `afterEach` clears the global on every path.
   });
 });
 

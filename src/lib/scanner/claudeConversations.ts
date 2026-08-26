@@ -45,6 +45,8 @@ import { hasUnresolvedToolUse, statusFromPending } from "./sessionStatus";
 import { mostFrequent, canonicalizeDirName } from "../usage/parser";
 import { isWorktreeEncodedDir } from "./worktreeCheck";
 import { FileCache } from "../usage/cache";
+import type { SessionFile } from "../adapters/types";
+import type { MinderConfig } from "../types";
 
 export interface ConversationEntry {
   type?: string;
@@ -868,6 +870,12 @@ export async function scanAllSessions(): Promise<SessionSummary[]> {
     await scanOneHome(projectsDir, dirs, sessions, liveSet, now);
   }
 
+  // Non-Claude harnesses, merged the way `mergeAdapterSessions` merges into
+  // `buildAllSessions` (#489). Runs INSIDE the sweep so its files land in
+  // `liveSet` before the prune below — an adapter path missing from that set
+  // would be evicted on every pass and re-parsed on the next.
+  await mergeAdapterSessionSummaries(config, sessions, liveSet, now);
+
   // Drop cached summaries for transcripts that are gone — deleted, or no longer
   // under any readable home after a config change. Without this a removed home
   // keeps paying LRU rent, and `maxMtimeMs()` would keep reporting a file that
@@ -882,6 +890,289 @@ export async function scanAllSessions(): Promise<SessionSummary[]> {
   });
 
   return sessions;
+}
+
+/**
+ * Derive a `SessionSummary` for one non-Claude adapter session (#489).
+ *
+ * **Shares the content derivation with ingest rather than re-implementing it.**
+ * `buildAdapterParsedSession` is the converter the SQLite path already runs on
+ * exactly these `UsageTurn[]`, so token totals, turn counts, prompts,
+ * categories, work mode and one-shot detection are produced by one function for
+ * both backends. Writing a second derivation that agreed by inspection is the
+ * failure class #483 was: five hand-copied predicates that matched perfectly
+ * and were wrong together.
+ *
+ * The import is dynamic and has to be: `db/ingest.ts` imports `toSlug` and
+ * `ConversationEntry` from THIS module, so a static import would close the
+ * cycle at module-evaluation time. It is also safe without `better-sqlite3` —
+ * `ingest.ts` names it in a type-only import and opens no connection at module
+ * scope — which matters because this path is exactly the one that runs under
+ * `MINDER_USE_DB=0`.
+ *
+ * What is NOT shared is the `ParsedSession` -> `SessionSummary` field mapping,
+ * which mirrors `loadSessionsListFromDb`'s. That one really is agreement by
+ * inspection, and it is held there by a dual-backend parity test that puts the
+ * same fixture through both loaders and compares field by field, rather than by
+ * this comment.
+ */
+async function buildAdapterScannedSession(
+  file: SessionFile,
+  turns: UsageTurn[],
+  mtimeMs: number,
+  fileSize: number
+): Promise<ScannedSession | null> {
+  const { buildAdapterParsedSession } = await import("@/lib/db/ingest");
+  const parsed = buildAdapterParsedSession(file, turns, mtimeMs, fileSize);
+  if (!parsed) return null;
+
+  const toolUsage: Record<string, number> = {};
+  const skillsUsed: Record<string, number> = {};
+  const models = new Set<string>();
+  const searchParts: string[] = [];
+  const perModelTokens: PerModelTokens = new Map();
+
+  for (const turn of parsed.turns) {
+    for (const tu of turn.toolUses) {
+      toolUsage[tu.toolName] = (toolUsage[tu.toolName] ?? 0) + 1;
+      if (tu.skillName) skillsUsed[tu.skillName] = (skillsUsed[tu.skillName] ?? 0) + 1;
+    }
+    if (turn.textPreview) searchParts.push(turn.textPreview);
+    if (turn.role !== "assistant") continue;
+    if (turn.model) models.add(turn.model);
+    const u = turn.usageTurn;
+    // The SAME accumulator the Claude sweep uses, so the two share one tier
+    // decision. `applyPricing`'s `auto` rule is re-implemented nowhere.
+    accumulateTurn(
+      perModelTokens,
+      turn.model ?? undefined,
+      u.inputTokens, u.outputTokens, u.cacheCreateTokens, u.cacheReadTokens,
+      u.cacheCreate1hTokens ?? 0,
+      u.speed,
+    );
+  }
+
+  const canonicalDirName = canonicalizeDirName(parsed.projectDirName);
+  const durationMs =
+    parsed.startTs && parsed.endTs
+      ? new Date(parsed.endTs).getTime() - new Date(parsed.startTs).getTime()
+      : undefined;
+
+  const summary: SessionSummary = {
+    sessionId: parsed.sessionId,
+    projectPath: decodeDirName(canonicalDirName),
+    // **Deliberately NOT `toSlug(canonicalDirName)`, which is what the Claude
+    // scanner uses.** The adapter stamps `toSlug(projectDirName)` on every turn
+    // (`codex.ts:261`) and `buildAdapterParsedSession` prefers that, so this is
+    // the value ingest stores in `sessions.project_slug` — taking the canonical
+    // one here would make the file backend disagree with the index for exactly
+    // the sessions this PR exists to make agree.
+    //
+    // It IS inconsistent with `projectPath` above, which IS canonicalized: a
+    // Codex session run inside a Claude worktree reports the parent project's
+    // path and the worktree's slug, so it groups apart from its own project
+    // while a Claude session in the same worktree groups with it. Measured, and
+    // identical on both backends. Correcting it means changing a stored derived
+    // column, which needs a `DERIVED_VERSION` bump to restamp existing rows —
+    // wider than this change and verified separately. Filed rather than folded
+    // in. (Copilot, PR #495.)
+    projectSlug: parsed.projectSlug,
+    projectName: parsed.projectDirName,
+    startTime: parsed.startTs ?? undefined,
+    endTime: parsed.endTs ?? undefined,
+    durationMs,
+    initialPrompt: parsed.initialPrompt ?? undefined,
+    // Same suppression both other loaders apply, so a single-prompt session
+    // does not render the same text twice.
+    lastPrompt:
+      parsed.lastPrompt && parsed.lastPrompt !== parsed.initialPrompt
+        ? parsed.lastPrompt
+        : undefined,
+    messageCount: parsed.turnCount,
+    userMessageCount: parsed.userTurnCount,
+    assistantMessageCount: parsed.assistantTurnCount,
+    inputTokens: parsed.inputTokens,
+    outputTokens: parsed.outputTokens,
+    cacheReadTokens: parsed.cacheReadTokens,
+    cacheCreateTokens: parsed.cacheCreateTokens,
+    // Placeholder — `applyLiveFields` reprices from `perModelTokens` on every
+    // read, the same as a Claude entry. Freezing an adapter cost here would
+    // re-arm the pricing defect fixed on PR #494 one merge over.
+    costEstimate: 0,
+    toolUsage,
+    modelsUsed: Array.from(models),
+    gitBranch: undefined,
+    // `toolUsage["Agent"]` rather than a sidechain walk, matching the DB
+    // mapper. No adapter emits sidechain turns today, so both read 0 unless
+    // the harness itself reports an Agent call.
+    subagentCount: toolUsage["Agent"] ?? 0,
+    errorCount: parsed.errorCount,
+    // Placeholders, as on the Claude path.
+    isActive: false,
+    status: "idle",
+    skillsUsed,
+    oneShotRate:
+      parsed.verifiedTaskCount > 0
+        ? parsed.oneShotTaskCount / parsed.verifiedTaskCount
+        : undefined,
+    searchableText: searchParts.join(" ").slice(0, 4000),
+    cacheHitRatio: parsed.cacheHitRatio ?? undefined,
+    // All-or-nothing, as in the DB mapper: a partial work-mode split would
+    // render as a bar that does not sum to 100.
+    workMode:
+      parsed.workModeExplorationPct !== null &&
+      parsed.workModeBuildingPct !== null &&
+      parsed.workModeTestingPct !== null &&
+      parsed.workModeOtherPct !== null
+        ? {
+            exploration: parsed.workModeExplorationPct,
+            building: parsed.workModeBuildingPct,
+            testing: parsed.workModeTestingPct,
+            other: parsed.workModeOtherPct,
+          }
+        : undefined,
+    isWorktree: isWorktreeEncodedDir(parsed.projectDirName),
+    source: file.source,
+  };
+
+  return {
+    summary,
+    // **Always false, and that is a match rather than a shortcut.** Ingest
+    // stores `storedStatus: "inactive"` for every adapter session, and
+    // `computeStatus("inactive", …)` returns `idle` unconditionally — so the
+    // DB backend never shows a Codex session as `working`. `hasPendingTools:
+    // false` produces exactly that through `statusFromPending`, which is the
+    // point: `status` is the first field a user looks at, and deriving it one
+    // way here and another there would be a per-backend disagreement on it.
+    hasPendingTools: false,
+    mtimeMs,
+    perModelTokens,
+  };
+}
+
+/**
+ * Sweep every enabled non-Claude adapter and append its sessions (#489).
+ *
+ * Closes the last half of #475: `getSessionsList` was the only loader whose
+ * file path could not see the whole corpus, which is why `fileParseCoversCorpus`
+ * existed and why an adapter user kept the #472 defect on the session list.
+ *
+ * Deliberately mirrors `mergeAdapterSessions` in `usage/parser.ts` rather than
+ * inventing a second policy — same enabled-adapter filter, same batch size,
+ * same size cap, same containment, same id rule:
+ *
+ *   - **`a.id !== "claude"`.** The Claude corpus was already swept above by the
+ *     home walk; running the Claude adapter here would double every session.
+ *   - **Failures are contained per adapter AND per file.** A harness whose
+ *     `discover()` throws must not take the other harnesses — or the Claude
+ *     sessions already collected — down with it.
+ *   - **`MAX_SESSION_FILE_SIZE`.** `reconcileAdapterSessionFile` SKIPS oversized
+ *     files on the SQL side, so parsing them here would make the fallback
+ *     include sessions the index deliberately excludes — a fresh divergence
+ *     introduced by the change closing one.
+ *   - **Keyed on the id the turns carry**, never the filename. Codex reads its
+ *     id from `session_meta` and falls back to the basename only when that is
+ *     absent, so a basename key would disagree with the id ingest stores —
+ *     which is what any "same corpus" claim rests on.
+ *
+ * **Adapter files are NOT registered in `sessionIndex`, on purpose.** That index
+ * feeds `scanSessionDetail`, which parses Claude JSONL entries; handing it a
+ * Codex event stream would not fail loudly, it would render a plausible empty
+ * detail view. Unregistered, the detail route falls through to
+ * `resolveSessionJsonl` (Claude homes only) and 404s, which is the honest
+ * degrade. A real adapter detail view needs a per-harness parser and is out of
+ * scope here.
+ */
+/**
+ * Thrown for an adapter parse that yielded no turns, to keep it OUT of the
+ * cache. Not an error condition in itself — it is the absence of a usable
+ * answer, and `FileCache` has exactly one way to express "do not remember
+ * this", which is a rejected factory.
+ */
+class AmbiguousEmptyParse extends Error {}
+
+async function mergeAdapterSessionSummaries(
+  config: MinderConfig,
+  sessions: SessionSummary[],
+  liveSet: Set<string>,
+  now: number
+): Promise<void> {
+  const { getEnabledAdapters } = await import("@/lib/adapters");
+  const adapters = getEnabledAdapters(config).filter((a) => a.id !== "claude");
+  if (adapters.length === 0) return;
+
+  // Claude wins a collision, matching `mergeAdapterSessions`. Built once here
+  // rather than per adapter so a later adapter cannot overwrite an earlier one
+  // either.
+  const seen = new Set(sessions.map((s) => s.sessionId));
+
+  for (const adapter of adapters) {
+    let files: SessionFile[];
+    try {
+      files = await adapter.discover();
+    } catch {
+      continue;
+    }
+
+    for (let i = 0; i < files.length; i += 5) {
+      const batch = files.slice(i, i + 5);
+      const scanned = await Promise.all(
+        batch.map(async (file) => {
+          liveSet.add(file.filePath);
+          try {
+            return await getScanCache().getOrCompute(file.filePath, async (fp) => {
+              const stat = await fs.stat(fp);
+              if (stat.size > MAX_SESSION_FILE_SIZE) return null;
+              const turns = await adapter.parseFile(file);
+              // **An empty adapter parse is ambiguous, so it is not cached.**
+              //
+              // Both adapter parsers wrap their own `readFile` in
+              // `catch { return { turns: [], ... } }`, so an EACCES, EBUSY or
+              // EIO arrives here as an empty array — identical to a genuinely
+              // empty transcript. Caching `null` for it would make a transient
+              // failure permanent: restoring permissions touches ctime, not
+              // mtime or size, so the cache key never changes and the session
+              // stays hidden until its contents do.
+              //
+              // The first attempt at this probed with an `fs.readFile` before
+              // calling the parser, and Codex was right to reject it: the probe
+              // verifies a DIFFERENT read from the one whose result is cached,
+              // so an error landing between the two still produced a cached
+              // `null`. It narrowed the window instead of closing it, and paid
+              // a full extra read of every changed transcript to do so.
+              //
+              // Refusing to cache the ambiguous answer closes it outright. The
+              // cost is that a genuinely empty or malformed adapter transcript
+              // is re-parsed on every sweep rather than being remembered — real,
+              // but bounded by how few such files exist, and the safe direction
+              // of the trade: a redundant parse is a wasted millisecond, a
+              // cached I/O error is a session that disappears until a restart.
+              //
+              // #498 widens the `SessionAdapter` contract to distinguish the
+              // two, which is what lets the empty case be cached again.
+              if (turns.length === 0) throw new AmbiguousEmptyParse();
+              return buildAdapterScannedSession(
+                file, turns, stat.mtimeMs, stat.size
+              );
+            });
+          } catch {
+            // Covers both an outright throw and the `AmbiguousEmptyParse`
+            // above. `getOrCompute` stores nothing when its factory rejects,
+            // which is the whole mechanism: no verdict recorded, next sweep
+            // tries again. (#494, #495.)
+            return undefined;
+          }
+        })
+      );
+
+      for (const r of scanned) {
+        if (!r) continue;
+        if (seen.has(r.summary.sessionId)) continue;
+        seen.add(r.summary.sessionId);
+        sessions.push(applyLiveFields(r, now));
+      }
+    }
+  }
 }
 
 async function scanOneHome(

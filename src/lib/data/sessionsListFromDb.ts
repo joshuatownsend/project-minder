@@ -5,7 +5,7 @@ import { decodeDirName } from "@/lib/platform";
 import { canonicalizeDirName } from "@/lib/usage/parser";
 import { prepCached } from "@/lib/db/connection";
 import type { SessionSummary, SessionStatus, PrLink, TicketLink } from "@/lib/types";
-import { isWorktreeFilePath } from "@/lib/scanner/worktreeCheck";
+import { isWorktreeFilePath, isWorktreeEncodedDir } from "@/lib/scanner/worktreeCheck";
 import { rollUpTreeDelegation, type DelegationTreeSource } from "@/lib/usage/delegationTree";
 import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptPath";
 
@@ -507,7 +507,19 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
       // under the parent project's slug, so `project_dir_name` has
       // lost the worktree marker by the time we read it. The raw path
       // is preserved on the `file_path` column.
-      isWorktree: isWorktreeFilePath(h.file_path),
+      // Two sources because the two harness families store the fact in
+      // different columns. A Claude transcript lives INSIDE the worktree, so
+      // its `file_path` carries the marker while `project_dir_name` has been
+      // canonicalized at ingest and no longer does. An adapter transcript lives
+      // under the harness's own home (`~/.codex/sessions/...`), which carries
+      // no marker at all — its worktree fact survives only in the encoded cwd,
+      // which for adapters is NOT canonicalized.
+      //
+      // Reading `file_path` alone reported `false` for every adapter worktree
+      // session while the file backend reported `true`, so switching backends
+      // changed the answer for the same session. (Codex P2, PR #495.)
+      isWorktree:
+        isWorktreeFilePath(h.file_path) || isWorktreeEncodedDir(h.project_dir_name),
       source: h.source ?? "claude",
       prs: prsBySession.get(h.session_id),
       tickets: ticketsBySession.get(h.session_id),
