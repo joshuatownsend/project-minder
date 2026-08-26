@@ -229,28 +229,28 @@ describe.skipIf(!driverAvailable)("data façade — half-built index gates (#472
     expect(agents.stats.length).toBe(0);
   });
 
-  it("diverts the usage loaders for an adapter install, and not the session list", async () => {
-    // This is the #475 split, and it is the whole point of that issue.
+  it("diverts every loader for an adapter install, the session list included", async () => {
+    // The end of a three-stage arc, and the assertion on the last line is the
+    // one that moved twice.
     //
-    // BEFORE: `fileParseCoversCorpus` refused to divert ANY loader whenever
+    // #474: `fileParseCoversCorpus` refused to divert ANY loader whenever
     // adapter sessions were discoverable, because file-parse saw Claude and
-    // nothing else — so diverting would have traded a partial view of every
-    // source for a complete view of one. The cost was that adapter users kept
-    // the #472 defect on every surface.
+    // nothing else — diverting would have traded a partial view of every source
+    // for a complete view of one. Adapter users kept the #472 defect everywhere.
     //
-    // NOW: `buildAllSessions` merges enabled adapters (see
-    // `usageParserAdapters.test.ts`, which proves the turns actually arrive), so
-    // the usage loaders cover the corpus and divert like everyone else. The
-    // session list does not: `scanAllSessions` has no adapter derivation, so it
-    // still declines rather than showing an adapter user a Claude-only list.
+    // #475: `buildAllSessions` gained adapter discovery, so the usage loaders
+    // covered the corpus and diverted like everyone else. The session list did
+    // not, and kept refusing.
+    //
+    // #489: `scanAllSessions` merges adapters too, so there is no loader left
+    // whose fallback is Claude-only and nothing left for the gate to withhold.
     const { facade, conn } = await seedBuilding();
     const spies = await mockDiscoverableCodexSession();
     try {
       expect((await facade.getUsage("all", undefined)).meta.backend).toBe("file");
       expect((await facade.getAgentUsage()).meta.backend).toBe("file");
       expect((await facade.getSkillUsage()).meta.backend).toBe("file");
-      // The one that is still Claude-only, and so still refuses.
-      expect((await facade.getSessionsList()).meta.backend).toBe("db");
+      expect((await facade.getSessionsList()).meta.backend).toBe("file");
     } finally {
       spies();
       conn.closeDb();
@@ -277,13 +277,16 @@ describe.skipIf(!driverAvailable)("data façade — half-built index gates (#472
     }
   });
 
-  it("does not undo the session list's refusal at the zero-rows branch", async () => {
-    // The gate declines to divert `getSessionsList` for an adapter install, and
-    // then the DB query returns zero rows early in a first reconcile — at which
-    // point the `sessions.length === 0` branch used to fall back to file-parse
-    // unconditionally, handing back exactly the Claude-only list the gate had
-    // just withheld. The refusal has to hold at both branches or it holds at
-    // neither. (Copilot, PR #490.)
+  it("falls back at the zero-rows branch, now that file-parse covers the corpus", async () => {
+    // This branch refused to fall back for the length of #490, because the gate
+    // above had just declined for an adapter install and falling back here would
+    // have undone that decision one branch later — handing back the Claude-only
+    // list the gate withheld. The refusal had to hold at both branches or it
+    // held at neither.
+    //
+    // #489 removed its reason rather than its symmetry: with adapters merged
+    // into `scanAllSessions` there is no Claude-only list to withhold, so both
+    // branches fall back again, together.
     const { facade, conn, db, runs } = await seedBuilding();
     // `seedBuilding` deliberately leaves rows present, so empty the table to
     // reach the branch under test. Without this the earlier gate answers first
@@ -296,8 +299,7 @@ describe.skipIf(!driverAvailable)("data façade — half-built index gates (#472
     const spies = await mockDiscoverableCodexSession();
     try {
       const result = await facade.getSessionsList();
-      expect(result.meta.backend).toBe("db");
-      expect(result.sessions).toEqual([]);
+      expect(result.meta.backend).toBe("file");
     } finally {
       spies();
       conn.closeDb();
@@ -376,19 +378,27 @@ describe.skipIf(!driverAvailable)("data façade — half-built index gates (#472
       expect(compareLog).toContain("comparison suppressed");
       expect(compareLog).not.toContain("fell back to file-parse");
 
-      warn.mockClear();
       const spies = await mockDiscoverableCodexSession();
       try {
-        // The session list is the loader that still declines (#475) — it must
-        // not claim a fallback it did not take.
+        // An adapter install used to be the case where the session list logged
+        // a refusal INSTEAD of a fallback. Since #489 it takes the same branch
+        // as the ordinary case above, so the refusal's wording must be gone
+        // from the whole run: a log line describing a branch that no longer
+        // exists is worse than silence during the only window an operator reads
+        // these.
+        //
+        // Deliberately NOT re-asserting "fell back to file-parse" here.
+        // `logIntentionalFallthrough` goes through `warnOnce`, keyed on
+        // scope+reason, so the ordinary `getSessionsList()` call above already
+        // consumed that line and a second assertion would fail for a reason
+        // with nothing to do with the branch taken. Which branch it takes is
+        // pinned positively by the two backend assertions earlier in this file;
+        // what is left for this arm is that the refusal's wording cannot come
+        // back with it.
         await facade.getSessionsList();
-        const adapterLog = warn.mock.calls.flat().join("\n");
-        expect(adapterLog).not.toContain("fell back to file-parse");
-        expect(adapterLog).toContain("serving the SQL answer");
+        expect(warn.mock.calls.flat().join("\n")).not.toContain("serving the SQL answer");
 
         warn.mockClear();
-        // And the usage loader, which now covers the corpus, really does fall
-        // back — so it must say so rather than inheriting the list's silence.
         await facade.getUsage("all", undefined);
         expect(warn.mock.calls.flat().join("\n")).toContain("fell back to file-parse");
       } finally {
