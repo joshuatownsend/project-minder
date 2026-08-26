@@ -366,6 +366,66 @@ describe("adapter read failures are not cached as empty (#498)", () => {
     expect(after.has(CODEX_SESSION_ID)).toBe(true);
   });
 
+  it("keeps the REST of a project's transcripts when one is unreadable", async () => {
+    // The containment the catch above promises, and the case the single-file
+    // fixtures could not see. The Claude sweep's catch sits inside a per-file
+    // loop within a per-DIRECTORY callback, so `return` there abandons every
+    // transcript later in the same project — one EACCES dropping most of a
+    // project's usage totals, which is worse than the defect being fixed.
+    // Both reviewers caught it independently. (Codex P2 + Copilot, PR #499.)
+    const dir = path.join(tmpHome, ".claude", "projects", "C--dev-app-x");
+    const SIBLING = "bbbbbbbb-4444-4444-4444-444455556666";
+    await fs.writeFile(
+      path.join(dir, `${SIBLING}.jsonl`),
+      [
+        {
+          type: "user",
+          timestamp: "2026-04-15T12:00:00Z",
+          message: { content: [{ type: "text", text: "second session" }] },
+        },
+        {
+          type: "assistant",
+          timestamp: "2026-04-15T12:00:01Z",
+          message: {
+            model: "claude-sonnet-4-5",
+            content: [{ type: "text", text: "ok" }],
+            usage: { input_tokens: 7, output_tokens: 3 },
+          },
+        },
+      ]
+        .map((l) => JSON.stringify(l))
+        .join("\n") + "\n"
+    );
+    await writeConfigFile(["claude"]);
+    await state.reload();
+    const { parseAllSessions } = await import("@/lib/usage/parser");
+
+    // Premise: both live in the SAME project directory, so they share one
+    // callback and one loop. Asserted rather than assumed — in separate
+    // directories this test would pass against the broken `return`.
+    const before = await parseAllSessions();
+    expect(before.has(CLAUDE_SESSION_ID)).toBe(true);
+    expect(before.has(SIBLING)).toBe(true);
+
+    // **Reload between the premise and the measurement.** The sweep above
+    // warmed the per-file cache, and a cache hit never calls the factory — so
+    // without this the mocked read is never reached and the assertion below
+    // passes against the broken `return` as well. (Caught by the test failing
+    // for that reason on the first attempt.)
+    await state.reload();
+    const { parseAllSessions: parseAgain } = await import("@/lib/usage/parser");
+
+    // `readdir` returns these in lexical order, so failing the ORIGINAL id —
+    // which sorts before the sibling's `bbbb…` — puts the failure ahead of a
+    // file that must still be reached.
+    const spy = failReadsOf(path.join(dir, `${CLAUDE_SESSION_ID}.jsonl`));
+    const during = await parseAgain();
+    expect(during.has(CLAUDE_SESSION_ID)).toBe(false);
+    // The one AFTER it in the same directory must survive.
+    expect(during.has(SIBLING)).toBe(true);
+    spy.mockRestore();
+  });
+
   it("retries a CLAUDE transcript that was briefly unreadable", async () => {
     // The same hole on the biggest corpus in the app, and outside the
     // `SessionAdapter` contract entirely: `parseSessionTurns` swallowed the

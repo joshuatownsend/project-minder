@@ -799,7 +799,16 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
               });
             });
           } catch {
-            return;
+            // `continue`, NOT `return`. This catch sits inside the per-file
+            // loop of a per-DIRECTORY callback, so returning would abandon
+            // every remaining transcript in the project — turning "one
+            // unreadable file is skipped" into "one unreadable file drops most
+            // of a project's usage totals", which is worse than the defect
+            // being fixed and contradicts the containment promised two comments
+            // up. The adapter merge below reads `return` because its catch is
+            // in a per-FILE `batch.map` callback; the shapes differ and the
+            // keyword has to follow the shape. (Codex P2 + Copilot, PR #499.)
+            continue;
           }
 
           if (turns && turns.length > 0) {
