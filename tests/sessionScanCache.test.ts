@@ -11,9 +11,14 @@
  * sessions it would be wrong about are exactly the ones the status field exists
  * to flag.
  *
+ * `costEstimate` is the same defect one input over, and was found in review:
+ * it depends on the active pricing table, which is likewise not in the cache
+ * key, so editing a rule in Settings would leave every already-scanned session
+ * priced at the old rates.
+ *
  * Hence the split in `sessionStatus.ts` and `applyLiveFields` in the scanner:
- * the transcript-derived half is cached, the clock-derived half is recomputed
- * per read. The first two tests below fail if anyone later "simplifies" that
+ * what the transcript determines is cached, what outside state determines is
+ * recomputed per read. The tests below fail if anyone later "simplifies" that
  * away by returning the cached summary verbatim.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -168,6 +173,48 @@ describe("#473 — session scan cache re-derives clock-dependent fields", () => 
     const warm = (await mod.scanAllSessions()).find((s) => s.sessionId === "sess-done");
     expect(warm?.status).toBe("idle");
     expect(warm?.isActive).toBe(false);
+  });
+});
+
+describe("#473 — session scan cache re-derives cost from live pricing", () => {
+  it("picks up a pricing-rule change on a cache hit", async () => {
+    // The same defect as the status one, one input over: a transcript's cost
+    // depends on the active pricing table, which is not part of the cache key.
+    // Editing a rule in Settings changes what a session costs without changing
+    // one byte of it, so a cached `costEstimate` would survive the edit until
+    // the file was appended to, evicted, or the process restarted. Uncached,
+    // this recomputed on every sweep — caching it was a regression this PR
+    // introduced. (Codex P2, PR #494.)
+    await writeSession("C--dev-demo", "sess-cost", [
+      user("2026-08-01T10:00:00Z", "hi"),
+      assistantText("2026-08-01T10:00:01Z"),
+    ]);
+
+    const mod = await import("@/lib/scanner/claudeConversations");
+    const { setPricingRules } = await import("@/lib/usage/costCalculator");
+
+    setPricingRules([
+      { pattern: "claude-opus-5", inputUsdPerMillion: 12, outputUsdPerMillion: 60 },
+    ]);
+    const first = (await mod.scanAllSessions()).find((s) => s.sessionId === "sess-cost");
+    expect(first?.costEstimate).toBeGreaterThan(0);
+
+    // Same file, untouched — the second sweep is a pure cache hit.
+    setPricingRules([
+      { pattern: "claude-opus-5", inputUsdPerMillion: 0, outputUsdPerMillion: 0 },
+    ]);
+    const second = (await mod.scanAllSessions()).find((s) => s.sessionId === "sess-cost");
+    expect(second?.costEstimate).toBe(0);
+
+    // And back up again, so this cannot pass by any mechanism that only ever
+    // drives cost toward zero.
+    setPricingRules([
+      { pattern: "claude-opus-5", inputUsdPerMillion: 24, outputUsdPerMillion: 120 },
+    ]);
+    const third = (await mod.scanAllSessions()).find((s) => s.sessionId === "sess-cost");
+    expect(third?.costEstimate).toBeGreaterThan(first!.costEstimate);
+
+    setPricingRules([]);
   });
 });
 

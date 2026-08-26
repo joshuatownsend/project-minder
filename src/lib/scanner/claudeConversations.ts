@@ -220,14 +220,23 @@ const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 /**
  * What the per-file cache stores. NOT a `SessionSummary` — see `applyLiveFields`.
  *
- * `summary.status` and `summary.isActive` carry placeholder values here; the
- * two live fields are recomputed on every read from `hasPendingTools` +
- * `mtimeMs` + the current clock.
+ * `summary.status`, `summary.isActive` and `summary.costEstimate` carry
+ * placeholder values here. All three depend on state that is NOT part of the
+ * cache key — the wall clock for the first two, the active pricing table for
+ * the third — so each is re-derived on every read from the inputs kept
+ * alongside: `hasPendingTools`, `mtimeMs`, and `perModelTokens`.
  */
 interface ScannedSession {
   summary: SessionSummary;
   hasPendingTools: boolean;
   mtimeMs: number;
+  /**
+   * Per-model token buckets, the file-derived half of the cost calculation.
+   * A few numbers per model, so keeping them costs almost nothing next to the
+   * summary they sit beside — and it means a pricing change needs no
+   * invalidation plumbing at all. (Codex P2, PR #494.)
+   */
+  perModelTokens: PerModelTokens;
 }
 
 // Per-file mtime+size-keyed cache for session summaries (#473).
@@ -277,16 +286,30 @@ export function sessionScanCacheSize(): number {
 }
 
 /**
- * Re-derive the two clock-dependent fields onto a fresh object.
+ * Re-derive every field that depends on something outside the cache key.
  *
- * Both decay monotonically against a FIXED mtime — the cache key guarantees the
- * file has not been touched — so a warm hit is not approximating anything:
- * `working` really does become `needs_attention` and then `idle` as an
- * abandoned tool call ages, and `isActive` really does fall to false two
- * minutes after the last write. Returning the cached summary verbatim would pin
- * every session to the status it held the first time it was read, and the file
- * stops changing precisely when the session is abandoned — the one case the
- * age thresholds exist to detect.
+ * **`status` / `isActive` — the clock.** Both decay monotonically against a
+ * FIXED mtime, since the cache key guarantees the file has not been touched, so
+ * a warm hit is not approximating anything: `working` really does become
+ * `needs_attention` and then `idle` as an abandoned tool call ages, and
+ * `isActive` really does fall to false two minutes after the last write.
+ * Returning the cached summary verbatim would pin every session to the status
+ * it held the first time it was read, and the file stops changing precisely
+ * when the session is abandoned — the one case the age thresholds exist to
+ * detect.
+ *
+ * **`costEstimate` — the pricing table.** Same shape, different external input.
+ * Editing a custom pricing rule in Settings, or LiteLLM's 24h refresh landing
+ * new rates, changes what a transcript costs without changing one byte of it,
+ * so a cached cost would survive the change until the session was appended to,
+ * evicted, or the process restarted. Uncached, this recomputed on every sweep;
+ * caching it would have been a regression this PR introduced. Re-deriving is
+ * the fix rather than invalidating from the config route, because the pricing
+ * table has more than one writer and only one of them is a config PATCH.
+ * (Codex P2, PR #494.)
+ *
+ * Callers must `await loadPricing()` before this runs — a fully warm sweep
+ * parses no file, so nothing else on the path would prime the table.
  *
  * The copy is shallow, so the arrays inside (`toolUsage`, `prs`, `modelsUsed`,
  * `recaps`, …) are shared with the cached entry. Every consumer treats a
@@ -304,6 +327,7 @@ function applyLiveFields(scanned: ScannedSession, now: number): SessionSummary {
     ...scanned.summary,
     status: statusFromPending(scanned.hasPendingTools, mtime, now),
     isActive: now - scanned.mtimeMs < 2 * 60_000,
+    costEstimate: computeCostFromPerModel(scanned.perModelTokens),
   };
 }
 
@@ -311,7 +335,11 @@ function applyLiveFields(scanned: ScannedSession, now: number): SessionSummary {
  * Cached parse of one transcript. Returns `null` for files that produce no
  * summary (oversized, empty, malformed) — and caches that `null`, so a 60MB
  * transcript costs one `stat` per sweep instead of being re-read and re-rejected
- * every time. `undefined` means the file vanished between `readdir` and `stat`.
+ * every time. `undefined` means the `stat` itself failed and the file could not
+ * be classified at all — it vanished between `readdir` and `stat`, or is
+ * unreadable (permissions, a broken link, an I/O error). Nothing is cached in
+ * that case, so a transient failure is retried on the next sweep rather than
+ * remembered. (Copilot, PR #494.)
  */
 async function scanSessionFileCached(
   filePath: string,
@@ -328,7 +356,11 @@ async function scanSessionFile(
   projectDirName: string
 ): Promise<SessionSummary | null> {
   const scanned = await scanSessionFileCached(filePath, projectDirName);
-  return scanned ? applyLiveFields(scanned, Date.now()) : null;
+  if (!scanned) return null;
+  // A cache hit parses nothing, so this is the only thing that primes the
+  // pricing table before `applyLiveFields` reads it.
+  await loadPricing();
+  return applyLiveFields(scanned, Date.now());
 }
 
 async function scanSessionFileRaw(
@@ -683,7 +715,9 @@ async function scanSessionFileRaw(
       if (found.length > 0) tickets = found;
     } catch { /* non-critical */ }
 
-    // Per-model cost calculation using LiteLLM pricing (unified with /usage)
+    // Per-model cost calculation using LiteLLM pricing (unified with /usage).
+    // Placeholder, like `status` below: `applyLiveFields` recomputes it on every
+    // read so a pricing change is picked up without touching the transcript.
     await loadPricing();
     const costEstimate = computeCostFromPerModel(perModelTokens);
 
@@ -762,7 +796,7 @@ async function scanSessionFileRaw(
       hookErrors: hookErrors.length > 0 ? hookErrors : undefined,
     };
 
-    return { summary, hasPendingTools, mtimeMs: mtime.getTime() };
+    return { summary, hasPendingTools, mtimeMs: mtime.getTime(), perModelTokens };
   } catch {
     return null;
   }
@@ -785,6 +819,11 @@ export async function scanAllSessions(): Promise<SessionSummary[]> {
   const { getReadableClaudeHomes } = await import("../claudeHome");
   const config = await readConfig();
   const homes = await getReadableClaudeHomes(config);
+
+  // Before the sweep, not inside it: a fully warm sweep parses no file, and the
+  // per-file parse is what used to prime this. `applyLiveFields` reads the
+  // pricing table for every session, warm or cold.
+  await loadPricing();
 
   const sessions: SessionSummary[] = [];
   // Every transcript path this sweep actually looked at, across ALL homes.
