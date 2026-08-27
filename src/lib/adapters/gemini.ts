@@ -3,7 +3,7 @@ import os from "os";
 import { promises as fs } from "fs";
 import type { SessionAdapter, SessionFile } from "./types";
 import type { UsageTurn, ToolCall } from "@/lib/usage/types";
-import type { SessionTurnsMeta } from "@/lib/usage/parser";
+import { canonicalizeDirName, type SessionTurnsMeta } from "@/lib/usage/parser";
 import { encodeProjectPath } from "@/lib/usage/projectMatch";
 import { toSlug } from "@/lib/scanner/claudeConversations";
 import { TEXT_CAP, makeBaseTurn } from "./utils";
@@ -125,7 +125,10 @@ async function parseGeminiFileWithMeta(
     (typeof record.startTime === "string" && record.startTime.trim() ? record.startTime : null) ??
     (await fs.stat(filePath).then((s) => s.mtime.toISOString()).catch(() => new Date().toISOString()));
 
-  const projectSlug = toSlug(projectDirName);
+  // Canonicalized for the same reason as `codex.ts` - see the note there.
+  // Both adapters have to move together or the grouping split just changes
+  // which harness it applies to. (#497.)
+  const projectSlug = toSlug(canonicalizeDirName(projectDirName));
 
   const turns: UsageTurn[] = [];
   let hasThinking = false;

@@ -26,7 +26,7 @@
 // here would drop every column that build added. The gates in `ingest.ts`
 // enforce this via `isNewerDerivation`; see the 2026-08-05 entry below for
 // what it costs when they don't.
-export const DERIVED_VERSION = 20;
+export const DERIVED_VERSION = 21;
 // History:
 // 1 — initial.
 // 2 — added `tool_result_preview` storage so `detectOneShot` rehydrates
@@ -359,6 +359,40 @@ export const DERIVED_VERSION = 20;
 //     which would double a re-log straddling a tail-window boundary and stay
 //     wrong until the next full re-parse. `Agent` 62 and `WebSearch` 123 nested,
 //     none of which had ever reached the index.
+//
+// 21 — #497: adapter sessions stamp a CANONICALIZED `project_slug`. Codex and
+//     Gemini derived it as `toSlug(projectDirName)` while `projectPath` came
+//     from `canonicalizeDirName(projectDirName)`, so a session run inside a
+//     Claude Code worktree reported the parent project's path and the
+//     worktree's slug — and grouped under a pseudo-project of its own, while a
+//     Claude session in the SAME directory grouped with the parent because
+//     `scanSessionFile` has always canonicalized.
+//
+//     **Why it needs a bump rather than being read-side.** The slug is a
+//     STORED derived column: `sessions.project_slug`, plus the `daily_costs`
+//     and `category_costs` rollup tuples keyed on it. Existing adapter rows
+//     keep the old derivation until re-ingest, and the skip-gates
+//     (`reconcileAdapterSessionFile`, `reconcileSessionFile`) compare
+//     `derived_version === DERIVED_VERSION`, so this is what reaches them —
+//     an unchanged transcript's mtime and size say nothing about a derivation
+//     change. Both full-replace paths union the OLD session's tuples into the
+//     refresh set, so the stale-slug rollup rows are rewritten rather than
+//     stranded beside the new ones.
+//
+//     Deliberately scoped to the slug. `project_dir_name` stays RAW, because
+//     `isWorktree` is derived from it on both backends via
+//     `isWorktreeEncodedDir` and an adapter transcript lives OUTSIDE the
+//     worktree, so the file-path marker cannot rescue a canonicalized dir name.
+//
+//     **Cost.** Adapter rows only in practice — Claude rows re-derive to the
+//     same values — but the gate is per-session and version-wide, so the pass
+//     is a full corpus re-parse like any other bump. The reference index holds
+//     zero adapter sessions today, which is exactly why no measurement here can
+//     stand in for the corpus of a user who runs Codex.
+//
+//     No read-side gate. Pre-reconcile, an adapter worktree session groups the
+//     way it did before this change — degraded, not wrong — and the file-parse
+//     backend is already correct because it reads the same shared derivation.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // 2026-08-05 — what a non-directional comparison cost, recorded here because

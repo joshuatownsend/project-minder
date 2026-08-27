@@ -3425,8 +3425,15 @@ export function buildAdapterParsedSession(
     path.basename(file.filePath).replace(/\.[^.]+$/, "");
   const projectDirName =
     turns.find((t) => t.projectDirName)?.projectDirName || file.projectDirName;
+  // The fallback canonicalizes too. Every adapter now stamps a canonical
+  // slug on its turns (#497), so a turn-less fallback deriving the raw one
+  // would reintroduce the worktree grouping split for exactly the sessions
+  // whose turns carry no slug - a narrower hole than the original, and
+  // invisible in the common case, which is what makes it worth closing here
+  // rather than relying on the adapters alone.
   const projectSlug =
-    turns.find((t) => t.projectSlug)?.projectSlug || toSlug(projectDirName);
+    turns.find((t) => t.projectSlug)?.projectSlug ||
+    toSlug(canonicalizeDirName(projectDirName));
 
   let inputTokens = 0;
   let outputTokens = 0;
