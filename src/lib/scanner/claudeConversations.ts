@@ -42,7 +42,13 @@ import {
   type CachedModelBuckets,
 } from "../claudeStatsCache";
 import { hasUnresolvedToolUse, statusFromPending } from "./sessionStatus";
-import { mostFrequent, canonicalizeDirName } from "../usage/parser";
+import { mostFrequent } from "../usage/parser";
+import {
+  toSlug,
+  canonicalizeDirName,
+  projectSlugFromDirName,
+} from "@/lib/sessions/projectIdentity";
+import { projectSessionSummary } from "@/lib/sessions/summaryProjection";
 import { isWorktreeEncodedDir } from "./worktreeCheck";
 import { FileCache } from "../usage/cache";
 import type { SessionFile } from "../adapters/types";
@@ -172,13 +178,12 @@ export function encodePath(projectPath: string): string {
 
 export { decodeDirName };
 
-export function toSlug(dirName: string): string {
-  // Extract last segment as project name, slugify
-  const parts = dirName.split("-");
-  // Skip drive letter prefix like "C-"
-  const meaningful = parts.slice(parts.findIndex((p) => p.length > 1));
-  return meaningful.join("-").toLowerCase().replace(/[^a-z0-9-]/g, "-");
-}
+// `toSlug` now lives in `@/lib/sessions/projectIdentity`, a leaf light enough
+// for the SQL read path to import — which is what let `sessionsListFromDb`
+// delete its hand-copied `slugifyDirName` mirror (#496). Re-exported here
+// because this module has been its import site since the beginning and the
+// other callers have no reason to care where a pure string rule lives.
+export { toSlug };
 
 function extractTextContent(content: any[]): string {
   if (!Array.isArray(content)) return "";
@@ -651,7 +656,7 @@ async function scanSessionFileRaw(
           lightTurns.push({
             timestamp: entry.timestamp,
             sessionId,
-            projectSlug: toSlug(canonicalDirName),
+            projectSlug: projectSlugFromDirName(projectDirName),
             projectDirName: canonicalDirName,
             model: entry.message?.model || "",
             role: entry.type === "assistant" ? "assistant" : "user",
@@ -759,7 +764,7 @@ async function scanSessionFileRaw(
         : undefined;
 
     const projectPath = decodeDirName(canonicalDirName);
-    const projectSlug = toSlug(canonicalDirName);
+    const projectSlug = projectSlugFromDirName(projectDirName);
 
     const summary: SessionSummary = {
       sessionId,
@@ -952,87 +957,59 @@ async function buildAdapterScannedSession(
     );
   }
 
-  const canonicalDirName = canonicalizeDirName(parsed.projectDirName);
-  const durationMs =
-    parsed.startTs && parsed.endTs
-      ? new Date(parsed.endTs).getTime() - new Date(parsed.startTs).getTime()
-      : undefined;
-
   const summary: SessionSummary = {
-    sessionId: parsed.sessionId,
-    projectPath: decodeDirName(canonicalDirName),
-    // **Canonical by construction, and still read from `parsed` rather than
-    // re-derived here.** The adapters stamp `toSlug(canonicalizeDirName(...))`
-    // on every turn (`codex.ts`, `gemini.ts`), `buildAdapterParsedSession`
-    // prefers that value, and ingest stores it in `sessions.project_slug` — so
-    // reading it through keeps one derivation site for both backends. Applying
-    // `toSlug(canonicalDirName)` here instead would look equivalent and would
-    // be, right up until the adapters' derivation changes on one side only.
+    // **The shared projection (#496).** Identity, counts, tokens, duration, the
+    // lastPrompt suppression, oneShotRate's zero-guard, workMode's
+    // all-or-nothing rule and the two-source worktree check are all derived by
+    // the same function `loadSessionsListFromDb` calls, so the two backends
+    // agree by construction rather than by a test noticing when they stop.
     //
-    // It used to be the raw slug against the canonical `projectPath` above,
-    // which grouped a worktree adapter session apart from its own project
-    // while a Claude session in the same directory grouped with it (#497).
-    //
-    // `projectName` stays RAW, deliberately: the DB mapper passes
-    // `project_dir_name` through unchanged for Claude sessions too, and it is
-    // what `isWorktree` is derived from on both backends.
-    projectSlug: parsed.projectSlug,
-    projectName: parsed.projectDirName,
-    startTime: parsed.startTs ?? undefined,
-    endTime: parsed.endTs ?? undefined,
-    durationMs,
-    initialPrompt: parsed.initialPrompt ?? undefined,
-    // Same suppression both other loaders apply, so a single-prompt session
-    // does not render the same text twice.
-    lastPrompt:
-      parsed.lastPrompt && parsed.lastPrompt !== parsed.initialPrompt
-        ? parsed.lastPrompt
-        : undefined,
-    messageCount: parsed.turnCount,
-    userMessageCount: parsed.userTurnCount,
-    assistantMessageCount: parsed.assistantTurnCount,
-    inputTokens: parsed.inputTokens,
-    outputTokens: parsed.outputTokens,
-    cacheReadTokens: parsed.cacheReadTokens,
-    cacheCreateTokens: parsed.cacheCreateTokens,
+    // `projectSlug` is passed through from `parsed` rather than re-derived: the
+    // adapters stamp `toSlug(canonicalizeDirName(...))` on every turn, ingest
+    // stores exactly that in `sessions.project_slug`, and the projection's own
+    // fallback fires only for a null (#497).
+    ...projectSessionSummary({
+      sessionId: parsed.sessionId,
+      source: file.source,
+      // A Claude transcript lives inside the worktree and an adapter one does
+      // not, so this contributes nothing for adapters today — it is passed
+      // because the projection's worktree rule needs both halves, and passing
+      // one of them as a lie would be a per-backend difference in disguise.
+      filePath: file.filePath,
+      projectDirName: parsed.projectDirName,
+      projectSlug: parsed.projectSlug,
+      startTs: parsed.startTs,
+      endTs: parsed.endTs,
+      initialPrompt: parsed.initialPrompt,
+      lastPrompt: parsed.lastPrompt,
+      turnCount: parsed.turnCount,
+      userTurnCount: parsed.userTurnCount,
+      assistantTurnCount: parsed.assistantTurnCount,
+      inputTokens: parsed.inputTokens,
+      outputTokens: parsed.outputTokens,
+      cacheReadTokens: parsed.cacheReadTokens,
+      cacheCreateTokens: parsed.cacheCreateTokens,
+      errorCount: parsed.errorCount,
+      verifiedTaskCount: parsed.verifiedTaskCount,
+      oneShotTaskCount: parsed.oneShotTaskCount,
+      cacheHitRatio: parsed.cacheHitRatio,
+      gitBranch: null,
+      workModeExplorationPct: parsed.workModeExplorationPct,
+      workModeBuildingPct: parsed.workModeBuildingPct,
+      workModeTestingPct: parsed.workModeTestingPct,
+      workModeOtherPct: parsed.workModeOtherPct,
+      toolUsage,
+      skillsUsed,
+      modelsUsed: Array.from(models),
+      searchableText: searchParts.join(" ").slice(0, 4000),
+    }),
     // Placeholder — `applyLiveFields` reprices from `perModelTokens` on every
     // read, the same as a Claude entry. Freezing an adapter cost here would
     // re-arm the pricing defect fixed on PR #494 one merge over.
     costEstimate: 0,
-    toolUsage,
-    modelsUsed: Array.from(models),
-    gitBranch: undefined,
-    // `toolUsage["Agent"]` rather than a sidechain walk, matching the DB
-    // mapper. No adapter emits sidechain turns today, so both read 0 unless
-    // the harness itself reports an Agent call.
-    subagentCount: toolUsage["Agent"] ?? 0,
-    errorCount: parsed.errorCount,
     // Placeholders, as on the Claude path.
     isActive: false,
     status: "idle",
-    skillsUsed,
-    oneShotRate:
-      parsed.verifiedTaskCount > 0
-        ? parsed.oneShotTaskCount / parsed.verifiedTaskCount
-        : undefined,
-    searchableText: searchParts.join(" ").slice(0, 4000),
-    cacheHitRatio: parsed.cacheHitRatio ?? undefined,
-    // All-or-nothing, as in the DB mapper: a partial work-mode split would
-    // render as a bar that does not sum to 100.
-    workMode:
-      parsed.workModeExplorationPct !== null &&
-      parsed.workModeBuildingPct !== null &&
-      parsed.workModeTestingPct !== null &&
-      parsed.workModeOtherPct !== null
-        ? {
-            exploration: parsed.workModeExplorationPct,
-            building: parsed.workModeBuildingPct,
-            testing: parsed.workModeTestingPct,
-            other: parsed.workModeOtherPct,
-          }
-        : undefined,
-    isWorktree: isWorktreeEncodedDir(parsed.projectDirName),
-    source: file.source,
   };
 
   return {

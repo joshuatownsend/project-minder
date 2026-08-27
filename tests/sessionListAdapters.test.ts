@@ -85,6 +85,31 @@ const CODEX_JSONL =
   "\n" +
   JSON.stringify({ type: "turn_context", payload: { model: "gpt-4o" } }) +
   "\n" +
+  // An MCP call and a Skill dispatch, so `toolUsage` and `skillsUsed` are
+  // non-empty on both backends. Before this the parity comparison ran with
+  // `{}` on each side for both maps: two empty objects are equal no matter how
+  // either was built, so the fields were compared and nothing was proved.
+  // (#496.)
+  JSON.stringify({
+    type: "response_item",
+    payload: {
+      type: "function_call",
+      name: "mcp__project-minder__list-sessions",
+      arguments: JSON.stringify({ limit: 5 }),
+      call_id: "call-mcp-1",
+    },
+  }) +
+  "\n" +
+  JSON.stringify({
+    type: "response_item",
+    payload: {
+      type: "function_call",
+      name: "Skill",
+      arguments: JSON.stringify({ skill: "pr-resolve" }),
+      call_id: "call-skill-1",
+    },
+  }) +
+  "\n" +
   JSON.stringify({
     type: "response_item",
     payload: {
@@ -190,6 +215,47 @@ async function writeClaudeWorktreeSession(): Promise<void> {
   await fs.writeFile(
     path.join(dir, `${CLAUDE_WT_SESSION_ID}.jsonl`),
     lines.map((l) => JSON.stringify(l)).join("\n") + "\n"
+  );
+}
+
+const CODEX_USER_ONLY_SESSION_ID = "codex-session-eeee-ffff";
+
+/**
+ * A transcript with a user turn and nothing else - no assistant reply, no
+ * token counts, no tools. The degenerate end of the mapping: `endTs` equals
+ * `startTs`, `primaryModel` is null, `oneShotRate` takes its zero-guard, and
+ * `workMode` has nothing to split. `buildAdapterParsedSession` returns null
+ * only for ZERO turns, so this one is a real session on both backends rather
+ * than a dropped file - which the test asserts before comparing anything.
+ * (#496.)
+ */
+const CODEX_USER_ONLY_JSONL =
+  JSON.stringify({
+    type: "session_meta",
+    payload: {
+      id: CODEX_USER_ONLY_SESSION_ID,
+      cwd: CODEX_CWD,
+      timestamp: "2026-04-15T12:00:00Z",
+      cli_version: "1.0.0",
+    },
+  }) +
+  "\n" +
+  JSON.stringify({
+    type: "response_item",
+    payload: {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "just thinking out loud" }],
+    },
+  }) +
+  "\n";
+
+async function writeCodexUserOnlySession(): Promise<void> {
+  const dir = path.join(codexHome, "sessions", "2026");
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, `${CODEX_USER_ONLY_SESSION_ID}.jsonl`),
+    CODEX_USER_ONLY_JSONL
   );
 }
 
@@ -492,6 +558,7 @@ describe("session list adapter discovery (#489)", () => {
     // same fixture goes through both loaders and the summaries are compared.
     await writeCodexSession();
     await writeCodexWorktreeSession();
+    await writeCodexUserOnlySession();
     await writeConfigFile(["claude", "codex"]);
     process.env.MINDER_USE_DB = "1";
     await state.reload();
@@ -574,6 +641,43 @@ describe("session list adapter discovery (#489)", () => {
     expect(fileWt).toBeDefined();
     expect(dbWt).toBeDefined();
     expect(compare(fileWt)).toEqual(compare(dbWt));
+
+    // **Premise for the two map fields, which were previously compared empty.**
+    // `toolUsage` and `skillsUsed` are in `compare()`, but the fixture made no
+    // tool calls, so both sides produced `{}` — and two empty objects are equal
+    // however either was built. Asserting they are POPULATED is what turns
+    // those two lines of the comparison from decoration into evidence. (#496.)
+    expect(fileSide.toolUsage["mcp__project-minder__list-sessions"]).toBe(1);
+    expect(fileSide.toolUsage["Skill"]).toBe(1);
+    expect(fileSide.skillsUsed["pr-resolve"]).toBe(1);
+
+    // The degenerate end of the mapping: a user turn and nothing else, so
+    // `oneShotRate` takes its zero-guard, `workMode` has nothing to split, and
+    // `endTime` equals `startTime`. Every branch the populated fixtures above
+    // take the other way.
+    const fileUserOnly = (await scanAllSessions()).find(
+      (s) => s.sessionId === CODEX_USER_ONLY_SESSION_ID
+    )!;
+    const dbUserOnly = loadSessionsListFromDb(db).find(
+      (s) => s.sessionId === CODEX_USER_ONLY_SESSION_ID
+    )!;
+    // Premise: a user-only transcript is a real session on BOTH backends, not
+    // one that either dropped. `buildAdapterParsedSession` returns null only
+    // for zero turns, and the DB list filters on `turn_count > 0` — a fixture
+    // silently dropped by either would make the comparison below vacuous.
+    expect(fileUserOnly).toBeDefined();
+    expect(dbUserOnly).toBeDefined();
+    expect(fileUserOnly.assistantMessageCount).toBe(0);
+    expect(fileUserOnly.oneShotRate).toBeUndefined();
+    // All four percentages are 0 rather than null, so the all-or-nothing guard
+    // lets a zero-sum split through. Pinned as the CURRENT behaviour of both
+    // backends, not endorsed: a work-mode bar summing to 0% is a rendering
+    // question, and one this refactor deliberately does not change - what
+    // matters here is that the two backends answer it identically.
+    expect(fileUserOnly.workMode).toEqual({
+      exploration: 0, building: 0, testing: 0, other: 0,
+    });
+    expect(compare(fileUserOnly)).toEqual(compare(dbUserOnly));
 
     // **Absolute, on both sides, because the comparison above cannot see this
     // class of defect.** #497 was two backends agreeing on the WRONG value: an

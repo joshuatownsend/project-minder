@@ -1,9 +1,16 @@
 import { promises as fs } from "fs";
 import path from "path";
+import type { ConversationEntry } from "@/lib/scanner/claudeConversations";
 import {
   toSlug,
-  type ConversationEntry,
-} from "@/lib/scanner/claudeConversations";
+  canonicalizeDirName,
+  projectSlugFromDirName,
+} from "@/lib/sessions/projectIdentity";
+// Re-exported from its original home: six modules import it from here, and a
+// pure string rule is not worth a rename sweep. The definition moved to a leaf
+// so `sessionsListFromDb` and the shared summary projection can reach it
+// without pulling in this module's pricing and fs caches. (#496.)
+export { canonicalizeDirName };
 import type { UsageTurn } from "./types";
 import type { MinderConfig } from "@/lib/types";
 import type { SessionFile } from "@/lib/adapters/types";
@@ -94,31 +101,6 @@ function extractToolResults(content: any[]): string {
   return extractToolResultsRaw(content).slice(0, 2000);
 }
 
-// ── Dir name canonicalization ─────────────────────────────────────────────────
-
-// In the encoded dir name, ':', '\', and '.' all become '-'.
-// Windows paths start with '{Drive}--' (drive colon + first backslash).
-// Any '--' after that initial prefix represents '\.' — a dot-prefixed component.
-// Worktree dirs are always dot-prefixed (.worktrees, .claude-worktrees, etc.),
-// so strip the worktree suffix to group their sessions with the parent project.
-// We scan '--' occurrences left-to-right and stop at the FIRST worktree marker.
-// Earlier dot-prefixed dirs (e.g. '--cache') don't match the pattern, so the
-// loop naturally skips them. Stopping at the first match also ensures a branch
-// name that happens to contain '--worktrees-' is never treated as a second marker.
-export function canonicalizeDirName(dirName: string): string {
-  const searchFrom = /^[A-Za-z]--/.test(dirName) ? 2 : 0;
-  let pos = searchFrom;
-  while (pos < dirName.length) {
-    const idx = dirName.indexOf("--", pos);
-    if (idx === -1) break;
-    if (/^(?:[a-z]+-)?worktrees-/.test(dirName.slice(idx + 2))) {
-      return dirName.slice(0, idx);
-    }
-    pos = idx + 2;
-  }
-  return dirName;
-}
-
 // ── Shared utilities ─────────────────────────────────────────────────────────
 
 /** Returns the key with the highest count, or null if the map is empty. */
@@ -176,7 +158,7 @@ export async function parseSessionTurns(
 ): Promise<UsageTurn[]> {
   const sessionId = path.basename(filePath, ".jsonl");
   const canonicalDir = canonicalizeDirName(projectDirName);
-  const projectSlug = toSlug(canonicalDir);
+  const projectSlug = projectSlugFromDirName(projectDirName);
 
   let raw: string;
   try {
@@ -427,7 +409,7 @@ export async function parseSessionTurnsWithMeta(
 ): Promise<{ turns: UsageTurn[]; meta: SessionTurnsMeta }> {
   const sessionId = path.basename(filePath, ".jsonl");
   const canonicalDir = canonicalizeDirName(projectDirName);
-  const projectSlug = toSlug(canonicalDir);
+  const projectSlug = projectSlugFromDirName(projectDirName);
 
   let raw: string;
   try {
