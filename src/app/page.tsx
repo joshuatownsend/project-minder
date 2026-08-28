@@ -86,6 +86,13 @@ export default function HomePage() {
   // and would otherwise render skeletons — and claim to be loading —
   // forever (Codex, PR #517).
   const [projectsPending, setProjectsPending] = useState(true);
+  // Usage and health need the same lifecycle for the same reason (Codex,
+  // PR #517). `usageAll === null` is not "pending": a scope change refetches
+  // while KEEPING the previous report, so the marker vanished mid-request,
+  // and a failed first load leaves it null forever, so the marker never
+  // cleared. Neither direction is what a consumer of `[data-loading]` needs.
+  const [usagePending, setUsagePending] = useState(true);
+  const [healthPending, setHealthPending] = useState(true);
   // And a FAILURE is not an empty result either. Without this the settled
   // branch tells a user with plenty of projects that they have none,
   // whenever the request happened to fail (Codex, PR #517).
@@ -125,8 +132,16 @@ export default function HomePage() {
     fetch(`/api/usage?period=all${scope !== "all" ? `&project=${encodeURIComponent(scope)}` : ""}`, { signal: ctrl.signal })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => d && setUsageAll(d as UsageReport))
-      .catch(() => {});
-    return () => ctrl.abort();
+      .catch(() => {})
+      .finally(() => {
+        if (!ctrl.signal.aborted) setUsagePending(false);
+      });
+    return () => {
+      // A scope change starts a new request, so the marker goes back up rather
+      // than staying down because the PREVIOUS report is still in state.
+      setUsagePending(true);
+      ctrl.abort();
+    };
   }, [scope]);
 
   useEffect(() => {
@@ -137,12 +152,26 @@ export default function HomePage() {
         if (d?.projects) setProjects(d.projects as ProjectData[]);
         else setProjectsFailed(true);
       })
-      .catch(() => setProjectsFailed(true))
-      // Settles on failure too: an error is not a pending state, and leaving
-      // the marker mounted would pin the dashboard as loading.
-      .finally(() => setProjectsPending(false));
+      .catch((err) => {
+        if (aborted(err)) return;
+        setProjectsFailed(true);
+      })
+      .finally(() => {
+        // Settles on failure too: an error is not a pending state, and leaving
+        // the marker mounted would pin the dashboard as loading. `signal.aborted`
+        // rather than the caught error, so the replayed request owns the flag.
+        if (!ctrl.signal.aborted) setProjectsPending(false);
+      });
     return () => ctrl.abort();
   }, []);
+
+  // An aborted request has not failed — it was replaced. React's Strict Mode
+  // mounts effects twice in development, so the FIRST fetch of every pair is
+  // always aborted; treating that as a failure showed "Could not load
+  // projects" on a perfectly healthy dashboard, and settled the pending flag
+  // before the replayed request had answered (Codex, PR #517).
+  const aborted = (err: unknown) =>
+    (err as { name?: string })?.name === "AbortError";
 
   // Sessions / insights / manual-steps all follow the global scope so the
   // Home attention strip and live-activity feed agree with the scoped
@@ -252,8 +281,14 @@ export default function HomePage() {
     fetch(`/api/home-health?approvals=${snapshot.approvalCount}`, { signal: ctrl.signal })
       .then((r) => (r.ok ? r.json() : null))
       .then((d: HealthReport | null) => d && setHealth(d))
-      .catch(() => {});
-    return () => ctrl.abort();
+      .catch(() => {})
+      .finally(() => {
+        if (!ctrl.signal.aborted) setHealthPending(false);
+      });
+    return () => {
+      setHealthPending(true);
+      ctrl.abort();
+    };
   }, [snapshot.approvalCount]);
 
   // DB readiness probe. `/api/health` actively drives the state machine
@@ -419,7 +454,7 @@ export default function HomePage() {
         <Stat
           label="Tokens"
           value={usageAll === null ? "—" : formatCount(headlineTokens)}
-          sub={usageAll === null ? <span data-loading="true">loading…</span> : `${(cacheHitRate * 100).toFixed(0)}% cache hit`}
+          sub={usagePending ? <span data-loading="true">loading…</span> : `${(cacheHitRate * 100).toFixed(0)}% cache hit`}
           accent="var(--info)"
           spark={tokensSpark}
           sparkColor="var(--info)"
@@ -428,7 +463,7 @@ export default function HomePage() {
           label="Config health"
           value={health === null ? "—" : `${healthScore}%`}
           sub={
-            health === null
+            healthPending
               ? <span data-loading="true">loading…</span>
               : `${healthGrade} — ${healthLabel.toLowerCase()}`
           }
@@ -706,9 +741,11 @@ export default function HomePage() {
           <CardHeader
             title="Config health"
             sub={
-              health === null
+              healthPending
                 ? <span data-loading="true">loading…</span>
-                : `${health.components.filter((c) => c.score !== null).length} of ${health.components.length} signals`
+                : !health
+                  ? "—"
+                  : `${health.components.filter((c) => c.score !== null).length} of ${health.components.length} signals`
             }
             right={
               <Link href="/insights" style={{ textDecoration: "none" }}>
