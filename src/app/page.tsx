@@ -86,6 +86,10 @@ export default function HomePage() {
   // and would otherwise render skeletons — and claim to be loading —
   // forever (Codex, PR #517).
   const [projectsPending, setProjectsPending] = useState(true);
+  // And a FAILURE is not an empty result either. Without this the settled
+  // branch tells a user with plenty of projects that they have none,
+  // whenever the request happened to fail (Codex, PR #517).
+  const [projectsFailed, setProjectsFailed] = useState(false);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [insightCount, setInsightCount] = useState<number>(0);
   const [pendingStepsCount, setPendingStepsCount] = useState<number>(0);
@@ -129,8 +133,11 @@ export default function HomePage() {
     const ctrl = new AbortController();
     fetch("/api/projects", { signal: ctrl.signal })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => d?.projects && setProjects(d.projects as ProjectData[]))
-      .catch(() => {})
+      .then((d) => {
+        if (d?.projects) setProjects(d.projects as ProjectData[]);
+        else setProjectsFailed(true);
+      })
+      .catch(() => setProjectsFailed(true))
       // Settles on failure too: an error is not a pending state, and leaving
       // the marker mounted would pin the dashboard as loading.
       .finally(() => setProjectsPending(false));
@@ -615,7 +622,9 @@ export default function HomePage() {
             Array.from({ length: 4 }).map((_, i) => <ProjectTileSkeleton key={i} />)
           ) : recentProjects.length === 0 ? (
             <div style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
-              No projects found under your scan roots.
+              {projectsFailed
+                ? "Could not load projects."
+                : "No projects found under your scan roots."}
             </div>
           ) : (
             recentProjects.map((p) => (

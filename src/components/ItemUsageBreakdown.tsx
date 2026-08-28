@@ -85,7 +85,14 @@ export function ItemUsageBreakdown({
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "20px", opacity: loading ? 0.6 : 1 }}>
+    <div
+      // The dimming already says "refetching" to a person; this says it to
+      // everything else. A style-only loading cue is invisible to
+      // `[data-loading]`, and the flag arrives as a PROP here, so no
+      // declaration-based rule would find it either (Codex, PR #517).
+      data-loading={loading ? "true" : undefined}
+      style={{ display: "flex", flexDirection: "column", gap: "20px", opacity: loading ? 0.6 : 1 }}
+    >
       {toggle}
       <HeaderTiles usage={usage} showCost={showCost} currency={currency} fxRate={fxRate} />
       <ProjectBar projects={usage.projects} />

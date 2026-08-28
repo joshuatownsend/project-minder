@@ -285,7 +285,11 @@ describe("every loading state carries a queryable marker (#445)", () => {
     // enough to be safe — it fires only when a `…Loading` flag is declared and
     // the file has no marker of any kind, which was true of exactly one
     // component when this was written.
-    const DECLARES = /const \[\s*[a-z]\w*[Ll]oading\s*,/;
+    // Declared as state OR received as a prop. `ItemUsageBreakdown` takes
+    // `loading?: boolean` and only dims its body with it, which no
+    // branch rule can see (Codex, PR #517).
+    const DECLARES =
+      /const \[\s*[a-z]\w*[Ll]oading\s*,|^\s*loading\??:\s*boolean/m;
     const violations: string[] = [];
     for (const file of files) {
       if (EXEMPT[file]) continue;
