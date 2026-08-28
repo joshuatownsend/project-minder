@@ -305,6 +305,41 @@ describe("every loading state carries a queryable marker (#445)", () => {
     expect(violations).toEqual([]);
   });
 
+/**
+ * Components whose loading state is still driven by an emptiness test, tracked
+ * as **#518**.
+ *
+ * The marker is CORRECT in the common case and wrong only when the request
+ * fails — before #445 these views had no marker at all and the capture
+ * published mid-load images every time, so the successful path being right is
+ * a net improvement rather than a regression. What sticks is the failure path.
+ *
+ * They are here rather than fixed in #445 because their state arrives from a
+ * hook (`useQuota`) or a parent (`config`), so the flag has to be threaded
+ * through those seams — a different change from adding a `useState`. Six
+ * instances whose lifecycle WAS local were fixed there instead.
+ *
+ * **This list should only ever shrink.** A new entry means someone added a
+ * loading state driven by an absence, which is the mistake the rule exists to
+ * catch.
+ */
+const EMPTINESS_TRACKED: Record<string, string> = {
+  "src/app/adapters/page.tsx": "#518",
+  "src/components/ApplyTemplateModal.tsx": "#518",
+  "src/components/ApplyUnitButton.tsx": "#518",
+  "src/components/ConfigHistoryTab.tsx": "#518",
+  "src/components/InsightsReportViewer.tsx": "#518",
+  "src/components/MemoryBrowser.tsx": "#518",
+  "src/components/MemoryEditor.tsx": "#518",
+  "src/components/MemorySeedTray.tsx": "#518",
+  "src/components/MemoryTriage.tsx": "#518",
+  "src/components/agent-view/AgentPeekPanel.tsx": "#518",
+  "src/components/settings/ClaudeHomesSection.tsx": "#518",
+  "src/components/settings/CostSection.tsx": "#518",
+  "src/components/settings/IntegrationsSection.tsx": "#518",
+  "src/components/settings/ScanRootsSection.tsx": "#518",
+};
+
   it("no marker is driven by an emptiness or nullness test", () => {
     // The single most repeated defect in this PR — six instances, found one at
     // a time. `rows === null`, `adapters.length === 0`, `!library`,
@@ -320,15 +355,32 @@ describe("every loading state carries a queryable marker (#445)", () => {
     // Matches the emptiness test immediately guarding a marked element, and
     // the conditional form. Deliberately narrow: it is looking for a specific
     // mistake, not auditing every condition in the tree.
-    const EMPTY_GUARD =
-      /\{\s*(!\s*[A-Za-z_$][\w.$]*|[A-Za-z_$][\w.$]*(?:\.length)?\s*===?\s*(?:0|null|undefined))\s*&&[^<]{0,80}<[A-Za-z][\w.]*\s+data-loading="true"/g;
+    // The emptiness test itself, in every position it can occupy: the `&&`
+    // guard, the ternary, and the early return. The first version only knew
+    // `&&`, and four more instances were sitting in the other two forms
+    // (Codex, PR #517).
+    const EMPTY = String.raw`(!\s*[A-Za-z_$][\w.$]*|[A-Za-z_$][\w.$]*(?:\.length)?\s*===?\s*(?:0|null|undefined))`;
+    const MARKED = String.raw`[^<]{0,80}<[A-Za-z][\w.]*\s+data-loading="true"`;
+    const EMPTY_GUARD = new RegExp(
+      String.raw`\{\s*` + EMPTY + String.raw`\s*&&` + MARKED,
+      "g"
+    );
+    const EMPTY_TERNARY = new RegExp(
+      String.raw`\{?\s*` + EMPTY + String.raw`\s*\?` + MARKED,
+      "g"
+    );
+    const EMPTY_RETURN = new RegExp(
+      String.raw`\bif\s*\(\s*` + EMPTY + String.raw`\s*\)\s*\{?\s*return` + MARKED,
+      "g"
+    );
     const EMPTY_COND =
       /data-loading=\{[^}]{0,120}?(?:\.length\s*===?\s*0|===?\s*null|===?\s*undefined)/g;
 
     const violations: string[] = [];
     for (const file of files) {
+      if (EMPTINESS_TRACKED[file]) continue;
       const code = fs.readFileSync(file, "utf-8");
-      for (const re of [EMPTY_GUARD, EMPTY_COND]) {
+      for (const re of [EMPTY_GUARD, EMPTY_TERNARY, EMPTY_RETURN, EMPTY_COND]) {
         re.lastIndex = 0;
         let m: RegExpExecArray | null;
         while ((m = re.exec(code)) !== null) {
@@ -351,6 +403,26 @@ describe("every loading state carries a queryable marker (#445)", () => {
       }
     }
     expect(violations).toEqual([]);
+  });
+
+  it("the emptiness allowlist only shrinks", () => {
+    // A tracked entry that no longer has the defect is a licence the next
+    // component to take that filename would inherit silently.
+    const stale: string[] = [];
+    for (const file of Object.keys(EMPTINESS_TRACKED)) {
+      if (!fs.existsSync(file)) {
+        stale.push(`${file} is tracked for #518 but does not exist`);
+        continue;
+      }
+      const code = fs.readFileSync(file, "utf-8");
+      if (!/data-loading=/.test(code)) {
+        stale.push(
+          `${file} is tracked for #518 but has no marker at all — remove it ` +
+            `from EMPTINESS_TRACKED, or it is silently exempt forever.`
+        );
+      }
+    }
+    expect(stale).toEqual([]);
   });
 
   it("keeps the exemption list honest", () => {
