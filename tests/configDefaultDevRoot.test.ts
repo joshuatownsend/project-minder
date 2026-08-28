@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
 import { preserveEnvVars } from "./_helpers/preserveEnv";
+import { removeTempHome } from "./_helpers/isolatedState";
 
 // #481 — `DEFAULT_DEV_ROOT` used to be a module-scope `const`, so
 // `probeDefaultDevRoot()` ran during IMPORT. Two things followed that no test
@@ -144,10 +145,25 @@ describe("readConfig applies the substrate invariant (#491, Codex P1 on #509)", 
   // the rule this session added in #421.
   preserveEnvVars(["MINDER_STATE_DIR"]);
 
+  // These live OUTSIDE the `pm-suite-state` tree that
+  // `tests/setup/isolateStateDir.ts` sweeps, so nothing else would ever
+  // collect them — every full run and every watch-mode rerun would leave three
+  // more behind in the system temp area (Codex P2, PR #509).
+  //
+  // Removed through `removeTempHome`, the bounded helper #430 added in this
+  // same session, rather than a bare `fs.rm`: it retries the busy case and
+  // stops waiting after 2s, so a Windows handle that has not closed yet costs
+  // a slow teardown instead of a failed hook.
+  const created: string[] = [];
+  afterEach(async () => {
+    await Promise.all(created.splice(0).map(removeTempHome));
+  });
+
   async function withConfigFile(contents: unknown) {
     // mkdtemp, not a fixed name: a shared path would collide with another fork
     // running this file's siblings, and the failure would look like a flake.
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "pm-cfg-invariant-"));
+    created.push(tmp);
     await fs.writeFile(
       path.join(tmp, ".minder.json"),
       JSON.stringify(contents),
