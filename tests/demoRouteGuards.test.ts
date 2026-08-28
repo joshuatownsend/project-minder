@@ -65,6 +65,10 @@ describe("route-level demo guards (no loader seam behind them)", () => {
 
     expect(res.status).toBe(200);
     expect(body).toEqual({ readable: [], unavailable: [], complete: true });
+    // Part of the contract, and the help page promises it on EVERY response
+    // — a header-only client would otherwise get an indeterminate answer in
+    // exactly the deployment where it cannot read paths from the body.
+    expect(res.headers.get("X-Minder-Homes-Unavailable")).toBe("0");
     // The guard sits BEFORE `readConfig`, so nothing is opened on a viewer's
     // behalf — not a filesystem probe, and not a `wsl.exe` round-trip.
     expect(opendir).not.toHaveBeenCalled();

@@ -36,7 +36,18 @@ export async function GET(): Promise<NextResponse> {
   // the response but never to look at them, and never to spend a `wsl.exe` or
   // UNC probe on a viewer's behalf.
   if (await demoMode()) {
-    return NextResponse.json({ readable: [], unavailable: [], complete: true });
+    // Carries the header too. It is part of the endpoint's contract and the
+    // help page says every response has it, so omitting it would leave a
+    // header-only client with an indeterminate answer in exactly the
+    // deployment where it cannot fall back to reading paths out of the body.
+    // (Codex P2, PR #510.)
+    const demo = NextResponse.json({
+      readable: [],
+      unavailable: [],
+      complete: true,
+    });
+    demo.headers.set("X-Minder-Homes-Unavailable", "0");
+    return demo;
   }
 
   const config = await readConfig();
