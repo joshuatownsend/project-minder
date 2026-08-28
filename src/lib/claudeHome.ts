@@ -148,10 +148,22 @@ export async function partitionClaudeHomes(
 /**
  * `undefined` when the home can be read, otherwise a reason string.
  *
- * Checks the home directory rather than `<home>/projects`: a home that exists
- * but has recorded no sessions yet has no `projects` directory, and that is a
- * normal empty state rather than a fault. What this is looking for is a home
- * that is not there at all, or that cannot be opened.
+ * **Opens the directory rather than asking whether the path exists.**
+ * `fs.access(home)` defaults to `F_OK`, which succeeds for a directory with no
+ * read permission and for a regular file sitting where a home should be — so
+ * the partition would call it readable, the readers would catch their own
+ * `readdir` failure and suppress it, and the endpoint would still report
+ * `complete: true` with the banner hidden. That is precisely the case this
+ * partition exists to expose, so the probe has to ask the question the readers
+ * will ask. (Codex P2, PR #510.)
+ *
+ * `opendir` is the cheap form of that question: it proves the directory can be
+ * listed without reading a single entry, and it is honest on Windows, where
+ * `access(R_OK)` is close to meaningless.
+ *
+ * Checks the home itself rather than `<home>/projects`: a home that exists but
+ * has recorded no sessions yet has no `projects` directory, and that is a
+ * normal empty state rather than a fault.
  */
 async function probeHome(home: string): Promise<string | undefined> {
   // Tolerant of a partially-mocked `fs`, the same way `platform.ts`'s
@@ -159,13 +171,20 @@ async function probeHome(home: string): Promise<string | undefined> {
   // probe that threw there would report every configured home unavailable and
   // exclude it from the sweep. Absent means "cannot tell", and the honest
   // answer to that is the pre-probe behaviour — readable.
-  if (typeof fs.access !== "function") return undefined;
+  if (typeof fs.opendir !== "function") return undefined;
+  let dir: Awaited<ReturnType<typeof fs.opendir>> | undefined;
   try {
-    await fs.access(home);
+    dir = await fs.opendir(home);
     return undefined;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
-    return code === "ENOENT" ? "home-missing" : "home-unreadable";
+    if (code === "ENOENT") return "home-missing";
+    if (code === "ENOTDIR") return "home-not-a-directory";
+    return "home-unreadable";
+  } finally {
+    // An open handle would keep the directory locked on Windows, which is the
+    // platform this runs on most.
+    if (dir) await dir.close().catch(() => {});
   }
 }
 

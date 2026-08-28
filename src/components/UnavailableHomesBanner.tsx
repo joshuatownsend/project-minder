@@ -41,6 +41,7 @@ const REASON_LABELS: Record<string, string> = {
   "wsl-unavailable": "WSL is unavailable",
   "home-missing": "the directory is not there",
   "home-unreadable": "the directory cannot be opened",
+  "home-not-a-directory": "the path is not a directory",
 };
 
 function describe(home: UnavailableHome): string {

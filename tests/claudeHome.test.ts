@@ -172,6 +172,25 @@ describe("partitionClaudeHomes probes extra homes for real (#479)", () => {
     }
   });
 
+  it("reports a home that exists but is not a directory", async () => {
+    // `fs.access` defaults to F_OK and succeeds here, which is how the first
+    // version of this probe called a regular file a readable home (Codex P2,
+    // PR #510). Opening it is the question the readers actually ask.
+    const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), "pm-home-file-"));
+    const asFile = path.join(dirPath, "not-a-home");
+    await fs.writeFile(asFile, "", "utf-8");
+    try {
+      const { unavailable } = await partitionClaudeHomes(
+        cfg({ claudeHomes: [asFile] })
+      );
+      expect(unavailable).toEqual([
+        { path: asFile, reason: "home-not-a-directory" },
+      ]);
+    } finally {
+      await removeTempHome(dirPath);
+    }
+  });
+
   it("does not require a projects/ directory", async () => {
     // A home that exists but has recorded nothing yet is a normal empty state,
     // not a fault. Probing `<home>/projects` instead would flag every home
