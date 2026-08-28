@@ -2,7 +2,7 @@
 
 > A local-only dev dashboard that auto-scans your projects and surfaces the context you need — git status, Claude Code sessions, TODOs, costs, and more — without leaving your browser.
 
-![Node](https://img.shields.io/badge/node-%3E%3D22.12-brightgreen)
+![Node](https://img.shields.io/badge/node-%3E%3D22.13-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Stack](https://img.shields.io/badge/stack-Next.js%2016%20%2B%20TypeScript-black)
 
@@ -29,7 +29,7 @@ By default Project Minder scans `C:\dev` on Windows and `~/dev` on macOS/Linux. 
 
 ### Option 2 — Run from source
 
-**Prerequisites:** Node.js ≥ 22.12 and [pnpm](https://pnpm.io) (run `corepack enable` to use the version pinned in `package.json`) — runs on macOS, Linux, and Windows
+**Prerequisites:** Node.js ≥ 22.13 and [pnpm](https://pnpm.io) (run `corepack enable` to use the version pinned in `package.json`) — runs on macOS, Linux, and Windows
 
 ```bash
 git clone https://github.com/joshuatownsend/project-minder.git

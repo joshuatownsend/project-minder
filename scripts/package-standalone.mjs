@@ -92,7 +92,7 @@ const outDir = path.join(root, "dist", "minder-server");
 // with an "was compiled against a different Node.js version" error.
 // Repo CI targets Node 22. Node 20 was dropped 2026-08-08 (EOL
 // 2026-04-30, and claude-code-lint's markdownlint needs >=22).
-const EXPECTED_NODE_ENGINES = ">=22.12.0";
+const EXPECTED_NODE_ENGINES = ">=22.13.0";
 
 function fail(message) {
   console.error(`[package-standalone] ERROR: ${message}`);
@@ -1166,7 +1166,7 @@ const enginesRange = pkgJson.engines?.node ?? EXPECTED_NODE_ENGINES;
 
 function satisfiesEngines(version, range) {
   // Minimal semver-range check for the clause shapes this repo
-  // actually uses (">=22.12.0"; historically "^20.19.0 || >=22.12.0",
+  // actually uses (">=22.13.0"; historically "^20.19.0 || >=22.12.0",
   // hence the retained caret + OR handling) — not a general semver
   // parser. Falls back to a warning (not a hard failure) for any
   // range shape it doesn't recognize, since this is a best-effort

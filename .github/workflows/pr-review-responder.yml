@@ -91,7 +91,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: '22.12.0'   # pin to match CI
+          node-version: '22.13.0'   # pin to match CI
           cache: 'pnpm'
 
       - name: Install project dependencies
