@@ -63,6 +63,20 @@ function timeOfDayGreeting(): string {
   return "Good night";
 }
 
+/**
+ * An aborted request has not failed — it was replaced. React's Strict Mode
+ * mounts effects twice in development, so the FIRST fetch of every pair is
+ * always aborted; treating that as a failure showed "Could not load projects"
+ * on a perfectly healthy dashboard (Codex, PR #517).
+ *
+ * At module scope rather than inside the component: as a `const` arrow declared
+ * below its first use it was a temporal-dead-zone error, which `pnpm lint`
+ * catches and typecheck does not.
+ */
+function aborted(err: unknown): boolean {
+  return (err as { name?: string })?.name === "AbortError";
+}
+
 export default function HomePage() {
   useDocumentTitle("Home");
   const { scope } = useScope();
@@ -164,14 +178,6 @@ export default function HomePage() {
       });
     return () => ctrl.abort();
   }, []);
-
-  // An aborted request has not failed — it was replaced. React's Strict Mode
-  // mounts effects twice in development, so the FIRST fetch of every pair is
-  // always aborted; treating that as a failure showed "Could not load
-  // projects" on a perfectly healthy dashboard, and settled the pending flag
-  // before the replayed request had answered (Codex, PR #517).
-  const aborted = (err: unknown) =>
-    (err as { name?: string })?.name === "AbortError";
 
   // Sessions / insights / manual-steps all follow the global scope so the
   // Home attention strip and live-activity feed agree with the scoped
