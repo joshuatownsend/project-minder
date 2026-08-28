@@ -76,3 +76,14 @@ Sessions recorded by Claude Code running *inside* the distro live in the distro'
 The easy path is **Detect WSL** in that section: it finds each running distro's `.claude` homes and one click adds the home *and* its implied path mapping. After **Save & Rescan**, WSL projects show their session counts, last-session previews, and live status exactly like native ones.
 
 The same never-wake rule applies: a Claude home inside a stopped distro is skipped for the cycle and picked back up when the distro runs.
+
+**And Minder now says so.** A warning banner appears at the top of every page while any configured home is unreadable, naming the distro and why (`the distro is not running`, `the distro is not installed`, `WSL is unavailable`). This matters because the two backends handle the gap differently and neither is wrong:
+
+- the **file-parse** path answers completely for every home it *can* read, silently omitting the one it cannot;
+- the **SQLite index** keeps the rows it recorded when that home was last up, so it reports a home the filesystem is not currently confirming.
+
+Which of those you would rather have depends on how much of your history lives in the unreachable home — a judgement Minder cannot make for you, so it reports the fact instead of choosing. Sessions, usage and cost totals are affected; project scanning is not, since projects come from your scan roots rather than from a Claude home.
+
+Starting the distro and reloading is all it takes. Minder will not start one for you: doing so is exactly the auto-wake the never-wake rule exists to prevent.
+
+The raw answer is available at `GET /api/claude-homes` (`readable`, `unavailable`, `complete`), and every response carries an `X-Minder-Homes-Unavailable` count header.

@@ -58,13 +58,75 @@ export function getClaudeHomes(config: MinderConfig): string[] {
  * never-wake rule as WSL scan roots). The primary home always qualifies.
  */
 export async function getReadableClaudeHomes(config: MinderConfig): Promise<string[]> {
+  return (await partitionClaudeHomes(config)).readable;
+}
+
+/** A configured Claude home that cannot be read this cycle, and why. */
+export interface UnavailableClaudeHome {
+  /** The configured home path, as the user wrote it. */
+  path: string;
+  /** The distro that is unreachable, when the home is a WSL UNC path. */
+  distro?: string;
+  /** `checkWslRoot`'s verdict — `wsl-stopped`, `wsl-distro-not-found`, … */
+  reason: string;
+}
+
+/**
+ * Split the configured homes into the ones readable right now and the ones
+ * that are not, with a reason for each exclusion.
+ *
+ * **Why the exclusion has to be reportable (#479).** Skipping a home inside a
+ * stopped WSL distro is deliberate and load-bearing — touching it would
+ * auto-start the VM, which is the never-wake invariant from #307/#308. But it
+ * was also SILENT, and every file-parse reader answers over readable homes
+ * only, while SQLite retains rows indexed when that home was last up. So a user
+ * with a distro down gets a session list and usage totals quietly missing a
+ * home, with nothing saying so.
+ *
+ * The obvious patch — refuse the file-parse fallback when coverage cannot be
+ * proven — was rejected on the issue and is worth recording here, because it
+ * looks right: a stopped distro is a STEADY STATE, not a transient. A user can
+ * run for weeks with one down, so that check would hold the #472 gates off
+ * indefinitely for exactly the multi-home users the multi-home work was for,
+ * trading a bounded first-build window for an unbounded one.
+ *
+ * What is done instead is to say it. Neither answer (file-parse complete over
+ * readable homes, SQL partial across all of them) is right, and which is less
+ * wrong depends on how much of the corpus lives in the unreachable home — a
+ * judgement the user can make and Minder cannot. Reporting the fact lets the UI
+ * be honest rather than choosing silently.
+ *
+ * Costs no extra `wsl.exe` round-trip: `checkWslRoot` was already being called
+ * for every home, and its verdict was simply discarded for the excluded ones.
+ */
+export async function partitionClaudeHomes(
+  config: MinderConfig
+): Promise<{ readable: string[]; unavailable: UnavailableClaudeHome[] }> {
   const readable: string[] = [];
+  const unavailable: UnavailableClaudeHome[] = [];
   for (const home of getClaudeHomes(config)) {
     const wslCheck = await checkWslRoot(home);
-    if (wslCheck && !wslCheck.ok) continue;
+    if (wslCheck && !wslCheck.ok) {
+      unavailable.push({
+        path: home,
+        distro: wslCheck.distro,
+        reason: wslCheck.reason,
+      });
+      continue;
+    }
     readable.push(home);
   }
-  return readable;
+  return { readable, unavailable };
+}
+
+/**
+ * Just the unreadable half of {@link partitionClaudeHomes}, for callers that
+ * only need to report the gap rather than read anything.
+ */
+export async function getUnavailableClaudeHomes(
+  config: MinderConfig
+): Promise<UnavailableClaudeHome[]> {
+  return (await partitionClaudeHomes(config)).unavailable;
 }
 
 /**
