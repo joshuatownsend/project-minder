@@ -125,20 +125,21 @@ export async function partitionClaudeHomes(
     // `readdir` failure and silently omit it — the exact incomplete-coverage
     // case this partition exists to expose, reported as `complete: true`.
     //
-    // Only EXTRA homes are probed. The primary is implicit, and on a machine
-    // that has never run Claude Code `~/.claude` legitimately does not exist —
-    // flagging that would put a warning on every fresh install for a home the
-    // user never asked for. A configured home that has vanished is a different
-    // fact, and one worth telling them about.
+    // Probing after the WSL gate, never before: opening a stopped distro's UNC
+    // path is exactly the auto-wake the gate exists to prevent.
     //
-    // Probing after the WSL gate, never before: an `access` on a stopped
-    // distro's UNC path is exactly the auto-wake the gate exists to prevent.
-    if (home !== primary) {
-      const failure = await probeHome(home);
-      if (failure) {
-        unavailable.push({ path: home, reason: failure });
-        continue;
-      }
+    // EVERY home is probed, including the primary. What is special about the
+    // primary is one specific outcome, not the check: on a machine that has
+    // never run Claude Code `~/.claude` legitimately does not exist, and
+    // warning about that would fire on every fresh install for a home the user
+    // never configured. An unreadable primary is a different matter entirely —
+    // it omits the main corpus — so only `home-missing` is forgiven, and only
+    // there. (An earlier draft skipped the primary's probe altogether, which
+    // suppressed every failure rather than that one; Codex P2, #510.)
+    const failure = await probeHome(home);
+    if (failure && !(home === primary && failure === "home-missing")) {
+      unavailable.push({ path: home, reason: failure });
+      continue;
     }
     readable.push(home);
   }

@@ -206,11 +206,10 @@ describe("partitionClaudeHomes probes extra homes for real (#479)", () => {
     }
   });
 
-  it("never flags the PRIMARY home, even when it is absent", async () => {
+  it("forgives an ABSENT primary home, because a fresh install has none", async () => {
     // On a machine that has never run Claude Code, `~/.claude` legitimately
-    // does not exist. Flagging that would put a warning on every fresh install
-    // for a home the user never asked for; a CONFIGURED home that has vanished
-    // is a different fact.
+    // does not exist. Warning about that would fire on every fresh install for
+    // a home the user never configured.
     const spy = vi.spyOn(os, "homedir").mockReturnValue(
       path.join(os.tmpdir(), "pm-home-never-used")
     );
@@ -220,6 +219,34 @@ describe("partitionClaudeHomes probes extra homes for real (#479)", () => {
       expect(readable).toHaveLength(1);
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it("still reports an UNREADABLE primary home", async () => {
+    // The counterpart, and the reason the rule forgives one outcome rather
+    // than skipping the check: a primary that exists but cannot be listed
+    // omits the MAIN corpus, and is the last thing that should be silent.
+    // An earlier draft skipped the primary's probe entirely and suppressed
+    // this too (Codex P2, PR #510).
+    const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), "pm-home-prim-"));
+    const asFile = path.join(dirPath, "primary-is-a-file");
+    await fs.writeFile(asFile, "", "utf-8");
+    const spy = vi.spyOn(os, "homedir").mockReturnValue(dirPath);
+    try {
+      // `getPrimaryClaudeHome()` joins `.claude` onto the home, so point the
+      // spy at a directory whose `.claude` IS the regular file above.
+      await fs.rename(asFile, path.join(dirPath, ".claude"));
+      const { readable, unavailable } = await partitionClaudeHomes(cfg());
+      expect(readable).toEqual([]);
+      expect(unavailable).toEqual([
+        {
+          path: path.join(dirPath, ".claude"),
+          reason: "home-not-a-directory",
+        },
+      ]);
+    } finally {
+      spy.mockRestore();
+      await removeTempHome(dirPath);
     }
   });
 
