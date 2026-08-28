@@ -308,6 +308,11 @@ function AgentRowItem({
                 e.stopPropagation();
                 fetchBody();
               }}
+              // The label already says "loading…" to a person; this says it to
+              // everything else. A quoted label is still a VISIBLE pending state,
+              // even though the guard cannot tell one from an ordinary button
+              // caption (Codex, PR #517).
+              data-loading={bodyLoading ? "true" : undefined}
               disabled={bodyLoading}
               style={{
                 alignSelf: "flex-start",
