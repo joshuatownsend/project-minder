@@ -127,10 +127,28 @@ const BRANCH_PATTERNS: Array<{ re: RegExp; lookBack: number }> = [
   // which indicate a pending FETCH but are not a loading VIEW and have no
   // element of their own to mark. Policing them would force a marker onto
   // whatever element happened to contain the label.
-  { re: />\s*[Ll]oading(?:…|\.\.\.)/g, lookBack: 600 },
+  {
+    // The subject may sit BETWEEN the word and the ellipsis — "Loading
+    // quota…", "Loading adapters…", "loading projects…". Requiring them
+    // adjacent left four visible unmarked states green (Codex, PR #517).
+    // Bounded to 40 chars and no tag/brace between, so it stays a
+    // SENTENCE rather than swallowing the rest of a component.
+    re: />\s*[Ll]oading\b[^<>{}\n]{0,40}?(?:…|\.\.\.)/g,
+    lookBack: 600,
+  },
 ];
 
-const MARKER = /data-loading|<Skeleton/;
+/**
+ * What counts as "this branch is marked".
+ *
+ * `<LoadingSkeleton` is here because four components define a local one
+ * that marks its OWN root — which is the right shape, since a component
+ * that IS a loading state should not depend on every caller remembering to
+ * say so, and a propless one silently drops an attribute passed to it
+ * anyway (Codex, PR #517). The convention is verified below rather than
+ * trusted: a `LoadingSkeleton` that stopped marking its root would fail.
+ */
+const MARKER = /data-loading|<Skeleton|<LoadingSkeleton/;
 
 describe("every loading state carries a queryable marker (#445)", () => {
   const files = ROOTS.flatMap(tsxFiles);
@@ -151,6 +169,8 @@ describe("every loading state carries a queryable marker (#445)", () => {
       `{!loaded && <div>x</div>}`,
       `<p>Loading…</p>`,
       `<p>loading...</p>`,
+      `<div>Loading quota…</div>`,
+      `<span>loading projects…</span>`,
     ];
     for (const s of samples) {
       const hit = BRANCH_PATTERNS.some(({ re }) => {
@@ -251,6 +271,26 @@ describe("every loading state carries a queryable marker (#445)", () => {
       }
     }
     expect(stale).toEqual([]);
+  });
+
+  it("every local LoadingSkeleton marks its own root", () => {
+    // The guard treats `<LoadingSkeleton` as a marker at the call site, so
+    // that trust has to be earned at the definition. Without this, one of them
+    // losing its attribute would turn four call sites silently green.
+    const violations: string[] = [];
+    for (const file of files) {
+      const code = fs.readFileSync(file, "utf-8");
+      const at = code.indexOf("function LoadingSkeleton(");
+      if (at === -1) continue;
+      const body = code.slice(at, at + 400);
+      if (!body.includes("data-loading")) {
+        violations.push(
+          `${file} defines a LoadingSkeleton whose root carries no ` +
+            `\`data-loading\`, while the guard credits its callers for using it.`
+        );
+      }
+    }
+    expect(violations).toEqual([]);
   });
 
   it("Skeleton itself carries the marker, since 24 components rely on it", () => {

@@ -269,7 +269,7 @@ export function HooksBrowser() {
 
       {/* Virtualised list */}
       {loading || disabledLoading ? (
-        <LoadingSkeleton data-loading="true" />
+        <LoadingSkeleton />
       ) : sorted.length === 0 && disabledEntries.length === 0 ? (
         <Empty query={rawQuery} />
       ) : sorted.length === 0 ? (
@@ -431,9 +431,14 @@ function SourceBadge({
   );
 }
 
+// Marked HERE, on its own root, rather than by the caller. A local
+// component that takes no props silently DROPS a `data-loading` passed
+// to it, so the source reads correctly and the DOM does not — the same
+// trap `Note` in HarnessConfigView fell into (Codex, PR #517). A
+// component that IS a loading state should carry the marker itself.
 function LoadingSkeleton() {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+    <div data-loading="true" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
       {Array.from({ length: 8 }).map((_, i) => (
         <div
           key={i}

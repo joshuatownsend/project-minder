@@ -105,7 +105,7 @@ export function AdaptersSection({
           );
         })}
         {adapters.length === 0 && (
-          <div style={S.muted}>Loading adapters…</div>
+          <div data-loading="true" style={S.muted}>Loading adapters…</div>
         )}
       </div>
     </section>

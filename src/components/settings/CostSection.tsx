@@ -524,7 +524,7 @@ export function CostSection({
         </div>
 
         {quota === null ? (
-          <div style={S.muted}>Loading quota…</div>
+          <div data-loading="true" style={S.muted}>Loading quota…</div>
         ) : !quota.configured ? (
           <div style={{
             padding: "10px 12px", borderRadius: "var(--radius)",

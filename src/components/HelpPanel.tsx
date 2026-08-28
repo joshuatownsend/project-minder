@@ -257,7 +257,7 @@ export function HelpPanel() {
               })}
             </nav>
           ) : loading ? (
-            <LoadingSkeleton data-loading="true" />
+            <LoadingSkeleton />
           ) : (
             <article style={{ padding: "24px 20px" }}>
               <MarkdownRenderer
@@ -378,9 +378,14 @@ function TocItem({
   );
 }
 
+// Marked HERE, on its own root, rather than by the caller. A local
+// component that takes no props silently DROPS a `data-loading` passed
+// to it, so the source reads correctly and the DOM does not — the same
+// trap `Note` in HarnessConfigView fell into (Codex, PR #517). A
+// component that IS a loading state should carry the marker itself.
 function LoadingSkeleton() {
   return (
-    <div style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "10px" }}>
+    <div data-loading="true" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "10px" }}>
       {[48, 100, 80, 90, 60].map((w, i) => (
         <div key={i} style={{
           height: i === 0 ? "18px" : "12px",
