@@ -5,9 +5,9 @@ import type { FileHandle } from "fs/promises";
 import { parse as parseToml } from "smol-toml";
 import type { SessionAdapter, SessionFile, HarnessConfig, HarnessConfigRule, HarnessResource } from "./types";
 import type { UsageTurn, ToolCall } from "@/lib/usage/types";
-import { canonicalizeDirName, type SessionTurnsMeta } from "@/lib/usage/parser";
+import type { SessionTurnsMeta } from "@/lib/usage/parser";
 import { encodeProjectPath } from "@/lib/usage/projectMatch";
-import { toSlug } from "@/lib/scanner/claudeConversations";
+import { projectSlugFromDirName } from "@/lib/sessions/projectIdentity";
 import { TEXT_CAP, makeBaseTurn } from "./utils";
 import { redactConfig } from "./redact";
 
@@ -277,7 +277,7 @@ async function parseCodexFileWithMeta(
   // backends derive `isWorktree` from it via `isWorktreeEncodedDir`, and an
   // adapter transcript lives outside the worktree, so canonicalizing it too
   // would silently mark these sessions as non-worktree. (#497.)
-  const projectSlug = toSlug(canonicalizeDirName(projectDirName));
+  const projectSlug = projectSlugFromDirName(projectDirName);
 
   // Codex has no per-turn timestamps; use session creation time, falling back to file mtime
   let sessionTimestamp: string =

@@ -14,7 +14,8 @@ import { canonicalizeDirName, mostFrequent } from "@/lib/usage/parser";
 import { getClaudeHomes, getReadableClaudeHomes } from "@/lib/claudeHome";
 import { normalizePathKey, sessionFileHomeKey } from "@/lib/platform";
 import { chunkText } from "./textChunks";
-import { toSlug, type ConversationEntry } from "@/lib/scanner/claudeConversations";
+import type { ConversationEntry } from "@/lib/scanner/claudeConversations";
+import { projectSlugFromDirName } from "@/lib/sessions/projectIdentity";
 import { bridgeJsonlAppendToEventBus } from "@/lib/agentView/eventBus";
 import { emitMinderEvent } from "@/lib/events/bus";
 import { classifyTurn } from "@/lib/usage/classifier";
@@ -620,7 +621,7 @@ async function readJsonlSession(
 ): Promise<ReadResult | null> {
   const sessionId = path.basename(filePath, ".jsonl");
   const canonicalDir = canonicalizeDirName(projectDirName);
-  const projectSlug = toSlug(canonicalDir);
+  const projectSlug = projectSlugFromDirName(projectDirName);
   const fromOffset = options.fromOffset ?? 0;
   const startTurnIndex = options.startTurnIndex ?? 0;
 
@@ -3304,7 +3305,7 @@ export async function reconcileSessionFile(
     }
 
     if (rows > 0) {
-      const slug = toSlug(canonicalizeDirName(projectDirName));
+      const slug = projectSlugFromDirName(projectDirName);
       bridgeJsonlAppendToEventBus(sessionId, slug);
       // Signal SSE clients so the live sessions list invalidates (replaces the
       // 15s poll when the liveEvents flag is on). Coalesced server-side.
@@ -3335,7 +3336,7 @@ export async function reconcileSessionFile(
   const affectedCategoryTuples = new Set<string>(fullResult.parsed.affectedCategoryTuples);
   for (const tuple of oldCategoryTuples) affectedCategoryTuples.add(tuple);
   if (rows > 0) {
-    const slug = toSlug(canonicalizeDirName(projectDirName));
+    const slug = projectSlugFromDirName(projectDirName);
     bridgeJsonlAppendToEventBus(sessionId, slug);
   }
   return { rowsWritten: rows, affectedDays, affectedCategoryTuples };
@@ -3433,7 +3434,7 @@ export function buildAdapterParsedSession(
   // rather than relying on the adapters alone.
   const projectSlug =
     turns.find((t) => t.projectSlug)?.projectSlug ||
-    toSlug(canonicalizeDirName(projectDirName));
+    projectSlugFromDirName(projectDirName);
 
   let inputTokens = 0;
   let outputTokens = 0;

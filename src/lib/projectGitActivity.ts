@@ -4,11 +4,11 @@ import {
   aggregateGitActivity,
   type GitActivitySummary,
 } from "@/lib/usage/gitActivity";
-import { parseAllSessions, canonicalizeDirName } from "@/lib/usage/parser";
+import { parseAllSessions } from "@/lib/usage/parser";
 import { gatherProjectTurns, projectDirNameCandidates } from "@/lib/usage/projectMatch";
 import { readConfig } from "@/lib/config";
 import { getClaudeHomes } from "@/lib/claudeHome";
-import { toSlug } from "@/lib/scanner/claudeConversations";
+import { projectSlugFromDirName } from "@/lib/sessions/projectIdentity";
 
 // Composed lookup for "git activity by project slug + path". Used by the
 // /api/projects/[slug]/git-activity route AND the MCP `get-project-git-activity`
@@ -25,12 +25,14 @@ export async function getProjectGitActivity(
   // ingest parser slugs the encoded Linux dirname, e.g. `-home-josh-dev-foo`
   // → `home-josh-dev-foo`), so querying by the scanned route slug alone
   // returns nothing for a UNC project. Query every candidate slug — derived
-  // exactly the way ingest derives it (toSlug ∘ canonicalizeDirName).
+  // exactly the way ingest derives it — the shared `projectSlugFromDirName`,
+  // which IS toSlug ∘ canonicalizeDirName and is now the only place that
+  // composition is written (#496).
   const slugCandidates = [
     ...new Set([
       slug,
       ...projectDirNameCandidates(projectPath, mappings, homes).map((c) =>
-        toSlug(canonicalizeDirName(c.dirName))
+        projectSlugFromDirName(c.dirName)
       ),
     ]),
   ];

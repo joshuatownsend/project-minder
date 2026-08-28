@@ -1,11 +1,11 @@
 import { toPrLinkSource } from "@/lib/types/session";
 import "server-only";
 import type DatabaseT from "better-sqlite3";
-import { decodeDirName } from "@/lib/platform";
-import { canonicalizeDirName } from "@/lib/usage/parser";
+import {
+  projectSessionSummary,
+} from "@/lib/sessions/summaryProjection";
 import { prepCached } from "@/lib/db/connection";
 import type { SessionSummary, SessionStatus, PrLink, TicketLink } from "@/lib/types";
-import { isWorktreeFilePath, isWorktreeEncodedDir } from "@/lib/scanner/worktreeCheck";
 import { rollUpTreeDelegation, type DelegationTreeSource } from "@/lib/usage/delegationTree";
 import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptPath";
 
@@ -413,67 +413,58 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
 
     const isActive = now - h.file_mtime_ms < 2 * 60_000;
     const status = computeStatus(h.status, h.file_mtime_ms, now, isActive);
-    const durationMs =
-      h.start_ts && h.end_ts
-        ? new Date(h.end_ts).getTime() - new Date(h.start_ts).getTime()
-        : undefined;
-
-    const oneShotRate =
-      h.verified_task_count > 0
-        ? h.one_shot_task_count / h.verified_task_count
-        : undefined;
-
-    // Match file-parse: suppress lastPrompt when identical to initialPrompt
-    // so single-prompt sessions don't render the same text twice.
-    const lastPrompt =
-      h.last_prompt && h.last_prompt !== h.initial_prompt
-        ? h.last_prompt
-        : undefined;
-
     result.push({
-      sessionId: h.session_id,
-      projectPath: decodeDirName(canonicalizeDirName(h.project_dir_name)),
-      // `project_slug` is set at ingest via `toSlug(canonicalDir)` so
-      // it should never be NULL on a healthy index. Schema permits NULL
-      // though, so fall back to deriving the same slug on the fly
-      // rather than serving an empty string downstream — `SessionsBrowser`'s
-      // project filter and grouping both key on a non-empty slug.
-      projectSlug: h.project_slug ?? slugifyDirName(h.project_dir_name),
-      projectName: h.project_dir_name,
-      startTime: h.start_ts ?? undefined,
-      endTime: h.end_ts ?? undefined,
-      durationMs,
-      initialPrompt: h.initial_prompt ?? undefined,
-      lastPrompt,
+      // **The shared projection (#496).** Every field both backends can
+      // produce is derived here rather than beside its counterpart in
+      // `buildAdapterScannedSession` — identity, counts, tokens, duration,
+      // the lastPrompt suppression, oneShotRate's zero-guard, workMode's
+      // all-or-nothing rule, and the two-source worktree check.
+      ...projectSessionSummary({
+        sessionId: h.session_id,
+        source: h.source ?? "claude",
+        filePath: h.file_path,
+        projectDirName: h.project_dir_name,
+        projectSlug: h.project_slug,
+        startTs: h.start_ts,
+        endTs: h.end_ts,
+        initialPrompt: h.initial_prompt,
+        lastPrompt: h.last_prompt,
+        turnCount: h.turn_count,
+        userTurnCount: h.user_turn_count,
+        assistantTurnCount: h.assistant_turn_count,
+        inputTokens: h.input_tokens,
+        outputTokens: h.output_tokens,
+        cacheReadTokens: h.cache_read_tokens,
+        cacheCreateTokens: h.cache_create_tokens,
+        errorCount: h.error_count,
+        verifiedTaskCount: h.verified_task_count,
+        oneShotTaskCount: h.one_shot_task_count,
+        cacheHitRatio: h.cache_hit_ratio,
+        gitBranch: h.git_branch,
+        workModeExplorationPct: h.work_mode_exploration_pct,
+        workModeBuildingPct: h.work_mode_building_pct,
+        workModeTestingPct: h.work_mode_testing_pct,
+        workModeOtherPct: h.work_mode_other_pct,
+        toolUsage,
+        skillsUsed,
+        modelsUsed,
+        searchableText,
+      }),
       recaps: undefined,
-      messageCount: h.turn_count,
-      userMessageCount: h.user_turn_count,
-      assistantMessageCount: h.assistant_turn_count,
-      inputTokens: h.input_tokens,
-      outputTokens: h.output_tokens,
-      cacheReadTokens: h.cache_read_tokens,
-      cacheCreateTokens: h.cache_create_tokens,
+      // Stored at ingest. File-parse reprices live from token buckets instead
+      // (#494), which is why the projection takes neither side's answer.
       costEstimate: h.cost_usd,
-      toolUsage,
-      modelsUsed,
-      gitBranch: h.git_branch ?? undefined,
-      // file-parse counts every Agent tool_use block (line 196 of
-      // claudeConversations.ts); the indexed `toolUsage['Agent']`
-      // tally is the same number from the same source, modulo
-      // sidechain skipping (divergence #4).
-      subagentCount: toolUsage["Agent"] ?? 0,
+      // Derived from a stored snapshot + the clock, where file-parse derives
+      // from unresolved tool-use pairs. Different inputs, deliberately.
+      isActive,
+      status,
+      // ── DB-only below: derived by post-reconcile passes the file backend
+      //    does not run, or read from tables it has no equivalent of. ───────
       // #395: the same calls counted over the whole tree instead of the root
       // turn set, or undefined when the index cannot yet see the tree.
       treeDelegation: rollUpTreeDelegation(h.session_id, delegationTreeSource),
-      errorCount: h.error_count,
-      isActive,
-      status,
-      skillsUsed,
-      oneShotRate,
-      searchableText,
       slug: h.slug ?? undefined,
       continuedFromSessionId: h.continued_from_session_id ?? undefined,
-      cacheHitRatio: h.cache_hit_ratio ?? undefined,
       maxContextFill: h.max_context_fill ?? undefined,
       hasCompactionLoop: h.has_compaction_loop === 1,
       hasToolFailureStreak: h.has_tool_failure_streak === 1,
@@ -490,37 +481,6 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
       starredAt: h.starred_at ?? undefined,
       distilledAt: h.distilled_at ?? undefined,
       distilledText: h.distilled_text ?? undefined,
-      workMode: (h.work_mode_exploration_pct !== null &&
-                 h.work_mode_building_pct !== null &&
-                 h.work_mode_testing_pct !== null &&
-                 h.work_mode_other_pct !== null)
-        ? {
-            exploration: h.work_mode_exploration_pct,
-            building: h.work_mode_building_pct,
-            testing: h.work_mode_testing_pct,
-            other: h.work_mode_other_pct,
-          }
-        : undefined,
-      // Derived from `file_path` (raw filesystem path), NOT
-      // `project_dir_name` — `canonicalizeDirName` strips
-      // `--claude-worktrees-*` at ingest to group worktree sessions
-      // under the parent project's slug, so `project_dir_name` has
-      // lost the worktree marker by the time we read it. The raw path
-      // is preserved on the `file_path` column.
-      // Two sources because the two harness families store the fact in
-      // different columns. A Claude transcript lives INSIDE the worktree, so
-      // its `file_path` carries the marker while `project_dir_name` has been
-      // canonicalized at ingest and no longer does. An adapter transcript lives
-      // under the harness's own home (`~/.codex/sessions/...`), which carries
-      // no marker at all — its worktree fact survives only in the encoded cwd,
-      // which for adapters is NOT canonicalized.
-      //
-      // Reading `file_path` alone reported `false` for every adapter worktree
-      // session while the file backend reported `true`, so switching backends
-      // changed the answer for the same session. (Codex P2, PR #495.)
-      isWorktree:
-        isWorktreeFilePath(h.file_path) || isWorktreeEncodedDir(h.project_dir_name),
-      source: h.source ?? "claude",
       prs: prsBySession.get(h.session_id),
       tickets: ticketsBySession.get(h.session_id),
     });
@@ -672,19 +632,6 @@ function computeStatus(
   if (stored === "inactive") return "idle";
   // Legacy / unexpected — preserve the pre-P2c heuristic.
   return isActive ? "working" : "idle";
-}
-
-/**
- * Inline mirror of `toSlug` from `src/lib/scanner/claudeConversations.ts`.
- * Duplicated here (3 lines) so this file can stay free of the heavy
- * scanner module — the scanner pulls in pricing, fs caches, etc., which
- * we don't need on the read path. Kept in sync with the original; if
- * the slugification rule changes, both must move together.
- */
-function slugifyDirName(dirName: string): string {
-  const parts = dirName.split("-");
-  const meaningful = parts.slice(parts.findIndex((p) => p.length > 1));
-  return meaningful.join("-").toLowerCase().replace(/[^a-z0-9-]/g, "-");
 }
 
 function groupCounts<T>(
