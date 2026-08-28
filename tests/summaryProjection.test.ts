@@ -265,6 +265,45 @@ describe("projectIdentity (#496)", () => {
     expect(projectSlugFromDirName(WT)).not.toBe(toSlug(WT));
   });
 
+  describe("toSlug drops the path prefix, not short segments (#502)", () => {
+    it("drops the drive letter and the empty segment its `--` produces", () => {
+      expect(toSlug("C--dev-app-x")).toBe("dev-app-x");
+      expect(toSlug("c--dev-project-minder")).toBe("dev-project-minder");
+    });
+
+    it("drops the leading empty segments of a POSIX or UNC encoding", () => {
+      expect(toSlug("-home-user-my-project")).toBe("home-user-my-project");
+      expect(toSlug("--wsl-localhost-Ubuntu-26-04-home-josh-dev")).toBe(
+        "wsl-localhost-ubuntu-26-04-home-josh-dev",
+      );
+    });
+
+    it("keeps a one-character path component instead of skipping to it", () => {
+      // The old rule scanned for the first segment longer than one character,
+      // so it ate real components: `/a/bc` slugged to "bc".
+      expect(toSlug("-a-bc")).toBe("a-bc");
+    });
+
+    it("keeps every component when they are all one character", () => {
+      // The reported defect: `findIndex` returned -1 and `slice(-1)` kept only
+      // the last segment, so `C:\a\b` collided with any project slugged "b".
+      expect(toSlug("C--a-b")).toBe("a-b");
+      expect(toSlug("C--x-y-z")).toBe("x-y-z");
+    });
+
+    it("still slugs a single-component degenerate path to that component", () => {
+      // This one passed BEFORE the fix too, for the wrong reason — `slice(-1)`
+      // on a three-element array happens to yield the element that was wanted.
+      // It is here to pin the answer, not to discriminate the fix; the two
+      // cases above do that.
+      expect(toSlug("C--a")).toBe("a");
+    });
+
+    it("lowercases and replaces characters outside [a-z0-9-]", () => {
+      expect(toSlug("C--dev-My_App.v2")).toBe("dev-my-app-v2");
+    });
+  });
+
   it("is re-exported unchanged from both of its former homes", async () => {
     // Six modules import `canonicalizeDirName` from `usage/parser` and several
     // import `toSlug` from the scanner. Both moved to a leaf and are
