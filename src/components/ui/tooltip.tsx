@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   tooltipAbove,
   tooltipLeft,
@@ -37,11 +38,22 @@ import {
  * elsewhere. The trigger is focusable, which is what makes the keyboard path
  * exist at all.
  *
- * ## What it deliberately is not
+ * ## Why it portals
  *
- * Not a portal, and not a floating-ui dependency. It positions itself with a
- * `position: fixed` layer and the arithmetic in `lib/ui/tooltipPosition` —
- * enough for a chip in a dense row, and unit-testable in a repo whose test
+ * A transformed ancestor establishes the containing block for a
+ * `position: fixed` descendant — so inside the sessions browser's virtual rows,
+ * which are positioned with `translateY(...)`, the row's offset was applied a
+ * SECOND time to coordinates that were already viewport-relative. The tooltip
+ * landed far from its trigger, or was clipped by the scrolling container. That
+ * is the primary context these chips render in, so "not a portal" was a wrong
+ * call rather than a simplifying one (Codex P1, PR #519).
+ *
+ * It renders into `document.body` after mount, which restores the meaning of
+ * the `getBoundingClientRect()` coordinates `place()` computes. `aria-describedby`
+ * is unaffected: it resolves by id across the whole document, not by ancestry.
+ *
+ * Still no floating-ui dependency — the arithmetic is in
+ * `lib/ui/tooltipPosition`, which is unit-testable in a repo whose test
  * environment is `node` with no DOM.
  */
 export function Tooltip({
@@ -60,6 +72,11 @@ export function Tooltip({
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const triggerRef = useRef<HTMLSpanElement | null>(null);
   const tipRef = useRef<HTMLSpanElement | null>(null);
+  // The portal target only exists in the browser. Rendering the tip inline on
+  // the server keeps it in the SSR markup, so the description is present
+  // before hydration rather than appearing late.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   const place = useCallback(() => {
     const trigger = triggerRef.current?.getBoundingClientRect();
@@ -103,6 +120,41 @@ export function Tooltip({
     };
   }, [open, place]);
 
+  const tip = (
+  <span
+    ref={tipRef}
+    id={id}
+    role="tooltip"
+    // Always rendered. `aria-describedby` reaches it whether or not it is
+    // visible, which is what removes the need for a second `.sr-only` copy
+    // of the same sentence.
+    style={{
+      position: "fixed",
+      left: pos?.left ?? 0,
+      top: pos?.top ?? 0,
+      zIndex: 60,
+      maxWidth: "min(320px, calc(100vw - 16px))",
+      padding: "6px 8px",
+      borderRadius: "var(--radius)",
+      border: "1px solid var(--border-subtle)",
+      background: "var(--bg-elevated, var(--bg-surface))",
+      color: "var(--text-primary)",
+      fontSize: "0.72rem",
+      lineHeight: 1.5,
+      fontWeight: 400,
+      textAlign: "left",
+      whiteSpace: "normal",
+      pointerEvents: "none",
+      boxShadow: "0 4px 16px rgba(0,0,0,.35)",
+      visibility: open && pos ? "visible" : "hidden",
+      opacity: open && pos ? 1 : 0,
+      transition: "opacity .12s ease",
+    }}
+  >
+    {content}
+  </span>
+  );
+
   return (
     <span
       ref={triggerRef}
@@ -143,38 +195,8 @@ export function Tooltip({
       }}
     >
       {children}
-      <span
-        ref={tipRef}
-        id={id}
-        role="tooltip"
-        // Always rendered. `aria-describedby` reaches it whether or not it is
-        // visible, which is what removes the need for a second `.sr-only` copy
-        // of the same sentence.
-        style={{
-          position: "fixed",
-          left: pos?.left ?? 0,
-          top: pos?.top ?? 0,
-          zIndex: 60,
-          maxWidth: "min(320px, calc(100vw - 16px))",
-          padding: "6px 8px",
-          borderRadius: "var(--radius)",
-          border: "1px solid var(--border-subtle)",
-          background: "var(--bg-elevated, var(--bg-surface))",
-          color: "var(--text-primary)",
-          fontSize: "0.72rem",
-          lineHeight: 1.5,
-          fontWeight: 400,
-          textAlign: "left",
-          whiteSpace: "normal",
-          pointerEvents: "none",
-          boxShadow: "0 4px 16px rgba(0,0,0,.35)",
-          visibility: open && pos ? "visible" : "hidden",
-          opacity: open && pos ? 1 : 0,
-          transition: "opacity .12s ease",
-        }}
-      >
-        {content}
-      </span>
+      {mounted ? createPortal(tip, document.body) : tip}
     </span>
   );
 }
+
