@@ -43,10 +43,11 @@ const globalForParser = globalThis as unknown as {
    *  corpus fingerprint (#492). Deliberately NOT the cache's size, which
    *  answers "how much fits" rather than "how much exists" (#476). */
   __usageLiveFileCount?: number;
-  /** Newest mtime the last completed sweep saw. Recorded for the same reason
-   *  as the count: once the cache is byte-bounded, scanning its slots answers
-   *  a question about RESIDENCY, and the newest file is exactly the kind that
-   *  gets evicted when it is also one of the largest (Codex P1, PR #514). */
+  /** Newest mtime the last completed sweep saw. Read from the cache's
+   *  WATERMARK, not from its live slots: once the cache is byte-bounded,
+   *  scanning slots answers a question about residency, and the newest file is
+   *  exactly the kind that gets evicted when it is also one of the largest —
+   *  an active session grows (Codex P1, PR #514). */
   __usageLiveMaxMtime?: number;
   __usageAllSessionsInFlight?: {
     promise: Promise<Map<string, UsageTurn[]>>;
@@ -880,7 +881,7 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
   // byte-bounded as of #476, so its contents answer a question about residency
   // rather than about the corpus.
   globalForParser.__usageLiveFileCount = liveSet.size;
-  globalForParser.__usageLiveMaxMtime = cache.maxMtimeMs();
+  globalForParser.__usageLiveMaxMtime = cache.observedMaxMtimeMs;
   return result;
 }
 

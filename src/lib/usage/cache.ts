@@ -81,8 +81,23 @@ export class FileCache<T> {
   private readonly maxEntries: number;
   private readonly maxBytes: number;
   private readonly weigh: (value: T, size: number) => number;
-  /** Running sum of `slot.size`, so the budget check is O(1) per insert. */
+  /** Running sum of `slot.weight`, so the budget check is O(1) per insert. */
   private retainedBytes = 0;
+  /**
+   * Newest mtime this cache has ever been TOLD about, which is not the same as
+   * the newest it currently holds.
+   *
+   * `maxMtimeMs()` scans the live slots, so once eviction exists it answers a
+   * question about residency — and the newest transcript is often also one of
+   * the largest, because an active session grows, so it is exactly what
+   * largest-first eviction takes. A caller building a corpus fingerprint needs
+   * the file to have counted even after its value was dropped.
+   *
+   * Monotone by construction, and deliberately so: deletions are the job of
+   * the cardinality half of that fingerprint (#492), never of a watermark.
+   * Reset only by `clear()`. (Codex P1, PR #514.)
+   */
+  private observedMaxMtime = 0;
 
   constructor(opts: FileCacheOptions<T> = {}) {
     this.maxEntries = opts.maxEntries ?? 5000;
@@ -98,6 +113,14 @@ export class FileCache<T> {
   /** Retained source bytes across all cached entries (for tests and metrics). */
   get bytes(): number {
     return this.retainedBytes;
+  }
+
+  /**
+   * Newest mtime seen since the last `clear()`, whether or not that entry is
+   * still resident. See `observedMaxMtime`.
+   */
+  get observedMaxMtimeMs(): number {
+    return this.observedMaxMtime;
   }
 
   /**
@@ -122,6 +145,8 @@ export class FileCache<T> {
     const mtimeMs = stat.mtimeMs;
     const size = stat.size;
     const now = Date.now();
+    // Before the cache-hit return below, so a warm sweep still advances it.
+    if (mtimeMs > this.observedMaxMtime) this.observedMaxMtime = mtimeMs;
 
     const cached = this.slots.get(filePath);
     if (cached && cached.mtimeMs === mtimeMs && cached.size === size) {
@@ -149,7 +174,7 @@ export class FileCache<T> {
         weight,
       });
       this.retainedBytes += weight;
-      this.evictIfNeeded(filePath);
+      this.evictIfNeeded();
       return value;
     })();
 
@@ -170,6 +195,7 @@ export class FileCache<T> {
   clear(): void {
     this.slots.clear();
     this.retainedBytes = 0;
+    this.observedMaxMtime = 0;
   }
 
   /** The one place a slot leaves the map, so the byte total cannot drift. */
@@ -211,12 +237,18 @@ export class FileCache<T> {
   /**
    * Two bounds, and each evicts by the dimension it bounds.
    *
-   * `justInserted` is never evicted: the caller is about to use it, and
-   * dropping it would make the insert pure cost.
+   * **No entry is exempt, including the one just inserted.** An earlier version
+   * spared it, on the reasoning that dropping it made the insert pure cost.
+   * That is true and it is the lesser problem: a single transcript larger than
+   * the budget would then sit above `maxBytes` after everything else had been
+   * evicted, defeating the bound entirely — and any budget under 50 MB, the
+   * file-size cap, can meet one. The caller already holds the returned value,
+   * so evicting it costs a re-parse on the next request and nothing else,
+   * while keeping it costs the guarantee. (Codex P2, PR #514.)
    */
-  private evictIfNeeded(justInserted?: string): void {
-    this.evictByBytes(justInserted);
-    this.evictByCount(justInserted);
+  private evictIfNeeded(): void {
+    this.evictByBytes();
+    this.evictByCount();
   }
 
   /**
@@ -240,7 +272,7 @@ export class FileCache<T> {
    * re-parsed on every sweep once a corpus exceeds the budget. That is
    * bounded work proportional to the overshoot, against an unbounded heap.
    */
-  private evictByBytes(justInserted?: string): void {
+  private evictByBytes(): void {
     if (this.retainedBytes <= this.maxBytes) return;
     // Trim to 80% of the budget in one pass, the way the count sweep does.
     // Evicting only down to the line meant sorting the entire cache on EVERY
@@ -248,9 +280,9 @@ export class FileCache<T> {
     // of a ten-thousand-entry array on a 2 GiB corpus of 100 KiB files, which
     // is superlinear work before any parsing cost. (Codex P2, PR #514.)
     const target = this.maxBytes * 0.8;
-    const byWeightDesc = Array.from(this.slots.entries())
-      .filter(([path]) => path !== justInserted)
-      .sort((a, b) => b[1].weight - a[1].weight);
+    const byWeightDesc = Array.from(this.slots.entries()).sort(
+      (a, b) => b[1].weight - a[1].weight
+    );
     for (const [path] of byWeightDesc) {
       if (this.retainedBytes <= target) return;
       this.drop(path);
@@ -262,16 +294,12 @@ export class FileCache<T> {
    * capacity in a single sweep so we don't pay the sort cost on every insert
    * near the boundary.
    */
-  private evictByCount(justInserted?: string): void {
+  private evictByCount(): void {
     if (this.slots.size <= this.maxEntries) return;
     const target = Math.floor(this.maxEntries * 0.8);
-    // Excludes `justInserted` for the same reason the byte sweep does. It is
-    // the newest entry so LRU would reach it last in all but a pathological
-    // cap, but "all but" is not "never", and the doc above promises never.
-    // (Copilot, PR #514.)
-    const entries = Array.from(this.slots.entries())
-      .filter(([path]) => path !== justInserted)
-      .sort((a, b) => a[1].lastSeenAt - b[1].lastSeenAt);
+    const entries = Array.from(this.slots.entries()).sort(
+      (a, b) => a[1].lastSeenAt - b[1].lastSeenAt
+    );
     const toEvict = this.slots.size - target;
     for (let i = 0; i < toEvict && i < entries.length; i++) {
       this.drop(entries[i][0]);
