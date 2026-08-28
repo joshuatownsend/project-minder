@@ -82,8 +82,12 @@ export function Tooltip({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
     };
-    const onDown = (e: MouseEvent) => {
-      if (!triggerRef.current?.contains(e.target as Node)) setOpen(false);
+    const onDown = (e: PointerEvent) => {
+      // `pointerdown`, so a PointerEvent — and `e.target` can be null or a
+      // non-Node (a shadow root retarget), which `contains` would throw on.
+      const target = e.target;
+      if (!(target instanceof Node)) return;
+      if (!triggerRef.current?.contains(target)) setOpen(false);
     };
     // Reposition rather than close: a tooltip that vanishes when the page
     // scrolls under a stationary pointer reads as a glitch.
@@ -109,8 +113,34 @@ export function Tooltip({
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
       onFocus={() => setOpen(true)}
+      onKeyDown={(e) => {
+        // The trigger is focusable, so it needs the activation keys a
+        // focusable thing is expected to answer — and Escape here as well as
+        // on `window`, so a keyboard user can dismiss without moving focus.
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          setOpen(true);
+        } else if (e.key === "Escape") {
+          setOpen(false);
+        }
+      }}
       onBlur={() => setOpen(false)}
-      onClick={() => setOpen((v) => !v)}
+      onClick={(e) => {
+        // **Stop the event.** Every migrated chip lives inside a `<Link>` —
+        // `QualityChip` and `EffortMixChip` inside `SessionRow`'s, the compact
+        // Git status inside `ProjectCard`'s — so without this a tap navigates
+        // away and unmounts the tooltip instead of showing it. The touch path
+        // would have been unusable in exactly the contexts that ship.
+        // (Codex P1, PR #519.)
+        e.preventDefault();
+        e.stopPropagation();
+        // OPEN, never toggle. A tap fires focus and mouse-compatibility events
+        // before its click on many browsers, so `open` is already true by the
+        // time this runs and a toggle would close it again — a tap that ends
+        // with the tooltip hidden. Dismissal is Escape, an outside tap, blur
+        // or mouse-leave, all of which work on touch. (Codex P2.)
+        setOpen(true);
+      }}
     >
       {children}
       <span
