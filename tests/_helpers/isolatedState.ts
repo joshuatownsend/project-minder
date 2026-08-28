@@ -117,6 +117,67 @@ export interface IsolatedStateHandle {
 }
 
 /**
+ * How long teardown will wait for the temp home to be removed before giving up
+ * on it. Well under vitest's 10s hook timeout, so a stall costs a slow teardown
+ * rather than a failed run.
+ */
+const RM_BUDGET_MS = 2_000;
+
+/**
+ * Remove the temp home, and NEVER let doing so fail or stall a test (#430).
+ *
+ * The previous version was `try { await fs.rm(...) } catch {}` with a comment
+ * naming the right hazard — "Windows can hold a sqlite file handle open
+ * briefly" — while handling the wrong half of it. A `catch` answers the THROW
+ * (EBUSY/EPERM), which is the cheap case. It does not answer the STALL: on
+ * Windows, recursing a temp tree that still holds an open-but-closing SQLite
+ * handle can block well past the 10s hook timeout, and vitest then fails the
+ * hook before `fs.rm` either resolves or rejects, so the `catch` never runs.
+ *
+ * That is what took down `verify-windows` on the v1.10.0 release PR (#429),
+ * where the branch's only diff from `main` was `CHANGELOG.md` and a version
+ * string — the same code having passed the same job thirty minutes earlier.
+ * The failing file, `otelQueries.test.ts`, was simply whichever one happened to
+ * be holding the handle.
+ *
+ * Two changes, for the two halves:
+ *
+ *  - **`maxRetries` + `retryDelay`.** `fs.rm` defaults to `maxRetries: 0`, and
+ *    `force: true` suppresses "path does not exist", NOT "path is busy" — so
+ *    the old call had no backoff for the transient case it was written for.
+ *    Retries give the handle time to close, which usually means the directory
+ *    really does go away.
+ *  - **A time budget.** If it is still going after `RM_BUDGET_MS`, teardown
+ *    stops waiting and returns. The removal is left running and unobserved:
+ *    it may still succeed, and if it does not, the directory is an empty-ish
+ *    tree under the OS temp dir, which the OS reclaims. A leaked temp
+ *    directory is a strictly smaller problem than a red CI run on a green
+ *    commit.
+ *
+ * Deliberately does not throw or warn on the timeout. Teardown noise on a
+ * passing run trains people to ignore it, and the condition is a known,
+ * benign, platform-specific one rather than a signal about the test.
+ */
+export async function removeTempHome(dir: string): Promise<void> {
+  if (!dir) return;
+  const removal = fs
+    .rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    .catch(() => {
+      /* EBUSY/EPERM after the retries, or already gone — either way, done. */
+    });
+
+  let timer: NodeJS.Timeout | undefined;
+  const budget = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, RM_BUDGET_MS);
+    // Do not hold the process open for a removal nobody is waiting on.
+    timer.unref?.();
+  });
+
+  await Promise.race([removal, budget]);
+  if (timer) clearTimeout(timer);
+}
+
+/**
  * Install temp-home isolation for `~/.minder`-backed state.
  *
  * Setup: allocate a temp dir, point `HOME` / `USERPROFILE` / `os.homedir()` at
@@ -252,11 +313,7 @@ export function installIsolatedState(
     }
     savedEnv.clear();
     clearGlobals();
-    try {
-      await fs.rm(tmpHome, { recursive: true, force: true });
-    } catch {
-      /* ignore — Windows can hold a sqlite file handle open briefly */
-    }
+    await removeTempHome(tmpHome);
   };
 
   if (lifetime === "perTest") {
