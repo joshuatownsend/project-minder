@@ -356,7 +356,7 @@ export function BoardBrowser() {
 
       {/* ── Content ────────────────────────────────────────────────────────── */}
       {loading ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+        <div data-loading="true" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
           {Array.from({ length: 5 }).map((_, i) => (
             <div
               key={i}

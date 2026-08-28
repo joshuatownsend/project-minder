@@ -202,7 +202,7 @@ function ApplyPopover({ unit, source, excludeTargetSlugs, onClose }: ApplyPopove
             target project
           </span>
           {!projects ? (
-            <span style={{ color: "var(--text-muted)" }}>loading…</span>
+            <span data-loading="true" style={{ color: "var(--text-muted)" }}>loading…</span>
           ) : projects.length === 0 ? (
             <span style={{ color: "var(--text-muted)" }}>no other projects available</span>
           ) : (

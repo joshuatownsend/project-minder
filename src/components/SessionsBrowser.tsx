@@ -1169,7 +1169,7 @@ export function SessionsBrowser() {
 
       {/* ── Meta row ─────────────────────────────────────────────────────────── */}
       {!loading && (
-        <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)", marginTop: "-8px" }}>
+        <div data-loading="true" style={{ fontSize: "0.72rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)", marginTop: "-8px" }}>
           {filtered.length} session{filtered.length !== 1 ? "s" : ""}
           {groupByProject && projectGroups.length > 0 ? `, ${projectGroups.length} projects` : ""}
         </div>
@@ -1177,7 +1177,7 @@ export function SessionsBrowser() {
 
       {/* ── Content ─────────────────────────────────────────────────────────── */}
       {loading ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+        <div data-loading="true" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
           {Array.from({ length: 8 }).map((_, i) => (
             <div key={i} style={{ height: "56px", background: "var(--bg-surface)", borderRadius: "var(--radius)", animation: "pulse 1.5s ease-in-out infinite" }} />
           ))}

@@ -86,7 +86,7 @@ export function DecisionsPanel() {
         <MessageSquare style={{ width: "11px", height: "11px" }} />
         Decisions waiting ({decisions.length})
         {loading && (
-          <Loader2
+          <Loader2 data-loading="true"
             style={{ width: "10px", height: "10px", animation: "spin 1s linear infinite" }}
           />
         )}

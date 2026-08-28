@@ -212,7 +212,7 @@ export function PlansBrowser() {
       )}
 
       {loading ? (
-        <LoadingSkeleton />
+        <LoadingSkeleton data-loading="true" />
       ) : sorted.length === 0 ? (
         <Empty query={rawQuery} />
       ) : (

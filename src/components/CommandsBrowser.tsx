@@ -124,7 +124,7 @@ export function CommandsBrowser() {
       </div>
 
       {isPending && (
-        <div style={{ padding: "20px 0", textAlign: "center", color: "var(--text-muted)", fontSize: "0.78rem" }}>
+        <div data-loading="true" style={{ padding: "20px 0", textAlign: "center", color: "var(--text-muted)", fontSize: "0.78rem" }}>
           loading…
         </div>
       )}

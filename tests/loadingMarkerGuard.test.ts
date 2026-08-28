@@ -18,19 +18,47 @@ import path from "path";
  * page until someone noticed by eye. The capture scripts now wait on
  * `[data-loading]`, which is only as good as this guard.
  *
- * The check is FILE-LEVEL and deliberately coarse: a file with a loading branch
- * must mention the marker somewhere. Matching a specific branch to a specific
- * element needs a JSX parse, and a regex that tried would be confidently wrong
- * on the cases that matter. Coarse-and-honest beats precise-and-fictional; the
- * same reasoning is written at `dbIsolationGuard`'s own limits.
+ * ## Branch-local, not file-level
+ *
+ * The first version asked whether the FILE mentioned the marker anywhere.
+ * Codex pointed out on PR #517 that this waves through a component with two
+ * loading states where only one is marked — `MemoryTab` was exactly that — and
+ * that it only recognised `if (loading)`, missing `loading ? (…)` and
+ * `loading && (…)`, and only the capitalised spelling. Three genuinely
+ * unmarked states passed it on the day it was written.
+ *
+ * It now looks for the marker in a WINDOW after each condition, which is where
+ * that branch's JSX lives. Still a regex over source — matching a branch to its
+ * element needs a JSX parse — but local to the branch rather than the file,
+ * which is the difference between "coarse" and "wrong".
+ *
+ * ## What it deliberately does not match
+ *
+ * A condition only counts when something is RENDERED after it: `(` then `<`, or
+ * `<` directly. Without that tail the patterns also caught styling ternaries
+ * (`cursor: loading ? "not-allowed" : "pointer"`, `opacity: loading ? 0.6 : 1`)
+ * and button labels — not loading views, with no element to mark. A draft
+ * without the tail reported 58 sites, mostly noise, and a guard that cries wolf
+ * on correct code is worse than one with a stated limit: it teaches people to
+ * route around it.
+ *
+ * ## What it cannot see
+ *
+ * Whether the attribute survives to the DOM. `HarnessConfigView` passed
+ * `data-loading` to a local `Note` that did not forward props, so React dropped
+ * it while the source read correctly (Codex + Copilot, PR #517). This catches
+ * the absent marker, not the swallowed one.
  */
 
 const ROOTS = ["src/components", "src/app"];
 
+/** How much source after a loading condition counts as "its branch". */
+const BRANCH_WINDOW = 700;
+
 /**
- * Files with a loading branch that legitimately renders NO marker, each with
- * the reason. An allowlist rather than a cleverer regex, so an exemption is a
- * decision someone wrote down instead of a pattern silently not matching.
+ * Loading branches that legitimately render no marker, each with the reason.
+ * An allowlist rather than a cleverer regex, so an exemption is a decision
+ * someone wrote down instead of a pattern silently not matching.
  */
 const EXEMPT: Record<string, string> = {
   "src/components/DisabledHooksSection.tsx":
@@ -51,11 +79,58 @@ function tsxFiles(dir: string): string[] {
   return out;
 }
 
-const LOADING_BRANCH =
-  /\bif\s*\(\s*(?:loading|isLoading|!loaded|![A-Za-z]*[Ll]oaded)\b[^)]*\)\s*\{?\s*(?:return)?/;
+/** "…and then it renders something." */
+const RENDERS = String.raw`\s*\(?\s*<`;
+const FLAG = String.raw`(?:loading|isLoading|[a-z]\w*Loading)`;
+const NOT_LOADED = String.raw`!\s*(?:loaded|[a-z]\w*Loaded)`;
 
-/** The literal sentence, in both spellings that existed before this landed. */
-const LOADING_TEXT = /Loading(?:…|\.\.\.)/;
+/**
+ * `lookBack` is not decoration. For a CONDITION the branch's JSX follows the
+ * match, so zero is right. For the SENTENCE the marker sits on the opening
+ * tag that PRECEDES it — `<p data-loading="true">Loading…</p>` — so a
+ * forward-only window reports every correctly-marked site in the codebase.
+ * A draft without it flagged 50, most of them already fixed.
+ */
+const BRANCH_PATTERNS: Array<{ re: RegExp; lookBack: number }> = [
+  // `loading ? <…` / `loading && (<…`
+  {
+    // The negative lookbehinds matter: `{data && !loading && (<>` is the
+    // LOADED branch, and without them the flag matches inside it and the
+    // guard demands a marker on content that has finished arriving.
+    re: new RegExp(
+      String.raw`(?<!!)(?<!!\s)\b` + FLAG + String.raw`\b\s*(?:\?|&&)` + RENDERS,
+      "g"
+    ),
+    lookBack: 0,
+  },
+  {
+    re: new RegExp(NOT_LOADED + String.raw`\b\s*(?:\?|&&)` + RENDERS, "g"),
+    lookBack: 0,
+  },
+  // `if (loading) return <…`
+  {
+    re: new RegExp(
+      String.raw`\bif\s*\(\s*(?:` +
+        FLAG +
+        "|" +
+        NOT_LOADED +
+        String.raw`)\b[^)]*\)\s*\{?\s*return` +
+        RENDERS,
+      "g"
+    ),
+    lookBack: 0,
+  },
+  // the sentence itself, in either spelling and either case
+  // Only as JSX CONTENT (`>` then the word), never as a string literal.
+  // Quoted forms are button labels and prop values -- `sub={x === null ?
+  // "loading…" : …}`, `{bodyLoading ? "loading…" : "View full body"}` --
+  // which indicate a pending FETCH but are not a loading VIEW and have no
+  // element of their own to mark. Policing them would force a marker onto
+  // whatever element happened to contain the label.
+  { re: />\s*[Ll]oading(?:…|\.\.\.)/g, lookBack: 600 },
+];
+
+const MARKER = /data-loading|<Skeleton/;
 
 describe("every loading state carries a queryable marker (#445)", () => {
   const files = ROOTS.flatMap(tsxFiles);
@@ -66,20 +141,63 @@ describe("every loading state carries a queryable marker (#445)", () => {
     expect(files.length).toBeGreaterThan(100);
   });
 
-  it("no component renders a loading branch without data-loading", () => {
+  it("matches the branch shapes it claims to", () => {
+    // The guard's own discriminating test: without it, a pattern that stopped
+    // matching would turn this file green rather than red.
+    const samples = [
+      `if (loading) return <div>x</div>;`,
+      `{loading ? <Spinner /> : <List />}`,
+      `{loading && (<div>x</div>)}`,
+      `{!loaded && <div>x</div>}`,
+      `<p>Loading…</p>`,
+      `<p>loading...</p>`,
+    ];
+    for (const s of samples) {
+      const hit = BRANCH_PATTERNS.some(({ re }) => {
+        re.lastIndex = 0;
+        return re.test(s);
+      });
+      expect(hit, `no pattern matched: ${s}`).toBe(true);
+    }
+
+    // ...and the shapes it must NOT match, which is what keeps it usable.
+    const ignored = [
+      `cursor: loading ? "not-allowed" : "pointer",`,
+      `opacity: loading ? 0.6 : 1,`,
+      `{loading ? "Distilling…" : "Distill"}`.replace("…", ""),
+      `{data && !loading && (<><Panel /></>)}`,
+    ];
+    for (const s of ignored) {
+      const hit = BRANCH_PATTERNS.some(({ re }) => {
+        re.lastIndex = 0;
+        return re.test(s);
+      });
+      expect(hit, `should not have matched: ${s}`).toBe(false);
+    }
+  });
+
+  it("no loading branch renders without a marker beside it", () => {
     const violations: string[] = [];
     for (const file of files) {
-      const code = fs.readFileSync(file, "utf-8");
-      if (!LOADING_BRANCH.test(code) && !LOADING_TEXT.test(code)) continue;
-      if (code.includes("data-loading") || code.includes("<Skeleton")) continue;
       if (EXEMPT[file]) continue;
-      violations.push(
-        `${file} has a loading state with no \`data-loading\` marker and no ` +
-          `<Skeleton>. Anything outside the component — the screenshot ` +
-          `pipeline, a test, a11y tooling — cannot tell it apart from a ` +
-          `finished view. Mark the element it renders while loading, or add ` +
-          `it to EXEMPT in this file with the reason.`
-      );
+      const code = fs.readFileSync(file, "utf-8");
+      for (const { re, lookBack } of BRANCH_PATTERNS) {
+        re.lastIndex = 0;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(code)) !== null) {
+          const window = code.slice(
+            Math.max(0, m.index - lookBack),
+            m.index + BRANCH_WINDOW
+          );
+          if (MARKER.test(window)) continue;
+          const line = code.slice(0, m.index).split("\n").length;
+          violations.push(
+            `${file}:${line} — a loading branch with no \`data-loading\` and ` +
+              `no <Skeleton> within ${BRANCH_WINDOW} chars.`
+          );
+          break; // one report per pattern per file is enough to act on
+        }
+      }
     }
     expect(violations).toEqual([]);
   });
@@ -94,15 +212,21 @@ describe("every loading state carries a queryable marker (#445)", () => {
         continue;
       }
       const code = fs.readFileSync(file, "utf-8");
-      if (!LOADING_BRANCH.test(code) && !LOADING_TEXT.test(code)) {
+      const hasBranch =
+        /\b(?:loading|isLoading|loaded)\b/.test(code) ||
+        /[Ll]oading(?:…|\.\.\.)/.test(code);
+      if (!hasBranch) {
         stale.push(`${file} is exempt (${reason}) but has no loading branch`);
       }
     }
     expect(stale).toEqual([]);
   });
 
-  it("Skeleton itself carries the marker, since 23 components rely on it", () => {
+  it("Skeleton itself carries the marker, since 24 components rely on it", () => {
+    // Either spelling: the shared constant, or the attribute written out. The
+    // contract is the attribute reaching the DOM, not which identifier
+    // produced it (Copilot, PR #517).
     const code = fs.readFileSync("src/components/ui/skeleton.tsx", "utf-8");
-    expect(code).toContain("LOADING_ATTR");
+    expect(code).toMatch(/LOADING_ATTR|data-loading/);
   });
 });

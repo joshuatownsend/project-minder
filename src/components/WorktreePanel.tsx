@@ -150,7 +150,7 @@ function WorktreeRow({ wt, status, parentSlug, parentDevPort, onRemoved }: Workt
       <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
         <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", width: "80px" }}>Dev server</span>
         {devServer.loading ? (
-          <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>…</span>
+          <span data-loading="true" style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>…</span>
         ) : devServer.running ? (
           <>
             <span style={{ fontSize: "0.72rem", color: "#4ade80", fontFamily: "var(--font-mono)" }}>

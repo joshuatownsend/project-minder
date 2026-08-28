@@ -181,7 +181,7 @@ export function MemoryTab({ slug }: MemoryTabProps) {
 
   if (loading) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+      <div data-loading="true" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
         {[...Array(3)].map((_, i) => (
           <div key={i} style={{
             height: "48px", borderRadius: "var(--radius)",

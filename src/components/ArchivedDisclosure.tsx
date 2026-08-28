@@ -95,7 +95,7 @@ export function ArchivedDisclosure({ kind, slug }: { kind: ArchivedKind; slug: s
         <Archive style={{ width: "11px", height: "11px" }} />
         <span>Archived{loaded && count > 0 ? ` (${count})` : ""}</span>
         {loading && (
-          <Loader2 style={{ width: "10px", height: "10px", animation: "spin 1s linear infinite" }} />
+          <Loader2 data-loading="true" style={{ width: "10px", height: "10px", animation: "spin 1s linear infinite" }} />
         )}
       </button>
 

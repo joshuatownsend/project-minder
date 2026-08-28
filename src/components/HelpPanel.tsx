@@ -257,7 +257,7 @@ export function HelpPanel() {
               })}
             </nav>
           ) : loading ? (
-            <LoadingSkeleton />
+            <LoadingSkeleton data-loading="true" />
           ) : (
             <article style={{ padding: "24px 20px" }}>
               <MarkdownRenderer
@@ -277,7 +277,7 @@ export function HelpPanel() {
 
         {/* Footer */}
         {!showToc && !loading && (
-          <div style={{
+          <div data-loading="true" style={{
             padding: "8px 16px",
             borderTop: "1px solid var(--border-subtle)",
             display: "flex",

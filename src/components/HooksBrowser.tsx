@@ -102,7 +102,7 @@ export function HooksBrowser() {
 
       {/* Coverage matrix */}
       {!loading && (
-        <div
+        <div data-loading="true"
           style={{
             display: "grid",
             gridTemplateColumns: "repeat(5, 1fr)",
@@ -269,7 +269,7 @@ export function HooksBrowser() {
 
       {/* Virtualised list */}
       {loading || disabledLoading ? (
-        <LoadingSkeleton />
+        <LoadingSkeleton data-loading="true" />
       ) : sorted.length === 0 && disabledEntries.length === 0 ? (
         <Empty query={rawQuery} />
       ) : sorted.length === 0 ? (

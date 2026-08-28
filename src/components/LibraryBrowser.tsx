@@ -295,7 +295,7 @@ export function LibraryBrowser() {
       </div>
 
       {loading && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+        <div data-loading="true" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
           {[1, 2, 3, 4].map((i) => (
             <div key={i} style={{ height: "42px", borderRadius: "var(--radius)", background: "var(--bg-elevated)", opacity: 0.5, animation: "pulse 1.5s ease-in-out infinite" }} />
           ))}
@@ -303,7 +303,7 @@ export function LibraryBrowser() {
       )}
 
       {!loading && (
-        <div style={{ border: "1px solid var(--border-subtle)", borderRadius: "var(--radius)", overflow: "hidden" }}>
+        <div data-loading="true" style={{ border: "1px solid var(--border-subtle)", borderRadius: "var(--radius)", overflow: "hidden" }}>
           {filtered.length === 0 ? (
             <p style={{ padding: "16px", fontSize: "0.8rem", color: "var(--text-muted)", fontFamily: "var(--font-body)", margin: 0 }}>
               {query ? `No library items match "${query}".` : "No items in this category."}

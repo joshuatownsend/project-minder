@@ -83,7 +83,7 @@ export function DriftSection() {
       </p>
 
       <div style={S.card}>
-        {loading && <div style={S.muted}>Reading harness config homes…</div>}
+        {loading && <div data-loading="true" style={S.muted}>Reading harness config homes…</div>}
 
         {!loading && data?.harnesses && data.harnesses.length > 0 && (
           <div style={{ display: "flex", gap: "16px", flexWrap: "wrap", marginBottom: "14px" }}>
@@ -131,7 +131,7 @@ export function DriftSection() {
           ))}
 
         {!loading && (
-          <button
+          <button data-loading="true"
             onClick={load}
             style={{
               marginTop: "4px",

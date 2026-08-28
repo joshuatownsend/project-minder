@@ -411,7 +411,7 @@ export function InstructionsBrowser() {
       </div>
 
       {loading ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+        <div data-loading="true" style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
           {[...Array(5)].map((_, i) => (
             <div
               key={i}

@@ -664,7 +664,7 @@ export function SessionDetailView({ sessionId }: { sessionId: string }) {
 
   if (loading) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+      <div data-loading="true" style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
         {[20, 100, 72, 500].map((h, i) => (
           <div key={i} style={{ height: `${h}px`, background: "var(--bg-surface)", borderRadius: "var(--radius)", animation: "pulse 1.5s ease-in-out infinite" }} />
         ))}
