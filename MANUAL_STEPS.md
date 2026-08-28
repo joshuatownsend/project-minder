@@ -267,7 +267,8 @@ then Install again to pick up the fix.
 ## 2026-07-18 09:30 | tray-app | Tray app first-install + deferred acceptance checks (C2–C4)
 
 - [x] One-time local dev setup: fetch the bundled Node runtime
-  `node scripts/fetch-node-runtime.mjs` (creates `dist/node/`, checksum-verified Node 22.13.0 — required by `pnpm tray:dev` since C4 declares it a Tauri resource)
+  `node scripts/fetch-node-runtime.mjs` (creates `dist/node/`, checksum-verified against nodejs.org — required by `pnpm tray:dev` since C4 declares it a Tauri resource)
+  The version is whatever `NODE_VERSION` in that script currently pins; it was 22.12.0 when this step was first run and is 22.13.0 as of #464.
   Done on this machine 2026-07-18; repeat once per fresh clone.
 - [ ] Windows login test for the autostart toggle (C2 acceptance)
   Enable "Start at login" in the tray menu, sign out and back in, confirm the tray relaunches and the checkbox is still checked. Toggle off afterward if undesired.
