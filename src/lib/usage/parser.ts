@@ -1004,6 +1004,30 @@ export function getJsonlMaxMtime(): number {
 }
 
 /**
+ * How many JSONL files the last `parseAllSessions()` sweep left cached.
+ *
+ * Exists as the second half of a corpus fingerprint. `getJsonlMaxMtime()` is a
+ * MONOTONE summary — it can only answer "has anything newer appeared" — so it
+ * is structurally blind to a deletion that does not hold the maximum mtime.
+ * Cardinality is the missing dimension: any deletion changes it, whatever the
+ * deleted file's age. See #492.
+ *
+ * `parseAllSessions` calls `cache.retainOnly(liveSet)` before returning, so
+ * after a completed sweep this is the size of the live set rather than a
+ * high-water mark. Two caveats, both of which degrade to today's behaviour
+ * rather than to something worse:
+ *
+ *  - It counts files that PARSED. An oversized or unreadable transcript never
+ *    gets a slot, so deleting one is invisible here as well as to the mtime.
+ *  - If the corpus ever exceeds the cache's `maxEntries` (25,000, against a
+ *    reference corpus of ~6,800), LRU eviction pins this near the cap and it
+ *    stops discriminating.
+ */
+export function getJsonlFileCount(): number {
+  return getFileCache().size;
+}
+
+/**
  * Sentinel error from `loadSessionTurnsBySessionId` signaling that the
  * JSONL was found but failed to read or parse. Distinct from a `null`
  * return (file not found / oversized) so callers can route the two
