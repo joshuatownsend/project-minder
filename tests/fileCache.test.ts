@@ -266,6 +266,48 @@ describe("FileCache byte budget (#476)", () => {
     expect(again).toBe("parsed");
   });
 
+
+  it("charges nothing for a value the factory declined to produce", async () => {
+    // The usage parser returns `[]` above MAX_SESSION_FILE_SIZE, so the slot
+    // retains nothing. Charged the file's size, one 72 MB in-progress
+    // transcript would evict 72 MB of real parsed turns to hold an empty
+    // array — and, since the just-inserted slot is exempt, leave the cache
+    // nominally over budget with nothing left to drop. (Codex P2, PR #514.)
+    const cache = new FileCache<string[]>({
+      maxBytes: 1000,
+      weigh: (v, size) => (v.length === 0 ? 0 : size),
+    });
+
+    mockStat.mockResolvedValue(statResult(1000, 5_000_000));
+    await cache.getOrCompute("/oversized", async () => []);
+    expect(cache.bytes).toBe(0);
+
+    mockStat.mockResolvedValue(statResult(1000, 200));
+    await cache.getOrCompute("/real", async () => ["turn"]);
+    expect(cache.bytes).toBe(200);
+    // And the oversized slot is still there doing its real job — remembering
+    // that this file was already looked at.
+    expect(cache.size).toBe(2);
+  });
+
+  it("trims below the budget rather than exactly to it", async () => {
+    // Evicting only down to the line meant sorting the whole cache on EVERY
+    // subsequent insert of an over-budget sweep — ten thousand sorts of a
+    // ten-thousand-entry array on a 2 GiB corpus of 100 KiB files, which is
+    // superlinear work before any parsing cost. (Codex P2, PR #514.)
+    const cache = new FileCache<string>({ maxBytes: 1000 });
+    await fill(
+      cache,
+      Array.from({ length: 10 }, (_, i) => [`/f${i}`, 100] as [string, number])
+    );
+    expect(cache.bytes).toBe(1000);
+
+    await fill(cache, [["/trigger", 100]]);
+
+    // At or under 80% of the budget, so the next several inserts are free.
+    expect(cache.bytes).toBeLessThanOrEqual(800);
+  });
+
   it("is unbounded by default, so existing callers are unaffected", async () => {
     const cache = new FileCache<string>();
     await fill(cache, [["/a", 10_000_000], ["/b", 10_000_000]]);

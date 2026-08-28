@@ -43,6 +43,11 @@ const globalForParser = globalThis as unknown as {
    *  corpus fingerprint (#492). Deliberately NOT the cache's size, which
    *  answers "how much fits" rather than "how much exists" (#476). */
   __usageLiveFileCount?: number;
+  /** Newest mtime the last completed sweep saw. Recorded for the same reason
+   *  as the count: once the cache is byte-bounded, scanning its slots answers
+   *  a question about RESIDENCY, and the newest file is exactly the kind that
+   *  gets evicted when it is also one of the largest (Codex P1, PR #514). */
+  __usageLiveMaxMtime?: number;
   __usageAllSessionsInFlight?: {
     promise: Promise<Map<string, UsageTurn[]>>;
     /** JSON of (claudeHomes, pathMappings) the sweep was started under — a
@@ -116,6 +121,12 @@ function getFileCache(): FileCache<UsageTurn[]> {
     // 2.4%-of-files-hold-50%-of-bytes skew buys.
     const budgetMb = Number(process.env.MINDER_PARSE_CACHE_MB);
     globalForParser.__usageFileCache = new FileCache<UsageTurn[]>({
+      // A transcript above `MAX_SESSION_FILE_SIZE` is not parsed — the factory
+      // returns `[]` — so the slot retains nothing and must not be charged the
+      // file's size. Left at the default, one 72 MB in-progress transcript
+      // would evict 72 MB of real parsed turns to hold an empty array.
+      // (Codex P2, PR #514.)
+      weigh: (turns, size) => (turns.length === 0 ? 0 : size),
       maxEntries: 25_000,
       maxBytes:
         Number.isFinite(budgetMb) && budgetMb > 0
@@ -864,10 +875,12 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
   // be re-parsed every time AND `maxMtimeMs()` would ignore adapter edits,
   // leaving ETags claiming "unchanged" across a real change.
   cache.retainOnly(liveSet);
-  // The corpus fingerprint's cardinality half (#492) is recorded HERE, from
-  // what the sweep saw, rather than read back off the cache — the cache is
-  // byte-bounded as of #476 and its size answers a different question.
+  // Both halves of the corpus fingerprint (#492) are recorded HERE, from what
+  // the sweep saw, rather than read back off the cache — the cache is
+  // byte-bounded as of #476, so its contents answer a question about residency
+  // rather than about the corpus.
   globalForParser.__usageLiveFileCount = liveSet.size;
+  globalForParser.__usageLiveMaxMtime = cache.maxMtimeMs();
   return result;
 }
 
@@ -1045,7 +1058,22 @@ export async function parseAllSessions(
  * the first `parseAllSessions()` call completes, it returns 0.
  */
 export function getJsonlMaxMtime(): number {
-  return getFileCache().maxMtimeMs();
+  // The larger of what the last sweep saw and what is cached right now.
+  //
+  // Reading the cache alone stopped being right when #476 gave it a byte
+  // budget: the newest transcript is often also one of the largest — an active
+  // session grows — so it is exactly the kind of entry eviction takes, and
+  // losing it would freeze the ETag and the `(mtime, fileCount)` fingerprint
+  // across a real change (Codex P1, PR #514).
+  //
+  // The max of the two rather than the recorded value alone, because files are
+  // also parsed OUTSIDE a sweep (`loadSessionTurnsBySessionId`), and a newer
+  // one seen that way must still move this. Both inputs are monotone
+  // summaries, so combining them cannot lose an advance.
+  return Math.max(
+    globalForParser.__usageLiveMaxMtime ?? 0,
+    getFileCache().maxMtimeMs()
+  );
 }
 
 /**
@@ -1073,6 +1101,18 @@ export function getJsonlMaxMtime(): number {
  */
 export function getJsonlFileCount(): number {
   return globalForParser.__usageLiveFileCount ?? 0;
+}
+
+/**
+ * Source bytes the parse cache is currently charging against its budget.
+ *
+ * Exposed for tests and metrics, and it is NOT a corpus measure -- unlike
+ * the two fingerprint halves above, this deliberately answers "how much is
+ * resident". It is how the `weigh` wiring is observable: a transcript the
+ * parser declined to parse retains nothing and must charge nothing (#476).
+ */
+export function getJsonlCacheBytes(): number {
+  return getFileCache().bytes;
 }
 
 /**

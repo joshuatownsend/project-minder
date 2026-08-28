@@ -22,9 +22,15 @@ interface CacheSlot<T> {
   size: number;
   value: T;
   lastSeenAt: number;
+  /**
+   * What this slot charges against `maxBytes`. Usually the file's size, but
+   * see the `weigh` option — a file the factory declined to parse retains
+   * nothing and must not be charged as though it did.
+   */
+  weight: number;
 }
 
-export interface FileCacheOptions {
+export interface FileCacheOptions<T = unknown> {
   /**
    * Maximum entries before LRU eviction kicks in. Default: 5000.
    *
@@ -55,6 +61,18 @@ export interface FileCacheOptions {
    * → 114 MB of retained heap). Budget accordingly.
    */
   maxBytes?: number;
+  /**
+   * What a cached value costs against `maxBytes`. Defaults to the file's size.
+   *
+   * The default is a proxy, and it is wrong in one direction that matters: a
+   * factory can decline to parse a file and return an empty value — the usage
+   * parser does exactly this above `MAX_SESSION_FILE_SIZE`. Charging that slot
+   * the file's full size lets one 72 MB in-progress transcript evict 72 MB of
+   * real parsed data while retaining nothing, and, since the just-inserted
+   * slot is exempt from eviction, leave the cache nominally over budget with
+   * nothing left to drop. (Codex P2, PR #514.)
+   */
+  weigh?: (value: T, size: number) => number;
 }
 
 export class FileCache<T> {
@@ -62,12 +80,14 @@ export class FileCache<T> {
   private readonly inFlight = new Map<string, Promise<T>>();
   private readonly maxEntries: number;
   private readonly maxBytes: number;
+  private readonly weigh: (value: T, size: number) => number;
   /** Running sum of `slot.size`, so the budget check is O(1) per insert. */
   private retainedBytes = 0;
 
-  constructor(opts: FileCacheOptions = {}) {
+  constructor(opts: FileCacheOptions<T> = {}) {
     this.maxEntries = opts.maxEntries ?? 5000;
     this.maxBytes = opts.maxBytes ?? Infinity;
+    this.weigh = opts.weigh ?? ((_value, size) => size);
   }
 
   /** Number of cached entries (for tests and metrics). */
@@ -120,8 +140,15 @@ export class FileCache<T> {
       // subtract the old size is how a running total silently drifts upward
       // until the cache evicts everything.
       this.drop(filePath);
-      this.slots.set(filePath, { mtimeMs, size, value, lastSeenAt: Date.now() });
-      this.retainedBytes += size;
+      const weight = Math.max(0, this.weigh(value, size));
+      this.slots.set(filePath, {
+        mtimeMs,
+        size,
+        value,
+        lastSeenAt: Date.now(),
+        weight,
+      });
+      this.retainedBytes += weight;
       this.evictIfNeeded(filePath);
       return value;
     })();
@@ -149,7 +176,7 @@ export class FileCache<T> {
   private drop(filePath: string): void {
     const slot = this.slots.get(filePath);
     if (!slot) return;
-    this.retainedBytes -= slot.size;
+    this.retainedBytes -= slot.weight;
     this.slots.delete(filePath);
   }
 
@@ -215,11 +242,17 @@ export class FileCache<T> {
    */
   private evictByBytes(justInserted?: string): void {
     if (this.retainedBytes <= this.maxBytes) return;
-    const bySizeDesc = Array.from(this.slots.entries())
+    // Trim to 80% of the budget in one pass, the way the count sweep does.
+    // Evicting only down to the line meant sorting the entire cache on EVERY
+    // subsequent insert of an over-budget sweep — roughly ten thousand sorts
+    // of a ten-thousand-entry array on a 2 GiB corpus of 100 KiB files, which
+    // is superlinear work before any parsing cost. (Codex P2, PR #514.)
+    const target = this.maxBytes * 0.8;
+    const byWeightDesc = Array.from(this.slots.entries())
       .filter(([path]) => path !== justInserted)
-      .sort((a, b) => b[1].size - a[1].size);
-    for (const [path] of bySizeDesc) {
-      if (this.retainedBytes <= this.maxBytes) return;
+      .sort((a, b) => b[1].weight - a[1].weight);
+    for (const [path] of byWeightDesc) {
+      if (this.retainedBytes <= target) return;
       this.drop(path);
     }
   }
