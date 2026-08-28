@@ -81,7 +81,13 @@ function tsxFiles(dir: string): string[] {
 
 /** "…and then it renders something." */
 const RENDERS = String.raw`\s*\(?\s*<`;
-const FLAG = String.raw`(?:loading|isLoading|[a-z]\w*Loading)`;
+const FLAG = String.raw`(?:loading|isLoading|[a-z]\w*Loading|isConnecting)`;
+/**
+ * Further `&&` terms between the flag and the element. `{loading && !status
+ * && <div>…}` is one condition, not two, and requiring the element to sit
+ * immediately after the flag left it unmatched (Codex, PR #517).
+ */
+const MORE_TERMS = String.raw`(?:[^<>{}]{0,80}&&)*`;
 const NOT_LOADED = String.raw`!\s*(?:loaded|[a-z]\w*Loaded)`;
 
 /**
@@ -98,7 +104,11 @@ const BRANCH_PATTERNS: Array<{ re: RegExp; lookBack: number }> = [
     // LOADED branch, and without them the flag matches inside it and the
     // guard demands a marker on content that has finished arriving.
     re: new RegExp(
-      String.raw`(?<!!)(?<!!\s)\b` + FLAG + String.raw`\b\s*(?:\?|&&)` + RENDERS,
+      String.raw`(?<!!)(?<!!\s)\b` +
+        FLAG +
+        String.raw`\b\s*(?:\?|&&)` +
+        MORE_TERMS +
+        RENDERS,
       "g"
     ),
     lookBack: 0,
@@ -137,7 +147,7 @@ const BRANCH_PATTERNS: Array<{ re: RegExp; lookBack: number }> = [
     // `<p>Loading</p>` is as much a loading state as `<p>Loading…</p>`,
     // and four of them were live (Codex, PR #517). Requiring the closing
     // `<` keeps it to a sentence rather than any prose containing the word.
-    re: />\s*[Ll]oading\b[^<>{}\n]{0,40}?(?:…|\.\.\.)?\s*</g,
+    re: />\s*(?:[Ll]oading|[Cc]onnecting)\b[^<>{}\n]{0,40}?(?:…|\.\.\.)?\s*</g,
     lookBack: 600,
   },
 ];
@@ -176,6 +186,8 @@ describe("every loading state carries a queryable marker (#445)", () => {
       `<div>Loading quota…</div>`,
       `<span>loading projects…</span>`,
       `<p>Loading</p>`,
+      `{loading && !status && <div>x</div>}`,
+      `<span>Connecting to live session stream…</span>`,
     ];
     for (const s of samples) {
       const hit = BRANCH_PATTERNS.some(({ re }) => {
