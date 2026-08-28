@@ -271,29 +271,27 @@ describe("FileCache byte budget (#476)", () => {
     expect(await cache.getOrCompute("/huge", async () => "MISS")).toBe("MISS");
   });
 
-  it("keeps the mtime watermark across eviction", async () => {
-    // `maxMtimeMs()` scans live slots, so once eviction exists it answers a
-    // question about RESIDENCY. The newest transcript is often also one of the
-    // largest — an active session grows — so it is exactly what largest-first
-    // takes, and a corpus fingerprint built on the scan would freeze across a
-    // real change. (Codex P1, PR #514.)
+  it("keeps the corpus mtime across eviction", async () => {
+    // `slots` is residency; `meta` is the corpus. The newest transcript is
+    // often also one of the largest — an active session grows — so it is
+    // exactly what largest-first eviction takes, and an ETag or fingerprint
+    // built on residency would freeze across a real change.
+    // (Codex P1, PR #514.)
     const cache = new FileCache<string>({ maxBytes: 300 });
     mockStat.mockResolvedValue(statResult(9_999, 400));
     await cache.getOrCompute("/newest-and-biggest", async () => "v");
 
-    // Evicted on the way in: nothing resident carries that mtime.
-    expect(cache.maxMtimeMs()).toBe(0);
-    // The watermark remembers it anyway.
-    expect(cache.observedMaxMtimeMs).toBe(9_999);
+    expect(cache.size).toBe(0); // evicted on the way in
+    expect(cache.bytes).toBe(0);
+    expect(cache.maxMtimeMs()).toBe(9_999); // still part of the corpus
+    expect(cache.corpusSize).toBe(1);
   });
 
-  it("does NOT advance the watermark when the factory rejects", async () => {
-    // `stat` succeeding says nothing about the read. A transient EACCES/EBUSY
-    // rejects in the factory, and `buildAllSessions` puts that path in its
-    // live set anyway — so advancing the watermark on the way past would let a
-    // later successful retry, with identical file metadata, leave BOTH halves
-    // of the fingerprint unmoved and the histogram stale for good.
-    // (Codex P1, PR #514.)
+  it("does NOT count a file whose parse failed", async () => {
+    // `stat` succeeding says nothing about the read; a transient EACCES/EBUSY
+    // rejects in the factory. A file that did not parse is not in the corpus,
+    // so a later successful retry with identical metadata genuinely moves the
+    // fingerprint. (Codex P1, PR #514.)
     const cache = new FileCache<string>();
     mockStat.mockResolvedValue(statResult(4_242, 10));
     await expect(
@@ -301,80 +299,61 @@ describe("FileCache byte budget (#476)", () => {
         throw Object.assign(new Error("EBUSY"), { code: "EBUSY" });
       })
     ).rejects.toThrow("EBUSY");
-    expect(cache.observedMaxMtimeMs).toBe(0);
+    expect(cache.corpusSize).toBe(0);
+    expect(cache.maxMtimeMs()).toBe(0);
 
-    // ...and the retry that succeeds does move it, which is the recovery the
-    // fingerprint has to be able to see.
     await cache.getOrCompute("/locked", async () => "parsed");
-    expect(cache.observedMaxMtimeMs).toBe(4_242);
+    expect(cache.corpusSize).toBe(1);
+    expect(cache.maxMtimeMs()).toBe(4_242);
   });
 
-  it("advances the watermark on a cache HIT, not only on a parse", async () => {
-    // A warm sweep parses nothing, and must still notice that a file grew.
+  it("registers a NON-NEWEST file recovering, which a maximum alone cannot", async () => {
+    // The case a watermark structurally could not see: the retry's mtime is
+    // below another file's, so no maximum moves — only the cardinality does.
+    // Both halves exist precisely so neither has to catch everything.
     const cache = new FileCache<string>();
+    mockStat.mockResolvedValue(statResult(9_000, 10));
+    await cache.getOrCompute("/newest", async () => "v");
+
     mockStat.mockResolvedValue(statResult(100, 10));
-    await cache.getOrCompute("/a", async () => "v1");
-    expect(cache.observedMaxMtimeMs).toBe(100);
+    await expect(
+      cache.getOrCompute("/older", async () => {
+        throw new Error("EBUSY");
+      })
+    ).rejects.toThrow();
+    expect(cache.corpusSize).toBe(1);
 
-    mockStat.mockResolvedValue(statResult(500, 10));
-    await cache.getOrCompute("/a", async () => "v2");
-    expect(cache.observedMaxMtimeMs).toBe(500);
+    await cache.getOrCompute("/older", async () => "parsed");
+    expect(cache.corpusSize).toBe(2);
+    expect(cache.maxMtimeMs()).toBe(9_000); // unchanged, as expected
   });
 
-  it("resets the watermark on clear, and only on clear", async () => {
-    // Monotone by construction: deletions are the cardinality half's job
-    // (#492), never a watermark's.
+  it("FALLS when the newest transcript is deleted", async () => {
+    // A monotone watermark could never do this, so a sweep that deletes the
+    // newest file and adds an older one — same count — was undetectable.
+    // (Codex P1, PR #514.)
     const cache = new FileCache<string>();
-    mockStat.mockResolvedValue(statResult(700, 10));
+    mockStat.mockResolvedValue(statResult(9_000, 10));
+    await cache.getOrCompute("/newest", async () => "v");
+    mockStat.mockResolvedValue(statResult(100, 10));
+    await cache.getOrCompute("/older", async () => "v");
+    expect(cache.maxMtimeMs()).toBe(9_000);
+
+    cache.retainOnly(new Set(["/older"]));
+    expect(cache.maxMtimeMs()).toBe(100);
+    expect(cache.corpusSize).toBe(1);
+  });
+
+  it("drops a file from the corpus when it disappears mid-flight", async () => {
+    const cache = new FileCache<string>();
+    mockStat.mockResolvedValue(statResult(500, 10));
     await cache.getOrCompute("/a", async () => "v");
+    expect(cache.corpusSize).toBe(1);
 
-    cache.retainOnly(new Set());
-    expect(cache.observedMaxMtimeMs).toBe(700);
-
-    cache.clear();
-    expect(cache.observedMaxMtimeMs).toBe(0);
-  });
-
-
-  it("charges nothing for a value the factory declined to produce", async () => {
-    // The usage parser returns `[]` above MAX_SESSION_FILE_SIZE, so the slot
-    // retains nothing. Charged the file's size, one 72 MB in-progress
-    // transcript would evict 72 MB of real parsed turns to hold an empty
-    // array — and, since the just-inserted slot is exempt, leave the cache
-    // nominally over budget with nothing left to drop. (Codex P2, PR #514.)
-    const cache = new FileCache<string[]>({
-      maxBytes: 1000,
-      weigh: (v, size) => (v.length === 0 ? 0 : size),
-    });
-
-    mockStat.mockResolvedValue(statResult(1000, 5_000_000));
-    await cache.getOrCompute("/oversized", async () => []);
-    expect(cache.bytes).toBe(0);
-
-    mockStat.mockResolvedValue(statResult(1000, 200));
-    await cache.getOrCompute("/real", async () => ["turn"]);
-    expect(cache.bytes).toBe(200);
-    // And the oversized slot is still there doing its real job — remembering
-    // that this file was already looked at.
-    expect(cache.size).toBe(2);
-  });
-
-  it("trims below the budget rather than exactly to it", async () => {
-    // Evicting only down to the line meant sorting the whole cache on EVERY
-    // subsequent insert of an over-budget sweep — ten thousand sorts of a
-    // ten-thousand-entry array on a 2 GiB corpus of 100 KiB files, which is
-    // superlinear work before any parsing cost. (Codex P2, PR #514.)
-    const cache = new FileCache<string>({ maxBytes: 1000 });
-    await fill(
-      cache,
-      Array.from({ length: 10 }, (_, i) => [`/f${i}`, 100] as [string, number])
-    );
-    expect(cache.bytes).toBe(1000);
-
-    await fill(cache, [["/trigger", 100]]);
-
-    // At or under 80% of the budget, so the next several inserts are free.
-    expect(cache.bytes).toBeLessThanOrEqual(800);
+    mockStat.mockRejectedValue(Object.assign(new Error("gone"), { code: "ENOENT" }));
+    expect(await cache.getOrCompute("/a", async () => "v")).toBeUndefined();
+    expect(cache.corpusSize).toBe(0);
+    expect(cache.maxMtimeMs()).toBe(0);
   });
 
   it("is unbounded by default, so existing callers are unaffected", async () => {

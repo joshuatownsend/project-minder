@@ -39,16 +39,6 @@ const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 // rationale as the existing globalThis caches in /api/sessions, /api/stats etc.
 const globalForParser = globalThis as unknown as {
   __usageFileCache?: FileCache<UsageTurn[]>;
-  /** Files the last completed sweep saw — the cardinality half of the
-   *  corpus fingerprint (#492). Deliberately NOT the cache's size, which
-   *  answers "how much fits" rather than "how much exists" (#476). */
-  __usageLiveFileCount?: number;
-  /** Newest mtime the last completed sweep saw. Read from the cache's
-   *  WATERMARK, not from its live slots: once the cache is byte-bounded,
-   *  scanning slots answers a question about residency, and the newest file is
-   *  exactly the kind that gets evicted when it is also one of the largest —
-   *  an active session grows (Codex P1, PR #514). */
-  __usageLiveMaxMtime?: number;
   __usageAllSessionsInFlight?: {
     promise: Promise<Map<string, UsageTurn[]>>;
     /** JSON of (claudeHomes, pathMappings) the sweep was started under — a
@@ -876,12 +866,6 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
   // be re-parsed every time AND `maxMtimeMs()` would ignore adapter edits,
   // leaving ETags claiming "unchanged" across a real change.
   cache.retainOnly(liveSet);
-  // Both halves of the corpus fingerprint (#492) are recorded HERE, from what
-  // the sweep saw, rather than read back off the cache — the cache is
-  // byte-bounded as of #476, so its contents answer a question about residency
-  // rather than about the corpus.
-  globalForParser.__usageLiveFileCount = liveSet.size;
-  globalForParser.__usageLiveMaxMtime = cache.observedMaxMtimeMs;
   return result;
 }
 
@@ -1059,49 +1043,31 @@ export async function parseAllSessions(
  * the first `parseAllSessions()` call completes, it returns 0.
  */
 export function getJsonlMaxMtime(): number {
-  // The larger of what the last sweep saw and what is cached right now.
-  //
-  // Reading the cache alone stopped being right when #476 gave it a byte
-  // budget: the newest transcript is often also one of the largest — an active
-  // session grows — so it is exactly the kind of entry eviction takes, and
-  // losing it would freeze the ETag and the `(mtime, fileCount)` fingerprint
-  // across a real change (Codex P1, PR #514).
-  //
-  // The max of the two rather than the recorded value alone, because files are
-  // also parsed OUTSIDE a sweep (`loadSessionTurnsBySessionId`), and a newer
-  // one seen that way must still move this. Both inputs are monotone
-  // summaries, so combining them cannot lose an advance.
-  return Math.max(
-    globalForParser.__usageLiveMaxMtime ?? 0,
-    getFileCache().maxMtimeMs()
-  );
+  return getFileCache().maxMtimeMs();
 }
 
+
 /**
- * How many JSONL files the last `parseAllSessions()` sweep actually saw.
+ * How many JSONL files the cache has successfully read and not since seen
+ * removed.
  *
- * Exists as the second half of a corpus fingerprint. `getJsonlMaxMtime()` is a
+ * The cardinality half of a corpus fingerprint. `getJsonlMaxMtime()` is a
  * MONOTONE summary — it can only answer "has anything newer appeared" — so it
  * is structurally blind to a deletion that does not hold the maximum mtime.
  * Cardinality is the missing dimension: any deletion changes it, whatever the
  * deleted file's age. See #492.
  *
- * **Recorded from the sweep's live set, NOT read from the cache** (Codex P2,
- * PR #514). It used to return `cache.size`, which was the same number only
- * while the cache held everything. Once #476 gave the cache a byte budget,
- * `size` became "how much fits" rather than "how much exists" — so on a corpus
- * over budget, deleting a transcript that had already been evicted would leave
- * both halves of the fingerprint unmoved and `getSessionCategoryCounts()` would
- * serve its old histogram indefinitely. Exactly the #492 defect, reintroduced
- * through the back door by an unrelated change.
+ * **`corpusSize`, not `size`.** Since #476 the cache evicts values under a
+ * byte budget, so `size` counts what is RESIDENT while this counts what was
+ * READ. Reading the resident count would make a deletion undetectable whenever
+ * the deleted file had already been evicted — the #492 defect, reintroduced
+ * through the back door by an unrelated change (Codex P2, PR #514).
  *
- * One caveat remains, and it degrades to today's behaviour rather than to
- * something worse: it counts files the sweep PARSED. An oversized or
- * unreadable transcript never enters the live set, so deleting one is
- * invisible here as it is to the mtime.
+ * A file whose parse FAILED is not counted, which is what lets a successful
+ * retry move this even when the file's mtime is below another's.
  */
 export function getJsonlFileCount(): number {
-  return globalForParser.__usageLiveFileCount ?? 0;
+  return getFileCache().corpusSize;
 }
 
 /**

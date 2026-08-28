@@ -84,20 +84,34 @@ export class FileCache<T> {
   /** Running sum of `slot.weight`, so the budget check is O(1) per insert. */
   private retainedBytes = 0;
   /**
-   * Newest mtime this cache has ever been TOLD about, which is not the same as
-   * the newest it currently holds.
+   * What the cache has successfully READ, for every such file — independent of
+   * whether its parsed value is still resident.
    *
-   * `maxMtimeMs()` scans the live slots, so once eviction exists it answers a
-   * question about residency — and the newest transcript is often also one of
-   * the largest, because an active session grows, so it is exactly what
-   * largest-first eviction takes. A caller building a corpus fingerprint needs
-   * the file to have counted even after its value was dropped.
+   * **This is the corpus, and `slots` is the residency.** The two were the
+   * same thing until `maxBytes` arrived (#476), which is why one map used to
+   * answer both questions. Once eviction exists they diverge, and every
+   * consumer that wants "what does the corpus look like" — the `(mtime,
+   * fileCount)` fingerprint behind `getSessionCategoryCounts` (#492), and the
+   * route ETags — wants this one.
    *
-   * Monotone by construction, and deliberately so: deletions are the job of
-   * the cardinality half of that fingerprint (#492), never of a watermark.
-   * Reset only by `clear()`. (Codex P1, PR #514.)
+   * Three properties it has that a monotone watermark does not, each of which
+   * was a real defect found on PR #514:
+   *
+   *  - **Eviction cannot lower it.** The newest transcript is often also one
+   *    of the largest, since an active session grows, so it is exactly what
+   *    largest-first eviction takes.
+   *  - **A failed parse never enters it.** `stat` succeeding says nothing
+   *    about the read; a transient EACCES/EBUSY rejects in the factory. So a
+   *    later successful retry genuinely changes this map, even with identical
+   *    file metadata.
+   *  - **It can FALL.** `retainOnly` prunes it, so deleting the newest
+   *    transcript lowers the maximum — which a watermark, being monotone by
+   *    construction, could never do.
+   *
+   * Cheap: two numbers per file, ~6,650 files on the reference corpus. It is
+   * the parsed VALUES that are large, and those are what `maxBytes` bounds.
    */
-  private observedMaxMtime = 0;
+  private readonly meta = new Map<string, { mtimeMs: number; size: number }>();
 
   constructor(opts: FileCacheOptions<T> = {}) {
     this.maxEntries = opts.maxEntries ?? 5000;
@@ -116,11 +130,13 @@ export class FileCache<T> {
   }
 
   /**
-   * Newest mtime seen since the last `clear()`, whether or not that entry is
-   * still resident. See `observedMaxMtime`.
+   * How many files the cache has successfully read and not since seen removed.
+   *
+   * The cardinality half of the corpus fingerprint (#492). Distinct from
+   * `size`, which counts RESIDENT values — see `meta`.
    */
-  get observedMaxMtimeMs(): number {
-    return this.observedMaxMtime;
+  get corpusSize(): number {
+    return this.meta.size;
   }
 
   /**
@@ -137,8 +153,10 @@ export class FileCache<T> {
     try {
       stat = await fs.stat(filePath);
     } catch {
-      // File gone — drop any cached entry so we don't return stale data later.
+      // File gone — drop the value AND the corpus entry, so a deletion moves
+      // both halves of the fingerprint.
       this.drop(filePath);
+      this.meta.delete(filePath);
       return undefined;
     }
 
@@ -149,10 +167,6 @@ export class FileCache<T> {
     const cached = this.slots.get(filePath);
     if (cached && cached.mtimeMs === mtimeMs && cached.size === size) {
       cached.lastSeenAt = now;
-      // A warm sweep parses nothing and must still notice that a file grew.
-      // Safe here because the value IS cached — see the miss path for why
-      // that distinction matters.
-      this.observe(mtimeMs);
       return cached.value;
     }
 
@@ -165,12 +179,9 @@ export class FileCache<T> {
       const value = await factory(filePath);
       // AFTER the factory resolves, never on the way past (Codex P1, PR #514).
       // `stat` succeeding says nothing about the read: a transient EACCES or
-      // EBUSY, or a write racing the read, rejects here. Advancing the
-      // watermark before that would let a later successful retry — same mtime,
-      // same size — leave BOTH halves of the corpus fingerprint unmoved, so
-      // `getSessionCategoryCounts()` would go on serving the histogram it
-      // built while the transcript was unreadable.
-      this.observe(mtimeMs);
+      // EBUSY, or a write racing the read, rejects here, and a file that did
+      // not parse is not part of the corpus this describes.
+      this.meta.set(filePath, { mtimeMs, size });
       // Replace, not add: a changed file already has a slot, and forgetting to
       // subtract the old size is how a running total silently drifts upward
       // until the cache evicts everything.
@@ -204,16 +215,11 @@ export class FileCache<T> {
   /** Drop everything. */
   clear(): void {
     this.slots.clear();
+    this.meta.clear();
     this.retainedBytes = 0;
-    this.observedMaxMtime = 0;
   }
 
   /** The one place a slot leaves the map, so the byte total cannot drift. */
-  /** Raise the watermark. The only place it moves. */
-  private observe(mtimeMs: number): void {
-    if (mtimeMs > this.observedMaxMtime) this.observedMaxMtime = mtimeMs;
-  }
-
   private drop(filePath: string): void {
     const slot = this.slots.get(filePath);
     if (!slot) return;
@@ -235,16 +241,27 @@ export class FileCache<T> {
     for (const path of [...this.slots.keys()]) {
       if (!liveSet.has(path)) this.drop(path);
     }
+    // The corpus index is pruned too, and this is what lets the fingerprint
+    // FALL — deleting the newest transcript lowers `maxMtimeMs()`, which a
+    // monotone watermark could never do.
+    for (const path of [...this.meta.keys()]) {
+      if (!liveSet.has(path)) this.meta.delete(path);
+    }
   }
 
   /**
-   * Max mtime across all currently cached entries — exposed as a side-channel
-   * so routes can compute an ETag without changing parser return signatures.
+   * Max mtime across the CORPUS — every file successfully read and not since
+   * removed — exposed as a side-channel so routes can compute an ETag without
+   * changing parser return signatures.
+   *
+   * Reads `meta`, not `slots`: with `maxBytes` in play (#476) the resident set
+   * is a subset of what was read, and an ETag built on residency would freeze
+   * across a real change the moment the newest file was evicted.
    */
   maxMtimeMs(): number {
     let max = 0;
-    for (const slot of this.slots.values()) {
-      if (slot.mtimeMs > max) max = slot.mtimeMs;
+    for (const entry of this.meta.values()) {
+      if (entry.mtimeMs > max) max = entry.mtimeMs;
     }
     return max;
   }

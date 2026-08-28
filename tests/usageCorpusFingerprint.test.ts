@@ -1,64 +1,90 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import path from "path";
+import { promises as fs } from "fs";
+import { installIsolatedState } from "./_helpers/isolatedState";
+import { preserveEnvVars } from "./_helpers/preserveEnv";
 
-// #476 round 2 (Codex P1/P2 on PR #514) — the corpus fingerprint must describe
-// the CORPUS, not the cache.
+// #476 (Codex P1/P2 on PR #514) — the corpus fingerprint must describe the
+// CORPUS, not the cache's residency.
 //
 // `getJsonlMaxMtime()` and `getJsonlFileCount()` are the two halves of the key
 // `getSessionCategoryCounts()` memoises on (#492), and they also feed route
-// ETags. Both used to be read off `FileCache`, which was the same thing as
-// "the corpus" only while the cache held all of it. Once #476 gave the cache a
-// byte budget, its contents answer a question about RESIDENCY — and the newest
-// transcript is often also one of the largest, because an active session grows,
-// so it is exactly the kind of entry eviction takes.
+// ETags. Both read `FileCache`, which was the same thing as "the corpus" only
+// while it held all of it. Once #476 gave it a byte budget the two diverged,
+// and the newest transcript is often also one of the largest — an active
+// session grows — so it is exactly the kind of entry eviction takes.
 //
-// Losing it freezes the ETag and the fingerprint across a real change: the
-// worst failure this pair has, and the one #492 exists to prevent.
+// Driven end to end through a real sweep, because the defect is entirely about
+// what the fingerprint does when the cache DOES evict.
 
-const globals = globalThis as unknown as {
-  __usageFileCache?: unknown;
-  __usageLiveFileCount?: number;
-  __usageLiveMaxMtime?: number;
-};
+const state = installIsolatedState({ seedClaudeProjects: true });
+preserveEnvVars(["MINDER_PARSE_CACHE_MB"]);
 
-beforeEach(() => {
-  vi.resetModules();
-  delete globals.__usageFileCache;
-  delete globals.__usageLiveFileCount;
-  delete globals.__usageLiveMaxMtime;
-});
+/** A budget far below a single file, so eviction fires on the way in. */
+const TINY_BUDGET_MB = "0.0001";
 
-async function load() {
-  return import("@/lib/usage/parser");
+function transcript(sessionId: string, pad: number) {
+  return JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-01-01T00:00:00Z",
+    sessionId,
+    message: {
+      id: "m1",
+      model: "claude-opus-5",
+      content: [{ type: "text", text: "x".repeat(pad) }],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    },
+  });
 }
 
+async function writeTranscript(dir: string, id: string, pad: number) {
+  const file = path.join(dir, `${id}.jsonl`);
+  await fs.writeFile(file, transcript(id, pad) + "\n", "utf-8");
+  return file;
+}
+
+async function seed() {
+  await state.reload();
+  process.env.MINDER_PARSE_CACHE_MB = TINY_BUDGET_MB;
+  const parser = await import("@/lib/usage/parser");
+  const dir = path.join(state.tmpHome(), ".claude", "projects", "C--dev-app");
+  await fs.mkdir(dir, { recursive: true });
+  return { parser, dir };
+}
+
+beforeEach(() => vi.clearAllMocks());
+
 describe("corpus fingerprint survives cache eviction (#476)", () => {
-  it("reports the sweep's newest mtime even when nothing is cached", async () => {
-    const { getJsonlMaxMtime } = await load();
-    globals.__usageLiveMaxMtime = 12_345;
-    // Cache is empty — `maxMtimeMs()` over zero slots is 0, which is what the
-    // old implementation would have returned.
-    expect(getJsonlMaxMtime()).toBe(12_345);
+  it("counts and dates a transcript the budget evicted", async () => {
+    const { parser, dir } = await seed();
+    await writeTranscript(dir, "a1111111-1111-1111-1111-111111111111", 4000);
+
+    await parser.parseAllSessions();
+
+    // Nothing resident...
+    expect(parser.getJsonlCacheBytes()).toBe(0);
+    // ...and the fingerprint unmoved by that, which is the whole point.
+    expect(parser.getJsonlFileCount()).toBe(1);
+    expect(parser.getJsonlMaxMtime()).toBeGreaterThan(0);
   });
 
-  it("still advances for a file parsed outside a sweep", async () => {
-    // `loadSessionTurnsBySessionId` parses one file without sweeping, so the
-    // recorded value alone would go stale. Both inputs are monotone summaries,
-    // so taking the larger cannot lose an advance in either direction.
-    const parser = await load();
-    globals.__usageLiveMaxMtime = 100;
-    expect(parser.getJsonlMaxMtime()).toBe(100);
-  });
+  it("falls when a transcript is deleted, even one already evicted", async () => {
+    // The half a monotone watermark could never provide: deleting a file has
+    // to be able to LOWER the answer. An earlier revision of this PR recorded
+    // a lifetime high-water mark instead, and could not.
+    const { parser, dir } = await seed();
+    const first = await writeTranscript(
+      dir,
+      "a1111111-1111-1111-1111-111111111111",
+      4000
+    );
+    await writeTranscript(dir, "b2222222-2222-2222-2222-222222222222", 4000);
 
-  it("reports the sweep's file count, not the cache's occupancy", async () => {
-    const { getJsonlFileCount } = await load();
-    globals.__usageLiveFileCount = 6_650;
-    expect(getJsonlFileCount()).toBe(6_650);
-  });
+    await parser.parseAllSessions();
+    expect(parser.getJsonlFileCount()).toBe(2);
 
-  it("reports zero before any sweep has completed", async () => {
-    // Not `undefined`, and not a stale number from another test's globals —
-    // the fingerprint's honest answer before there is a corpus to describe.
-    const { getJsonlFileCount } = await load();
-    expect(getJsonlFileCount()).toBe(0);
+    await fs.rm(first);
+    await parser.parseAllSessions();
+    expect(parser.getJsonlFileCount()).toBe(1);
   });
 });
