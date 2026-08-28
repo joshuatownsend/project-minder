@@ -75,12 +75,38 @@ function getFileCache(): FileCache<UsageTurn[]> {
     // every read of the dashboard re-parses the entire history.
     //
     // An entry count was never a memory bound in the first place: a slot holds
-    // one session's whole `UsageTurn[]`, so 5,000 large transcripts could
-    // already exceed 25,000 small ones. Bounding this by retained bytes or
-    // turns would be a real improvement over both numbers; it is a different
-    // change from removing the cliff, and is tracked separately rather than
-    // done here. (Codex P2, PR #474.)
-    globalForParser.__usageFileCache = new FileCache<UsageTurn[]>({ maxEntries: 25_000 });
+    // one session's whole `UsageTurn[]`, so 5,000 large transcripts can exceed
+    // 25,000 small ones. `maxBytes` is the bound that means something (#476);
+    // `maxEntries` stays as a runaway backstop, since the two bound different
+    // failure modes.
+    //
+    // **Measured, because the numbers turned out to matter more than expected.**
+    // On the reference corpus (5,498 transcripts, 2.51 GB of JSONL), parsed
+    // `UsageTurn[]` retains ≈2.0x the source bytes in heap — 153 files spanning
+    // the size distribution, 57 MB of source against 114 MB of retained heap.
+    // A fully warm cache of that corpus therefore wants ≈5.0 GB, which is past
+    // Node's default ~4 GB old-space limit. With `maxEntries: 25_000` against
+    // 5,498 files, NOTHING was evicting: the cap was four times larger than the
+    // corpus, so the only thing bounding this cache was the size of the user's
+    // history.
+    //
+    // The default budget is 1 GiB of source (≈2 GiB heap), which leaves room
+    // for the rest of the process under the default limit. Raise it with
+    // `MINDER_PARSE_CACHE_MB` on a machine with headroom — a bigger budget is
+    // strictly better for the sweep, up to the point where the process cannot
+    // afford it.
+    //
+    // Eviction above the budget is LARGEST-FIRST, not LRU; see `evictByBytes`
+    // for why LRU is the pessimal policy for a full-corpus sweep and what the
+    // 2.4%-of-files-hold-50%-of-bytes skew buys.
+    const budgetMb = Number(process.env.MINDER_PARSE_CACHE_MB);
+    globalForParser.__usageFileCache = new FileCache<UsageTurn[]>({
+      maxEntries: 25_000,
+      maxBytes:
+        Number.isFinite(budgetMb) && budgetMb > 0
+          ? budgetMb * 1024 * 1024
+          : 1024 * 1024 * 1024,
+    });
   }
   return globalForParser.__usageFileCache;
 }
