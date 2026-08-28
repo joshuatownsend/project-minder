@@ -202,6 +202,37 @@ describe("every loading state carries a queryable marker (#445)", () => {
     expect(violations).toEqual([]);
   });
 
+  it("no SETTLED branch carries the marker", () => {
+    // The inverse defect, and the more damaging one (Codex P1, PR #517). A
+    // marker on a `!loading &&` branch mounts permanently once the fetch
+    // finishes, so `[data-loading]` reports a finished page as busy forever —
+    // and the capture pipeline then waits its full 60s budget and SKIPS the
+    // shot rather than publishing a stale one. A missing marker publishes the
+    // wrong image; an inverted one publishes nothing.
+    //
+    // Seven of these were introduced by the mechanical sweep in this very PR,
+    // which matched the first `<` after a condition without checking whether
+    // the condition was negated. Worth a rule rather than a memory.
+    const NEGATED = /!\s*(?:loading|isLoading|[a-z]\w*Loading)\b[^<]{0,140}<[A-Za-z][\w.]*([^>]{0,160})/g;
+    const violations: string[] = [];
+    for (const file of files) {
+      const code = fs.readFileSync(file, "utf-8");
+      NEGATED.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = NEGATED.exec(code)) !== null) {
+        if (!m[1].includes("data-loading")) continue;
+        const line = code.slice(0, m.index).split("\n").length;
+        violations.push(
+          `${file}:${line} — \`data-loading\` on a branch guarded by a ` +
+            `NEGATED loading flag. That element renders when loading is DONE, ` +
+            `so the marker mounts permanently and every consumer reads the ` +
+            `page as busy forever.`
+        );
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
   it("keeps the exemption list honest", () => {
     // An exemption for a file that no longer has a loading branch is a stale
     // licence, and the next file to take that name inherits it silently.

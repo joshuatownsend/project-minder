@@ -429,7 +429,7 @@ export function InsightsBrowser() {
 
       {/* ── Meta row ─────────────────────────────────────────────────────────── */}
       {!loading && (
-        <div data-loading="true"
+        <div
           style={{
             fontSize: "0.72rem",
             color: "var(--text-muted)",

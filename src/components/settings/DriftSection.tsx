@@ -131,7 +131,7 @@ export function DriftSection() {
           ))}
 
         {!loading && (
-          <button data-loading="true"
+          <button
             onClick={load}
             style={{
               marginTop: "4px",

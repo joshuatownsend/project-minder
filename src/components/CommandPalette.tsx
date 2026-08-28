@@ -179,7 +179,7 @@ export function CommandPalette({ open, onClose, onNavigate, onAction }: CommandP
           style={{ overflowY: "auto", flex: 1, margin: 0, padding: "4px 0", listStyle: "none" }}
         >
           {displayed.length === 0 && !loading && (
-            <li data-loading="true" style={{
+            <li style={{
               padding: "16px",
               textAlign: "center",
               fontSize: "0.78rem",

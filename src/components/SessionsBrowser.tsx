@@ -1169,7 +1169,7 @@ export function SessionsBrowser() {
 
       {/* ── Meta row ─────────────────────────────────────────────────────────── */}
       {!loading && (
-        <div data-loading="true" style={{ fontSize: "0.72rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)", marginTop: "-8px" }}>
+        <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)", marginTop: "-8px" }}>
           {filtered.length} session{filtered.length !== 1 ? "s" : ""}
           {groupByProject && projectGroups.length > 0 ? `, ${projectGroups.length} projects` : ""}
         </div>

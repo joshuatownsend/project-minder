@@ -102,7 +102,7 @@ export function HooksBrowser() {
 
       {/* Coverage matrix */}
       {!loading && (
-        <div data-loading="true"
+        <div
           style={{
             display: "grid",
             gridTemplateColumns: "repeat(5, 1fr)",

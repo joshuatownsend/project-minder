@@ -277,7 +277,7 @@ export function HelpPanel() {
 
         {/* Footer */}
         {!showToc && !loading && (
-          <div data-loading="true" style={{
+          <div style={{
             padding: "8px 16px",
             borderTop: "1px solid var(--border-subtle)",
             display: "flex",

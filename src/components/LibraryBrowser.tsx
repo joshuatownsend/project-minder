@@ -303,7 +303,7 @@ export function LibraryBrowser() {
       )}
 
       {!loading && (
-        <div data-loading="true" style={{ border: "1px solid var(--border-subtle)", borderRadius: "var(--radius)", overflow: "hidden" }}>
+        <div style={{ border: "1px solid var(--border-subtle)", borderRadius: "var(--radius)", overflow: "hidden" }}>
           {filtered.length === 0 ? (
             <p style={{ padding: "16px", fontSize: "0.8rem", color: "var(--text-muted)", fontFamily: "var(--font-body)", margin: 0 }}>
               {query ? `No library items match "${query}".` : "No items in this category."}
