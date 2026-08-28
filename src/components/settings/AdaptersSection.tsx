@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import type { MinderConfig } from "@/lib/types";
+import { SUBSTRATE_ADAPTER_ID } from "@/lib/adapters/substrate";
 import { S } from "./styles";
 
 interface AdapterEntry {
@@ -10,7 +11,9 @@ interface AdapterEntry {
 }
 
 const ADAPTER_DESCRIPTIONS: Record<string, string> = {
-  claude: "Reads sessions from ~/.claude/projects/.",
+  claude:
+    "Reads sessions from ~/.claude/projects/. Always on — this setting adds " +
+    "harnesses alongside Claude rather than filtering sources.",
   codex: "Reads sessions from Codex CLI.",
   gemini: "Reads sessions from Gemini CLI.",
 };
@@ -24,7 +27,10 @@ export function AdaptersSection({
 }) {
   const [adapters, setAdapters] = useState<AdapterEntry[]>([]);
   const [saving, setSaving] = useState(false);
-  const enabled = new Set(config?.enabledAdapters ?? ["claude"]);
+  const enabled = new Set([
+    SUBSTRATE_ADAPTER_ID,
+    ...(config?.enabledAdapters ?? []),
+  ]);
 
   useEffect(() => {
     fetch("/api/adapters")
@@ -48,8 +54,11 @@ export function AdaptersSection({
     <section>
       <h2 style={S.sectionTitle}>Adapters</h2>
       <p style={S.desc}>
-        Enable or disable session sources. Disabling an adapter hides its sessions from the browser
-        and excludes them from analytics.
+        Enable additional session sources. Enabling one indexes its transcripts alongside
+        Claude&apos;s and includes them in the browser and in analytics.
+      </p>
+      <p style={{ ...S.desc, marginTop: "-6px" }}>
+        Claude is the substrate and is always read — see the note on its row below.
       </p>
 
       <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
@@ -68,13 +77,22 @@ export function AdaptersSection({
                   {ADAPTER_DESCRIPTIONS[adapter.id] ?? `${adapter.displayName} adapter.`}
                 </div>
               </div>
-              <button
-                style={{ ...S.btn, cursor: "pointer" }}
-                disabled={saving}
-                onClick={() => toggleAdapter(adapter.id, !isEnabled)}
-              >
-                {isEnabled ? "Disable" : "Enable"}
-              </button>
+              {adapter.id === SUBSTRATE_ADAPTER_ID ? (
+                // Not a disabled button — there is no state to reach, so
+                // offering the control at all would be a lie (#491). Minder
+                // reads Claude on both backends regardless of this setting,
+                // and a toggle the app does not honour is worse than no
+                // toggle.
+                <span style={{ ...S.muted, whiteSpace: "nowrap" }}>Always on</span>
+              ) : (
+                <button
+                  style={{ ...S.btn, cursor: "pointer" }}
+                  disabled={saving}
+                  onClick={() => toggleAdapter(adapter.id, !isEnabled)}
+                >
+                  {isEnabled ? "Disable" : "Enable"}
+                </button>
+              )}
             </div>
           );
         })}

@@ -9,6 +9,7 @@ import { isFeatureFlagKey } from "@/lib/featureFlags";
 import { setPricingRules } from "@/lib/usage/costCalculator";
 import { VALID_CURRENCIES } from "@/lib/currencies";
 import { listAdapters } from "@/lib/adapters";
+import { normalizeEnabledAdapters } from "@/lib/adapters/substrate";
 import { efficiencyGradeCache } from "@/lib/efficiencyGradeCache";
 import { invalidateClaudeUsageCache } from "@/lib/server/queries/stats";
 import { invalidateSessionCategoryCounts } from "@/lib/memory/seedCategoryCounts";
@@ -409,7 +410,9 @@ export async function PATCH(request: NextRequest) {
         error: `Unknown adapter id(s): ${unknown.join(", ")}. Known adapters: ${[...knownIds].join(", ")}`,
       }, { status: 400 });
     }
-    patches.push((c) => { c.enabledAdapters = ids; });
+    // The substrate is always read (#491), so store a set that says so
+    // rather than one the app silently overrides on every load.
+    patches.push((c) => { c.enabledAdapters = normalizeEnabledAdapters(ids); });
     // See `corpusShapeChanged` above: since #475 this changes what the sweep
     // returns, so it invalidates the same caches a home change does.
     corpusShapeChanged = true;
