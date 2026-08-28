@@ -7,6 +7,12 @@ vi.mock("@/lib/config", () => ({ readConfig: vi.fn() }));
 import { readConfig } from "@/lib/config";
 import { getStatsCache, getStatsCacheMtimeMs, crossCheckStats } from "@/lib/scanner/claudeStats";
 import { demoStatsCache } from "@/lib/demo/stats";
+import { preserveEnvVars } from "./_helpers/preserveEnv";
+
+// #421 — a bare `delete process.env.X` in teardown restores this file's own
+// assignment and destroys anything it INHERITED, and vitest reuses a worker
+// across files, so the erasure outlives this one. Capture and put back instead.
+preserveEnvVars(["MINDER_DEMO"]);
 
 const mockConfig = vi.mocked(readConfig);
 

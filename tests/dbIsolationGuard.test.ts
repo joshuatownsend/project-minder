@@ -651,10 +651,21 @@ describe("database isolation convention", () => {
       // which this repo does NOT set — `bootstrap.test.ts`, the one file using
       // stubs, calls `vi.unstubAllEnvs()` in its own afterEach. A stub was
       // previously invisible to this rule entirely (Codex review, PR #419).
+      //
+      // A `delete` is a mutation too (#421). Deleting an INHERITED variable
+      // erases it for every file that runs afterwards in the same worker, and
+      // unlike an assignment nothing puts it back. Most of the sites here
+      // delete as the teardown for their own assignment, which is correct when
+      // the variable started unset and lossy when it did not — and the two are
+      // indistinguishable from the source, which is exactly why the rule has to
+      // ask for a saved original rather than for the absence of a value.
       const mutations = [
         ...[...file.code.matchAll(/process\.env\.([A-Z][A-Z0-9_]*)\s*=(?!=)/g)].map(
           (m) => ({ name: m[1], stub: false })
         ),
+        ...[
+          ...file.code.matchAll(/delete\s+process\.env\.([A-Z][A-Z0-9_]*)/g),
+        ].map((m) => ({ name: m[1], stub: false })),
         ...[...file.code.matchAll(/vi\.stubEnv\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']/g)].map(
           (m) => ({ name: m[1], stub: true })
         ),
@@ -665,8 +676,14 @@ describe("database isolation convention", () => {
         // invariant, not caller options — so they never appear in the options
         // text a file writes.
         const HELPER_MANAGED = ["HOME", "USERPROFILE", "MINDER_STATE_DIR"];
+        // `preserveEnvVars([...])` is the light half of the same contract:
+        // save on entry, write the original back on exit, for files that need
+        // the environment restored but not a temp home or a module reset.
+        const preserve = /preserveEnvVars\(\[[\s\S]*?\]\)/.exec(file.code);
         const declared =
-          install !== null && (install[0].includes(name) || HELPER_MANAGED.includes(name));
+          (install !== null &&
+            (install[0].includes(name) || HELPER_MANAGED.includes(name))) ||
+          (preserve !== null && preserve[0].includes(name));
         // Each alternative is bound to THIS variable and has to sit in
         // teardown. A bare `stubEnv` token anywhere used to exempt every
         // assignment in the file, and a `delete` in setup counted as a restore
@@ -675,11 +692,19 @@ describe("database isolation convention", () => {
         // `unstubAllEnvs()` restores stubs and only stubs, so it answers for a
         // `vi.stubEnv` mutation and NOT for a direct assignment — matching what
         // vitest actually undoes.
+        // A bare `delete` in teardown used to satisfy this. It no longer does
+        // (#421): it restores the file's OWN assignment and destroys anything
+        // the file inherited, and the guard cannot tell those apart. Only
+        // writing back a captured original counts — or a conditional delete
+        // guarded on that original having been `undefined`, which is what the
+        // capture-and-restore shape looks like when the variable was unset.
         const restoresThis = stub
           ? /unstubAllEnvs\s*\(/
           : new RegExp(
-              `delete process\\.env\\.${name}\\b|` +
-                `process\\.env\\.${name}\\s*=\\s*(original|saved|prev)`
+              `process\\.env\\.${name}\\s*=\\s*(original|saved|prev)|` +
+                `\\b(original|saved|prev)\\w*\\s*===?\\s*undefined\\s*\\)?\\s*` +
+                `(\\{\\s*)?delete process\\.env\\.${name}\\b`,
+              "i"
             );
         if (declared || restoresThis.test(teardown)) continue;
         violations.push(
@@ -689,10 +714,12 @@ describe("database isolation convention", () => {
               `automatically when test.unstubEnvs is enabled, and this repo ` +
               `does not set it, so the value escapes into the next file in ` +
               `the same worker.`
-            : `${file.name} sets process.env.${name} and never restores it — ` +
-              `it escapes into the next file in the same vitest worker. ` +
-              `Declare it in installIsolatedState's env/preserveEnv, or ` +
-              `restore it in a teardown hook or a finally.`
+            : `${file.name} mutates process.env.${name} (assign or delete) and ` +
+              `never puts the ORIGINAL back — it escapes into the next file in ` +
+              `the same vitest worker. Declare it in installIsolatedState's ` +
+              `env/preserveEnv, pass it to preserveEnvVars([...]), or write a ` +
+              `captured original back in a teardown hook or a finally. A bare ` +
+              `delete is not a restore: it erases an inherited value.`
         );
       }
     }

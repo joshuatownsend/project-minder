@@ -5,9 +5,9 @@ import os from "os";
 import {
   canonicalizeDirName,
   parseSessionTurns,
-  loadSessionTurnsBySessionId,
   SessionTurnsLoadError,
 } from "@/lib/usage/parser";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 describe("canonicalizeDirName", () => {
   it("leaves a normal project path unchanged", () => {
@@ -144,22 +144,79 @@ describe("parseSessionTurns non-array assistant content", () => {
 
 // ── loadSessionTurnsBySessionId 404/500 distinction (Wave 3.1 PR #63 review fix) ─
 
+// #485 — these reach `resolveSessionJsonl`, which walks
+// `getReadableClaudeHomes()`. Unisolated, that is the DEVELOPER'S real
+// `~/.claude/projects`, which made the block two things it should not be:
+//
+//  - **Vacuous on a clean checkout.** With no `~/.claude/projects` the null
+//    came back for a reason unrelated to the contract, so the test could not
+//    distinguish a working id gate from a broken one. The old comment said so
+//    outright — "either outcome is acceptable" — which is an assertion that
+//    cannot fail.
+//  - **Timing-dependent on that developer's history.** 80 project directories
+//    and 3,279 `access` calls on this machine; under the suite's 8-way
+//    parallelism it blew the 30s timeout on #484 — passing in isolation and
+//    failing in the full suite, which is the signature of a machine-and-load
+//    dependency rather than a flake.
+//
+// With a seeded temp home the tree is known, so a null MEANS "not in this
+// tree". The positive case below is what makes that a real answer rather than
+// the same null every input would produce.
 describe("loadSessionTurnsBySessionId", () => {
+  const state = installIsolatedState({ seedClaudeProjects: true });
+
+  /** Write one transcript into the isolated home. Returns its session id. */
+  async function seedTranscript(dirName: string, sessionId: string) {
+    const dir = path.join(state.tmpHome(), ".claude", "projects", dirName);
+    await fs.mkdir(dir, { recursive: true });
+    const line = JSON.stringify({
+      type: "assistant",
+      timestamp: "2026-01-01T00:00:00Z",
+      sessionId,
+      message: {
+        id: "msg_1",
+        model: "claude-opus-5",
+        content: [{ type: "text", text: "hello" }],
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+    });
+    await fs.writeFile(path.join(dir, sessionId + ".jsonl"), line + "\n", "utf-8");
+    return sessionId;
+  }
+
+  /** Reload so the module graph resolves paths against the isolated home. */
+  async function load() {
+    await state.reload();
+    return (await import("@/lib/usage/parser")).loadSessionTurnsBySessionId;
+  }
+
   it("returns null for non-UUID-shaped session ids", async () => {
+    const loadSessionTurnsBySessionId = await load();
     expect(await loadSessionTurnsBySessionId("not-a-uuid-shape")).toBeNull();
   });
 
-  it("returns null when projects dir is missing (ENOENT path → 404 at route)", async () => {
-    // Standard runtime: real ~/.claude/projects exists. If a test machine
-    // has no such dir, the function returns null. Either outcome (null
-    // for unknown id, null for missing dir) is the legitimate 404 path.
-    const result = await loadSessionTurnsBySessionId(
-      "ffffffff-ffff-ffff-ffff-ffffffffffff"
+  it("returns null for a well-formed id that is not in the tree", async () => {
+    // Paired with the positive case below on purpose: alone, a null here is
+    // what an empty tree returns for every input, so it would ratify a
+    // resolver that never worked at all.
+    const loadSessionTurnsBySessionId = await load();
+    await seedTranscript("C--dev-app", "11111111-1111-1111-1111-111111111111");
+    expect(
+      await loadSessionTurnsBySessionId("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    ).toBeNull();
+  });
+
+  it("finds a transcript that IS in the tree", async () => {
+    const loadSessionTurnsBySessionId = await load();
+    const id = await seedTranscript(
+      "C--dev-app",
+      "22222222-2222-2222-2222-222222222222"
     );
-    // Real machines have ~/.claude/projects; either null (id not found)
-    // or null (dir missing) is acceptable. The contract being pinned is
-    // "no throw on a well-formed id that doesn't resolve."
-    expect(result).toBeNull();
+    const turns = await loadSessionTurnsBySessionId(id);
+    expect(turns).not.toBeNull();
+    expect(turns).toHaveLength(1);
+    expect(turns![0].sessionId).toBe(id);
+    expect(turns![0].model).toBe("claude-opus-5");
   });
 
   it("SessionTurnsLoadError class round-trips its fields", () => {

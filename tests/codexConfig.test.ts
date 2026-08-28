@@ -16,6 +16,12 @@ import os from "os";
 import path from "path";
 import codexAdapter from "@/lib/adapters/codex";
 import { REDACTED } from "@/lib/adapters/redact";
+import { preserveEnvVars } from "./_helpers/preserveEnv";
+
+// #421 — a bare `delete process.env.X` in teardown restores this file's own
+// assignment and destroys anything it INHERITED, and vitest reuses a worker
+// across files, so the erasure outlives this one. Capture and put back instead.
+preserveEnvVars(["CODEX_HOME"]);
 
 // `as any` — fs.promises' overloaded signatures otherwise collapse the mock
 // implementation's param type to `never`. We drive these by path string.

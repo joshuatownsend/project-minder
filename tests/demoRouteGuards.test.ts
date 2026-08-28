@@ -5,6 +5,12 @@ import { NextRequest } from "next/server";
 import { GET as plansDetailGET } from "@/app/api/plans/[slug]/route";
 import { GET as adapterConfigGET } from "@/app/api/adapters/[id]/config/route";
 import { demoPlans } from "@/lib/demo/plans";
+import { preserveEnvVars } from "./_helpers/preserveEnv";
+
+// #421 — a bare `delete process.env.X` in teardown restores this file's own
+// assignment and destroys anything it INHERITED, and vitest reuses a worker
+// across files, so the erasure outlives this one. Capture and put back instead.
+preserveEnvVars(["MINDER_DEMO"]);
 
 /**
  * The two W12 guards that do NOT sit at a shared loader.

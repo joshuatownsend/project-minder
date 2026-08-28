@@ -52,11 +52,13 @@ export function getDefaultDevRoot(): string {
 /**
  * Real-filesystem existence check, tolerant of a partially-mocked `fs`.
  *
- * `config.ts` calls `probeDefaultDevRoot()` at MODULE scope to seed
- * `DEFAULT_DEV_ROOT`, so this runs during import in any test that touches the
- * config module. Under a partial `fs` mock `existsSync` is simply absent —
- * reporting "not found" there yields exactly the pre-probe default, whereas
- * throwing would break unrelated suites.
+ * `config.ts` calls `probeDefaultDevRoot()` from `resolveDefaultDevRoot()`,
+ * which runs on every `readConfig()` cache miss — so this is reached by any
+ * test that reads config, under whatever `fs` that test has installed. Under a
+ * partial `fs` mock `existsSync` is simply absent — reporting "not found"
+ * there yields exactly the pre-probe default, whereas throwing would break
+ * unrelated suites. (It used to run at MODULE scope, which is what #481
+ * changed: the value was then frozen before any `os.homedir()` spy existed.)
  */
 function fsExists(p: string): boolean {
   return typeof nodeFs.existsSync === "function" ? nodeFs.existsSync(p) : false;

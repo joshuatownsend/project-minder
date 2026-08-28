@@ -15,6 +15,12 @@ vi.mock("@/mcp/screenshot-to-code/providers", async (importOriginal) => {
 
 import { handleCall, type ServerConfig } from "@/mcp/screenshot-to-code/index";
 import * as providers from "@/mcp/screenshot-to-code/providers";
+import { preserveEnvVars } from "./_helpers/preserveEnv";
+
+// #421 — a bare `delete process.env.X` in teardown restores this file's own
+// assignment and destroys anything it INHERITED, and vitest reuses a worker
+// across files, so the erasure outlives this one. Capture and put back instead.
+preserveEnvVars(["TEST_API_KEY"]);
 
 const mockedCallProvider = vi.mocked(providers.callProvider);
 
