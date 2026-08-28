@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Minimum Node raised from 22.12.0 to 22.13.0** (#464). `package.json` advertised `>=22.12.0` while two transitives declare ranges that *exclude* 22.12.x — `@napi-rs/wasm-runtime` (`^20.19.0 || ^22.13.0 || >=23.5.0`) and `eslint-visitor-keys` (`^20.19.0 || ^22.13.0 || >=24`); the issue named only the first. Latent rather than live, since there is no `.npmrc` and `engine-strict` is set nowhere, so pnpm's default warns instead of failing — but a contributor running 22.12.x with `engine-strict=true` would have seen a refused install for a version the repo claimed to support.
+
+  The pin moves **everywhere at once**, because in this repo 22.12.0 was never only a floor: it is an ABI contract between the runtime `fetch-node-runtime.mjs` bundles and the `better-sqlite3` prebuilt `package-standalone.mjs` resolves. `package.json` engines, `EXPECTED_NODE_ENGINES`, the bundled-runtime `NODE_VERSION`, all four workflow pins (`ci`, `release`, `release-installers`, `pr-review-responder`), the README and site badges, and the tray-app help all now read 22.13.0. The ABI is unchanged — both are Node 22, `NODE_MODULE_VERSION` 127 — so no prebuilt moves; all five platform archives were confirmed published upstream before the pin changed.
+
 ### Added
 
 - **The session list can now see non-Claude sessions** (#489), closing the last half of #475. `scanAllSessions` walked `<claude-home>/projects/**` and stopped, so with an adapter installed the SQLite backend listed every enabled harness and the file backend listed Claude — the last loader whose two backends were not equivalent. It now merges each enabled non-Claude adapter the way `buildAllSessions` already did for usage: same enabled-adapter filter, same size cap, same per-adapter and per-file containment, and sessions keyed by the id their turns carry rather than the filename, so they cannot collide with or disagree with what the index stores.
