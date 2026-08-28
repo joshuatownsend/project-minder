@@ -46,6 +46,15 @@ function describe(home: UnavailableHome): string {
   return home.distro ? `${home.distro} — ${why}` : why;
 }
 
+/**
+ * The never-wake line only applies to a distro that exists and is STOPPED.
+ * "Minder will not start it" is confusing for `wsl-distro-not-found` and
+ * `wsl-unavailable`, where there is nothing to start (Copilot, PR #510).
+ */
+function anyStopped(homes: UnavailableHome[]): boolean {
+  return homes.some((h) => h.reason === "wsl-stopped");
+}
+
 export function UnavailableHomesBanner() {
   const [homes, setHomes] = useState<UnavailableHome[]>([]);
   const [allowRender, setAllowRender] = useState(false);
@@ -121,9 +130,11 @@ export function UnavailableHomesBanner() {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 600 }}>{headline}</div>
         <div style={{ color: "var(--text-3)", marginTop: 2 }}>
-          Sessions, usage and cost totals below exclude{" "}
-          {homes.map((h) => describe(h)).join("; ")}. Minder will not start a
-          stopped distro to read it.
+          Session, usage and cost figures may not account for{" "}
+          {homes.map((h) => describe(h)).join("; ")}. Direct reads omit it
+          entirely; the index still reports whatever it recorded when the home
+          was last reachable.
+          {anyStopped(homes) && " Minder will not start a stopped distro to check."}
         </div>
       </div>
     </div>
