@@ -42,6 +42,8 @@ const REASON_LABELS: Record<string, string> = {
   "home-missing": "the directory is not there",
   "home-unreadable": "the directory cannot be opened",
   "home-not-a-directory": "the path is not a directory",
+  "projects-unreadable": "its projects folder cannot be listed",
+  "projects-not-a-directory": "its projects path is not a directory",
 };
 
 function describe(home: UnavailableHome): string {

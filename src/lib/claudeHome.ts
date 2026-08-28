@@ -147,47 +147,95 @@ export async function partitionClaudeHomes(
 }
 
 /**
+ * How long a home's readability verdict is reused. Matches `listWslDistros`'s
+ * own cache, so the two halves of the availability answer go stale together.
+ */
+const PROBE_TTL_MS = 30_000;
+
+const probeCache = new Map<string, { at: number; result: string | undefined }>();
+
+/** Test seam — drop the memoised verdicts. */
+export function resetClaudeHomeProbeCache(): void {
+  probeCache.clear();
+}
+
+/**
  * `undefined` when the home can be read, otherwise a reason string.
  *
- * **Opens the directory rather than asking whether the path exists.**
- * `fs.access(home)` defaults to `F_OK`, which succeeds for a directory with no
- * read permission and for a regular file sitting where a home should be — so
- * the partition would call it readable, the readers would catch their own
- * `readdir` failure and suppress it, and the endpoint would still report
- * `complete: true` with the banner hidden. That is precisely the case this
- * partition exists to expose, so the probe has to ask the question the readers
- * will ask. (Codex P2, PR #510.)
+ * **Asks what the readers ask, at the depth they ask it.** Two earlier versions
+ * of this probe were each too shallow, and both had the same consequence: the
+ * partition called the home readable, the readers caught their own failure and
+ * suppressed it, and `/api/claude-homes` reported `complete: true` with the
+ * banner hidden — the case this whole partition exists to expose.
  *
- * `opendir` is the cheap form of that question: it proves the directory can be
- * listed without reading a single entry, and it is honest on Windows, where
- * `access(R_OK)` is close to meaningless.
+ *   - `fs.access(home)` defaults to `F_OK`, so it passed a directory with no
+ *     read permission and a regular file sitting where a home should be.
+ *   - Opening the home alone passed a home whose `<home>/projects` is a file or
+ *     is permission-denied — and `projects` is what `buildAllSessions` and
+ *     `scanAllSessions` actually enumerate.
  *
- * Checks the home itself rather than `<home>/projects`: a home that exists but
- * has recorded no sessions yet has no `projects` directory, and that is a
- * normal empty state rather than a fault.
+ * So both are opened. `opendir` is the cheap form of the question: it proves a
+ * directory can be listed without reading an entry, and it is honest on
+ * Windows, where `access(R_OK)` is close to meaningless.
+ *
+ * A **missing** `projects` directory is not a fault — a home that exists but
+ * has recorded no sessions yet has none, and every reader treats that as an
+ * empty home. Only a `projects` that exists and cannot be listed is reported.
+ *
+ * **Memoised for {@link PROBE_TTL_MS}.** `getReadableClaudeHomes` is called
+ * once per project during a scan (`scanClaudeSessions` in `scanner/index.ts`),
+ * so an unmemoised probe added N filesystem round-trips per scan for N
+ * projects — over UNC to a WSL distro, N network round-trips. The verdict is a
+ * property of the home, not of the caller, so it is shared. (Codex P2, #510.)
  */
 async function probeHome(home: string): Promise<string | undefined> {
+  const hit = probeCache.get(home);
+  if (hit && Date.now() - hit.at < PROBE_TTL_MS) return hit.result;
+  const result = await runProbe(home);
+  probeCache.set(home, { at: Date.now(), result });
+  return result;
+}
+
+async function runProbe(home: string): Promise<string | undefined> {
   // Tolerant of a partially-mocked `fs`, the same way `platform.ts`'s
   // `fsExists` is: several suites mock only `readFile`/`readdir`/`stat`, and a
   // probe that threw there would report every configured home unavailable and
   // exclude it from the sweep. Absent means "cannot tell", and the honest
   // answer to that is the pre-probe behaviour — readable.
   if (typeof fs.opendir !== "function") return undefined;
-  let dir: Awaited<ReturnType<typeof fs.opendir>> | undefined;
+
+  const atHome = await openable(home);
+  if (atHome) {
+    if (atHome === "ENOENT") return "home-missing";
+    if (atHome === "ENOTDIR") return "home-not-a-directory";
+    return "home-unreadable";
+  }
+
+  const atProjects = await openable(path.join(home, "projects"));
+  // ENOENT here is the empty-home state every reader already handles.
+  if (atProjects && atProjects !== "ENOENT") {
+    return atProjects === "ENOTDIR"
+      ? "projects-not-a-directory"
+      : "projects-unreadable";
+  }
+  return undefined;
+}
+
+/** `undefined` when the directory opened, otherwise its errno code. */
+async function openable(dir: string): Promise<string | undefined> {
+  let handle: Awaited<ReturnType<typeof fs.opendir>> | undefined;
   try {
-    dir = await fs.opendir(home);
+    handle = await fs.opendir(dir);
     return undefined;
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code === "ENOENT") return "home-missing";
-    if (code === "ENOTDIR") return "home-not-a-directory";
-    return "home-unreadable";
+    return (err as NodeJS.ErrnoException)?.code ?? "UNKNOWN";
   } finally {
     // An open handle would keep the directory locked on Windows, which is the
     // platform this runs on most.
-    if (dir) await dir.close().catch(() => {});
+    if (handle) await handle.close().catch(() => {});
   }
 }
+
 
 /**
  * Just the unreadable half of {@link partitionClaudeHomes}, for callers that

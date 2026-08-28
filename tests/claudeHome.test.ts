@@ -20,6 +20,7 @@ import {
   getReadableClaudeHomes,
   partitionClaudeHomes,
   getUnavailableClaudeHomes,
+  resetClaudeHomeProbeCache,
 } from "@/lib/claudeHome";
 
 const mockCheckWslRoot = vi.mocked(checkWslRoot);
@@ -34,6 +35,10 @@ function cfg(overrides: Partial<MinderConfig> = {}): MinderConfig {
 beforeEach(() => {
   vi.clearAllMocks();
   mockCheckWslRoot.mockResolvedValue(null);
+  // The probe memoises per home path for 30s. Without this, a case that
+  // creates a temp home and a later one that reuses the name would read the
+  // first verdict — and the cache-reuse test below would pass by accident.
+  resetClaudeHomeProbeCache();
 });
 
 describe("getClaudeHomes", () => {
@@ -188,6 +193,52 @@ describe("partitionClaudeHomes probes extra homes for real (#479)", () => {
       ]);
     } finally {
       await removeTempHome(dirPath);
+    }
+  });
+
+  it("reports a projects/ directory that exists but cannot be listed", async () => {
+    // The depth that matters: `buildAllSessions` and `scanAllSessions`
+    // enumerate `<home>/projects`, so a home that opens while its `projects`
+    // is a regular file is exactly the silent-omission case, one level below
+    // where the previous probe stopped (Codex P2, PR #510).
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "pm-home-badproj-"));
+    try {
+      await fs.writeFile(path.join(home, "projects"), "", "utf-8");
+      const { readable, unavailable } = await partitionClaudeHomes(
+        cfg({ claudeHomes: [home] })
+      );
+      expect(readable).not.toContain(home);
+      expect(unavailable).toEqual([
+        { path: home, reason: "projects-not-a-directory" },
+      ]);
+    } finally {
+      await removeTempHome(home);
+    }
+  });
+
+  it("probes each home once per window, not once per caller", async () => {
+    // `getReadableClaudeHomes` is called once per PROJECT during a scan, so an
+    // unmemoised probe added N filesystem round-trips per scan — over UNC to a
+    // WSL distro, N network round-trips (Codex P2, PR #510).
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "pm-home-cached-"));
+    try {
+      const first = await partitionClaudeHomes(cfg({ claudeHomes: [home] }));
+      expect(first.unavailable).toEqual([]);
+
+      // Break the home AFTER the first probe. Within the window the verdict is
+      // reused, which is the observable form of "it did not look again".
+      await removeTempHome(home);
+      const second = await partitionClaudeHomes(cfg({ claudeHomes: [home] }));
+      expect(second.unavailable).toEqual([]);
+
+      // And it is a cache, not a permanent answer.
+      resetClaudeHomeProbeCache();
+      const third = await partitionClaudeHomes(cfg({ claudeHomes: [home] }));
+      expect(third.unavailable).toEqual([
+        { path: home, reason: "home-missing" },
+      ]);
+    } finally {
+      await removeTempHome(home);
     }
   });
 
