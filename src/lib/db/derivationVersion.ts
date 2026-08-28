@@ -26,7 +26,7 @@
 // here would drop every column that build added. The gates in `ingest.ts`
 // enforce this via `isNewerDerivation`; see the 2026-08-05 entry below for
 // what it costs when they don't.
-export const DERIVED_VERSION = 21;
+export const DERIVED_VERSION = 22;
 // History:
 // 1 — initial.
 // 2 — added `tool_result_preview` storage so `detectOneShot` rehydrates
@@ -393,6 +393,36 @@ export const DERIVED_VERSION = 21;
 //     No read-side gate. Pre-reconcile, an adapter worktree session groups the
 //     way it did before this change — degraded, not wrong — and the file-parse
 //     backend is already correct because it reads the same shared derivation.
+//
+// 22 — #502: `toSlug` dropped leading path segments by scanning for the first
+//      one longer than a single character. That is only incidentally the
+//      "drop the drive prefix" rule it was written to be: when EVERY segment
+//      is one character `findIndex` returns -1 and `slice(-1)` keeps just the
+//      last, so `C--a-b` slugged to `"b"` instead of `"a-b"` — a project at
+//      `C:\a\b` silently shared a slug with any other project ending in `b`.
+//      It also ate genuine one-character POSIX components (`-a-bc` → `"bc"`).
+//      The rule is now the explicit prefix test `canonicalizeDirName` already
+//      used: `^[A-Za-z]--` → skip 2, otherwise skip leading empty segments.
+//
+//      **Why a bump.** `sessions.project_slug` is stored, and the
+//      `daily_costs` / `category_costs` rollup tuples are keyed on it, so
+//      existing rows keep the old derivation until re-parsed.
+//
+//      **Measured blast radius: zero on well-formed corpora.** Both rules were
+//      run over all 80 encoded dir names in the reference `~/.claude/projects`
+//      and agreed on every one. Only degenerate all-short-segment paths change,
+//      which is why nothing surfaced this before Copilot read the code on
+//      PR #501. Note `C--a` produced the right answer for the WRONG reason
+//      (`slice(-1)` on a 3-element array happened to yield the wanted element),
+//      so it passes both before and after and cannot discriminate a fix.
+//
+//      No read-side gate. A pre-reconcile row carries the old slug, which is
+//      how it grouped yesterday — degraded, not wrong — and the file-parse
+//      backend is correct immediately because it shares this derivation.
+//
+//      Interacts with #478: this rebuild is another instance of the window
+//      where cross-corpus aggregates sum rows derived under two formulas.
+//      Unfixed there, unfixed here; recorded so the pair is not forgotten.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // 2026-08-05 — what a non-directional comparison cost, recorded here because

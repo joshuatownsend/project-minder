@@ -24,26 +24,32 @@
 /**
  * Slugify an encoded project directory name (`C--dev-my-app` → `dev-my-app`).
  *
- * The rule is "drop leading segments shorter than two characters". For a
- * Windows path that means the drive letter AND the empty segment the `--`
- * produces: `C:\dev\my-app` encodes to `C--dev-my-app`, which splits to
- * `["C", "", "dev", "my", "app"]`, and the scan lands on `"dev"`.
+ * The leading path prefix is dropped explicitly rather than by a heuristic.
+ * A Windows encoding starts with `{Drive}--` — the drive letter plus the empty
+ * segment the doubled dash produces — so `C:\dev\my-app` splits to
+ * `["C", "", "dev", "my", "app"]` and the first two go. A POSIX or UNC
+ * encoding starts with one or more empty segments from its leading slashes,
+ * so those go instead.
  *
- * **Known defect, deliberately not fixed here (#502).** When EVERY segment is
- * one character, `findIndex` returns -1 and `slice(-1)` keeps only the last
- * one: `C--a-b` slugs to `"b"` rather than `"a-b"`. Verified, not theorised.
- * It needs a `DERIVED_VERSION` bump — `sessions.project_slug` is stored — so
- * it is a separate change from the move that brought this function here, which
- * is deliberately byte-for-byte so it can be audited as a no-op.
- * (Copilot, PR #501.)
+ * This is the same prefix rule `canonicalizeDirName` below already applies
+ * (`/^[A-Za-z]--/` → start at 2), which is why they now agree on where a path
+ * actually begins.
+ *
+ * It used to scan for the first segment longer than one character, which is
+ * only *incidentally* the same rule: it also dropped short leading segments
+ * that were real path components, and when EVERY segment was one character
+ * `findIndex` returned -1 and `slice(-1)` kept only the last — `C--a-b` slugged
+ * to `"b"` rather than `"a-b"`. See #502; measured, not theorised.
  */
 export function toSlug(dirName: string): string {
-  // Extract last segment as project name, slugify
   const parts = dirName.split("-");
-  // Skip the drive-letter prefix — for `C--dev-…` that is the `"C"` and the
-  // empty string between the two dashes.
-  const meaningful = parts.slice(parts.findIndex((p) => p.length > 1));
-  return meaningful.join("-").toLowerCase().replace(/[^a-z0-9-]/g, "-");
+  let start = /^[A-Za-z]--/.test(dirName) ? 2 : 0;
+  while (parts[start] === "") start++;
+  return parts
+    .slice(start)
+    .join("-")
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-");
 }
 
 // In the encoded dir name, ':', '\', and '.' all become '-'.
