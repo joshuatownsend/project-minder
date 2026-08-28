@@ -2,6 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { existsSync, statSync } from "fs";
 import path from "path";
 import { installIsolatedState } from "./_helpers/isolatedState";
+import { preserveEnvVars } from "./_helpers/preserveEnv";
+
+// #421 — a bare `delete process.env.X` in teardown restores this file's own
+// assignment and destroys anything it INHERITED, and vitest reuses a worker
+// across files, so the erasure outlives this one. Capture and put back instead.
+preserveEnvVars(["MINDER_FORCE_QUICK_CHECK"]);
 
 // Integration coverage for the quick_check skip, against a REAL better-sqlite3
 // database rather than a mocked filesystem.

@@ -11,39 +11,72 @@ import { resolveStateDir } from "./serverRoot";
 // bury (or fail to write) `.minder.json`. Repo runs keep the repo-root path.
 const CONFIG_PATH = path.join(resolveStateDir(), ".minder.json");
 
-// Prefer a candidate that actually exists over the bare first choice, so a
-// machine with `~/dev` but no `C:\dev` scans the directory it really has
-// instead of a hardcoded convention it doesn't. Falls back to the first
-// candidate when neither exists — in that case nothing is worth scanning
-// anyway and `isFirstRun()` routes the user to setup instead.
-export const DEFAULT_DEV_ROOT = probeDefaultDevRoot() ?? getDefaultDevRoot();
+/**
+ * The dev root to use when the user has not configured one.
+ *
+ * Prefers a candidate that actually exists over the bare first choice, so a
+ * machine with `~/dev` but no `C:\dev` scans the directory it really has
+ * instead of a hardcoded convention it doesn't. Falls back to the first
+ * candidate when neither exists — in that case nothing is worth scanning
+ * anyway and `isFirstRun()` routes the user to setup instead.
+ *
+ * **A function, not a module-scope constant (#481).** As a constant this ran
+ * `existsSync` during IMPORT, which had two consequences a test could not
+ * escape: the value was frozen before any `os.homedir()` spy was armed, so the
+ * `<home>/dev` candidate was probed against the developer's REAL home; and
+ * the default config's `devRoot` — which `readConfig()` returns whenever no
+ * config file is found, i.e. every isolated test since #477 — carried that
+ * real value.
+ * Measured under full isolation: state dir, adapters and hidden list were all
+ * correctly isolated while `devRoot` still read `C:\dev`.
+ *
+ * The divergence is narrow, because when the first candidate exists the probe
+ * returns exactly what the fallback would and the machine-dependence cancels.
+ * It bites a Windows developer with no `C:\dev` but a `~/dev`, who gets
+ * `C:\Users\<name>\dev` where CI gets `C:\dev`.
+ *
+ * Cost of being lazy: one or two `existsSync` calls per `readConfig()` cache
+ * miss (3s TTL) instead of one per process. Nothing imported the old constant
+ * — verified by grep across `src`, `tests` and `scripts` — so this is not a
+ * public-signature change for any caller.
+ */
+export function resolveDefaultDevRoot(): string {
+  return probeDefaultDevRoot() ?? getDefaultDevRoot();
+}
 
 let configCache: { value: MinderConfig; expiresAt: number } | null = null;
 const CONFIG_TTL_MS = 3_000;
 
-const DEFAULT_CONFIG: MinderConfig = {
-  statuses: {},
-  hidden: [],
-  portOverrides: {},
-  devRoot: DEFAULT_DEV_ROOT,
-  pinnedSlugs: [],
-};
+/**
+ * Built per call rather than shared, so `devRoot` is resolved against the
+ * filesystem as it is NOW. Callers already spread it, so no caller relied on
+ * identity.
+ */
+function defaultConfig(): MinderConfig {
+  return {
+    statuses: {},
+    hidden: [],
+    portOverrides: {},
+    devRoot: resolveDefaultDevRoot(),
+    pinnedSlugs: [],
+  };
+}
 
 /** Returns all configured scan roots. Falls back to devRoot for backward compat. */
 export function getDevRoots(config: MinderConfig): string[] {
   if (config.devRoots && config.devRoots.length > 0) return config.devRoots;
-  return [config.devRoot || DEFAULT_DEV_ROOT];
+  return [config.devRoot || resolveDefaultDevRoot()];
 }
 
 export async function readConfig(): Promise<MinderConfig> {
   if (configCache && Date.now() < configCache.expiresAt) return configCache.value;
   try {
     const data = await fs.readFile(CONFIG_PATH, "utf-8");
-    const value = { ...DEFAULT_CONFIG, ...JSON.parse(data) };
+    const value = { ...defaultConfig(), ...JSON.parse(data) };
     configCache = { value, expiresAt: Date.now() + CONFIG_TTL_MS };
     return value;
   } catch {
-    const value = { ...DEFAULT_CONFIG };
+    const value = { ...defaultConfig() };
     configCache = { value, expiresAt: Date.now() + CONFIG_TTL_MS };
     return value;
   }

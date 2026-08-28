@@ -48,6 +48,12 @@ vi.mock("@/lib/server/queries/stats", () => ({ invalidateClaudeUsageCache: vi.fn
 
 import { PATCH } from "@/app/api/config/route";
 import { getOrCreateRouteCache } from "@/lib/routeCache";
+import { preserveEnvVars } from "./_helpers/preserveEnv";
+
+// #421 — a bare `delete process.env.X` in teardown restores this file's own
+// assignment and destroys anything it INHERITED, and vitest reuses a worker
+// across files, so the erasure outlives this one. Capture and put back instead.
+preserveEnvVars(["MINDER_DEMO"]);
 
 function patchRequest(body: unknown): NextRequest {
   return new NextRequest("http://localhost:4100/api/config", {

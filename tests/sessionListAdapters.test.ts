@@ -27,6 +27,12 @@ import { promises as fs } from "fs";
 import { installIsolatedState } from "./_helpers/isolatedState";
 import { assertReconcileClean } from "./_helpers/reconcile";
 import type { SessionSummary } from "@/lib/types";
+import { preserveEnvVars } from "./_helpers/preserveEnv";
+
+// #421 — a bare `delete process.env.X` in teardown restores this file's own
+// assignment and destroys anything it INHERITED, and vitest reuses a worker
+// across files, so the erasure outlives this one. Capture and put back instead.
+preserveEnvVars(["CODEX_HOME"]);
 
 const state = installIsolatedState({
   prefix: "pm-session-adapters-",

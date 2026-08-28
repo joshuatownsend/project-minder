@@ -3,6 +3,12 @@ import { EventEmitter } from "events";
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import { probeStdioHandshake } from "@/lib/mcpStdioProbe";
 import type { McpServer } from "@/lib/types";
+import { preserveEnvVars } from "./_helpers/preserveEnv";
+
+// #421 — a bare `delete process.env.X` in teardown restores this file's own
+// assignment and destroys anything it INHERITED, and vitest reuses a worker
+// across files, so the erasure outlives this one. Capture and put back instead.
+preserveEnvVars(["MINDER_UNRELATED_SECRET"]);
 
 function server(overrides: Partial<McpServer>): McpServer {
   return {
