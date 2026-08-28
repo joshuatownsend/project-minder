@@ -24,13 +24,24 @@
 /**
  * Slugify an encoded project directory name (`C--dev-my-app` → `dev-my-app`).
  *
- * The leading drive-letter segment is dropped by skipping to the first part
- * longer than one character.
+ * The rule is "drop leading segments shorter than two characters". For a
+ * Windows path that means the drive letter AND the empty segment the `--`
+ * produces: `C:\dev\my-app` encodes to `C--dev-my-app`, which splits to
+ * `["C", "", "dev", "my", "app"]`, and the scan lands on `"dev"`.
+ *
+ * **Known defect, deliberately not fixed here (#502).** When EVERY segment is
+ * one character, `findIndex` returns -1 and `slice(-1)` keeps only the last
+ * one: `C--a-b` slugs to `"b"` rather than `"a-b"`. Verified, not theorised.
+ * It needs a `DERIVED_VERSION` bump — `sessions.project_slug` is stored — so
+ * it is a separate change from the move that brought this function here, which
+ * is deliberately byte-for-byte so it can be audited as a no-op.
+ * (Copilot, PR #501.)
  */
 export function toSlug(dirName: string): string {
   // Extract last segment as project name, slugify
   const parts = dirName.split("-");
-  // Skip drive letter prefix like "C-"
+  // Skip the drive-letter prefix — for `C--dev-…` that is the `"C"` and the
+  // empty string between the two dashes.
   const meaningful = parts.slice(parts.findIndex((p) => p.length > 1));
   return meaningful.join("-").toLowerCase().replace(/[^a-z0-9-]/g, "-");
 }
