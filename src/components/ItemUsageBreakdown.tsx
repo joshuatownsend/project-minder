@@ -66,7 +66,13 @@ export function ItemUsageBreakdown({
 
   if (!usage || usage.invocations === 0) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+      // The EMPTY branch returns before the marked root below, so a period
+      // refetch on an agent with zero invocations was invisible — the parent
+      // keeps the empty usage and only flips `loading` (Codex, PR #517).
+      <div
+        data-loading={loading ? "true" : undefined}
+        style={{ display: "flex", flexDirection: "column", gap: "16px" }}
+      >
         {toggle}
         <div
           style={{

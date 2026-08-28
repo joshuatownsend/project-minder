@@ -364,6 +364,10 @@ export default function NewProjectPage() {
   useEffect(() => {
     if (step !== 3) return;
     if (library) return;
+    // Back UP on every attempt. A failed first fetch left this false while
+    // `library` stayed null, so returning to step 3 retried the request
+    // behind an apparently-settled blank picker (Codex, PR #517).
+    setLibraryPending(true);
     fetch("/api/library")
       .then((r) => r.json() as Promise<LibraryResponse>)
       .then((data) => {
