@@ -113,7 +113,7 @@ export function MemoryTriage() {
     );
   }
   if (!data) {
-    return <p style={{ padding: "40px 0", color: "var(--text-muted)" }}>Loading</p>;
+    return <p data-loading="true" style={{ padding: "40px 0", color: "var(--text-muted)" }}>Loading</p>;
   }
 
   const { report, archived, trashed } = data;

@@ -133,7 +133,11 @@ const BRANCH_PATTERNS: Array<{ re: RegExp; lookBack: number }> = [
     // adjacent left four visible unmarked states green (Codex, PR #517).
     // Bounded to 40 chars and no tag/brace between, so it stays a
     // SENTENCE rather than swallowing the rest of a component.
-    re: />\s*[Ll]oading\b[^<>{}\n]{0,40}?(?:…|\.\.\.)/g,
+    // The ellipsis is OPTIONAL when the word is the whole content:
+    // `<p>Loading</p>` is as much a loading state as `<p>Loading…</p>`,
+    // and four of them were live (Codex, PR #517). Requiring the closing
+    // `<` keeps it to a sentence rather than any prose containing the word.
+    re: />\s*[Ll]oading\b[^<>{}\n]{0,40}?(?:…|\.\.\.)?\s*</g,
     lookBack: 600,
   },
 ];
@@ -171,6 +175,7 @@ describe("every loading state carries a queryable marker (#445)", () => {
       `<p>loading...</p>`,
       `<div>Loading quota…</div>`,
       `<span>loading projects…</span>`,
+      `<p>Loading</p>`,
     ];
     for (const s of samples) {
       const hit = BRANCH_PATTERNS.some(({ re }) => {

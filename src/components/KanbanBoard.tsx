@@ -475,6 +475,11 @@ export function KanbanBoard() {
 
       {/* Board — live announcement region for screen readers */}
       <div
+        // CONDITIONAL: this live region is always mounted and announces the
+        // settled state too, so an unconditional marker would report the page
+        // as loading forever — the inverted-marker defect from earlier in this
+        // PR, in a element that is invisible and therefore easy to get wrong.
+        data-loading={loading ? "true" : undefined}
         role="status"
         aria-live="polite"
         aria-atomic="false"

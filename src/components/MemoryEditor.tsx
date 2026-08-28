@@ -140,7 +140,7 @@ export function MemoryEditor({ entry, onSaved }: MemoryEditorProps) {
     return <p style={{ ...errorTextStyle, padding: "20px 0" }}>{error}</p>;
   }
   if (!data) {
-    return <p style={{ ...mutedStyle, padding: "20px 0" }}>Loading</p>;
+    return <p data-loading="true" style={{ ...mutedStyle, padding: "20px 0" }}>Loading</p>;
   }
 
   const dirty = draft !== data.content;
