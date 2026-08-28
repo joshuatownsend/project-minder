@@ -333,10 +333,18 @@ export function SettingsPage() {
           <ServerPortSection config={config} onConfigChange={patchConfig} />
         )}
         {active === "scan-roots" && (
-          <ScanRootsSection config={config} onConfigChange={patchConfig} />
+          <ScanRootsSection
+            config={config}
+            configPending={configPending}
+            onConfigChange={patchConfig}
+          />
         )}
         {active === "claude-homes" && (
-          <ClaudeHomesSection config={config} onConfigChange={patchConfig} />
+          <ClaudeHomesSection
+            config={config}
+            configPending={configPending}
+            onConfigChange={patchConfig}
+          />
         )}
         {active === "notifications" && (
           <NotificationsSection config={config} onConfigChange={patchConfig} />

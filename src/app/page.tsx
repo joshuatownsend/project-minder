@@ -454,7 +454,19 @@ export default function HomePage() {
         <Stat
           label="Tokens"
           value={usageAll === null ? "—" : formatCount(headlineTokens)}
-          sub={usagePending ? <span data-loading="true">loading…</span> : `${(cacheHitRate * 100).toFixed(0)}% cache hit`}
+          sub={
+            usagePending ? (
+              <span data-loading="true">loading…</span>
+            ) : !usageAll ? (
+              // Settled with nothing is not settled with zero. The null
+              // fallback would print "0% cache hit" for a request that never
+              // answered — a fabricated metric is worse than an absent one
+              // (Codex, PR #517).
+              "—"
+            ) : (
+              `${(cacheHitRate * 100).toFixed(0)}% cache hit`
+            )
+          }
           accent="var(--info)"
           spark={tokensSpark}
           sparkColor="var(--info)"
@@ -463,9 +475,13 @@ export default function HomePage() {
           label="Config health"
           value={health === null ? "—" : `${healthScore}%`}
           sub={
-            healthPending
-              ? <span data-loading="true">loading…</span>
-              : `${healthGrade} — ${healthLabel.toLowerCase()}`
+            healthPending ? (
+              <span data-loading="true">loading…</span>
+            ) : !health ? (
+              "—"
+            ) : (
+              `${healthGrade} — ${healthLabel.toLowerCase()}`
+            )
           }
           accent="var(--danger)"
         />

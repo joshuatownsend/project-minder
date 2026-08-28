@@ -22,9 +22,13 @@ interface WslDiscovery {
 
 export function ScanRootsSection({
   config,
+  configPending,
   onConfigChange,
 }: {
   config: MinderConfig | null;
+  /** The parent's REQUEST state. `config === null` is also what a failed
+   *  load leaves, so it cannot mean "still loading" (#518). */
+  configPending: boolean;
   onConfigChange: (patch: Partial<MinderConfig>) => Promise<void>;
 }) {
   const { showToast } = useToast();
@@ -149,7 +153,7 @@ export function ScanRootsSection({
       </p>
 
       <div style={S.card}>
-        {config === null ? (
+        {configPending ? (
           <p data-loading="true" style={S.muted}>Loading…</p>
         ) : (
           <>

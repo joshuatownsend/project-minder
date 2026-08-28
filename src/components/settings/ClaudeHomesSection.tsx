@@ -40,9 +40,13 @@ const sameMapping = (a: PathMapping, b: PathMapping) =>
 
 export function ClaudeHomesSection({
   config,
+  configPending,
   onConfigChange,
 }: {
   config: MinderConfig | null;
+  /** The parent's REQUEST state. `config === null` is also what a failed
+   *  load leaves, so it cannot mean "still loading" (#518). */
+  configPending: boolean;
   onConfigChange: (patch: Partial<MinderConfig>) => Promise<void>;
 }) {
   const { showToast } = useToast();
@@ -138,7 +142,7 @@ export function ClaudeHomesSection({
       </p>
 
       <div style={S.card}>
-        {config === null ? (
+        {configPending ? (
           <p data-loading="true" style={S.muted}>Loading…</p>
         ) : (
           <>

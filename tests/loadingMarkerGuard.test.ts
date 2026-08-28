@@ -335,10 +335,8 @@ const EMPTINESS_TRACKED: Record<string, string> = {
   "src/components/MemorySeedTray.tsx": "#518",
   "src/components/MemoryTriage.tsx": "#518",
   "src/components/agent-view/AgentPeekPanel.tsx": "#518",
-  "src/components/settings/ClaudeHomesSection.tsx": "#518",
   "src/components/settings/CostSection.tsx": "#518",
   "src/components/settings/IntegrationsSection.tsx": "#518",
-  "src/components/settings/ScanRootsSection.tsx": "#518",
 };
 
   it("no marker is driven by an emptiness or nullness test", () => {
