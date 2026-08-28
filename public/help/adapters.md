@@ -51,7 +51,7 @@ When you enable Codex or Gemini, their sessions are indexed into the same SQLite
   cross-agent either way. Non-Claude sessions do not currently open from that
   list while the index is off: the detail view reads Claude transcripts, so it
   reports the session as unavailable rather than rendering an empty page.
-- **Opt-in.** Indexing only happens for adapters listed in `enabledAdapters`. With the default (`["claude"]`), no Codex/Gemini data is read or written — enabling an adapter is what turns its indexing on. Disabling an adapter later removes its sessions from the index on the next scan.
+- **Opt-in, and additive.** Indexing only happens for adapters listed in `enabledAdapters`. With the default (`["claude"]`), no Codex/Gemini data is read or written — enabling an adapter is what turns its indexing on. Disabling one later removes its sessions from the index on the next scan. **Claude is the exception: it is the substrate and is always read.** The setting adds harnesses alongside Claude rather than filtering sources, so removing `"claude"` from the list changes nothing — it is added back when the list is saved.
 - **Lean index for non-Claude.** Claude Code sessions are parsed from their raw JSONL into the richest possible record. Codex/Gemini sessions are indexed through the adapter's own parser, which yields a slightly leaner record. What you **do** get: per-session and per-turn **cost**, **token** totals, **By Source / By Model / By Project / By Category** breakdowns, **work-mode** mix, **one-shot** rate, **tool usage**, and full **session list + detail** (timeline, tools). What is currently **Claude-only**: full-text prompt search richness, PR/ticket chips, resume-anomaly and compaction-loop flags, per-turn context-fill, and — on the direct-read fallback only — the session **detail** view.
 - **Project grouping.** A session is attributed to the project its working directory names, and a session run inside a **Claude Code worktree** (`<project>--claude-worktrees-<branch>`) groups with the **parent project** rather than under a project of its own — the same rule Claude sessions have always followed, so both harnesses in one worktree appear together. The worktree is still marked as such on the session, and still shows in the project's costs alongside the parent's other sessions.
 
@@ -62,7 +62,11 @@ When you enable Codex or Gemini, their sessions are indexed into the same SQLite
 
 ## Managing adapters
 
-Go to **Settings → Adapters** to see which adapters are enabled. Disabling an adapter hides its sessions from the session browser and excludes them from analytics. All adapters, including Claude Code, can be toggled.
+Go to **Settings → Adapters** to see which adapters are enabled. Disabling an adapter hides its sessions from the session browser and excludes them from analytics.
+
+**Claude Code cannot be turned off, and its row says so** ("Always on") rather than offering a control. Minder reads `~/.claude/projects/` on both backends regardless of this setting — the file-parse sweep walks every readable Claude home before it consults the adapter registry, and the indexer's adapter discovery is defined as "every enabled adapter except Claude". A toggle that changed nothing was worse than no toggle, so it is gone (#491).
+
+If you want to *stop seeing* a harness's sessions rather than stop indexing them, use the **source filter** on the Sessions page — that is the surface for reading less, and it works for Claude too.
 
 ## Harness config (read-only)
 
@@ -102,3 +106,5 @@ Several endpoints accept an optional `?source=` query parameter to filter result
 ```
 
 Unknown adapter IDs in this list are rejected with a 400 error naming the known adapters.
+
+`"claude"` is **normalised in** whenever it is missing — by the API before the value is stored, and again when the config is read, so a hand-edited `.minder.json` behaves the same way the Settings toggle does.

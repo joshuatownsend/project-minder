@@ -3,6 +3,7 @@ import type { MinderConfig } from "@/lib/types";
 import claudeAdapter from "./claude";
 import codexAdapter from "./codex";
 import geminiAdapter from "./gemini";
+import { SUBSTRATE_ADAPTER_ID, normalizeEnabledAdapters } from "./substrate";
 
 const REGISTRY = new Map<string, SessionAdapter>();
 
@@ -13,6 +14,11 @@ function register(adapter: SessionAdapter): void {
 register(claudeAdapter);
 register(codexAdapter);
 register(geminiAdapter);
+
+// The substrate rule lives in a leaf module so a client component can
+// import it without dragging the registry -- and `fs` -- into the browser
+// bundle. See the doc block there.
+export { SUBSTRATE_ADAPTER_ID, normalizeEnabledAdapters };
 
 export function listAdapters(): SessionAdapter[] {
   return [...REGISTRY.values()];
@@ -29,7 +35,7 @@ export function getAdapterDisplayNameMap(): Map<string, string> {
 const _warnedUnknown = new Set<string>();
 
 export function getEnabledAdapters(config: MinderConfig): SessionAdapter[] {
-  const ids = config.enabledAdapters ?? ["claude"];
+  const ids = normalizeEnabledAdapters(config.enabledAdapters ?? []);
   const result: SessionAdapter[] = [];
 
   for (const id of ids) {

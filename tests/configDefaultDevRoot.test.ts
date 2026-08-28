@@ -1,4 +1,9 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import path from "path";
+import os from "os";
+import { promises as fs } from "fs";
+import { preserveEnvVars } from "./_helpers/preserveEnv";
+import { removeTempHome } from "./_helpers/isolatedState";
 
 // #481 — `DEFAULT_DEV_ROOT` used to be a module-scope `const`, so
 // `probeDefaultDevRoot()` ran during IMPORT. Two things followed that no test
@@ -125,5 +130,65 @@ describe("getDevRoots (#481)", () => {
       })
     ).toEqual(["/one", "/two"]);
     expect(probeDefaultDevRoot).not.toHaveBeenCalled();
+  });
+});
+
+describe("readConfig applies the substrate invariant (#491, Codex P1 on #509)", () => {
+  // Several consumers read `config.enabledAdapters` RAW and never touch the
+  // adapter registry — `server/queries/sessions.ts` builds its filter set from
+  // it directly, so a config saved as ["codex"] by the old UI would strip every
+  // Claude session out of /api/sessions while Settings said "Always on".
+  // Normalising inside `getEnabledAdapters` alone does not reach them.
+  // The global `isolateStateDir` setup pins MINDER_STATE_DIR per fork; these
+  // tests repoint it at a config file they wrote, so they have to put it back.
+  // Caught by `dbIsolationGuard` rather than by review — which is the point of
+  // the rule this session added in #421.
+  preserveEnvVars(["MINDER_STATE_DIR"]);
+
+  // These live OUTSIDE the `pm-suite-state` tree that
+  // `tests/setup/isolateStateDir.ts` sweeps, so nothing else would ever
+  // collect them — every full run and every watch-mode rerun would leave three
+  // more behind in the system temp area (Codex P2, PR #509).
+  //
+  // Removed through `removeTempHome`, the bounded helper #430 added in this
+  // same session, rather than a bare `fs.rm`: it retries the busy case and
+  // stops waiting after 2s, so a Windows handle that has not closed yet costs
+  // a slow teardown instead of a failed hook.
+  const created: string[] = [];
+  afterEach(async () => {
+    await Promise.all(created.splice(0).map(removeTempHome));
+  });
+
+  async function withConfigFile(contents: unknown) {
+    // mkdtemp, not a fixed name: a shared path would collide with another fork
+    // running this file's siblings, and the failure would look like a flake.
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "pm-cfg-invariant-"));
+    created.push(tmp);
+    await fs.writeFile(
+      path.join(tmp, ".minder.json"),
+      JSON.stringify(contents),
+      "utf-8"
+    );
+    process.env.MINDER_STATE_DIR = tmp;
+    vi.resetModules();
+    return (await import("@/lib/config")).readConfig;
+  }
+
+  it("adds claude to a stored list that omits it", async () => {
+    const readConfig = await withConfigFile({ enabledAdapters: ["codex"] });
+    expect((await readConfig()).enabledAdapters).toEqual(["claude", "codex"]);
+  });
+
+  it("leaves a list that already has it exactly as stored", async () => {
+    const readConfig = await withConfigFile({ enabledAdapters: ["codex", "claude"] });
+    expect((await readConfig()).enabledAdapters).toEqual(["codex", "claude"]);
+  });
+
+  it("leaves the field ABSENT when the config never set it", async () => {
+    // Every consumer already defaults `undefined` to ["claude"], so
+    // materialising the field would change what a config reports without
+    // changing what it means.
+    const readConfig = await withConfigFile({ devRoot: "/x" });
+    expect((await readConfig()).enabledAdapters).toBeUndefined();
   });
 });
