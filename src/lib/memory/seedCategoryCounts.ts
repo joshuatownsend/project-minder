@@ -6,8 +6,10 @@ import {
 import { classifyTurn } from "@/lib/usage/classifier";
 
 // Top-level histogram of session turn categories (Feature Dev / Refactoring /
-// etc.), memoized by the max JSONL mtime so a /memory/seed reload that
-// follows a /usage hit reuses the same classification pass. The aggregator
+// etc.), memoized by a corpus fingerprint -- (newest JSONL mtime, file count)
+// -- so a /memory/seed reload that follows a /usage hit reuses the same
+// classification pass. The count is the half that sees a DELETION; see #492 at
+// the key itself for why a watermark alone cannot. The aggregator
 // in src/lib/usage/aggregator.ts does much more (cost calc, MCP parsing,
 // shell parsing) -- this helper exists for callers that just want the
 // histogram. Module-scope cache so HMR survives.
