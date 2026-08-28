@@ -8,7 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- **The session-parse cache is bounded by memory, not by entry count** (#476). `FileCache` capped itself at 25,000 entries while each slot holds one transcript's whole parsed `UsageTurn[]` — and transcript sizes span orders of magnitude, so the cap said nothing about memory. Measured on the reference corpus: 5,498 files, 2.51 GB of JSONL, with **160 files (2.4%) holding 50% of the bytes** (p50 160 KB, p99 6.7 MB, max 72 MB). Parsed turns retain **≈2.0× the source bytes** in heap, so a fully warm cache of that corpus wants **≈5.0 GB** — past Node's default ~4 GB old-space limit. With the cap four times larger than the corpus, nothing was evicting at all.
+- **The session-parse cache is bounded by memory, not by entry count** (#476). `FileCache` capped itself at 25,000 entries while each slot holds one transcript's whole parsed `UsageTurn[]` — and transcript sizes span orders of magnitude, so the cap said nothing about memory. Measured on the reference corpus: 5,498 files, 2.51 GB of JSONL, with **160 files (2.4%) holding 50% of the bytes** (p50 160 KB, p99 6.7 MB, max 72 MB). Parsed turns retain **≈2.0× the source bytes** in heap, so the whole corpus parsed at once is **≈5.0 GB** — past Node's default ~4 GB old-space limit. With the cap four times larger than the corpus, nothing was evicting at all.
+
+  **Scope, stated plainly:** this bounds what is retained *between* sweeps, not the peak *during* one. `buildAllSessions` holds every parsed session in one map until its consumer is finished, so eviction there only drops a second reference to a still-reachable array. The peak needs the sweep to aggregate or stream, which is #515. What this buys is a process that no longer grows without limit across a long-running session.
 
   There is now a byte budget, defaulting to **1 GiB of source** (≈2 GiB heap) and overridable with `MINDER_PARSE_CACHE_MB`. The entry cap stays as a runaway backstop — the two bound different failure modes.
 

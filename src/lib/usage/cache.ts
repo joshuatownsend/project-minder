@@ -189,7 +189,7 @@ export class FileCache<T> {
    */
   private evictIfNeeded(justInserted?: string): void {
     this.evictByBytes(justInserted);
-    this.evictByCount();
+    this.evictByCount(justInserted);
   }
 
   /**
@@ -229,14 +229,18 @@ export class FileCache<T> {
    * capacity in a single sweep so we don't pay the sort cost on every insert
    * near the boundary.
    */
-  private evictByCount(): void {
+  private evictByCount(justInserted?: string): void {
     if (this.slots.size <= this.maxEntries) return;
     const target = Math.floor(this.maxEntries * 0.8);
-    const entries = Array.from(this.slots.entries()).sort(
-      (a, b) => a[1].lastSeenAt - b[1].lastSeenAt
-    );
-    const toEvict = entries.length - target;
-    for (let i = 0; i < toEvict; i++) {
+    // Excludes `justInserted` for the same reason the byte sweep does. It is
+    // the newest entry so LRU would reach it last in all but a pathological
+    // cap, but "all but" is not "never", and the doc above promises never.
+    // (Copilot, PR #514.)
+    const entries = Array.from(this.slots.entries())
+      .filter(([path]) => path !== justInserted)
+      .sort((a, b) => a[1].lastSeenAt - b[1].lastSeenAt);
+    const toEvict = this.slots.size - target;
+    for (let i = 0; i < toEvict && i < entries.length; i++) {
       this.drop(entries[i][0]);
     }
   }
