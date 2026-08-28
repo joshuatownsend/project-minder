@@ -244,16 +244,40 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
             session_kind, ai_title, entrypoint,
             derived_version
      FROM sessions
-     -- turn_count counts PRIMARY turns only. Sidechain-only rows (subagent
-     -- transcripts ingested from <session>/subagents/*.jsonl — needed so
-     -- their token spend reaches the usage rollups) aren't sessions the
-     -- user ran and would render as blank zero-turn cards; keep them out
-     -- of the browser.
+     -- Zero-turn rows are not sessions anyone can read. This no longer
+     -- excludes subagent transcripts on its own — see the filter below.
      WHERE turn_count > 0
      ORDER BY end_ts DESC`
   ).all() as SessionRow[];
 
-  if (headers.length === 0) return [];
+  // Subagent transcripts stay OUT of the browser, and as of #487 that has to be
+  // said explicitly rather than falling out of `turn_count > 0`.
+  //
+  // Before #487 those rows stored sidechain-only skeletons, so `turn_count` was
+  // structurally 0 and the SQL clause excluded them as a side effect. #487
+  // ingests a nested transcript as its own conversation — which is what stopped
+  // it opening to an empty timeline — so the count is now real and the side
+  // effect is gone.
+  //
+  // Keeping them hidden is a product decision, not a leftover: on this corpus
+  // there are 1,268 of them against roughly as many top-level sessions, so
+  // listing them would about DOUBLE the browser for work the user delegated
+  // rather than ran. They remain fully openable by link from their parent, and
+  // their spend still reaches every rollup — neither of which depends on their
+  // being listed.
+  //
+  // It also keeps the two backends equivalent: the file-parse sweep reads only
+  // `*.jsonl` directly inside each project directory and never descends into
+  // `<session>/subagents/`, so it has never listed them and cannot start.
+  //
+  // Filtered in JS through the same predicate the delegation roll-up uses,
+  // rather than as a SQL `LIKE` on the path — one rule about what a subagent
+  // transcript looks like, not two that agree until they don't.
+  const headersOwned = headers.filter(
+    (r) => parseSubagentParentSessionId(r.file_path) === undefined
+  );
+
+  if (headersOwned.length === 0) return [];
 
   // Stitch per-session breakdown maps. Each query returns flat rows
   // keyed by session_id; we group in JS into Maps the assembly loop
@@ -269,10 +293,10 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
   );
 
   // #395: what the delegation roll-up needs, over ALL sessions — not just the
-  // ones in `headers`. Subagent transcripts are excluded from the header query
-  // by `turn_count > 0` (they are not sessions the user ran), yet their tool
-  // calls are exactly what the roll-up is for. Querying them separately is the
-  // point, not an oversight.
+  // ones in `headersOwned`. Subagent transcripts are excluded from the listing
+  // by the `parseSubagentParentSessionId` filter above (they are not sessions
+  // the user ran), yet their tool calls are exactly what the roll-up is for.
+  // Querying them separately is the point, not an oversight.
   const sidechainToolsBySession = groupCounts(
     prepCached(
       db,
@@ -405,7 +429,7 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
 
   const now = Date.now();
   const result: SessionSummary[] = [];
-  for (const h of headers) {
+  for (const h of headersOwned) {
     const toolUsage = toolsBySession.get(h.session_id) ?? {};
     const skillsUsed = skillsBySession.get(h.session_id) ?? {};
     const modelsUsed = modelsBySession.get(h.session_id) ?? [];

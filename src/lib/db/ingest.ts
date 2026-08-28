@@ -16,6 +16,7 @@ import { normalizePathKey, sessionFileHomeKey } from "@/lib/platform";
 import { chunkText } from "./textChunks";
 import type { ConversationEntry } from "@/lib/scanner/claudeConversations";
 import { projectSlugFromDirName } from "@/lib/sessions/projectIdentity";
+import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptPath";
 import { bridgeJsonlAppendToEventBus } from "@/lib/agentView/eventBus";
 import { emitMinderEvent } from "@/lib/events/bus";
 import { classifyTurn } from "@/lib/usage/classifier";
@@ -622,6 +623,25 @@ async function readJsonlSession(
   const sessionId = path.basename(filePath, ".jsonl");
   const canonicalDir = canonicalizeDirName(projectDirName);
   const projectSlug = projectSlugFromDirName(projectDirName);
+  // #487 — `isSidechain` means "this turn is a sidechain OF ITS PARENT". That
+  // reading is correct for an ordinary transcript and WRONG for a nested
+  // subagent one, where the file IS the subagent's own conversation and every
+  // entry carries the flag. Sampled from a real file: 50 entries, 50 with
+  // `isSidechain: true`, 0 without.
+  //
+  // Routed through the sidechain branch, such a session stored assistant
+  // SKELETONS: for `agent-a38db58938dbeea68`, 9 turns, every one assistant,
+  // `text_preview` NULL on all of them, and `turn_count = 0`. So #483/#484 made
+  // these sessions resolve instead of 404ing and they opened to an EMPTY
+  // TIMELINE — arguably worse than the error it replaced, since it reads as a
+  // real session that did nothing.
+  //
+  // Detecting it from the path rather than from the entries is deliberate: a
+  // parent transcript that legitimately contains a few sidechain entries must
+  // keep excluding them, and "every entry is a sidechain" would also be true of
+  // a one-turn parent that happened to delegate immediately.
+  const fileIsSubagentTranscript =
+    parseSubagentParentSessionId(filePath) !== undefined;
   const fromOffset = options.fromOffset ?? 0;
   const startTurnIndex = options.startTurnIndex ?? 0;
 
@@ -1183,7 +1203,7 @@ async function readJsonlSession(
     // tokens/cost must fold into the usage totals. Collect them here and append
     // as rows after the primary pass; then `continue` so the primary logic below
     // is untouched (identical to the pre-A1 skip for every other purpose).
-    if (entry.isSidechain) {
+    if (entry.isSidechain && !fileIsSubagentTranscript) {
       if (entry.type === "assistant") {
         collectSidechainTools(entry.message?.content);
         const model = entry.message?.model;
@@ -1360,7 +1380,27 @@ async function readJsonlSession(
         : undefined;
       if (messageId && openMessage) openMessages.set(messageId, openMessage);
 
-      const toolUses = buildToolUses(toolBlocks, 0, openMessage);
+      // #487 — a nested subagent transcript's TURNS are primary for that
+      // session (that is what fixes the empty timeline), but its TOOL CALLS
+      // still belong in `sidechain_tool_uses`, exactly where #395 put them.
+      //
+      // Not a hedge: `schema.sql` states the constraint outright — "`tool_uses`
+      // holds primary turns only and always has; every query above reads it
+      // with no `is_sidechain` predicate, so subagent calls cannot go in there
+      // without moving /usage, /agents, /skills, /costs and the denial
+      // analytics all at once". Measured on this tree: 23 `FROM tool_uses`
+      // sites across 11 modules. Letting them ride the primary path would have
+      // shifted portfolio-wide tool analytics as a side effect of a fix about
+      // a blank timeline — the silent widening this repo keeps unwinding.
+      //
+      // So the split is explicit: the turn carries no `toolUses`, and the calls
+      // are collected into the sidechain table the delegation roll-up already
+      // sums alongside the primary one. The roll-up total is therefore
+      // unchanged by this whole change.
+      const toolUses = fileIsSubagentTranscript
+        ? []
+        : buildToolUses(toolBlocks, 0, openMessage);
+      if (fileIsSubagentTranscript) collectSidechainTools(entry.message?.content);
       toolCallCount += toolUses.length;
 
       const usageTurn: UsageTurn = {

@@ -217,10 +217,18 @@ describe.skipIf(!driverAvailable)("data façade — getClaudeUsage backend parit
       .prepare("SELECT session_id, turn_count FROM sessions WHERE session_id = ?")
       .get(AGENT_SESSION) as { session_id: string; turn_count: number } | undefined;
     expect(nested).toBeDefined();
-    // And stored the way the fix reasons about: a sidechain-only transcript
-    // carries zero primary turns, which is why counting it as a conversation
-    // was incoherent rather than merely inconsistent.
-    expect(nested!.turn_count).toBe(0);
+    // And stored the way the fix reasons about. This USED to read
+    // `toBe(0)` — a sidechain-only transcript carried zero primary turns,
+    // which is why counting it as a conversation was incoherent rather than
+    // merely inconsistent. #487 ingests a nested transcript as the subagent's
+    // OWN conversation (its turns were being stored as skeletons, so the
+    // session opened to a blank timeline), so the count is real now and the
+    // exclusion below is explicit rather than incidental.
+    //
+    // Still asserted, because the premise this test rests on is that the
+    // nested transcript was INDEXED and then excluded — not that the walk
+    // stopped finding it. A zero would now be indistinguishable from that.
+    expect(nested!.turn_count).toBeGreaterThan(0);
 
     const dbResult = await dbFacade.getClaudeUsage(projectPaths);
     expect(dbResult.meta.backend).toBe("db");

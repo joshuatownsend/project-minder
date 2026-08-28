@@ -104,6 +104,13 @@ import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptP
 //    against the schema, not against the fact that every row on the
 //    reference index happens to say `claude`.
 
+/** Sum one numeric column across rows. */
+function sum<T>(rows: T[], pick: (row: T) => number): number {
+  let total = 0;
+  for (const r of rows) total += pick(r) ?? 0;
+  return total;
+}
+
 interface TotalsRow {
   row_count: number;
   total_turns: number;
@@ -189,21 +196,55 @@ function collectStats(
 
   // One prepare per call (variable-shape SQL). The route's 10-min
   // cache absorbs the per-prepare cost; under churn that's pennies.
-  const totals = db
+  //
+  // Summed in JS over the rows rather than by SQL, because the subagent
+  // transcripts have to come out first (#487). They used to fall out on their
+  // own: a nested transcript's session row carried `turn_count = 0` and zero
+  // tokens, because every one of its turns was stored as a sidechain and the
+  // session aggregates are primary-only. #487 ingests those turns as the
+  // subagent's own conversation — which is what stopped it opening to a blank
+  // timeline — so the row now carries real numbers, and a plain SUM would add
+  // them here.
+  //
+  // That would be a BACKEND DIVERGENCE, not a correction: `scanClaudeConversations`
+  // reads only `*.jsonl` directly inside a project directory and never descends
+  // into `<session>/subagents/`, so the file-parse side cannot see them at all.
+  // The same predicate that already excludes them from `conversationCount`
+  // therefore has to exclude them from the totals, and the numbers this surface
+  // reports are unchanged by #487.
+  //
+  // Their spend is not lost: `getUsage` sums over `turns`, where these rows have
+  // always been counted (DERIVED_VERSION 10 folded subagent tokens into the
+  // usage totals deliberately). This surface is session-level and single-source,
+  // and its file-parse counterpart defines the corpus.
+  const rows = db
     .prepare(
-      `SELECT COUNT(*) AS row_count,
-              COALESCE(SUM(turn_count), 0) AS total_turns,
-              COALESCE(SUM(input_tokens), 0) AS input_tokens,
-              COALESCE(SUM(output_tokens), 0) AS output_tokens,
-              COALESCE(SUM(cache_create_tokens), 0) AS cache_create_tokens,
-              COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
-              COALESCE(SUM(cost_usd), 0) AS cost_usd,
-              COALESCE(SUM(error_count), 0) AS error_count
+      `SELECT session_id, file_path, turn_count, input_tokens, output_tokens,
+              cache_create_tokens, cache_read_tokens, cost_usd, error_count
        FROM sessions
        WHERE project_dir_name IN (${placeholders})
          AND source = 'claude'`
     )
-    .get(...allowedDirs) as TotalsRow;
+    .all(...allowedDirs) as Array<
+    { session_id: string; file_path: string } & Omit<
+      TotalsRow,
+      "row_count" | "total_turns"
+    > & { turn_count: number }
+  >;
+
+  const owned = rows.filter(
+    (r) => parseSubagentParentSessionId(r.file_path) === undefined
+  );
+  const totals: TotalsRow = {
+    row_count: rows.length,
+    total_turns: sum(owned, (r) => r.turn_count),
+    input_tokens: sum(owned, (r) => r.input_tokens),
+    output_tokens: sum(owned, (r) => r.output_tokens),
+    cache_create_tokens: sum(owned, (r) => r.cache_create_tokens),
+    cache_read_tokens: sum(owned, (r) => r.cache_read_tokens),
+    cost_usd: sum(owned, (r) => r.cost_usd),
+    error_count: sum(owned, (r) => r.error_count),
+  };
 
   // Zero indexed rows keeps the previous meaning: the façade reads a
   // zero `conversationCount` as "indexer warming up" and falls through
@@ -224,16 +265,9 @@ function collectStats(
   // definition. (A stored column was considered and rejected in that
   // module's docblock — a not-yet-re-derived row would silently have no
   // link.)
-  const paths = db
-    .prepare(
-      `SELECT file_path FROM sessions
-       WHERE project_dir_name IN (${placeholders})
-         AND source = 'claude'`
-    )
-    .all(...allowedDirs) as Array<{ file_path: string }>;
-  stats.conversationCount = paths.filter(
-    (r) => parseSubagentParentSessionId(r.file_path) === undefined
-  ).length;
+  // `owned` above is this same filter; the separate `file_path` query it used
+  // to run has been folded into the row fetch rather than asking twice.
+  stats.conversationCount = owned.length;
   stats.totalTurns = totals.total_turns;
   stats.inputTokens = totals.input_tokens;
   stats.outputTokens = totals.output_tokens;
@@ -263,9 +297,16 @@ function collectStats(
   // `<synthetic>` is the file-parse path's "no model" sentinel for
   // turns that don't have a real assistant model (e.g. system-only
   // entries). Both backends exclude it from `modelsUsed`.
+  //
+  // `t.is_sidechain = 0` no longer excludes subagent transcripts by itself
+  // (#487): their turns are now stored as the subagent's own conversation, so
+  // they are primary rows on a session of their own. Without the id filter, a
+  // model used ONLY by a delegated agent would appear here while file-parse —
+  // which never reads those files — reported it nowhere. Same reasoning as the
+  // totals above, and the same single predicate.
   const models = db
     .prepare(
-      `SELECT DISTINCT t.model AS model
+      `SELECT DISTINCT t.model AS model, s.session_id AS session_id
        FROM turns t
        JOIN sessions s USING (session_id)
        WHERE s.project_dir_name IN (${placeholders})
@@ -275,9 +316,14 @@ function collectStats(
          AND t.model IS NOT NULL
          AND t.model <> '<synthetic>'`
     )
-    .all(...allowedDirs) as ModelRow[];
+    .all(...allowedDirs) as Array<ModelRow & { session_id: string }>;
 
-  stats.modelsUsed = models.map((m) => m.model);
+  const ownedIds = new Set(owned.map((r) => r.session_id));
+  stats.modelsUsed = [
+    ...new Set(
+      models.filter((m) => ownedIds.has(m.session_id)).map((m) => m.model)
+    ),
+  ];
 
   return stats;
 }

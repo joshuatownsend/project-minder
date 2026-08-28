@@ -26,7 +26,7 @@
 // here would drop every column that build added. The gates in `ingest.ts`
 // enforce this via `isNewerDerivation`; see the 2026-08-05 entry below for
 // what it costs when they don't.
-export const DERIVED_VERSION = 22;
+export const DERIVED_VERSION = 23;
 // History:
 // 1 — initial.
 // 2 — added `tool_result_preview` storage so `detectOneShot` rehydrates
@@ -423,6 +423,58 @@ export const DERIVED_VERSION = 22;
 //      Interacts with #478: this rebuild is another instance of the window
 //      where cross-corpus aggregates sum rows derived under two formulas.
 //      Unfixed there, unfixed here; recorded so the pair is not forgotten.
+//
+// 23 — #487: nested subagent transcripts are ingested as their OWN sessions
+//      rather than as sidechain skeletons.
+//
+//      `turns.is_sidechain` means "this turn is a sidechain OF ITS PARENT".
+//      Correct for an ordinary transcript, and wrong for
+//      `<session>/subagents/agent-*.jsonl`, where the file IS the subagent's
+//      conversation and every entry carries the flag — sampled from a real
+//      file: 50 entries, 50 flagged, 0 not. Routed through the sidechain
+//      branch, ingest stored SKELETONS: for `agent-a38db58938dbeea68`, 9 rows,
+//      all assistant, `text_preview` NULL on every one, `turn_count = 0`.
+//
+//      So when #483/#484 made these sessions resolve instead of 404ing, they
+//      opened to an EMPTY TIMELINE — which reads as a real session that did
+//      nothing, and is arguably worse than the error it replaced.
+//
+//      **Why the read-side fix alone did not work, and was reverted.** Making
+//      the detail loaders' `AND is_sidechain = 0` conditional on
+//      `parseSubagentParentSessionId(file_path)` was written first. It yields
+//      nine EMPTY rows and still an empty timeline — measured, not predicted
+//      — because the data was never stored. The fix has to be at ingest, and
+//      a re-parse is the only thing that can supply what was discarded.
+//
+//      **Why a bump.** 1,268 such rows already exist on the reference index,
+//      stored the old way. `reconcileSessionFile`'s skip gate compares mtime
+//      and size, neither of which says anything about a derivation change, so
+//      the version is what reaches them.
+//
+//      **The list deliberately does NOT grow.** With a real `turn_count`,
+//      these would start appearing in `loadSessionsListFromDb`, which
+//      excluded them only as a side effect of `turn_count > 0`. That side
+//      effect is gone, so the exclusion is now explicit — through the same
+//      `parseSubagentParentSessionId` predicate, not a second SQL `LIKE` rule.
+//      1,268 of them against roughly as many top-level sessions would about
+//      double the browser for work the user delegated rather than ran, and the
+//      file-parse sweep never listed them either (it reads only `*.jsonl`
+//      directly inside a project dir and does not descend), so listing them on
+//      one backend would be a divergence as well as a product change.
+//
+//      **The delegation roll-up is unaffected, and that is checked rather than
+//      hoped.** A subagent transcript's tool calls move from
+//      `sidechain_tool_uses` to `tool_uses`, and `rollUpTreeDelegation` sums
+//      BOTH per session, so the total is invariant. Each entry is written to
+//      one table or the other, never both, so nothing double-counts.
+//
+//      No read-side gate. Pre-reconcile a subagent session opens exactly as
+//      empty as it does today — degraded, not wrong — and the file-parse
+//      backend is correct immediately, since it reads the JSONL directly and
+//      its guards changed in the same commit.
+//
+//      Interacts with #478, like every bump: the rebuild is another window
+//      where cross-corpus aggregates sum rows derived under two formulas.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // 2026-08-05 — what a non-directional comparison cost, recorded here because

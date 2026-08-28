@@ -24,6 +24,7 @@ import { readSubagentMeta } from "./subagentMeta";
 import { enrichSubagentsFromOtel } from "./subagentEnrichment";
 import { resolveSessionJsonl } from "../usage/sessionPath";
 import { isValidSessionId } from "@/lib/sessionId";
+import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptPath";
 import type { SubagentMeta } from "./subagentMeta";
 import type { UsageTurn, ToolCall as UsageToolCall } from "../usage/types";
 import {
@@ -1251,6 +1252,22 @@ export async function scanSessionDetail(
   const subagentMap = new Map<string, SubagentInfo>();
   const subagentMetaMap = await readSubagentMeta(filePath);
 
+  // #487 — `isSidechain` means "this turn is a sidechain OF ITS PARENT", which
+  // is correct for an ordinary transcript and wrong for a nested subagent one.
+  // There the file IS the subagent's own conversation and EVERY entry carries
+  // the flag (sampled: 50 of 50), so the three guards below excluded the whole
+  // session and it rendered an empty timeline — which reads as a real session
+  // that did nothing, and is arguably worse than the 404 #483/#484 replaced.
+  //
+  // Read from the PATH, not from the entries: a parent transcript that
+  // legitimately contains a few sidechain entries must keep excluding them, and
+  // "every entry is a sidechain" would also be true of a one-turn parent that
+  // delegated immediately.
+  const fileIsSubagentTranscript =
+    parseSubagentParentSessionId(filePath) !== undefined;
+  const isSidechainHere = (entry: { isSidechain?: boolean }): boolean =>
+    Boolean(entry.isSidechain) && !fileIsSubagentTranscript;
+
   let hasThinking = false;
   const versionCounts = new Map<string, number>();
   // Index into timeline[] of the most recently pushed assistant event.
@@ -1282,7 +1299,7 @@ export async function scanSessionDetail(
           continue;
         }
 
-        if (entry.type === "user" && !entry.isMeta && !entry.isSidechain) {
+        if (entry.type === "user" && !entry.isMeta && !isSidechainHere(entry)) {
           const text = entry.message?.content
             ? extractTextContent(entry.message.content)
             : Array.isArray(entry.content)
@@ -1306,7 +1323,7 @@ export async function scanSessionDetail(
         // `subagent_completed` + `api_request` events via the enrichment
         // step in `enrichSubagentsFromOtel`. Kept here for any session JSONL
         // that still includes the old schema — does no harm when empty.
-        if (entry.type === "assistant" && entry.message && entry.isSidechain) {
+        if (entry.type === "assistant" && entry.message && isSidechainHere(entry)) {
           const msg = entry.message;
           const parentId = (entry as any).parentToolUseID;
           if (parentId && subagentMap.has(parentId)) {
@@ -1327,7 +1344,7 @@ export async function scanSessionDetail(
           continue;
         }
 
-        if (entry.type === "assistant" && entry.message && !entry.isSidechain) {
+        if (entry.type === "assistant" && entry.message && !isSidechainHere(entry)) {
           const msg = entry.message;
           lastAssistantTimelineIdx = -1;
 
