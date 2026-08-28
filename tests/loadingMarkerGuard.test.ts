@@ -305,6 +305,54 @@ describe("every loading state carries a queryable marker (#445)", () => {
     expect(violations).toEqual([]);
   });
 
+  it("no marker is driven by an emptiness or nullness test", () => {
+    // The single most repeated defect in this PR — six instances, found one at
+    // a time. `rows === null`, `adapters.length === 0`, `!library`,
+    // `fx === null`, `recentProjects.length === 0`, `usageAll === null`: all of
+    // them read as "still loading" AND as "the request failed", because a
+    // failed fetch leaves the state exactly as empty as a pending one. A marker
+    // driven by one never clears, and every `[data-loading]` consumer then
+    // treats the page as busy until it times out — which for the capture
+    // pipeline means the shot is SKIPPED, not stale.
+    //
+    //   A loading marker needs a flag that is definitively CLEARED.
+    //
+    // Matches the emptiness test immediately guarding a marked element, and
+    // the conditional form. Deliberately narrow: it is looking for a specific
+    // mistake, not auditing every condition in the tree.
+    const EMPTY_GUARD =
+      /\{\s*(!\s*[A-Za-z_$][\w.$]*|[A-Za-z_$][\w.$]*(?:\.length)?\s*===?\s*(?:0|null|undefined))\s*&&[^<]{0,80}<[A-Za-z][\w.]*\s+data-loading="true"/g;
+    const EMPTY_COND =
+      /data-loading=\{[^}]{0,120}?(?:\.length\s*===?\s*0|===?\s*null|===?\s*undefined)/g;
+
+    const violations: string[] = [];
+    for (const file of files) {
+      const code = fs.readFileSync(file, "utf-8");
+      for (const re of [EMPTY_GUARD, EMPTY_COND]) {
+        re.lastIndex = 0;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(code)) !== null) {
+          // A proper flag inside the matched span means the emptiness test
+          // is not what drives the marker — `{!collapsed && (loading ? …)}`
+          // is a layout gate wrapping a real condition.
+          // Only the part BEFORE the attribute: `m[0]` ends with
+          // `data-loading`, which contains "loading", so testing the whole
+          // match disabled this rule entirely. Caught by mutation.
+          const guardExpr = m[0].slice(0, m[0].indexOf("data-loading"));
+          if (/[Pp]ending|[Ll]oading|[Cc]onnecting/.test(guardExpr)) continue;
+          const line = code.slice(0, m.index).split("\n").length;
+          violations.push(
+            `${file}:${line} — the marker is driven by an emptiness/nullness ` +
+              `test (\`${(m[1] ?? m[0]).trim().slice(0, 40)}\`). A failed request ` +
+              `leaves that state empty too, so the marker would never clear. ` +
+              `Track a pending flag and settle it in a \`finally\`.`
+          );
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
   it("keeps the exemption list honest", () => {
     // An exemption for a file that no longer has a loading branch is a stale
     // licence, and the next file to take that name inherits it silently.

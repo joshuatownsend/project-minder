@@ -28,6 +28,11 @@ export function WorkflowsBrowser() {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortKey>("recent");
   const [expanded, setExpanded] = useState<string | null>(null);
+  // An emptiness test is not a pending test: a failed request leaves the
+  // state empty forever, so a marker driven by it never clears and every
+  // `[data-loading]` consumer reads the page as busy indefinitely
+  // (Codex, PR #517).
+  const [pending, setPending] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -39,7 +44,8 @@ export function WorkflowsBrowser() {
         // `body.data` gets undefined here (see the route comment).
         setRows(Array.isArray(body) ? body : []);
       })
-      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : String(e)));
+      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => !cancelled && setPending(false));
     return () => { cancelled = true; };
   }, []);
 
@@ -110,7 +116,7 @@ export function WorkflowsBrowser() {
         </label>
       </header>
 
-      {rows === null && <p data-loading="true" style={{ color: "var(--text-muted)", fontSize: "0.82rem" }}>Loading…</p>}
+      {pending && <p data-loading="true" style={{ color: "var(--text-muted)", fontSize: "0.82rem" }}>Loading…</p>}
 
       {rows !== null && rows.length === 0 && (
         <p style={{ color: "var(--text-muted)", fontSize: "0.82rem", lineHeight: 1.6 }}>

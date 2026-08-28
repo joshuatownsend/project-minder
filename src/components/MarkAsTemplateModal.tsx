@@ -55,6 +55,9 @@ export function MarkAsTemplateModal({ project, onClose }: Props) {
   const [description, setDescription] = useState("");
   const [available, setAvailable] = useState<AvailableUnits | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // The REQUEST's state. `available` is null both while the six fetches are
+  // out and after they fail, so it cannot drive a loading marker (#445).
+  const [inventoryPending, setInventoryPending] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -137,6 +140,8 @@ export function MarkAsTemplateModal({ project, onClose }: Props) {
         });
       } catch (e) {
         if (!cancelled) setLoadError((e as Error).message);
+      } finally {
+        if (!cancelled) setInventoryPending(false);
       }
     }
     loadUnits();
@@ -254,7 +259,9 @@ export function MarkAsTemplateModal({ project, onClose }: Props) {
         {loadError && (
           <div style={{ color: "var(--error, #ef4444)", fontSize: "0.72rem", marginTop: "8px" }}>{loadError}</div>
         )}
-        {!available && !loadError && (
+        {/* `available.length === 0` is also what a FAILED load leaves, so
+            the request's own state drives this. */}
+        {inventoryPending && !loadError && (
           <div data-loading="true" style={{ color: "var(--text-muted)", fontSize: "0.72rem", marginTop: "8px" }}>loading units…</div>
         )}
 

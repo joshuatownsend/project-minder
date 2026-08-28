@@ -162,9 +162,12 @@ function Step2({
 
 // ── Step 3: Item selection ─────────────────────────────────────────────────────
 function Step3({
-  library, selectedIds, toggleId, onBack, onNext,
+  library, libraryPending, selectedIds, toggleId, onBack, onNext,
 }: {
   library: LibraryIndexItem[] | null;
+  /** The REQUEST's state, not the data's. An empty `library` is also what a
+   *  failed fetch leaves behind, so it cannot mean "still loading". */
+  libraryPending: boolean;
   selectedIds: Set<string>;
   toggleId: (id: string) => void;
   onBack: () => void;
@@ -183,7 +186,7 @@ function Step3({
         </p>
       </div>
 
-      {!library && (
+      {libraryPending && (
         <p data-loading="true" style={{ fontSize: "0.8rem", color: "var(--text-muted)", fontFamily: "var(--font-body)" }}>Loading…</p>
       )}
 
@@ -347,11 +350,16 @@ export default function NewProjectPage() {
   const [relPath, setRelPath] = useState("");
   const [stack, setStack] = useState<Stack | null>(null);
   const [library, setLibrary] = useState<LibraryIndexItem[] | null>(null);
+  const [libraryPending, setLibraryPending] = useState(true);
   const [stackPresets, setStackPresets] = useState<Record<string, string[]>>({});
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<NewProjectResponse | null>(null);
 
+  // An emptiness test is not a pending test: a failed request leaves the
+  // state empty forever, so a marker driven by it never clears and every
+  // `[data-loading]` consumer reads the page as busy indefinitely
+  // (Codex, PR #517).
   // Effect 1: fetch library once when reaching step 3
   useEffect(() => {
     if (step !== 3) return;
@@ -362,7 +370,8 @@ export default function NewProjectPage() {
         setLibrary(data.items);
         setStackPresets(data.stackPresets);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setLibraryPending(false));
   }, [step, library]);
 
   // Effect 2: recompute preset whenever stack or library changes (on step 3)
@@ -444,6 +453,7 @@ export default function NewProjectPage() {
         {step === 3 && (
           <Step3
             library={library}
+            libraryPending={libraryPending}
             selectedIds={selectedIds}
             toggleId={toggleId}
             onBack={() => setStep(2)}

@@ -38,11 +38,18 @@ export function AdaptersSection({
     normalizeEnabledAdapters(config?.enabledAdapters ?? [])
   );
 
+  // An emptiness test is not a pending test: a failed request leaves the
+  // state empty forever, so a marker driven by it never clears and every
+  // `[data-loading]` consumer reads the page as busy indefinitely
+  // (Codex, PR #517).
+  const [pending, setPending] = useState(true);
+
   useEffect(() => {
     fetch("/api/adapters")
       .then((r) => r.json())
       .then((data: AdapterEntry[]) => setAdapters(data))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setPending(false));
   }, []);
 
   async function toggleAdapter(id: string, on: boolean) {
@@ -104,7 +111,7 @@ export function AdaptersSection({
             </div>
           );
         })}
-        {adapters.length === 0 && (
+        {pending && (
           <div data-loading="true" style={S.muted}>Loading adapters…</div>
         )}
       </div>
