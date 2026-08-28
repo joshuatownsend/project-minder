@@ -90,7 +90,7 @@ export function ContextAttributionPanel({ sessionId }: { sessionId: string }) {
   }, [sessionId]);
 
   if (loading) {
-    return <p style={{ color: "var(--text-muted)", fontSize: 13 }}>Analysing context…</p>;
+    return <p data-loading="true" style={{ color: "var(--text-muted)", fontSize: 13 }}>Analysing context…</p>;
   }
   // An error must NOT render as an empty chart — "this session used no
   // context" is a wrong answer, not a missing one.

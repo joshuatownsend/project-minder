@@ -23,7 +23,7 @@ export function ConcurrencyTimeline({ sessionId }: Props) {
   );
 
   if (loading) {
-    return <div style={{ height: "120px", background: "var(--bg-elevated)", borderRadius: "var(--radius)", animation: "pulse 1.5s ease-in-out infinite" }} />;
+    return <div data-loading="true" style={{ height: "120px", background: "var(--bg-elevated)", borderRadius: "var(--radius)", animation: "pulse 1.5s ease-in-out infinite" }} />;
   }
 
   if (error) {

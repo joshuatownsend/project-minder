@@ -80,7 +80,7 @@ export function VersionHistoryPanel({ period, projectSlug }: { period: string; p
       </button>
       {!collapsed && (
         loading
-          ? <p style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>Loading…</p>
+          ? <p data-loading="true" style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>Loading…</p>
           : rows.length === 0
             ? <p style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>No version data for this period.</p>
             : (

@@ -200,7 +200,7 @@ export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
 
           {targetMode === "existing" ? (
             !projects ? (
-              <span style={mutedText}>loading projects…</span>
+              <span data-loading="true" style={mutedText}>loading projects…</span>
             ) : projects.length === 0 ? (
               <span style={mutedText}>no eligible target projects</span>
             ) : (

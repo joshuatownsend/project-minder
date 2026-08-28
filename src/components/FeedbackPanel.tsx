@@ -49,7 +49,7 @@ export function FeedbackPanel({ sessionId }: { sessionId: string }) {
       .finally(() => setLoading(false));
   }, [sessionId]);
 
-  if (loading) return <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", padding: "24px 0" }}>Loading…</p>;
+  if (loading) return <p data-loading="true" style={{ fontSize: "0.78rem", color: "var(--text-muted)", padding: "24px 0" }}>Loading…</p>;
   if (notFound) return <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", padding: "24px 0" }}>No feedback recorded for this session.</p>;
   if (error) return <p style={{ fontSize: "0.78rem", color: "var(--status-error-text)", padding: "24px 0" }}>Error loading feedback: {error}</p>;
   if (!data) return null;

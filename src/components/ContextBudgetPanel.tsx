@@ -106,7 +106,7 @@ export function ContextBudgetPanel({ slug, defaultExpanded = false }: Props) {
       </button>
 
       {expanded && loading && (
-        <p style={{ fontSize: "0.72rem", color: "var(--text-muted)", margin: 0 }}>
+        <p data-loading="true" style={{ fontSize: "0.72rem", color: "var(--text-muted)", margin: 0 }}>
           Computing…
         </p>
       )}

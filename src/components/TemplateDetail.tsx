@@ -88,7 +88,7 @@ export function TemplateDetail({ slug }: Props) {
     return (
       <div>
         <BackLink />
-        <div style={{ padding: "20px 0", color: "var(--text-muted)", fontSize: "0.78rem" }}>loading…</div>
+        <div data-loading="true" style={{ padding: "20px 0", color: "var(--text-muted)", fontSize: "0.78rem" }}>loading…</div>
       </div>
     );
   }

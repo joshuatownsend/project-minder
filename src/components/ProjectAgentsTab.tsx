@@ -127,7 +127,7 @@ export function ProjectAgentsTab({ slug }: Props) {
 
   if (loading) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+      <div data-loading="true" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
         {[...Array(4)].map((_, i) => (
           <div
             key={i}

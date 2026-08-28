@@ -140,7 +140,7 @@ export function MemoryEditor({ entry, onSaved }: MemoryEditorProps) {
     return <p style={{ ...errorTextStyle, padding: "20px 0" }}>{error}</p>;
   }
   if (!data) {
-    return <p style={{ ...mutedStyle, padding: "20px 0" }}>Loading</p>;
+    return <p data-loading="true" style={{ ...mutedStyle, padding: "20px 0" }}>Loading</p>;
   }
 
   const dirty = draft !== data.content;
@@ -240,7 +240,7 @@ function DiffView({ entry, draftContent }: { entry: MemoryFileEntry; draftConten
     [snapshot, draftContent],
   );
 
-  if (loading) return <p style={mutedStyle}>Loading snapshot</p>;
+  if (loading) return <p data-loading="true" style={mutedStyle}>Loading snapshot</p>;
   if (!snapshot || snapshot.content === null) {
     return (
       <p style={{ ...mutedStyle, padding: "12px 0" }}>

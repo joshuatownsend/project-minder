@@ -145,7 +145,16 @@ export function AgentViewToolbar({
       {/* Connection state indicator */}
       <span style={{ fontSize: "0.6rem", color: CONNECTION_COLOR[connectionState], display: "flex", alignItems: "center", gap: 4 }}>
         <span style={{ width: 6, height: 6, borderRadius: "50%", background: CONNECTION_COLOR[connectionState] }} />
-        {CONNECTION_LABEL[connectionState]}
+        {/* The label is the state; the marker says whether it is PENDING. */}
+        <span
+          data-loading={
+            connectionState === "connecting" || connectionState === "reconnecting"
+              ? "true"
+              : undefined
+          }
+        >
+          {CONNECTION_LABEL[connectionState]}
+        </span>
         {connectionState === "connected" && sessionCount > 0 && (
           <span style={{ marginLeft: 2, color: "var(--text-3,#888)" }}>· {sessionCount}</span>
         )}

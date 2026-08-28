@@ -184,7 +184,12 @@ function EmptyState({ connectionState }: { connectionState: ConnectionState }) {
         No active sessions
       </div>
       <div style={{ fontSize: "0.7rem", color: "var(--text-3,#8a8c8f)", textAlign: "center", maxWidth: 380 }}>
-        {isConnecting ? "Connecting to live session stream…" : (
+        {isConnecting ? (
+          // The connection IS the pending state here, and the capture scripts
+          // already treat "Connecting" as busy — so it needs the marker like
+          // any other loading view (Codex, PR #517).
+          <span data-loading="true">Connecting to live session stream…</span>
+        ) : (
           <>
             Start a Claude Code session in any project to see it here. Background sessions launched with{" "}
             <code style={{ fontFamily: "var(--font-mono,monospace)", background: "var(--card-bg-2,#1a1a1a)", padding: "0 4px", borderRadius: 3 }}>

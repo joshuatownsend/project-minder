@@ -137,7 +137,7 @@ export function MemorySeedTray() {
     return <p style={{ padding: "40px 0", color: "var(--accent)" }}>{error}</p>;
   }
   if (!data) {
-    return <p style={{ padding: "40px 0", color: "var(--text-muted)" }}>Loading</p>;
+    return <p data-loading="true" style={{ padding: "40px 0", color: "var(--text-muted)" }}>Loading</p>;
   }
 
   return (

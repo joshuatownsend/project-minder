@@ -43,7 +43,7 @@ export default function AdaptersPage() {
       </h1>
 
       {!loaded ? (
-        <p style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Loading…</p>
+        <p data-loading="true" style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Loading…</p>
       ) : configurable.length === 0 ? (
         <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", lineHeight: 1.6 }}>
           No enabled harness exposes a read-only config surface. Codex is the first

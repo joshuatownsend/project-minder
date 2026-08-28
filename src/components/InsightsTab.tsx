@@ -33,7 +33,7 @@ export function InsightsTab({ slug, worktrees }: InsightsTabProps) {
 
   if (loading) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+      <div data-loading="true" style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
         {[...Array(3)].map((_, i) => (
           <div
             key={i}

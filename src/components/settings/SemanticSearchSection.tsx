@@ -269,7 +269,7 @@ export function SemanticSearchSection({ config, saving, onToggle }: {
         </div>
 
         <div style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "12px" }}>
-          {loading && !status && <div style={S.muted}>Reading index coverage…</div>}
+          {loading && !status && <div data-loading="true" style={S.muted}>Reading index coverage…</div>}
 
           {loadError && (
             <div style={{ ...S.muted, color: "var(--danger, var(--text-secondary))" }}>

@@ -349,7 +349,7 @@ function PlanRow({
           }}
         >
           {bodyState.state === "loading" && (
-            <div
+            <div data-loading="true"
               style={{ color: "var(--text-muted)", fontSize: "0.75rem", padding: "8px 0" }}
             >
               Loading…
@@ -419,9 +419,14 @@ function PlanRow({
   );
 }
 
+// Marked HERE, on its own root, rather than by the caller. A local
+// component that takes no props silently DROPS a `data-loading` passed
+// to it, so the source reads correctly and the DOM does not — the same
+// trap `Note` in HarnessConfigView fell into (Codex, PR #517). A
+// component that IS a loading state should carry the marker itself.
 function LoadingSkeleton() {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+    <div data-loading="true" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
       {Array.from({ length: 6 }).map((_, i) => (
         <div
           key={i}

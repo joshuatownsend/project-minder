@@ -150,7 +150,7 @@ function WorktreeRow({ wt, status, parentSlug, parentDevPort, onRemoved }: Workt
       <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
         <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", width: "80px" }}>Dev server</span>
         {devServer.loading ? (
-          <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>…</span>
+          <span data-loading="true" style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>…</span>
         ) : devServer.running ? (
           <>
             <span style={{ fontSize: "0.72rem", color: "#4ade80", fontFamily: "var(--font-mono)" }}>
@@ -299,7 +299,7 @@ export function WorktreePanel({ slug, devPort, worktrees }: WorktreePanelProps) 
 
       {expanded && (
         <div style={{ marginTop: "12px", display: "flex", flexDirection: "column", gap: "10px" }}>
-          {loading && <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Loading…</span>}
+          {loading && <span data-loading="true" style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Loading…</span>}
           {error && (
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <span style={{ fontSize: "0.8rem", color: "var(--destructive)" }}>{error}</span>

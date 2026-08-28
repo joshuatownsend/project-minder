@@ -133,6 +133,10 @@ export function HandoffDocModal({ sessionId, open, onClose }: HandoffDocModalPro
 
         {/* Preview */}
         <pre
+          // Conditional: this element also renders the finished document, so an
+          // unconditional marker would leave the page looking permanently
+          // mid-load to anything querying `[data-loading]` (#445).
+          data-loading={loading ? "true" : undefined}
           style={{
             margin: 0,
             padding: "14px",

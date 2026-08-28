@@ -269,7 +269,7 @@ export function ConfigDashboard() {
 
   if (loading || !draft) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: "40px" }}>
+      <div data-loading="true" style={{ display: "flex", flexDirection: "column", gap: "40px" }}>
         {[1, 2, 3].map((i) => (
           <div key={i}>
             <div style={{ height: "14px", width: "80px", background: "var(--bg-elevated)", borderRadius: "3px", marginBottom: "16px" }} />

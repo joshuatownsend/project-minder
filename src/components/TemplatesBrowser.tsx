@@ -34,7 +34,7 @@ export function TemplatesBrowser() {
         </span>
       </header>
 
-      {loading && <div style={mutedRow}>loading…</div>}
+      {loading && <div data-loading="true" style={mutedRow}>loading…</div>}
 
       {!loading && manifests.length === 0 && errors.length === 0 && (
         <div style={emptyState}>

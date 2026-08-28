@@ -134,7 +134,7 @@ export function PatternsPanel({ slug }: PatternsPanelProps) {
 
   if (loading) {
     return (
-      <div style={{ padding: "32px 0", textAlign: "center", color: "var(--text-muted)", fontSize: "0.85rem" }}>
+      <div data-loading="true" style={{ padding: "32px 0", textAlign: "center", color: "var(--text-muted)", fontSize: "0.85rem" }}>
         Detecting workflow patterns…
       </div>
     );

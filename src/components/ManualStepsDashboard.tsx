@@ -496,7 +496,7 @@ export function ManualStepsDashboard() {
 
   if (loading) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+      <div data-loading="true" style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
         {[1, 2, 3].map((i) => (
           <div
             key={i}

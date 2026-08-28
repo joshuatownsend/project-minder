@@ -162,9 +162,12 @@ function Step2({
 
 // ── Step 3: Item selection ─────────────────────────────────────────────────────
 function Step3({
-  library, selectedIds, toggleId, onBack, onNext,
+  library, libraryPending, selectedIds, toggleId, onBack, onNext,
 }: {
   library: LibraryIndexItem[] | null;
+  /** The REQUEST's state, not the data's. An empty `library` is also what a
+   *  failed fetch leaves behind, so it cannot mean "still loading". */
+  libraryPending: boolean;
   selectedIds: Set<string>;
   toggleId: (id: string) => void;
   onBack: () => void;
@@ -183,8 +186,8 @@ function Step3({
         </p>
       </div>
 
-      {!library && (
-        <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", fontFamily: "var(--font-body)" }}>Loading…</p>
+      {libraryPending && (
+        <p data-loading="true" style={{ fontSize: "0.8rem", color: "var(--text-muted)", fontFamily: "var(--font-body)" }}>Loading…</p>
       )}
 
       {library && (
@@ -347,22 +350,42 @@ export default function NewProjectPage() {
   const [relPath, setRelPath] = useState("");
   const [stack, setStack] = useState<Stack | null>(null);
   const [library, setLibrary] = useState<LibraryIndexItem[] | null>(null);
+  const [libraryPending, setLibraryPending] = useState(true);
   const [stackPresets, setStackPresets] = useState<Record<string, string[]>>({});
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<NewProjectResponse | null>(null);
 
+  // An emptiness test is not a pending test: a failed request leaves the
+  // state empty forever, so a marker driven by it never clears and every
+  // `[data-loading]` consumer reads the page as busy indefinitely
+  // (Codex, PR #517).
   // Effect 1: fetch library once when reaching step 3
   useEffect(() => {
     if (step !== 3) return;
     if (library) return;
-    fetch("/api/library")
+    // Back UP on every attempt. A failed first fetch left this false while
+    // `library` stayed null, so returning to step 3 retried the request
+    // behind an apparently-settled blank picker (Codex, PR #517).
+    setLibraryPending(true);
+    // Only the LATEST attempt may settle the flag. Without a controller the
+    // effect had no cleanup, so leaving step 3 and returning started a
+    // second request while the first was still out — and whichever
+    // finished first cleared `libraryPending`, leaving a blank picker with
+    // no marker while the current request was still running.
+    // (Codex, PR #517.)
+    const ctrl = new AbortController();
+    fetch("/api/library", { signal: ctrl.signal })
       .then((r) => r.json() as Promise<LibraryResponse>)
       .then((data) => {
         setLibrary(data.items);
         setStackPresets(data.stackPresets);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!ctrl.signal.aborted) setLibraryPending(false);
+      });
+    return () => ctrl.abort();
   }, [step, library]);
 
   // Effect 2: recompute preset whenever stack or library changes (on step 3)
@@ -444,6 +467,7 @@ export default function NewProjectPage() {
         {step === 3 && (
           <Step3
             library={library}
+            libraryPending={libraryPending}
             selectedIds={selectedIds}
             toggleId={toggleId}
             onBack={() => setStep(2)}

@@ -63,6 +63,20 @@ function timeOfDayGreeting(): string {
   return "Good night";
 }
 
+/**
+ * An aborted request has not failed — it was replaced. React's Strict Mode
+ * mounts effects twice in development, so the FIRST fetch of every pair is
+ * always aborted; treating that as a failure showed "Could not load projects"
+ * on a perfectly healthy dashboard (Codex, PR #517).
+ *
+ * At module scope rather than inside the component: as a `const` arrow declared
+ * below its first use it was a temporal-dead-zone error, which `pnpm lint`
+ * catches and typecheck does not.
+ */
+function aborted(err: unknown): boolean {
+  return (err as { name?: string })?.name === "AbortError";
+}
+
 export default function HomePage() {
   useDocumentTitle("Home");
   const { scope } = useScope();
@@ -81,6 +95,22 @@ export default function HomePage() {
   // 5 days of data — copilot flagged the mismatch (PR #102).
   const [usageAll, setUsageAll] = useState<UsageReport | null>(null);
   const [projects, setProjects] = useState<ProjectData[]>([]);
+  // Tracked separately from `projects.length`, because an EMPTY result is
+  // not a pending one: a configured root with no projects settles at zero
+  // and would otherwise render skeletons — and claim to be loading —
+  // forever (Codex, PR #517).
+  const [projectsPending, setProjectsPending] = useState(true);
+  // Usage and health need the same lifecycle for the same reason (Codex,
+  // PR #517). `usageAll === null` is not "pending": a scope change refetches
+  // while KEEPING the previous report, so the marker vanished mid-request,
+  // and a failed first load leaves it null forever, so the marker never
+  // cleared. Neither direction is what a consumer of `[data-loading]` needs.
+  const [usagePending, setUsagePending] = useState(true);
+  const [healthPending, setHealthPending] = useState(true);
+  // And a FAILURE is not an empty result either. Without this the settled
+  // branch tells a user with plenty of projects that they have none,
+  // whenever the request happened to fail (Codex, PR #517).
+  const [projectsFailed, setProjectsFailed] = useState(false);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [insightCount, setInsightCount] = useState<number>(0);
   const [pendingStepsCount, setPendingStepsCount] = useState<number>(0);
@@ -116,16 +146,36 @@ export default function HomePage() {
     fetch(`/api/usage?period=all${scope !== "all" ? `&project=${encodeURIComponent(scope)}` : ""}`, { signal: ctrl.signal })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => d && setUsageAll(d as UsageReport))
-      .catch(() => {});
-    return () => ctrl.abort();
+      .catch(() => {})
+      .finally(() => {
+        if (!ctrl.signal.aborted) setUsagePending(false);
+      });
+    return () => {
+      // A scope change starts a new request, so the marker goes back up rather
+      // than staying down because the PREVIOUS report is still in state.
+      setUsagePending(true);
+      ctrl.abort();
+    };
   }, [scope]);
 
   useEffect(() => {
     const ctrl = new AbortController();
     fetch("/api/projects", { signal: ctrl.signal })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => d?.projects && setProjects(d.projects as ProjectData[]))
-      .catch(() => {});
+      .then((d) => {
+        if (d?.projects) setProjects(d.projects as ProjectData[]);
+        else setProjectsFailed(true);
+      })
+      .catch((err) => {
+        if (aborted(err)) return;
+        setProjectsFailed(true);
+      })
+      .finally(() => {
+        // Settles on failure too: an error is not a pending state, and leaving
+        // the marker mounted would pin the dashboard as loading. `signal.aborted`
+        // rather than the caught error, so the replayed request owns the flag.
+        if (!ctrl.signal.aborted) setProjectsPending(false);
+      });
     return () => ctrl.abort();
   }, []);
 
@@ -237,8 +287,14 @@ export default function HomePage() {
     fetch(`/api/home-health?approvals=${snapshot.approvalCount}`, { signal: ctrl.signal })
       .then((r) => (r.ok ? r.json() : null))
       .then((d: HealthReport | null) => d && setHealth(d))
-      .catch(() => {});
-    return () => ctrl.abort();
+      .catch(() => {})
+      .finally(() => {
+        if (!ctrl.signal.aborted) setHealthPending(false);
+      });
+    return () => {
+      setHealthPending(true);
+      ctrl.abort();
+    };
   }, [snapshot.approvalCount]);
 
   // DB readiness probe. `/api/health` actively drives the state machine
@@ -404,7 +460,19 @@ export default function HomePage() {
         <Stat
           label="Tokens"
           value={usageAll === null ? "—" : formatCount(headlineTokens)}
-          sub={usageAll === null ? "loading…" : `${(cacheHitRate * 100).toFixed(0)}% cache hit`}
+          sub={
+            usagePending ? (
+              <span data-loading="true">loading…</span>
+            ) : !usageAll ? (
+              // Settled with nothing is not settled with zero. The null
+              // fallback would print "0% cache hit" for a request that never
+              // answered — a fabricated metric is worse than an absent one
+              // (Codex, PR #517).
+              "—"
+            ) : (
+              `${(cacheHitRate * 100).toFixed(0)}% cache hit`
+            )
+          }
           accent="var(--info)"
           spark={tokensSpark}
           sparkColor="var(--info)"
@@ -413,9 +481,13 @@ export default function HomePage() {
           label="Config health"
           value={health === null ? "—" : `${healthScore}%`}
           sub={
-            health === null
-              ? "loading…"
-              : `${healthGrade} — ${healthLabel.toLowerCase()}`
+            healthPending ? (
+              <span data-loading="true">loading…</span>
+            ) : !health ? (
+              "—"
+            ) : (
+              `${healthGrade} — ${healthLabel.toLowerCase()}`
+            )
           }
           accent="var(--danger)"
         />
@@ -603,9 +675,16 @@ export default function HomePage() {
           }
         />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10 }}>
-          {recentProjects.length === 0
-            ? Array.from({ length: 4 }).map((_, i) => <ProjectTileSkeleton key={i} />)
-            : recentProjects.map((p) => (
+          {projectsPending && recentProjects.length === 0 ? (
+            Array.from({ length: 4 }).map((_, i) => <ProjectTileSkeleton key={i} />)
+          ) : recentProjects.length === 0 ? (
+            <div style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
+              {projectsFailed
+                ? "Could not load projects."
+                : "No projects found under your scan roots."}
+            </div>
+          ) : (
+            recentProjects.map((p) => (
               <Link key={p.slug} href={`/project/${p.slug}`} style={{ textDecoration: "none", color: "inherit" }}>
                 <div className="ds-card" style={{ padding: 14, cursor: "pointer", transition: "border-color .15s" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
@@ -638,7 +717,8 @@ export default function HomePage() {
                   )}
                 </div>
               </Link>
-            ))}
+            ))
+          )}
         </div>
       </Card>
 
@@ -683,9 +763,11 @@ export default function HomePage() {
           <CardHeader
             title="Config health"
             sub={
-              health === null
-                ? "loading…"
-                : `${health.components.filter((c) => c.score !== null).length} of ${health.components.length} signals`
+              healthPending
+                ? <span data-loading="true">loading…</span>
+                : !health
+                  ? "—"
+                  : `${health.components.filter((c) => c.score !== null).length} of ${health.components.length} signals`
             }
             right={
               <Link href="/insights" style={{ textDecoration: "none" }}>
@@ -799,7 +881,9 @@ function IndicatorDot({ active, kind, title }: { active: boolean; kind: "good" |
 
 function ProjectTileSkeleton() {
   return (
-    <div className="ds-card" style={{ padding: 14, opacity: 0.6 }}>
+    // Marks its own root, like every other skeleton here: a component that IS
+    // a loading state should not depend on callers saying so.
+    <div data-loading="true" className="ds-card" style={{ padding: 14, opacity: 0.6 }}>
       <div style={{ height: 14, background: "var(--bg-elev-2)", borderRadius: 4, marginBottom: 10, width: "70%" }} />
       <div style={{ height: 10, background: "var(--bg-elev-2)", borderRadius: 4, width: "40%" }} />
     </div>

@@ -220,6 +220,18 @@ export function NotificationsSection({
             ))}
           </ul>
         )}
+        {subsLoading && (
+          // While the fetch is out this section rendered NOTHING, which reads
+          // as "no subscriptions" rather than "not known yet" — and left the
+          // state invisible to `[data-loading]`, so a capture could shoot the
+          // tab mid-fetch and call it settled (Codex, PR #517).
+          <div
+            data-loading="true"
+            style={{ fontSize: "0.74rem", color: "var(--text-muted)", marginTop: "4px" }}
+          >
+            Loading subscriptions…
+          </div>
+        )}
         {!subsLoading && subscriptions.length === 0 && (
           <div style={{ fontSize: "0.74rem", color: "var(--text-muted)", marginTop: "4px" }}>No subscriptions registered.</div>
         )}

@@ -130,7 +130,7 @@ export function MemoryBrowser() {
     return <p style={{ padding: "40px 0", color: "var(--status-error-text, var(--accent))" }}>{error}</p>;
   }
   if (!entries) {
-    return <p style={{ padding: "40px 0", color: "var(--text-muted)" }}>Loading</p>;
+    return <p data-loading="true" style={{ padding: "40px 0", color: "var(--text-muted)" }}>Loading</p>;
   }
 
   return (

@@ -295,7 +295,7 @@ export function LibraryBrowser() {
       </div>
 
       {loading && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+        <div data-loading="true" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
           {[1, 2, 3, 4].map((i) => (
             <div key={i} style={{ height: "42px", borderRadius: "var(--radius)", background: "var(--bg-elevated)", opacity: 0.5, animation: "pulse 1.5s ease-in-out infinite" }} />
           ))}

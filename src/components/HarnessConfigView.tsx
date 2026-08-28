@@ -124,9 +124,20 @@ function RuleBlock({ name, content, truncated }: { name: string; content: string
   );
 }
 
-function Note({ children }: { children: React.ReactNode }) {
+function Note({
+  children,
+  ...rest
+}: { children: React.ReactNode } & React.HTMLAttributes<HTMLParagraphElement>) {
   return (
-    <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", margin: "0 0 16px", fontFamily: "var(--font-body)" }}>
+    <p
+      // Forwards the rest, which is what carries `data-loading` to the DOM.
+      // Without it React drops the attribute and the loading state is
+      // invisible to `[data-loading]` while the SOURCE still contains it —
+      // so a file-level guard passes and the contract is broken anyway
+      // (Codex + Copilot, PR #517).
+      {...rest}
+      style={{ fontSize: "0.75rem", color: "var(--text-muted)", margin: "0 0 16px", fontFamily: "var(--font-body)" }}
+    >
       {children}
     </p>
   );
@@ -156,7 +167,7 @@ export function HarnessConfigView({ harnessId }: { harnessId: string }) {
     return () => controller.abort();
   }, [harnessId]);
 
-  if (loading) return <Note>Loading harness config…</Note>;
+  if (loading) return <Note data-loading="true">Loading harness config…</Note>;
   if (error) return <Note>{error}</Note>;
   if (!data) return <Note>No data.</Note>;
 

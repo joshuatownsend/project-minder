@@ -36,7 +36,7 @@ export function AgentTreeView({ sessionId }: AgentTreeViewProps) {
 
   if (loading) {
     return (
-      <div style={{ color: "var(--text-3,#8a8c8f)", fontSize: "0.7rem", padding: "12px 0" }}>
+      <div data-loading="true" style={{ color: "var(--text-3,#8a8c8f)", fontSize: "0.7rem", padding: "12px 0" }}>
         Loading sub-agent tree…
       </div>
     );

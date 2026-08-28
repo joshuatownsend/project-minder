@@ -94,6 +94,11 @@ export function SettingsPage() {
   const refreshGlobalConfig = useConfigRefresh();
   const [active, setActive] = useState<SectionKey>("features");
   const [config, setConfig] = useState<MinderConfig | null>(null);
+  // The page's own request state. `config === null` is also what a FAILED
+  // load leaves, and several sections render default-valued controls until
+  // it arrives — so without this the capture could photograph defaults and
+  // call them settings (Codex, PR #517).
+  const [configPending, setConfigPending] = useState(true);
 
   // Honor a `?section=` deep-link once on mount (e.g. the /instructions empty
   // state links to /settings?section=adapters). Read from window rather than
@@ -126,6 +131,11 @@ export function SettingsPage() {
         if (!cancelled) {
           showToast("Couldn't load settings", e instanceof Error ? e.message : String(e));
         }
+      })
+      .finally(() => {
+        // Settles on failure too: the toast has reported it, and leaving the
+        // marker up would pin the page as busy for every consumer.
+        if (!cancelled) setConfigPending(false);
       });
     return () => {
       cancelled = true;
@@ -238,7 +248,10 @@ export function SettingsPage() {
   }
 
   return (
-    <div style={{ display: "flex", gap: "24px", padding: "20px 0", minHeight: "60vh" }}>
+    <div
+      data-loading={configPending ? "true" : undefined}
+      style={{ display: "flex", gap: "24px", padding: "20px 0", minHeight: "60vh" }}
+    >
       <aside style={{ width: "180px", flexShrink: 0 }}>
         <header style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
           <SettingsIcon style={{ width: "13px", height: "13px", color: "var(--text-muted)" }} />
@@ -320,10 +333,18 @@ export function SettingsPage() {
           <ServerPortSection config={config} onConfigChange={patchConfig} />
         )}
         {active === "scan-roots" && (
-          <ScanRootsSection config={config} onConfigChange={patchConfig} />
+          <ScanRootsSection
+            config={config}
+            configPending={configPending}
+            onConfigChange={patchConfig}
+          />
         )}
         {active === "claude-homes" && (
-          <ClaudeHomesSection config={config} onConfigChange={patchConfig} />
+          <ClaudeHomesSection
+            config={config}
+            configPending={configPending}
+            onConfigChange={patchConfig}
+          />
         )}
         {active === "notifications" && (
           <NotificationsSection config={config} onConfigChange={patchConfig} />
@@ -390,7 +411,13 @@ function InitStatusRow({ status }: { status: InitStatus | null }) {
     >
       <span>
         DB status:{" "}
-        <span style={{ color: DB_STATUS_COLOR[status.state] }}>
+        <span
+          // `in-flight` is a genuinely pending state — the DB is initializing
+          // and dependent data is not available yet — so it belongs to
+          // `[data-loading]` like any other (Codex, PR #517).
+          data-loading={status.state === "in-flight" ? "true" : undefined}
+          style={{ color: DB_STATUS_COLOR[status.state] }}
+        >
           {DB_STATUS_LABEL[status.state]}
         </span>
       </span>

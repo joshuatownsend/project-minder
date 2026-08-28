@@ -148,7 +148,7 @@ export function DiagnosisPanel({ sessionId }: { sessionId: string }) {
 
   if (loading) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+      <div data-loading="true" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
         {[60, 80, 80, 80].map((h, i) => (
           <div
             key={i}

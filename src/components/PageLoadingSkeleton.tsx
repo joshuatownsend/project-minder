@@ -18,7 +18,9 @@ export function PageLoadingSkeleton({
   rows?: number;
 }) {
   return (
-    <div className="shell-content wide">
+    // The ROOT carries it, not only the <Skeleton> children: one element
+    // answers "is this page loading" instead of N.
+    <div data-loading="true" className="shell-content wide">
       <div className="space-y-6">
         {/* Page heading */}
         <div className="space-y-2">

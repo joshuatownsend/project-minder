@@ -81,7 +81,7 @@ export function IntegrationsSection({
           Claude Max Quota
         </div>
         {quota === null ? (
-          <div style={S.muted}>Loading…</div>
+          <div data-loading="true" style={S.muted}>Loading…</div>
         ) : !quota.configured ? (
           <div style={S.muted}>
             {quota.reason}
