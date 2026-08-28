@@ -235,3 +235,59 @@ describe("loadSessionTurnsBySessionId", () => {
     expect(err.cause).toBe(cause);
   });
 });
+
+// #476 — the parse cache charges a slot by what it RETAINS, not by the file's
+// size, and this covers the production wiring rather than the mechanism. A
+// transcript the parser declines to parse returns `[]`; charged its size, one
+// oversized in-progress transcript would evict that much real parsed data to
+// hold an empty array. (Codex P2, PR #514.)
+//
+// Driven with a file that has REAL BYTES but yields no turns, rather than one
+// above `MAX_SESSION_FILE_SIZE` (50 MB — too big to write on every run).
+//
+// The first draft used an EMPTY file and did not discriminate: an empty file's
+// size is zero, so the default weigher and the real one charge the same
+// nothing. Caught by mutation — deleting the weigher left the test green. A
+// transcript of non-turn entries is the shape that separates them, and it is
+// also closer to the real case: an oversized file has plenty of bytes and
+// yields `[]` because the parser declined it.
+describe("parse cache weighs a declined parse at nothing (#476)", () => {
+  const state = installIsolatedState({ seedClaudeProjects: true });
+
+  it("charges the real transcript and not the turn-less one", async () => {
+    await state.reload();
+    const parser = await import("@/lib/usage/parser");
+
+    const dir = path.join(state.tmpHome(), ".claude", "projects", "C--dev-app");
+    await fs.mkdir(dir, { recursive: true });
+
+    // Real bytes, no turns: `summary` entries are not user or assistant turns.
+    const noise = Array.from({ length: 40 }, (_, i) =>
+      JSON.stringify({ type: "summary", summary: `padding line ${i} `.repeat(8) })
+    ).join("\n");
+    const emptyPath = path.join(dir, "e1111111-1111-1111-1111-111111111111.jsonl");
+    await fs.writeFile(emptyPath, noise + "\n", "utf-8");
+    expect((await fs.stat(emptyPath)).size).toBeGreaterThan(1000);
+    const line = JSON.stringify({
+      type: "assistant",
+      timestamp: "2026-01-01T00:00:00Z",
+      sessionId: "a2222222-2222-2222-2222-222222222222",
+      message: {
+        id: "m1",
+        model: "claude-opus-5",
+        content: [{ type: "text", text: "hello" }],
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+    });
+    const realPath = path.join(dir, "a2222222-2222-2222-2222-222222222222.jsonl");
+    await fs.writeFile(realPath, line + "\n", "utf-8");
+    const realSize = (await fs.stat(realPath)).size;
+
+    await parser.parseAllSessions();
+
+    // Both files were swept — the fingerprint counts what EXISTS...
+    expect(parser.getJsonlFileCount()).toBe(2);
+    // ...while the budget charges only what is RETAINED.
+    expect(parser.getJsonlCacheBytes()).toBe(realSize);
+  });
+});

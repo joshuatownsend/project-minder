@@ -75,12 +75,55 @@ function getFileCache(): FileCache<UsageTurn[]> {
     // every read of the dashboard re-parses the entire history.
     //
     // An entry count was never a memory bound in the first place: a slot holds
-    // one session's whole `UsageTurn[]`, so 5,000 large transcripts could
-    // already exceed 25,000 small ones. Bounding this by retained bytes or
-    // turns would be a real improvement over both numbers; it is a different
-    // change from removing the cliff, and is tracked separately rather than
-    // done here. (Codex P2, PR #474.)
-    globalForParser.__usageFileCache = new FileCache<UsageTurn[]>({ maxEntries: 25_000 });
+    // one session's whole `UsageTurn[]`, so 5,000 large transcripts can exceed
+    // 25,000 small ones. `maxBytes` is the bound that means something (#476);
+    // `maxEntries` stays as a runaway backstop, since the two bound different
+    // failure modes.
+    //
+    // **Measured, because the numbers turned out to matter more than expected.**
+    // On the reference corpus (5,498 transcripts, 2.51 GB of JSONL), parsed
+    // `UsageTurn[]` retains ≈2.0x the source bytes in heap — 153 files spanning
+    // the size distribution, 57 MB of source against 114 MB of retained heap.
+    // A fully warm cache of that corpus therefore wants ≈5.0 GB, which is past
+    // Node's default ~4 GB old-space limit. With `maxEntries: 25_000` against
+    // 5,498 files, NOTHING was evicting: the cap was four times larger than the
+    // corpus, so the only thing bounding this cache was the size of the user's
+    // history.
+    //
+    // The default budget is 1 GiB of source (≈2 GiB heap), which leaves room
+    // for the rest of the process under the default limit. Raise it with
+    // `MINDER_PARSE_CACHE_MB` on a machine with headroom — a bigger budget is
+    // strictly better for the sweep, up to the point where the process cannot
+    // afford it.
+    //
+    // **This bounds what is RETAINED BETWEEN sweeps, not the peak DURING one**
+    // (Codex P1, PR #514). `buildAllSessions` collects every parsed session
+    // into its `result` map and holds it until the sweep and its consumer are
+    // both done, so evicting here only drops a SECOND reference to an array
+    // that is still reachable. On a corpus larger than the heap limit the peak
+    // is unchanged, and no cache budget can change it. That is #515, and it
+    // needs the sweep to aggregate or stream rather than materialise
+    // everything at once. What this does buy is a process that does not grow
+    // without limit across a long-running session, which is the half that is
+    // a cache problem.
+    //
+    // Eviction above the budget is LARGEST-FIRST, not LRU; see `evictByBytes`
+    // for why LRU is the pessimal policy for a full-corpus sweep and what the
+    // 2.4%-of-files-hold-50%-of-bytes skew buys.
+    const budgetMb = Number(process.env.MINDER_PARSE_CACHE_MB);
+    globalForParser.__usageFileCache = new FileCache<UsageTurn[]>({
+      // A transcript above `MAX_SESSION_FILE_SIZE` is not parsed — the factory
+      // returns `[]` — so the slot retains nothing and must not be charged the
+      // file's size. Left at the default, one 72 MB in-progress transcript
+      // would evict 72 MB of real parsed turns to hold an empty array.
+      // (Codex P2, PR #514.)
+      weigh: (turns, size) => (turns.length === 0 ? 0 : size),
+      maxEntries: 25_000,
+      maxBytes:
+        Number.isFinite(budgetMb) && budgetMb > 0
+          ? budgetMb * 1024 * 1024
+          : 1024 * 1024 * 1024,
+    });
   }
   return globalForParser.__usageFileCache;
 }
@@ -1003,28 +1046,40 @@ export function getJsonlMaxMtime(): number {
   return getFileCache().maxMtimeMs();
 }
 
+
 /**
- * How many JSONL files the last `parseAllSessions()` sweep left cached.
+ * How many JSONL files the cache has successfully read and not since seen
+ * removed.
  *
- * Exists as the second half of a corpus fingerprint. `getJsonlMaxMtime()` is a
+ * The cardinality half of a corpus fingerprint. `getJsonlMaxMtime()` is a
  * MONOTONE summary — it can only answer "has anything newer appeared" — so it
  * is structurally blind to a deletion that does not hold the maximum mtime.
  * Cardinality is the missing dimension: any deletion changes it, whatever the
  * deleted file's age. See #492.
  *
- * `parseAllSessions` calls `cache.retainOnly(liveSet)` before returning, so
- * after a completed sweep this is the size of the live set rather than a
- * high-water mark. Two caveats, both of which degrade to today's behaviour
- * rather than to something worse:
+ * **`corpusSize`, not `size`.** Since #476 the cache evicts values under a
+ * byte budget, so `size` counts what is RESIDENT while this counts what was
+ * READ. Reading the resident count would make a deletion undetectable whenever
+ * the deleted file had already been evicted — the #492 defect, reintroduced
+ * through the back door by an unrelated change (Codex P2, PR #514).
  *
- *  - It counts files that PARSED. An oversized or unreadable transcript never
- *    gets a slot, so deleting one is invisible here as well as to the mtime.
- *  - If the corpus ever exceeds the cache's `maxEntries` (25,000, against a
- *    reference corpus of ~6,800), LRU eviction pins this near the cap and it
- *    stops discriminating.
+ * A file whose parse FAILED is not counted, which is what lets a successful
+ * retry move this even when the file's mtime is below another's.
  */
 export function getJsonlFileCount(): number {
-  return getFileCache().size;
+  return getFileCache().corpusSize;
+}
+
+/**
+ * Source bytes the parse cache is currently charging against its budget.
+ *
+ * Exposed for tests and metrics, and it is NOT a corpus measure -- unlike
+ * the two fingerprint halves above, this deliberately answers "how much is
+ * resident". It is how the `weigh` wiring is observable: a transcript the
+ * parser declined to parse retains nothing and must charge nothing (#476).
+ */
+export function getJsonlCacheBytes(): number {
+  return getFileCache().bytes;
 }
 
 /**
