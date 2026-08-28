@@ -166,7 +166,7 @@ const BRANCH_PATTERNS: Array<{ re: RegExp; lookBack: number }> = [
 // `[data-loading]` satisfied the bare form, and this file is full of such
 // comments — including the one explaining the fix. Caught by mutation: the
 // rule stayed green with the real attribute deleted.
-const MARKER = /data-loading=|<Skeleton|<LoadingSkeleton/;
+const MARKER = /data-loading=|<\w*Skeleton/;
 
 describe("every loading state carries a queryable marker (#445)", () => {
   const files = ROOTS.flatMap(tsxFiles);
@@ -321,21 +321,29 @@ describe("every loading state carries a queryable marker (#445)", () => {
     expect(stale).toEqual([]);
   });
 
-  it("every local LoadingSkeleton marks its own root", () => {
+  it("every bespoke skeleton component marks its own root", () => {
     // The guard treats `<LoadingSkeleton` as a marker at the call site, so
     // that trust has to be earned at the definition. Without this, one of them
     // losing its attribute would turn four call sites silently green.
     const violations: string[] = [];
     for (const file of files) {
       const code = fs.readFileSync(file, "utf-8");
-      const at = code.indexOf("function LoadingSkeleton(");
-      if (at === -1) continue;
-      const body = code.slice(at, at + 400);
-      if (!body.includes("data-loading")) {
-        violations.push(
-          `${file} defines a LoadingSkeleton whose root carries no ` +
-            `\`data-loading\`, while the guard credits its callers for using it.`
-        );
+      // ANY `…Skeleton` component, not the one name. `ProjectTileSkeleton`
+      // was unmarked and invisible to a check that only knew `LoadingSkeleton`
+      // (Codex, PR #517).
+      const DEF = /function\s+(\w*Skeleton)\s*\(/g;
+      DEF.lastIndex = 0;
+      let d: RegExpExecArray | null;
+      while ((d = DEF.exec(code)) !== null) {
+        const body = code.slice(d.index, d.index + 400);
+        // `LOADING_ATTR` counts: `ui/skeleton.tsx` spreads the shared
+        // constant rather than writing the attribute out.
+        if (!/data-loading=|LOADING_ATTR/.test(body)) {
+          violations.push(
+            `${file} defines ${d[1]} whose root carries no \`data-loading\`, ` +
+              `while the guard credits its callers for rendering it.`
+          );
+        }
       }
     }
     expect(violations).toEqual([]);

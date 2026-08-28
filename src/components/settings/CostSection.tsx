@@ -57,13 +57,21 @@ export function CostSection({
   const [budgetSaving, setBudgetSaving] = useState(false);
   const [budgetMsg, setBudgetMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
+  // A failed or malformed `/api/integrations/fx` response leaves `fx`
+  // null forever, so `fx === null` cannot mean "still fetching" — it also
+  // means "never arrived". Using it as the loading marker pinned the page
+  // as busy until every consumer timed out (Codex, PR #517). Track the
+  // request state explicitly instead.
+  const [fxPending, setFxPending] = useState(true);
+
   const quota = useQuota();
 
   useEffect(() => {
     fetch("/api/integrations/fx")
       .then((r) => r.json())
       .then((d) => setFx(d as FxData))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setFxPending(false));
   }, []);
 
   useEffect(() => {
@@ -242,7 +250,7 @@ export function CostSection({
         <div
           // Only while the rate is genuinely outstanding — `fxLabel` also renders
           // the fetched rate and an error string from the same element (#445).
-          data-loading={currency !== "USD" && fx === null ? "true" : undefined}
+          data-loading={currency !== "USD" && fxPending ? "true" : undefined}
           style={{ ...S.muted }}
         >
           {currency !== "USD" ? fxLabel : "No conversion — costs shown in USD."}

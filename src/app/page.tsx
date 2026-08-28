@@ -404,7 +404,7 @@ export default function HomePage() {
         <Stat
           label="Tokens"
           value={usageAll === null ? "—" : formatCount(headlineTokens)}
-          sub={usageAll === null ? "loading…" : `${(cacheHitRate * 100).toFixed(0)}% cache hit`}
+          sub={usageAll === null ? <span data-loading="true">loading…</span> : `${(cacheHitRate * 100).toFixed(0)}% cache hit`}
           accent="var(--info)"
           spark={tokensSpark}
           sparkColor="var(--info)"
@@ -414,7 +414,7 @@ export default function HomePage() {
           value={health === null ? "—" : `${healthScore}%`}
           sub={
             health === null
-              ? "loading…"
+              ? <span data-loading="true">loading…</span>
               : `${healthGrade} — ${healthLabel.toLowerCase()}`
           }
           accent="var(--danger)"
@@ -684,7 +684,7 @@ export default function HomePage() {
             title="Config health"
             sub={
               health === null
-                ? "loading…"
+                ? <span data-loading="true">loading…</span>
                 : `${health.components.filter((c) => c.score !== null).length} of ${health.components.length} signals`
             }
             right={
@@ -799,7 +799,9 @@ function IndicatorDot({ active, kind, title }: { active: boolean; kind: "good" |
 
 function ProjectTileSkeleton() {
   return (
-    <div className="ds-card" style={{ padding: 14, opacity: 0.6 }}>
+    // Marks its own root, like every other skeleton here: a component that IS
+    // a loading state should not depend on callers saying so.
+    <div data-loading="true" className="ds-card" style={{ padding: 14, opacity: 0.6 }}>
       <div style={{ height: 14, background: "var(--bg-elev-2)", borderRadius: 4, marginBottom: 10, width: "70%" }} />
       <div style={{ height: 10, background: "var(--bg-elev-2)", borderRadius: 4, width: "40%" }} />
     </div>
