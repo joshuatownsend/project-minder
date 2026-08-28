@@ -2,7 +2,10 @@
 
 import { useState, useEffect } from "react";
 import type { MinderConfig } from "@/lib/types";
-import { SUBSTRATE_ADAPTER_ID } from "@/lib/adapters/substrate";
+import {
+  SUBSTRATE_ADAPTER_ID,
+  normalizeEnabledAdapters,
+} from "@/lib/adapters/substrate";
 import { S } from "./styles";
 
 interface AdapterEntry {
@@ -27,10 +30,13 @@ export function AdaptersSection({
 }) {
   const [adapters, setAdapters] = useState<AdapterEntry[]>([]);
   const [saving, setSaving] = useState(false);
-  const enabled = new Set([
-    SUBSTRATE_ADAPTER_ID,
-    ...(config?.enabledAdapters ?? []),
-  ]);
+  // Through the shared rule rather than a second spelling of it: prepending
+  // unconditionally reordered a hand-edited `["codex", "claude"]`, which
+  // contradicts the no-reorder property the rule is tested for and would have
+  // written a pointless config diff on the next save. (Copilot, PR #509.)
+  const enabled = new Set(
+    normalizeEnabledAdapters(config?.enabledAdapters ?? [])
+  );
 
   useEffect(() => {
     fetch("/api/adapters")
@@ -44,7 +50,9 @@ export function AdaptersSection({
     if (on) next.add(id); else next.delete(id);
     setSaving(true);
     try {
-      await onConfigChange({ enabledAdapters: [...next] });
+      await onConfigChange({
+        enabledAdapters: normalizeEnabledAdapters([...next]),
+      });
     } finally {
       setSaving(false);
     }

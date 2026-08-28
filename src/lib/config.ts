@@ -3,6 +3,7 @@ import path from "path";
 import { MinderConfig, ProjectStatus } from "./types";
 import { getDefaultDevRoot, probeDefaultDevRoot } from "./platform";
 import { writeFileAtomic, withFileLock } from "./atomicWrite";
+import { normalizeEnabledAdapters } from "./adapters/substrate";
 import { resolveStateDir } from "./serverRoot";
 
 // User prefs are WRITABLE state — resolve under the state dir (which the tray
@@ -68,11 +69,33 @@ export function getDevRoots(config: MinderConfig): string[] {
   return [config.devRoot || resolveDefaultDevRoot()];
 }
 
+/**
+ * Apply the substrate rule to a config as it is read (#491).
+ *
+ * The rule has to live HERE, not only in `getEnabledAdapters`. Several
+ * consumers read `config.enabledAdapters` raw and never touch the registry —
+ * `server/queries/sessions.ts` builds its filter set from it directly, so a
+ * config saved as `["codex"]` by the old UI, or hand-edited, would strip every
+ * Claude session out of `/api/sessions` while Settings said Claude was
+ * "Always on". `drift/route.ts`, `indexer/instructions.ts` and
+ * `scanner/driftLint.ts` read it the same way. Normalising at the one boundary
+ * they all pass through fixes present and future consumers together, rather
+ * than leaving a rule each new caller has to remember. (Codex P1, PR #509.)
+ *
+ * Absent stays absent: every consumer already defaults `undefined` to
+ * `["claude"]`, so materialising the field would change what a config that
+ * never set it reports without changing what it means.
+ */
+function applyConfigInvariants(value: MinderConfig): MinderConfig {
+  if (!value.enabledAdapters) return value;
+  return { ...value, enabledAdapters: normalizeEnabledAdapters(value.enabledAdapters) };
+}
+
 export async function readConfig(): Promise<MinderConfig> {
   if (configCache && Date.now() < configCache.expiresAt) return configCache.value;
   try {
     const data = await fs.readFile(CONFIG_PATH, "utf-8");
-    const value = { ...defaultConfig(), ...JSON.parse(data) };
+    const value = applyConfigInvariants({ ...defaultConfig(), ...JSON.parse(data) });
     configCache = { value, expiresAt: Date.now() + CONFIG_TTL_MS };
     return value;
   } catch {
