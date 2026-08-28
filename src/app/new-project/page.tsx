@@ -368,14 +368,24 @@ export default function NewProjectPage() {
     // `library` stayed null, so returning to step 3 retried the request
     // behind an apparently-settled blank picker (Codex, PR #517).
     setLibraryPending(true);
-    fetch("/api/library")
+    // Only the LATEST attempt may settle the flag. Without a controller the
+    // effect had no cleanup, so leaving step 3 and returning started a
+    // second request while the first was still out — and whichever
+    // finished first cleared `libraryPending`, leaving a blank picker with
+    // no marker while the current request was still running.
+    // (Codex, PR #517.)
+    const ctrl = new AbortController();
+    fetch("/api/library", { signal: ctrl.signal })
       .then((r) => r.json() as Promise<LibraryResponse>)
       .then((data) => {
         setLibrary(data.items);
         setStackPresets(data.stackPresets);
       })
       .catch(() => {})
-      .finally(() => setLibraryPending(false));
+      .finally(() => {
+        if (!ctrl.signal.aborted) setLibraryPending(false);
+      });
+    return () => ctrl.abort();
   }, [step, library]);
 
   // Effect 2: recompute preset whenever stack or library changes (on step 3)
