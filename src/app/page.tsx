@@ -81,6 +81,11 @@ export default function HomePage() {
   // 5 days of data — copilot flagged the mismatch (PR #102).
   const [usageAll, setUsageAll] = useState<UsageReport | null>(null);
   const [projects, setProjects] = useState<ProjectData[]>([]);
+  // Tracked separately from `projects.length`, because an EMPTY result is
+  // not a pending one: a configured root with no projects settles at zero
+  // and would otherwise render skeletons — and claim to be loading —
+  // forever (Codex, PR #517).
+  const [projectsPending, setProjectsPending] = useState(true);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [insightCount, setInsightCount] = useState<number>(0);
   const [pendingStepsCount, setPendingStepsCount] = useState<number>(0);
@@ -125,7 +130,10 @@ export default function HomePage() {
     fetch("/api/projects", { signal: ctrl.signal })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => d?.projects && setProjects(d.projects as ProjectData[]))
-      .catch(() => {});
+      .catch(() => {})
+      // Settles on failure too: an error is not a pending state, and leaving
+      // the marker mounted would pin the dashboard as loading.
+      .finally(() => setProjectsPending(false));
     return () => ctrl.abort();
   }, []);
 
@@ -603,9 +611,14 @@ export default function HomePage() {
           }
         />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10 }}>
-          {recentProjects.length === 0
-            ? Array.from({ length: 4 }).map((_, i) => <ProjectTileSkeleton key={i} />)
-            : recentProjects.map((p) => (
+          {projectsPending && recentProjects.length === 0 ? (
+            Array.from({ length: 4 }).map((_, i) => <ProjectTileSkeleton key={i} />)
+          ) : recentProjects.length === 0 ? (
+            <div style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
+              No projects found under your scan roots.
+            </div>
+          ) : (
+            recentProjects.map((p) => (
               <Link key={p.slug} href={`/project/${p.slug}`} style={{ textDecoration: "none", color: "inherit" }}>
                 <div className="ds-card" style={{ padding: 14, cursor: "pointer", transition: "border-color .15s" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
@@ -638,7 +651,8 @@ export default function HomePage() {
                   )}
                 </div>
               </Link>
-            ))}
+            ))
+          )}
         </div>
       </Card>
 
