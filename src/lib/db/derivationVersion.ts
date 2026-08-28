@@ -399,7 +399,7 @@ export const DERIVED_VERSION = 22;
 //      "drop the drive prefix" rule it was written to be: when EVERY segment
 //      is one character `findIndex` returns -1 and `slice(-1)` keeps just the
 //      last, so `C--a-b` slugged to `"b"` instead of `"a-b"` — a project at
-//      `C:` silently shared a slug with any other project ending in `b`.
+//      `C:\a\b` silently shared a slug with any other project ending in `b`.
 //      It also ate genuine one-character POSIX components (`-a-bc` → `"bc"`).
 //      The rule is now the explicit prefix test `canonicalizeDirName` already
 //      used: `^[A-Za-z]--` → skip 2, otherwise skip leading empty segments.
