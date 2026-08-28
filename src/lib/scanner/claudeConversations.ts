@@ -908,12 +908,19 @@ export async function scanAllSessions(): Promise<SessionSummary[]> {
  * failure class #483 was: five hand-copied predicates that matched perfectly
  * and were wrong together.
  *
- * The import is dynamic and has to be: `db/ingest.ts` imports `toSlug` and
- * `ConversationEntry` from THIS module, so a static import would close the
- * cycle at module-evaluation time. It is also safe without `better-sqlite3` —
- * `ingest.ts` names it in a type-only import and opens no connection at module
- * scope — which matters because this path is exactly the one that runs under
- * `MINDER_USE_DB=0`.
+ * **The import stays dynamic, for one reason rather than the two it used to
+ * have.** It was justified partly by a cycle: `db/ingest.ts` imported `toSlug`
+ * as a VALUE from this module, so a static import here would have closed it at
+ * module-evaluation time. That cycle is gone as of #496 — `toSlug` moved to
+ * `sessions/projectIdentity` and ingest now names this module only in a
+ * type-only import, which erases at runtime.
+ *
+ * What remains is the reason that actually matters: a static import would pull
+ * the whole indexer into module scope on the path that exists to run WITHOUT
+ * it. This is the `MINDER_USE_DB=0` path. `ingest.ts` is safe to load without
+ * `better-sqlite3` — it opens no connection at module scope — but loading it
+ * eagerly here would still be paying for the index on the branch chosen
+ * precisely to avoid it.
  *
  * What is NOT shared is the `ParsedSession` -> `SessionSummary` field mapping,
  * which mirrors `loadSessionsListFromDb`'s. That one really is agreement by

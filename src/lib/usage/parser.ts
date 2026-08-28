@@ -1,11 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import type { ConversationEntry } from "@/lib/scanner/claudeConversations";
-import {
-  toSlug,
-  canonicalizeDirName,
-  projectSlugFromDirName,
-} from "@/lib/sessions/projectIdentity";
+import { canonicalizeDirName, projectSlugFromDirName } from "@/lib/sessions/projectIdentity";
 // Re-exported from its original home: six modules import it from here, and a
 // pure string rule is not worth a rename sweep. The definition moved to a leaf
 // so `sessionsListFromDb` and the shared summary projection can reach it
