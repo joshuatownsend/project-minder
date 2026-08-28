@@ -162,7 +162,11 @@ const BRANCH_PATTERNS: Array<{ re: RegExp; lookBack: number }> = [
  * anyway (Codex, PR #517). The convention is verified below rather than
  * trusted: a `LoadingSkeleton` that stopped marking its root would fail.
  */
-const MARKER = /data-loading|<Skeleton|<LoadingSkeleton/;
+// `data-loading=` with the EQUALS, not the bare word. A comment mentioning
+// `[data-loading]` satisfied the bare form, and this file is full of such
+// comments — including the one explaining the fix. Caught by mutation: the
+// rule stayed green with the real attribute deleted.
+const MARKER = /data-loading=|<Skeleton|<LoadingSkeleton/;
 
 describe("every loading state carries a queryable marker (#445)", () => {
   const files = ROOTS.flatMap(tsxFiles);
@@ -266,6 +270,33 @@ describe("every loading state carries a queryable marker (#445)", () => {
             `page as busy forever.`
         );
       }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it("no component declares a loading flag and marks nothing", () => {
+    // The class the branch rules structurally cannot see: a component whose
+    // ONLY conditional UI is the settled `!flag` branch renders NOTHING while
+    // pending (Codex, PR #517). There is no element to find, so requiring one
+    // to be rendered after the condition passes it — and the view reads as
+    // "no data" to a person and as "settled" to `[data-loading]`.
+    //
+    // File-level, unavoidably: the question is about an ABSENCE. It is narrow
+    // enough to be safe — it fires only when a `…Loading` flag is declared and
+    // the file has no marker of any kind, which was true of exactly one
+    // component when this was written.
+    const DECLARES = /const \[\s*[a-z]\w*[Ll]oading\s*,/;
+    const violations: string[] = [];
+    for (const file of files) {
+      if (EXEMPT[file]) continue;
+      const code = fs.readFileSync(file, "utf-8");
+      if (!DECLARES.test(code)) continue;
+      if (MARKER.test(code)) continue;
+      violations.push(
+        `${file} declares a loading flag but renders no marker anywhere. If ` +
+          `the pending state shows nothing, give it a marked placeholder — a ` +
+          `blank section reads as "no data" rather than "not known yet".`
+      );
     }
     expect(violations).toEqual([]);
   });
