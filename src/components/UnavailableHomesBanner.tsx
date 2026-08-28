@@ -39,11 +39,14 @@ const REASON_LABELS: Record<string, string> = {
   "wsl-stopped": "the distro is not running",
   "wsl-distro-not-found": "the distro is not installed",
   "wsl-unavailable": "WSL is unavailable",
+  "home-missing": "the directory is not there",
+  "home-unreadable": "the directory cannot be opened",
 };
 
 function describe(home: UnavailableHome): string {
   const why = REASON_LABELS[home.reason] ?? home.reason;
-  return home.distro ? `${home.distro} — ${why}` : why;
+  // A non-WSL home has no distro to name, so it names itself.
+  return home.distro ? `${home.distro} — ${why}` : `${home.path} — ${why}`;
 }
 
 /**

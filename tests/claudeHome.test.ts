@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import path from "path";
 import os from "os";
+import { promises as fs } from "fs";
+import { removeTempHome } from "./_helpers/isolatedState";
 import type { MinderConfig } from "@/lib/types";
 import type { WslRootCheck } from "@/lib/wsl";
 
@@ -138,5 +140,84 @@ describe("partitionClaudeHomes (#479)", () => {
     );
     await partitionClaudeHomes(cfg({ claudeHomes: [WSL_HOME] }));
     expect(mockCheckWslRoot).toHaveBeenCalledTimes(2); // primary + the WSL home
+  });
+});
+
+// #479 round 2 (Codex P2 on PR #510) — passing the WSL gate is not the same as
+// being readable. `checkWslRoot` returns null for a non-WSL path and `ok` for a
+// running distro WITHOUT touching the directory, so a configured home on a
+// disconnected drive was classified readable, the readers caught their own
+// `readdir` failure and silently omitted it, and the endpoint reported
+// `complete: true` — the exact case the partition exists to expose.
+describe("partitionClaudeHomes probes extra homes for real (#479)", () => {
+  const EXTRA = path.join(os.tmpdir(), "pm-home-that-is-not-there");
+
+  it("reports a configured home that does not exist", async () => {
+    const { unavailable } = await partitionClaudeHomes(
+      cfg({ claudeHomes: [EXTRA] })
+    );
+    expect(unavailable).toEqual([{ path: EXTRA, reason: "home-missing" }]);
+  });
+
+  it("keeps a configured home that does exist", async () => {
+    const real = await fs.mkdtemp(path.join(os.tmpdir(), "pm-home-real-"));
+    try {
+      const { readable, unavailable } = await partitionClaudeHomes(
+        cfg({ claudeHomes: [real] })
+      );
+      expect(unavailable).toEqual([]);
+      expect(readable).toContain(real);
+    } finally {
+      await removeTempHome(real);
+    }
+  });
+
+  it("does not require a projects/ directory", async () => {
+    // A home that exists but has recorded nothing yet is a normal empty state,
+    // not a fault. Probing `<home>/projects` instead would flag every home
+    // before its first session.
+    const real = await fs.mkdtemp(path.join(os.tmpdir(), "pm-home-empty-"));
+    try {
+      const { unavailable } = await partitionClaudeHomes(
+        cfg({ claudeHomes: [real] })
+      );
+      expect(unavailable).toEqual([]);
+    } finally {
+      await removeTempHome(real);
+    }
+  });
+
+  it("never flags the PRIMARY home, even when it is absent", async () => {
+    // On a machine that has never run Claude Code, `~/.claude` legitimately
+    // does not exist. Flagging that would put a warning on every fresh install
+    // for a home the user never asked for; a CONFIGURED home that has vanished
+    // is a different fact.
+    const spy = vi.spyOn(os, "homedir").mockReturnValue(
+      path.join(os.tmpdir(), "pm-home-never-used")
+    );
+    try {
+      const { readable, unavailable } = await partitionClaudeHomes(cfg());
+      expect(unavailable).toEqual([]);
+      expect(readable).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("checks WSL BEFORE touching the filesystem", async () => {
+    // An `access` on a stopped distro's UNC path is exactly the auto-wake the
+    // gate exists to prevent, so a stopped home must be reported by its WSL
+    // reason and never reach the probe.
+    mockCheckWslRoot.mockImplementation(async (root: string) =>
+      root === WSL_HOME
+        ? { ok: false, distro: "Ubuntu-26.04", reason: "wsl-stopped" }
+        : null
+    );
+    const { unavailable } = await partitionClaudeHomes(
+      cfg({ claudeHomes: [WSL_HOME] })
+    );
+    expect(unavailable).toEqual([
+      { path: WSL_HOME, distro: "Ubuntu-26.04", reason: "wsl-stopped" },
+    ]);
   });
 });

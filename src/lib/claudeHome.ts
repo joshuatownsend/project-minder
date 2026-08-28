@@ -1,3 +1,4 @@
+import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
 import type { MinderConfig, PathMapping } from "./types";
@@ -102,9 +103,11 @@ export interface UnavailableClaudeHome {
 export async function partitionClaudeHomes(
   config: MinderConfig
 ): Promise<{ readable: string[]; unavailable: UnavailableClaudeHome[] }> {
+  const homes = getClaudeHomes(config);
+  const primary = homes[0];
   const readable: string[] = [];
   const unavailable: UnavailableClaudeHome[] = [];
-  for (const home of getClaudeHomes(config)) {
+  for (const home of homes) {
     const wslCheck = await checkWslRoot(home);
     if (wslCheck && !wslCheck.ok) {
       unavailable.push({
@@ -114,9 +117,56 @@ export async function partitionClaudeHomes(
       });
       continue;
     }
+    // Passing the WSL gate is not the same as being readable (Codex P2, #510).
+    // `checkWslRoot` returns `null` for a non-WSL path and `ok` for a running
+    // distro WITHOUT touching the directory, so a configured home on a
+    // disconnected drive, or one whose `.claude` has been moved or locked
+    // down, was classified readable. The readers then catch their own
+    // `readdir` failure and silently omit it — the exact incomplete-coverage
+    // case this partition exists to expose, reported as `complete: true`.
+    //
+    // Only EXTRA homes are probed. The primary is implicit, and on a machine
+    // that has never run Claude Code `~/.claude` legitimately does not exist —
+    // flagging that would put a warning on every fresh install for a home the
+    // user never asked for. A configured home that has vanished is a different
+    // fact, and one worth telling them about.
+    //
+    // Probing after the WSL gate, never before: an `access` on a stopped
+    // distro's UNC path is exactly the auto-wake the gate exists to prevent.
+    if (home !== primary) {
+      const failure = await probeHome(home);
+      if (failure) {
+        unavailable.push({ path: home, reason: failure });
+        continue;
+      }
+    }
     readable.push(home);
   }
   return { readable, unavailable };
+}
+
+/**
+ * `undefined` when the home can be read, otherwise a reason string.
+ *
+ * Checks the home directory rather than `<home>/projects`: a home that exists
+ * but has recorded no sessions yet has no `projects` directory, and that is a
+ * normal empty state rather than a fault. What this is looking for is a home
+ * that is not there at all, or that cannot be opened.
+ */
+async function probeHome(home: string): Promise<string | undefined> {
+  // Tolerant of a partially-mocked `fs`, the same way `platform.ts`'s
+  // `fsExists` is: several suites mock only `readFile`/`readdir`/`stat`, and a
+  // probe that threw there would report every configured home unavailable and
+  // exclude it from the sweep. Absent means "cannot tell", and the honest
+  // answer to that is the pre-probe behaviour — readable.
+  if (typeof fs.access !== "function") return undefined;
+  try {
+    await fs.access(home);
+    return undefined;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    return code === "ENOENT" ? "home-missing" : "home-unreadable";
+  }
 }
 
 /**
