@@ -36,6 +36,13 @@ vi.mock("@/lib/bootstrap", () => ({
   installServiceLifecycle: vi.fn(async () => {}),
   runBootstrap: vi.fn(async () => {}),
   getBootstrapStatus: () => ({ ran: bootstrapRan }),
+  // What `registerIngestDisposer` actually gates on as of #296: whether
+  // anything exists that can FIRE a disposer. It used to ask
+  // `getBootstrapStatus().ran`, which stopped being the same question when
+  // #294 decoupled the signal handlers from the collectors gate — so a
+  // sidecar with MINDER_BOOTSTRAP=0 started ingest and registered nothing
+  // to stop it. This mirror keeps the two in step from one variable.
+  isServiceLifecycleInstalled: () => bootstrapRan,
 }));
 vi.mock("@/lib/tasks/dispatcher", () => ({ initDispatcher: vi.fn() }));
 

@@ -180,12 +180,17 @@ async function startDispatcher(): Promise<void> {
 
 async function registerIngestDisposer(): Promise<void> {
   try {
-    // Only wire this in service mode, where runBootstrap() actually installed
-    // the signal handlers and registered the other disposers. If bootstrap
-    // didn't run (plain `next dev`), nothing will ever fire a disposer, so
-    // there's no point populating the registry.
-    const { getBootstrapStatus } = await import("@/lib/bootstrap");
-    if (!getBootstrapStatus().ran) return;
+    // Only wire this where something can actually FIRE a disposer. In plain
+    // `next dev` nothing will, so there is no point populating the registry.
+    //
+    // This used to ask `getBootstrapStatus().ran`, which stopped being the
+    // same question when #294 made the signal handlers install independently
+    // of the `MINDER_BOOTSTRAP` collectors gate. A sidecar launched with
+    // `MINDER_BOOTSTRAP=0` still starts ingest — right below — and still
+    // shuts down on SIGTERM, but `ran` is false there, so the ingest disposer
+    // was skipped and shutdown could close SQLite mid-write. (#296)
+    const { isServiceLifecycleInstalled } = await import("@/lib/bootstrap");
+    if (!isServiceLifecycleInstalled()) return;
 
     const { onShutdown } = await import("@/lib/lifecycle");
     onShutdown("ingest", async () => {

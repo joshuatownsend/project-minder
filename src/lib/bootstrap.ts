@@ -42,6 +42,9 @@ interface BootstrapStatus {
 const g = globalThis as unknown as {
   __minderBootstrapped?: boolean;
   __minderBootstrapStatus?: BootstrapStatus;
+  /** Set once signal handlers are installed — i.e. once anything exists that
+   *  can FIRE a shutdown disposer. See `isServiceLifecycleInstalled` (#296). */
+  __minderLifecycleInstalled?: boolean;
 };
 
 /** Structured bootstrap log line — tees to console and (in service mode) to
@@ -68,6 +71,20 @@ function recordSubsystem(name: string): void {
  *  `{ ran: false, subsystems: [] }`). */
 export function getBootstrapStatus(): BootstrapStatus {
   return g.__minderBootstrapStatus ?? { ran: false, subsystems: [] };
+}
+
+/**
+ * True once `installServiceLifecycle()` has actually installed signal
+ * handlers — i.e. once something exists that can FIRE a shutdown disposer.
+ *
+ * The precise question for a would-be registrant. `getBootstrapStatus().ran`
+ * was standing in for it and is no longer the same thing: since #294 the
+ * handlers install independently of the `MINDER_BOOTSTRAP` collectors gate, so
+ * a sidecar with `MINDER_BOOTSTRAP=0` can shut down gracefully while
+ * `ran` is false (#296).
+ */
+export function isServiceLifecycleInstalled(): boolean {
+  return g.__minderLifecycleInstalled === true;
 }
 
 /** Pure gating decision — exported for unit testing. Takes an explicit env
@@ -106,6 +123,7 @@ export function shouldInstallServiceLifecycle(
 export function _resetBootstrapForTesting(): void {
   delete g.__minderBootstrapped;
   delete g.__minderBootstrapStatus;
+  delete g.__minderLifecycleInstalled;
 }
 
 /**
@@ -125,8 +143,27 @@ export async function installServiceLifecycle(): Promise<void> {
   if (process.env.VITEST) return;
   if (!shouldInstallServiceLifecycle()) return;
 
+  // BEFORE the signal handlers, so a stop arriving immediately finds a
+  // populated registry rather than an empty one.
+  //
+  // **Here rather than only in `runBootstrap` (#296).** The subsystems these
+  // dispose — the dispatcher, the two SQLite handles, the background caches —
+  // start independently of the `MINDER_BOOTSTRAP` collectors gate, but their
+  // disposers were registered only inside `runBootstrap()`. So a sidecar
+  // launched with `MINDER_BOOTSTRAP=0` installed signal handlers (since #294
+  // this layer runs regardless) and then had nothing to run: it exited 0
+  // without stopping dispatcher ticks or checkpointing the WAL. A clean EXIT,
+  // not a clean SHUTDOWN. Registration belongs at the same layer as the
+  // handlers that fire it.
+  //
+  // `runBootstrap` still calls this too, for the case where bootstrap runs but
+  // this gate does not. `onShutdown` is idempotent by name, so the second
+  // registration replaces rather than duplicates.
+  await registerServiceDisposers();
+
   const { installSignalHandlers } = await import("@/lib/lifecycle");
   installSignalHandlers();
+  g.__minderLifecycleInstalled = true;
 
   try {
     // Self-gates on MINDER_CONTROL_STDIN=1 (inert otherwise), so calling it
