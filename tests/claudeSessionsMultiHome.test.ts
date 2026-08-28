@@ -11,12 +11,6 @@ vi.mock("fs", () => ({
     readFile: vi.fn(),
     readdir: vi.fn(),
     stat: vi.fn(),
-    // `getReadableClaudeHomes` probes a configured home for real as of #479 —
-    // by OPENING it, not by asking whether the path exists (Codex P2, #510).
-    // `probeHome` tolerates this being absent, but leaving it out would send
-    // this file down the degraded branch and stop it exercising the path it is
-    // about. Resolving = the home is there and listable.
-    opendir: vi.fn().mockResolvedValue({ close: async () => {} }),
   },
 }));
 

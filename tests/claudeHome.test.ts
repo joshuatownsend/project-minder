@@ -1,8 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import path from "path";
 import os from "os";
-import { promises as fs } from "fs";
-import { removeTempHome } from "./_helpers/isolatedState";
 import type { MinderConfig } from "@/lib/types";
 import type { WslRootCheck } from "@/lib/wsl";
 
@@ -20,7 +18,6 @@ import {
   getReadableClaudeHomes,
   partitionClaudeHomes,
   getUnavailableClaudeHomes,
-  resetClaudeHomeProbeCache,
 } from "@/lib/claudeHome";
 
 const mockCheckWslRoot = vi.mocked(checkWslRoot);
@@ -35,10 +32,6 @@ function cfg(overrides: Partial<MinderConfig> = {}): MinderConfig {
 beforeEach(() => {
   vi.clearAllMocks();
   mockCheckWslRoot.mockResolvedValue(null);
-  // The probe memoises per home path for 30s. Without this, a case that
-  // creates a temp home and a later one that reuses the name would read the
-  // first verdict — and the cache-reuse test below would pass by accident.
-  resetClaudeHomeProbeCache();
 });
 
 describe("getClaudeHomes", () => {
@@ -148,173 +141,3 @@ describe("partitionClaudeHomes (#479)", () => {
   });
 });
 
-// #479 round 2 (Codex P2 on PR #510) — passing the WSL gate is not the same as
-// being readable. `checkWslRoot` returns null for a non-WSL path and `ok` for a
-// running distro WITHOUT touching the directory, so a configured home on a
-// disconnected drive was classified readable, the readers caught their own
-// `readdir` failure and silently omitted it, and the endpoint reported
-// `complete: true` — the exact case the partition exists to expose.
-describe("partitionClaudeHomes probes extra homes for real (#479)", () => {
-  const EXTRA = path.join(os.tmpdir(), "pm-home-that-is-not-there");
-
-  it("reports a configured home that does not exist", async () => {
-    const { unavailable } = await partitionClaudeHomes(
-      cfg({ claudeHomes: [EXTRA] })
-    );
-    expect(unavailable).toEqual([{ path: EXTRA, reason: "home-missing" }]);
-  });
-
-  it("keeps a configured home that does exist", async () => {
-    const real = await fs.mkdtemp(path.join(os.tmpdir(), "pm-home-real-"));
-    try {
-      const { readable, unavailable } = await partitionClaudeHomes(
-        cfg({ claudeHomes: [real] })
-      );
-      expect(unavailable).toEqual([]);
-      expect(readable).toContain(real);
-    } finally {
-      await removeTempHome(real);
-    }
-  });
-
-  it("reports a home that exists but is not a directory", async () => {
-    // `fs.access` defaults to F_OK and succeeds here, which is how the first
-    // version of this probe called a regular file a readable home (Codex P2,
-    // PR #510). Opening it is the question the readers actually ask.
-    const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), "pm-home-file-"));
-    const asFile = path.join(dirPath, "not-a-home");
-    await fs.writeFile(asFile, "", "utf-8");
-    try {
-      const { unavailable } = await partitionClaudeHomes(
-        cfg({ claudeHomes: [asFile] })
-      );
-      expect(unavailable).toEqual([
-        { path: asFile, reason: "home-not-a-directory" },
-      ]);
-    } finally {
-      await removeTempHome(dirPath);
-    }
-  });
-
-  it("reports a projects/ directory that exists but cannot be listed", async () => {
-    // The depth that matters: `buildAllSessions` and `scanAllSessions`
-    // enumerate `<home>/projects`, so a home that opens while its `projects`
-    // is a regular file is exactly the silent-omission case, one level below
-    // where the previous probe stopped (Codex P2, PR #510).
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "pm-home-badproj-"));
-    try {
-      await fs.writeFile(path.join(home, "projects"), "", "utf-8");
-      const { readable, unavailable } = await partitionClaudeHomes(
-        cfg({ claudeHomes: [home] })
-      );
-      expect(readable).not.toContain(home);
-      expect(unavailable).toEqual([
-        { path: home, reason: "projects-not-a-directory" },
-      ]);
-    } finally {
-      await removeTempHome(home);
-    }
-  });
-
-  it("probes each home once per window, not once per caller", async () => {
-    // `getReadableClaudeHomes` is called once per PROJECT during a scan, so an
-    // unmemoised probe added N filesystem round-trips per scan — over UNC to a
-    // WSL distro, N network round-trips (Codex P2, PR #510).
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "pm-home-cached-"));
-    try {
-      const first = await partitionClaudeHomes(cfg({ claudeHomes: [home] }));
-      expect(first.unavailable).toEqual([]);
-
-      // Break the home AFTER the first probe. Within the window the verdict is
-      // reused, which is the observable form of "it did not look again".
-      await removeTempHome(home);
-      const second = await partitionClaudeHomes(cfg({ claudeHomes: [home] }));
-      expect(second.unavailable).toEqual([]);
-
-      // And it is a cache, not a permanent answer.
-      resetClaudeHomeProbeCache();
-      const third = await partitionClaudeHomes(cfg({ claudeHomes: [home] }));
-      expect(third.unavailable).toEqual([
-        { path: home, reason: "home-missing" },
-      ]);
-    } finally {
-      await removeTempHome(home);
-    }
-  });
-
-  it("does not require a projects/ directory", async () => {
-    // A home that exists but has recorded nothing yet is a normal empty state,
-    // not a fault. Probing `<home>/projects` instead would flag every home
-    // before its first session.
-    const real = await fs.mkdtemp(path.join(os.tmpdir(), "pm-home-empty-"));
-    try {
-      const { unavailable } = await partitionClaudeHomes(
-        cfg({ claudeHomes: [real] })
-      );
-      expect(unavailable).toEqual([]);
-    } finally {
-      await removeTempHome(real);
-    }
-  });
-
-  it("forgives an ABSENT primary home, because a fresh install has none", async () => {
-    // On a machine that has never run Claude Code, `~/.claude` legitimately
-    // does not exist. Warning about that would fire on every fresh install for
-    // a home the user never configured.
-    const spy = vi.spyOn(os, "homedir").mockReturnValue(
-      path.join(os.tmpdir(), "pm-home-never-used")
-    );
-    try {
-      const { readable, unavailable } = await partitionClaudeHomes(cfg());
-      expect(unavailable).toEqual([]);
-      expect(readable).toHaveLength(1);
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  it("still reports an UNREADABLE primary home", async () => {
-    // The counterpart, and the reason the rule forgives one outcome rather
-    // than skipping the check: a primary that exists but cannot be listed
-    // omits the MAIN corpus, and is the last thing that should be silent.
-    // An earlier draft skipped the primary's probe entirely and suppressed
-    // this too (Codex P2, PR #510).
-    const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), "pm-home-prim-"));
-    const asFile = path.join(dirPath, "primary-is-a-file");
-    await fs.writeFile(asFile, "", "utf-8");
-    const spy = vi.spyOn(os, "homedir").mockReturnValue(dirPath);
-    try {
-      // `getPrimaryClaudeHome()` joins `.claude` onto the home, so point the
-      // spy at a directory whose `.claude` IS the regular file above.
-      await fs.rename(asFile, path.join(dirPath, ".claude"));
-      const { readable, unavailable } = await partitionClaudeHomes(cfg());
-      expect(readable).toEqual([]);
-      expect(unavailable).toEqual([
-        {
-          path: path.join(dirPath, ".claude"),
-          reason: "home-not-a-directory",
-        },
-      ]);
-    } finally {
-      spy.mockRestore();
-      await removeTempHome(dirPath);
-    }
-  });
-
-  it("checks WSL BEFORE touching the filesystem", async () => {
-    // An `access` on a stopped distro's UNC path is exactly the auto-wake the
-    // gate exists to prevent, so a stopped home must be reported by its WSL
-    // reason and never reach the probe.
-    mockCheckWslRoot.mockImplementation(async (root: string) =>
-      root === WSL_HOME
-        ? { ok: false, distro: "Ubuntu-26.04", reason: "wsl-stopped" }
-        : null
-    );
-    const { unavailable } = await partitionClaudeHomes(
-      cfg({ claudeHomes: [WSL_HOME] })
-    );
-    expect(unavailable).toEqual([
-      { path: WSL_HOME, distro: "Ubuntu-26.04", reason: "wsl-stopped" },
-    ]);
-  });
-});

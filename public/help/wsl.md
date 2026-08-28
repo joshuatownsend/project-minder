@@ -77,7 +77,9 @@ The easy path is **Detect WSL** in that section: it finds each running distro's 
 
 The same never-wake rule applies: a Claude home inside a stopped distro is skipped for the cycle and picked back up when the distro runs.
 
-**And Minder now says so.** A warning banner appears at the top of every page while any configured home is unreadable, naming what is wrong: the distro is not running, is not installed, WSL is unavailable, or — for any configured home, WSL or not — the directory is not there or cannot be opened. Your primary `~/.claude` is never flagged: on a machine that has never run Claude Code it legitimately does not exist. This matters because the two backends handle the gap differently and neither is wrong:
+**And Minder now says so.** A warning banner appears at the top of every page while a configured home is being skipped for this reason, naming the distro and what is wrong (the distro is not running, is not installed, or WSL itself is unavailable).
+
+This covers the never-wake skip specifically. A home can also be unreadable for reasons Minder does not currently detect — a disconnected drive, a permissions change — and those are still silent; #513 tracks reporting them by propagating the readers' own failures rather than probing separately. This matters because the two backends handle the gap differently and neither is wrong:
 
 - the **file-parse** path answers completely for every home it *can* read, silently omitting the one it cannot;
 - the **SQLite index** keeps the rows it recorded when that home was last up, so it reports a home the filesystem is not currently confirming.
