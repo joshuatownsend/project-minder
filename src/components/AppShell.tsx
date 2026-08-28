@@ -14,6 +14,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { AppSidebar } from "./AppSidebar";
 import { AppTopbar } from "./AppTopbar";
 import { ClaudeStatusBanner } from "./ClaudeStatusBanner";
+import { UnavailableHomesBanner } from "./UnavailableHomesBanner";
 import { GlobalLauncherRow } from "./GlobalLauncherRow";
 import { ProjectScopeMenu } from "./ProjectScopeMenu";
 import { useScope } from "./ScopeProvider";
@@ -102,6 +103,7 @@ export function AppShell({ children, devRootLabel }: AppShellProps) {
         />
         <GlobalLauncherRow />
         <ClaudeStatusBanner />
+        <UnavailableHomesBanner />
         {children}
       </div>
       <ProjectScopeMenu open={scopeOpen} onClose={() => setScopeOpen(false)} projects={projects} />
