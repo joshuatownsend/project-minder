@@ -287,6 +287,28 @@ describe("FileCache byte budget (#476)", () => {
     expect(cache.observedMaxMtimeMs).toBe(9_999);
   });
 
+  it("does NOT advance the watermark when the factory rejects", async () => {
+    // `stat` succeeding says nothing about the read. A transient EACCES/EBUSY
+    // rejects in the factory, and `buildAllSessions` puts that path in its
+    // live set anyway — so advancing the watermark on the way past would let a
+    // later successful retry, with identical file metadata, leave BOTH halves
+    // of the fingerprint unmoved and the histogram stale for good.
+    // (Codex P1, PR #514.)
+    const cache = new FileCache<string>();
+    mockStat.mockResolvedValue(statResult(4_242, 10));
+    await expect(
+      cache.getOrCompute("/locked", async () => {
+        throw Object.assign(new Error("EBUSY"), { code: "EBUSY" });
+      })
+    ).rejects.toThrow("EBUSY");
+    expect(cache.observedMaxMtimeMs).toBe(0);
+
+    // ...and the retry that succeeds does move it, which is the recovery the
+    // fingerprint has to be able to see.
+    await cache.getOrCompute("/locked", async () => "parsed");
+    expect(cache.observedMaxMtimeMs).toBe(4_242);
+  });
+
   it("advances the watermark on a cache HIT, not only on a parse", async () => {
     // A warm sweep parses nothing, and must still notice that a file grew.
     const cache = new FileCache<string>();

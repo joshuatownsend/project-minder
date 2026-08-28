@@ -145,12 +145,14 @@ export class FileCache<T> {
     const mtimeMs = stat.mtimeMs;
     const size = stat.size;
     const now = Date.now();
-    // Before the cache-hit return below, so a warm sweep still advances it.
-    if (mtimeMs > this.observedMaxMtime) this.observedMaxMtime = mtimeMs;
 
     const cached = this.slots.get(filePath);
     if (cached && cached.mtimeMs === mtimeMs && cached.size === size) {
       cached.lastSeenAt = now;
+      // A warm sweep parses nothing and must still notice that a file grew.
+      // Safe here because the value IS cached — see the miss path for why
+      // that distinction matters.
+      this.observe(mtimeMs);
       return cached.value;
     }
 
@@ -161,6 +163,14 @@ export class FileCache<T> {
 
     const promise = (async () => {
       const value = await factory(filePath);
+      // AFTER the factory resolves, never on the way past (Codex P1, PR #514).
+      // `stat` succeeding says nothing about the read: a transient EACCES or
+      // EBUSY, or a write racing the read, rejects here. Advancing the
+      // watermark before that would let a later successful retry — same mtime,
+      // same size — leave BOTH halves of the corpus fingerprint unmoved, so
+      // `getSessionCategoryCounts()` would go on serving the histogram it
+      // built while the transcript was unreadable.
+      this.observe(mtimeMs);
       // Replace, not add: a changed file already has a slot, and forgetting to
       // subtract the old size is how a running total silently drifts upward
       // until the cache evicts everything.
@@ -199,6 +209,11 @@ export class FileCache<T> {
   }
 
   /** The one place a slot leaves the map, so the byte total cannot drift. */
+  /** Raise the watermark. The only place it moves. */
+  private observe(mtimeMs: number): void {
+    if (mtimeMs > this.observedMaxMtime) this.observedMaxMtime = mtimeMs;
+  }
+
   private drop(filePath: string): void {
     const slot = this.slots.get(filePath);
     if (!slot) return;
