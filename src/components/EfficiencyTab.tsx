@@ -185,7 +185,7 @@ export function EfficiencyTab({ slug }: EfficiencyTabProps) {
 
   if (loading) {
     return (
-      <div style={{ padding: "24px", color: "var(--text-muted)", fontSize: "0.85rem" }}>
+      <div data-loading="true" style={{ padding: "24px", color: "var(--text-muted)", fontSize: "0.85rem" }}>
         Computing waste + yield…
       </div>
     );

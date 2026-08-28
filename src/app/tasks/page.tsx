@@ -56,7 +56,7 @@ export default function TasksPage() {
 
   if (loading) {
     return (
-      <div className="shell-content wide">
+      <div data-loading="true" className="shell-content wide">
         <div style={{ padding: "48px 0", textAlign: "center", color: "var(--text-muted)", fontSize: "0.85rem" }}>
           Loading tasks…
         </div>

@@ -152,7 +152,8 @@ async function settleBeforeShot(page, budgetMs = 60000) {
       return /Compiling/i.test(text)
         || /\bLoading\b/i.test(text)
         || /\bConnecting\b/i.test(text)
-        || document.querySelectorAll('.animate-pulse').length > 0
+        || document.querySelectorAll('[data-loading]').length > 0 ||
+          document.querySelectorAll('.animate-pulse').length > 0
         || [...document.querySelectorAll('[style*="pulse"]')]
           .some((el) => el.getBoundingClientRect().height >= 24);
       // Fail toward BUSY: an evaluation error (detached frame, navigation in
@@ -167,7 +168,8 @@ async function settleBeforeShot(page, budgetMs = 60000) {
         const text = document.body.innerText || '';
         return !(/Compiling/i.test(text) || /\bLoading\b/i.test(text)
           || /\bConnecting\b/i.test(text)
-          || document.querySelectorAll('.animate-pulse').length > 0
+          || document.querySelectorAll('[data-loading]').length > 0 ||
+          document.querySelectorAll('.animate-pulse').length > 0
         || [...document.querySelectorAll('[style*="pulse"]')]
           .some((el) => el.getBoundingClientRect().height >= 24));
       }).catch(() => false);
@@ -197,6 +199,17 @@ async function settleBeforeShot(page, budgetMs = 60000) {
 // body text length holding steady. Length rather than content, so a ticking
 // relative timestamp ("3m ago" -> "4m ago") does not count as churn and prevent
 // the page from ever settling.
+//
+// **`[data-loading]` is the primary signal as of #445.** Every loading state in
+// the app now carries it — `<Skeleton>` sets it, the loading sentences carry it,
+// and the bespoke placeholder divs were marked — and `tests/loadingMarkerGuard`
+// fails the build if a new one does not. Ask the app whether it is loading
+// instead of inferring it from a class, a string and an inline style, which is
+// what the heuristics below were doing.
+//
+// The heuristics STAY, as a safety net rather than the mechanism. They cost
+// nothing on a settled page and they still cover the one thing the marker
+// cannot: Next's "Compiling" pill, which is the dev server's DOM, not ours.
 async function waitForStableUI(page, { timeout = 25000, quietMs = 6000 } = {}) {
   try {
     await page.waitForFunction(
@@ -208,6 +221,7 @@ async function waitForStableUI(page, { timeout = 25000, quietMs = 6000 } = {}) {
           /Compiling/i.test(text) ||
           /\bLoading\b/i.test(text) ||
           /\bConnecting\b/i.test(text) ||
+          document.querySelectorAll('[data-loading]').length > 0 ||
           document.querySelectorAll('.animate-pulse').length > 0
         || [...document.querySelectorAll('[style*="pulse"]')]
           .some((el) => el.getBoundingClientRect().height >= 24);

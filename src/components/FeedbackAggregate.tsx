@@ -62,7 +62,7 @@ export function FeedbackAggregate({ period, projectSlug }: { period: string; pro
       .finally(() => setLoading(false));
   }, [period, projectSlug]);
 
-  if (loading) return <p style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>Loading…</p>;
+  if (loading) return <p data-loading="true" style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>Loading…</p>;
   if (error) return <p style={{ fontSize: "0.72rem", color: "var(--status-error-text)" }}>Failed to load feedback data.</p>;
   if (!data || data.sessionCount === 0) {
     return <p style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>No feedback recorded for this period.</p>;

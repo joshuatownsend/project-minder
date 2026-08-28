@@ -184,7 +184,7 @@ function Step3({
       </div>
 
       {!library && (
-        <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", fontFamily: "var(--font-body)" }}>Loading…</p>
+        <p data-loading="true" style={{ fontSize: "0.8rem", color: "var(--text-muted)", fontFamily: "var(--font-body)" }}>Loading…</p>
       )}
 
       {library && (

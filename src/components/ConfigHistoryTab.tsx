@@ -74,7 +74,7 @@ export function ConfigHistoryTab({ projectSlug, projectPath }: { projectSlug: st
   }
 
   if (entries === null) {
-    return <div style={{ padding: "16px", color: "var(--text-muted)", fontSize: "0.78rem" }}>Loading…</div>;
+    return <div data-loading="true" style={{ padding: "16px", color: "var(--text-muted)", fontSize: "0.78rem" }}>Loading…</div>;
   }
 
   if (entries.length === 0) {

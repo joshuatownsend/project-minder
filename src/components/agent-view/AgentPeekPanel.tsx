@@ -179,7 +179,7 @@ export function AgentPeekPanel({ session, onClose }: AgentPeekPanelProps) {
                 </span>
               </SectionLabel>
               {!data ? (
-                <div style={{ fontSize: "0.7rem", color: "var(--text-3,#8a8c8f)" }}>Loading…</div>
+                <div data-loading="true" style={{ fontSize: "0.7rem", color: "var(--text-3,#8a8c8f)" }}>Loading…</div>
               ) : data.hookEvents.length === 0 ? (
                 <div style={{ fontSize: "0.7rem", color: "var(--text-3,#8a8c8f)" }}>
                   No hook events. Enable Live Activity in Settings to see them.
@@ -220,7 +220,7 @@ export function AgentPeekPanel({ session, onClose }: AgentPeekPanelProps) {
             <section>
               <SectionLabel>Insights this session</SectionLabel>
               {!data ? (
-                <div style={{ fontSize: "0.7rem", color: "var(--text-3,#8a8c8f)" }}>Loading…</div>
+                <div data-loading="true" style={{ fontSize: "0.7rem", color: "var(--text-3,#8a8c8f)" }}>Loading…</div>
               ) : data.insightsThisSession.length === 0 ? (
                 <div style={{ fontSize: "0.7rem", color: "var(--text-3,#8a8c8f)", lineHeight: 1.5 }}>
                   No insights captured yet. Use{" "}

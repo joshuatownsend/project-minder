@@ -139,7 +139,7 @@ export function GsdPlanningTab({ slug }: { slug: string }) {
 
   if (loading) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+      <div data-loading="true" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
         {[1, 2, 3].map((i) => (
           <div key={i} style={{
             height: "40px", borderRadius: "var(--radius)",

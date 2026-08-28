@@ -96,7 +96,7 @@ export function BackgroundActivityBrowser() {
 
   if (loading) {
     return (
-      <div style={{ padding: "32px", color: "var(--text-muted)" }}>
+      <div data-loading="true" style={{ padding: "32px", color: "var(--text-muted)" }}>
         Loading background activity…
       </div>
     );

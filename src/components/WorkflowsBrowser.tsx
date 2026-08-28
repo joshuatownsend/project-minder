@@ -110,7 +110,7 @@ export function WorkflowsBrowser() {
         </label>
       </header>
 
-      {rows === null && <p style={{ color: "var(--text-muted)", fontSize: "0.82rem" }}>Loading…</p>}
+      {rows === null && <p data-loading="true" style={{ color: "var(--text-muted)", fontSize: "0.82rem" }}>Loading…</p>}
 
       {rows !== null && rows.length === 0 && (
         <p style={{ color: "var(--text-muted)", fontSize: "0.82rem", lineHeight: 1.6 }}>

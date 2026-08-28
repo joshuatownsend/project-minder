@@ -349,7 +349,7 @@ function PlanRow({
           }}
         >
           {bodyState.state === "loading" && (
-            <div
+            <div data-loading="true"
               style={{ color: "var(--text-muted)", fontSize: "0.75rem", padding: "8px 0" }}
             >
               Loading…

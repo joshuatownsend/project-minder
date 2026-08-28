@@ -22,6 +22,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Every loading state is now detectable from outside the component** (#445). The app had three unrelated loading idioms with no shared marker — `<Skeleton>` (findable via `.animate-pulse`), a plain “Loading…” sentence in ~20 components, and bespoke inline-styled placeholder boxes in ~25 more that carried no class, no attribute and no text. Nothing outside a component could answer “is this view still loading?”.
+
+  That had already shipped: the screenshot pipeline gates on `.animate-pulse`, so it was blind to the other two and published `status.png` as four empty grey bars, `config.png` with every tab count reading `0`, and four more shots mid-load — all live on the public landing page until someone noticed by eye.
+
+  Every loading state now carries `data-loading`: `<Skeleton>` sets it for the 24 components that use it, the loading sentences carry it, and the bespoke placeholders were marked in place (no markup was swapped, so nothing moved on screen). A new `<Loading>` primitive gives new code one spelling and one marker. `tests/loadingMarkerGuard` fails the build if a new loading branch appears without one, with an allowlist that records the reason for each genuine exemption rather than widening a regex until it stops matching.
+
+  The capture scripts now ask `[data-loading]` first. Their existing heuristics stay as a safety net — they cost nothing on a settled page and still cover Next's “Compiling” pill, which is the dev server's DOM rather than ours.
+
 - **A warning banner when a configured Claude home cannot be read** (#479). A home inside a stopped WSL distro is excluded from every read — deliberately, since touching it would auto-start the VM (the never-wake invariant) — and that exclusion was silent. File-parse then answers completely for the homes it can reach while the SQLite index keeps rows from when the missing home was last up, so totals quietly disagree with themselves and nothing says why.
 
   Minder now names the distro and the reason at the top of every page, and exposes the same answer at `GET /api/claude-homes` (`readable` / `unavailable` / `complete`, plus an `X-Minder-Homes-Unavailable` header). It deliberately does NOT refuse to answer: a stopped distro is a steady state, not a transient — a user can run for weeks with one down — so declining the fallback would trade a bounded first-build window for an unbounded one, for exactly the multi-home users the multi-home work was written for. Which backend's answer is less wrong depends on how much of the corpus lives in the unreachable home, which is the user's judgement to make.

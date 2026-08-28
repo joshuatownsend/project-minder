@@ -156,7 +156,7 @@ export function HarnessConfigView({ harnessId }: { harnessId: string }) {
     return () => controller.abort();
   }, [harnessId]);
 
-  if (loading) return <Note>Loading harness config…</Note>;
+  if (loading) return <Note data-loading="true">Loading harness config…</Note>;
   if (error) return <Note>{error}</Note>;
   if (!data) return <Note>No data.</Note>;
 

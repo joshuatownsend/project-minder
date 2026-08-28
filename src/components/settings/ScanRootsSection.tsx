@@ -150,7 +150,7 @@ export function ScanRootsSection({
 
       <div style={S.card}>
         {config === null ? (
-          <p style={S.muted}>Loading…</p>
+          <p data-loading="true" style={S.muted}>Loading…</p>
         ) : (
           <>
             <ScanRootsEditor roots={roots} onChange={setRoots} />

@@ -84,7 +84,7 @@ export function ManageHiddenProjects({
 
         <div className="overflow-y-auto p-4">
           {loading ? (
-            <p className="text-sm text-[var(--muted-foreground)]">Loading...</p>
+            <p data-loading="true" className="text-sm text-[var(--muted-foreground)]">Loading...</p>
           ) : hidden.length === 0 ? (
             <p className="text-sm text-[var(--muted-foreground)] text-center py-4">
               No hidden projects.

@@ -64,6 +64,17 @@ async function shoot(page, name) {
 // We run the check via waitForFunction (page-context JS, Playwright-enforced
 // timeout) instead of locator polling — keeps the whole wait bounded and
 // avoids the locator.count() hang we hit on stubborn pages.
+//
+// **`[data-loading]` is the primary signal as of #445.** Every loading state in
+// the app now carries it — `<Skeleton>` sets it, the loading sentences carry it,
+// and the bespoke placeholder divs were marked — and `tests/loadingMarkerGuard`
+// fails the build if a new one does not. Ask the app whether it is loading
+// instead of inferring it from a class, a string and an inline style, which is
+// what the heuristics below were doing.
+//
+// The heuristics STAY, as a safety net rather than the mechanism. They cost
+// nothing on a settled page and they still cover the one thing the marker
+// cannot: Next's "Compiling" pill, which is the dev server's DOM, not ours.
 async function waitForStableUI(page, { timeout = 25000 } = {}) {
   try {
     await page.waitForFunction(
@@ -82,7 +93,8 @@ async function waitForStableUI(page, { timeout = 25000 } = {}) {
         // 7px CI dot pulses while a check RUNS, which is a settled state, and
         // treating it as loading pins this page at "busy" forever. The Tailwind
         // class needs no floor — `h-4` skeletons are only 16px tall.
-        const hasSkeleton = document.querySelectorAll('.animate-pulse').length > 0
+        const hasSkeleton = document.querySelectorAll('[data-loading]').length > 0 ||
+          document.querySelectorAll('.animate-pulse').length > 0
           || [...document.querySelectorAll('[style*="pulse"]')]
             .some((el) => el.getBoundingClientRect().height >= 24);
         if (hasCompile || hasLoadingText || hasSkeleton) {

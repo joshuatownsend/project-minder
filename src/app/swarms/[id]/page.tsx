@@ -70,7 +70,7 @@ export default function SwarmDetailPage({ params }: { params: Promise<{ id: stri
   if (loading) {
     return (
       <div className="shell-content">
-        <div style={{ padding: "48px 0", textAlign: "center", color: "var(--text-muted)", fontSize: "0.85rem" }}>
+        <div data-loading="true" style={{ padding: "48px 0", textAlign: "center", color: "var(--text-muted)", fontSize: "0.85rem" }}>
           Loading…
         </div>
       </div>

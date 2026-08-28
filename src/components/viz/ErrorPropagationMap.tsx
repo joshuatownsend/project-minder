@@ -16,7 +16,7 @@ export function ErrorPropagationMap({ slug }: Props) {
   );
 
   if (loading) {
-    return <div style={{ height: "240px", background: "var(--bg-elevated)", borderRadius: "var(--radius)", animation: "pulse 1.5s ease-in-out infinite" }} />;
+    return <div data-loading="true" style={{ height: "240px", background: "var(--bg-elevated)", borderRadius: "var(--radius)", animation: "pulse 1.5s ease-in-out infinite" }} />;
   }
 
   if (error) {

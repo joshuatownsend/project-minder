@@ -34,7 +34,7 @@ export function InsightsReportViewer() {
 
   if (!data) {
     return (
-      <div style={{ padding: "24px", color: "var(--text-muted)", fontSize: "0.82rem" }}>
+      <div data-loading="true" style={{ padding: "24px", color: "var(--text-muted)", fontSize: "0.82rem" }}>
         Loading…
       </div>
     );

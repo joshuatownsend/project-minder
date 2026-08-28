@@ -240,7 +240,7 @@ function DiffView({ entry, draftContent }: { entry: MemoryFileEntry; draftConten
     [snapshot, draftContent],
   );
 
-  if (loading) return <p style={mutedStyle}>Loading snapshot</p>;
+  if (loading) return <p data-loading="true" style={mutedStyle}>Loading snapshot</p>;
   if (!snapshot || snapshot.content === null) {
     return (
       <p style={{ ...mutedStyle, padding: "12px 0" }}>

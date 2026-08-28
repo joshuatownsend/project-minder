@@ -32,7 +32,7 @@ export default function SwarmsPage() {
 
   if (loading) {
     return (
-      <div className="shell-content">
+      <div data-loading="true" className="shell-content">
         <div style={{ padding: "48px 0", textAlign: "center", color: "var(--text-muted)", fontSize: "0.85rem" }}>
           Loading swarms…
         </div>

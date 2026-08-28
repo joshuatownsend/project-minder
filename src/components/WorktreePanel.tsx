@@ -299,7 +299,7 @@ export function WorktreePanel({ slug, devPort, worktrees }: WorktreePanelProps) 
 
       {expanded && (
         <div style={{ marginTop: "12px", display: "flex", flexDirection: "column", gap: "10px" }}>
-          {loading && <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Loading…</span>}
+          {loading && <span data-loading="true" style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Loading…</span>}
           {error && (
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <span style={{ fontSize: "0.8rem", color: "var(--destructive)" }}>{error}</span>

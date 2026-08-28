@@ -70,7 +70,7 @@ export function GitActivityPanel({ slug }: { slug: string }) {
 
   if (loading) {
     return (
-      <div
+      <div data-loading="true"
         style={{
           height: "80px",
           background: "var(--bg-surface)",

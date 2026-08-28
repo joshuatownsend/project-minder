@@ -139,7 +139,7 @@ export function ClaudeHomesSection({
 
       <div style={S.card}>
         {config === null ? (
-          <p style={S.muted}>Loading…</p>
+          <p data-loading="true" style={S.muted}>Loading…</p>
         ) : (
           <>
             <div style={{ ...S.label, marginBottom: "6px" }}>Extra homes</div>

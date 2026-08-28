@@ -239,7 +239,12 @@ export function CostSection({
           )}
         </div>
 
-        <div style={{ ...S.muted }}>
+        <div
+          // Only while the rate is genuinely outstanding — `fxLabel` also renders
+          // the fetched rate and an error string from the same element (#445).
+          data-loading={currency !== "USD" && fx === null ? "true" : undefined}
+          style={{ ...S.muted }}
+        >
           {currency !== "USD" ? fxLabel : "No conversion — costs shown in USD."}
           {fx?.fetchedAt && (
             <span style={{ marginLeft: "8px", opacity: 0.6 }}>

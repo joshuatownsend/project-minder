@@ -40,7 +40,7 @@ export function OrchestrationDAG({ sessionId }: Props) {
 
   if (loading) {
     return (
-      <div style={{ padding: "32px", color: "var(--text-muted)", fontSize: "0.8rem" }}>
+      <div data-loading="true" style={{ padding: "32px", color: "var(--text-muted)", fontSize: "0.8rem" }}>
         Loading orchestration graph…
       </div>
     );

@@ -80,6 +80,17 @@ async function shoot(page, name) {
 // caller must not swallow that: shoot() would happily overwrite a published
 // PNG with a skeleton, leaving `skipped` empty and the run green — a stale
 // image published under a passing gate.
+//
+// **`[data-loading]` is the primary signal as of #445.** Every loading state in
+// the app now carries it — `<Skeleton>` sets it, the loading sentences carry it,
+// and the bespoke placeholder divs were marked — and `tests/loadingMarkerGuard`
+// fails the build if a new one does not. Ask the app whether it is loading
+// instead of inferring it from a class, a string and an inline style, which is
+// what the heuristics below were doing.
+//
+// The heuristics STAY, as a safety net rather than the mechanism. They cost
+// nothing on a settled page and they still cover the one thing the marker
+// cannot: Next's "Compiling" pill, which is the dev server's DOM, not ours.
 async function waitForStableUI(page, { timeout = 25000 } = {}) {
   try {
     await page.waitForFunction(
@@ -87,7 +98,8 @@ async function waitForStableUI(page, { timeout = 25000 } = {}) {
         const w = /** @type {any} */ (window);
         const now = Date.now();
         const hasCompile = /Compiling/i.test(document.body.innerText || '');
-        const hasSkeleton = document.querySelectorAll('.animate-pulse').length > 0;
+        const hasSkeleton = document.querySelectorAll('[data-loading]').length > 0 ||
+          document.querySelectorAll('.animate-pulse').length > 0;
         if (hasCompile || hasSkeleton) {
           w.__minderQuietSince = null;
           return false;

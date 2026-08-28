@@ -166,7 +166,7 @@ export function CommandPalette({ open, onClose, onNavigate, onAction }: CommandP
             }}
           />
           {loading && (
-            <span style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>Loading…</span>
+            <span data-loading="true" style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>Loading…</span>
           )}
         </div>
 

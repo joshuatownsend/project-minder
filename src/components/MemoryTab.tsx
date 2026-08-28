@@ -257,7 +257,7 @@ export function MemoryTab({ slug }: MemoryTabProps) {
                 </p>
               )}
               {selectedFile && fileLoading && (
-                <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", margin: 0 }}>Loading…</p>
+                <p data-loading="true" style={{ fontSize: "0.75rem", color: "var(--text-muted)", margin: 0 }}>Loading…</p>
               )}
               {selectedFile && !fileLoading && fileContent !== null && (
                 <>
