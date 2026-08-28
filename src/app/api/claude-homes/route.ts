@@ -2,6 +2,7 @@ import "server-only";
 import { NextResponse } from "next/server";
 import { readConfig } from "@/lib/config";
 import { partitionClaudeHomes } from "@/lib/claudeHome";
+import { demoMode } from "@/lib/demo/demoMode";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,21 @@ export const dynamic = "force-dynamic";
  * home's filesystem, which is the entire point.
  */
 export async function GET(): Promise<NextResponse> {
+  // Demo mode never reads the real homes (Codex P1, PR #510). Both arrays
+  // carry ABSOLUTE host paths — the machine username, where the user keeps
+  // their Claude homes, and the names of their WSL distros — and the banner
+  // renders an unavailable one verbatim. Every other path-bearing route
+  // substitutes synthetic data here; this one has nothing to substitute, so it
+  // reports full coverage of nothing, which is the honest demo answer: a demo
+  // machine has no unreadable homes to warn about.
+  //
+  // Before `readConfig`, not after: the point is not to filter the paths out of
+  // the response but never to look at them, and never to spend a `wsl.exe` or
+  // UNC probe on a viewer's behalf.
+  if (await demoMode()) {
+    return NextResponse.json({ readable: [], unavailable: [], complete: true });
+  }
+
   const config = await readConfig();
   const { readable, unavailable } = await partitionClaudeHomes(config);
 
