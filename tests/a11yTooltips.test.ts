@@ -26,10 +26,32 @@ async function read(rel: string): Promise<string> {
   return fs.readFile(path.join(COMPONENTS, rel), "utf-8");
 }
 
+/**
+ * Is the explanation reachable without a mouse?
+ *
+ * Two shapes count, and the difference is #391's whole point:
+ *
+ *  - **`<Tooltip>`** — one element, associated by `aria-describedby`, opened by
+ *    hover, focus AND tap. This is the target shape.
+ *  - **`.sr-only` + `aria-hidden`** — #390's answer. It reaches screen readers
+ *    and leaves sighted keyboard and touch users exactly where they were, so it
+ *    is accepted only while the remaining chips are migrated.
+ *
+ * Accepting both is deliberate: a migration that had to land in one commit
+ * across eleven components would be a worse change than one that can go chip by
+ * chip with the guard holding the line behind it.
+ */
+function usesPrimitive(src: string, anchor: string, window = 1400): boolean {
+  const i = src.indexOf(anchor);
+  if (i === -1) return false;
+  return /<Tooltip[\s>]/.test(src.slice(i, i + window));
+}
+
 /** Does the region following `anchor` pair `.sr-only` with `aria-hidden`? */
 function hasAccessiblePair(src: string, anchor: string, window = 1400): boolean {
   const i = src.indexOf(anchor);
   if (i === -1) return false;
+  if (usesPrimitive(src, anchor, window)) return true;
   const region = src.slice(i, i + window);
   // Match the rendered class attribute, not the bare substring: the word
   // "sr-only" now appears in explanatory comments next to several of these
@@ -77,10 +99,15 @@ describe("#380 — load-bearing tooltips are reachable without a mouse", () => {
     // The shared chip renders `compaction loop`, `tool fail streak` and
     // `resume anomaly` — jargon whose entire meaning lived in `title`. Fixing
     // the shared component covers every call site at once.
-    // Anchored on the attribute itself rather than the function declaration:
-    // the region between them is prose, and a comment growing there should not
-    // decide whether this test passes.
-    expect(hasAccessiblePair(src, "      title={title}", 900)).toBe(true);
+    // Migrated to the primitive (#391), so this asserts the stronger property:
+    // the explanation reaches keyboard and touch users too. Anchored on the
+    // function declaration now that the `title` attribute it used to anchor on
+    // is gone.
+    const at = src.indexOf("function QualityChip(");
+    expect(at).toBeGreaterThan(-1);
+    expect(src.slice(at, at + 2200)).toMatch(/<Tooltip[\s>]/);
+    // The mouse-only attribute is gone rather than merely supplemented.
+    expect(src).not.toContain("      title={title}");
   });
 
   it("the git 'status unavailable' caveat is not mouse-only", async () => {
@@ -92,7 +119,12 @@ describe("#380 — load-bearing tooltips are reachable without a mouse", () => {
     // Anchored on the call site, not the message text: the explanation is now a
     // shared constant declared at the top of the file, so matching the literal
     // found the declaration and looked at the wrong 900 characters.
-    expect(hasAccessiblePair(src, "title={GIT_STATUS_UNKNOWN_EXPLANATION}", 900)).toBe(true);
+    // Migrated to the primitive (#391), so this asserts the stronger property
+    // rather than the transitional one: the explanation reaches keyboard and
+    // touch users too, not only screen readers.
+    expect(src).toMatch(/<Tooltip[\s\S]{0,120}GIT_STATUS_UNKNOWN_EXPLANATION/);
+    // And the mouse-only attribute is gone rather than merely supplemented.
+    expect(src).not.toContain("title={GIT_STATUS_UNKNOWN_EXPLANATION}");
   });
 
   it("the effort mix explains why it does not sum to the turn count", async () => {
@@ -129,7 +161,9 @@ describe("#380 — load-bearing tooltips are reachable without a mouse", () => {
     const compactStart = src.indexOf("export function GitStatusCompact");
     expect(compactStart).toBeGreaterThan(-1);
     const compact = src.slice(compactStart);
-    expect(compact).toMatch(/className="sr-only"/);
+    // The variant that actually ships must be the migrated one — the #390
+    // lesson was that a fix can land in a component nothing renders.
+    expect(compact).toMatch(/<Tooltip[\s>]/);
     expect(compact).toContain("GIT_STATUS_UNKNOWN_EXPLANATION");
 
     for (const consumer of ["ProjectCard.tsx", "ProjectDetail.tsx"]) {
@@ -140,8 +174,11 @@ describe("#380 — load-bearing tooltips are reachable without a mouse", () => {
       const variantStart = src.indexOf(`export function ${variant}`);
       const variantEnd = src.indexOf("\nexport function ", variantStart + 1);
       const body = src.slice(variantStart, variantEnd === -1 ? undefined : variantEnd);
+      // Either shape: `<Tooltip>` (the #391 target) or the transitional
+      // `.sr-only` pair. What must not happen is a consumer rendering a
+      // variant that carries NEITHER — the #390 defect.
       expect(body, `${consumer} renders ${variant}, which must carry the caveat`)
-        .toMatch(/className="sr-only"/);
+        .toMatch(/<Tooltip[\s>]|className="sr-only"/);
     }
   });
 

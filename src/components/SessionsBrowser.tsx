@@ -41,6 +41,7 @@ const DELEGATION_BADGE_EXPLANATION = (label: string) =>
   `${label}. Counted across this session and every subagent it spawned, since Claude Code's caps apply to the whole session. A session that hits one is silently truncated rather than finishing. The caps are configurable, so this reports the count reached, not that anything was blocked.`;
 import { EntrypointChip } from "@/components/EntrypointChip";
 import { entrypointBucket, entrypointLabel, compareEntrypoint } from "@/lib/usage/entrypoint";
+import { Tooltip } from "@/components/ui/tooltip";
 
 type SortOption = "relevance" | "recent" | "longest" | "tokens" | "oneshot";
 
@@ -143,29 +144,31 @@ function QualityChip({
     // Fixed here, in the shared component, rather than at each call site —
     // every quality chip in the app inherits it.
     //
-    // KNOWN LIMIT, stated rather than papered over (Codex review of #380).
-    // `.sr-only` is visually clipped, so this reaches screen readers and does
-    // NOT help a sighted keyboard or touch user — two of the three audiences
-    // the issue names. Closing that needs a tooltip primitive that opens on
-    // focus and tap, which is a shared-UI change rather than a per-chip one.
-    // Tracked in #391. This is a real improvement for one audience, not the
-    // whole fix.
-    <span
-      title={title}
-      style={{
-        fontFamily: "var(--font-mono)",
-        fontSize: "0.65rem",
-        color: tokens.color,
-        background: tokens.bg,
-        border: `1px solid ${tokens.border}`,
-        borderRadius: "3px",
-        padding: "1px 5px",
-        flexShrink: 0,
-      }}
+    // That limit is closed as of #391. `Tooltip` opens on hover, keyboard
+    // FOCUS and tap, and carries the explanation in one element associated by
+    // `aria-describedby` — so all three audiences the issue named reach it,
+    // and the `.sr-only` duplicate of the same sentence is gone. Two copies of
+    // one string is a drift waiting to happen.
+    <Tooltip
+      content={srText ?? title}
+      className="quality-chip"
     >
-      <span className="sr-only">{srText ?? title}</span>
-      <span aria-hidden="true">{children}</span>
-    </span>
+      <span
+        style={{
+          fontFamily: "var(--font-mono)",
+          fontSize: "0.65rem",
+          color: tokens.color,
+          background: tokens.bg,
+          border: `1px solid ${tokens.border}`,
+          borderRadius: "3px",
+          padding: "1px 5px",
+          flexShrink: 0,
+          cursor: "help",
+        }}
+      >
+        {children}
+      </span>
+    </Tooltip>
   );
 }
 

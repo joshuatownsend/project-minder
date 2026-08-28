@@ -1,6 +1,7 @@
 import { GitInfo } from "@/lib/types";
 import { formatDistanceToNow } from "date-fns";
 import { GitBranch, Clock, AlertCircle } from "lucide-react";
+import { Tooltip } from "@/components/ui/tooltip";
 
 /**
  * One source for the "not confirmed clean" caveat, used by both variants.
@@ -27,14 +28,19 @@ export function GitStatus({ git }: { git: GitInfo }) {
         )}
         {!git.isDirty && git.unknown && (
           // See GIT_STATUS_UNKNOWN_EXPLANATION above for why this one matters.
-          <span
+          //
+          // Through `Tooltip` rather than `title` + `.sr-only` (#391): the
+          // explanation is now ONE element, associated by `aria-describedby`,
+          // reachable by hover, keyboard focus AND tap. The duplicated
+          // `.sr-only` copy is gone with it — two copies of one sentence is a
+          // drift waiting to happen.
+          <Tooltip
+            content={GIT_STATUS_UNKNOWN_EXPLANATION}
             className="flex items-center gap-1 text-[var(--muted-foreground)]"
-            title={GIT_STATUS_UNKNOWN_EXPLANATION}
           >
             <AlertCircle className="h-3 w-3" aria-hidden="true" />
-            <span className="sr-only">{GIT_STATUS_UNKNOWN_EXPLANATION}</span>
-            <span aria-hidden="true">status unavailable</span>
-          </span>
+            <span>status unavailable</span>
+          </Tooltip>
         )}
       </div>
       {git.lastCommitDate && (
@@ -100,18 +106,25 @@ export function GitStatusCompact({ git }: { git: GitInfo }) {
         //
         // And "?" is worse than "status unavailable": it carries no meaning at
         // all without the tooltip.
-        <span
-          title={GIT_STATUS_UNKNOWN_EXPLANATION}
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontWeight: 600,
-            color: "var(--text-muted)",
-            fontSize: "0.68rem",
-          }}
-        >
-          <span className="sr-only">{GIT_STATUS_UNKNOWN_EXPLANATION}</span>
-          <span aria-hidden="true">?</span>
-        </span>
+        <Tooltip content={GIT_STATUS_UNKNOWN_EXPLANATION}>
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontWeight: 600,
+              color: "var(--text-muted)",
+              fontSize: "0.68rem",
+              // Underlined, because a "?" that explains itself only on hover
+              // gives a sighted keyboard or touch user no reason to think
+              // there is anything to reach. The affordance has to be visible
+              // for the tooltip to be discoverable (#391).
+              textDecoration: "underline dotted",
+              textUnderlineOffset: "2px",
+              cursor: "help",
+            }}
+          >
+            ?
+          </span>
+        </Tooltip>
       )}
       {git.lastCommitDate && (
         <span style={{ color: "var(--text-muted)", marginLeft: "auto", flexShrink: 0 }}>
