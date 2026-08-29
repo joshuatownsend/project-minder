@@ -32,10 +32,74 @@ export { isValidSessionId };
  *  listing failures throw — a local EACCES/EIO is a real misconfiguration).
  *  Extra homes are best-effort: an unreachable UNC home (distro just
  *  stopped, network hiccup) must not turn a local session lookup into a 500. */
+export interface ResolveSessionOptions {
+  /**
+   * An exact path for this session, from something that already knows one.
+   *
+   * The index stores `sessions.file_path`, so when the SQL backend is available
+   * the answer is a single lookup and the walks below are pure waste (#486).
+   * They stay as the fallback: the file backend has no index, and a session
+   * written since the last reconcile is not in one.
+   *
+   * Passed IN rather than looked up here, because `src/lib/usage/` deliberately
+   * has no DB dependency. Inverting that to give this function a DB fast path
+   * was the other option the issue set out, and it would make the module that
+   * the file backend is built on import the database.
+   */
+  indexedPath?: (sessionId: string) => Promise<string | null>;
+}
+
+/**
+ * Turn an absolute transcript path into the project directory ingest attributes
+ * it to — the segment immediately after `projects/`.
+ *
+ * Handles both layouts, which is the point: `<projects>/<dir>/<id>.jsonl` and
+ * the nested `<projects>/<dir>/<parent>/subagents/<id>.jsonl` both yield
+ * `<dir>`. Deriving it from the PATH is what stops a caller re-deriving it from
+ * the id and assuming the flat shape (#486).
+ */
+export function projectDirNameFromPath(filePath: string): string | null {
+  const parts = path.resolve(filePath).split(/[\\/]/);
+  const i = parts.lastIndexOf("projects");
+  if (i < 0 || i + 1 >= parts.length) return null;
+  const dir = parts[i + 1];
+  return dir && dir.endsWith(".jsonl") ? null : (dir ?? null);
+}
+
 export async function resolveSessionJsonl(
   sessionId: string,
+  options: ResolveSessionOptions = {},
 ): Promise<{ filePath: string; projectDirName: string } | null> {
   if (!isValidSessionId(sessionId)) return null;
+
+  // The index first, when a caller supplied one. Exact, one lookup, and it
+  // carries the real layout — so nothing downstream has to guess whether the
+  // transcript is flat or nested.
+  if (options.indexedPath) {
+    let hinted: string | null = null;
+    try {
+      hinted = await options.indexedPath(sessionId);
+    } catch {
+      // A failing index must not break a lookup the filesystem can still
+      // answer. Fall through to the walks.
+      hinted = null;
+    }
+    if (hinted) {
+      const dir = projectDirNameFromPath(hinted);
+      if (dir) {
+        try {
+          // Verified, not trusted. The index can lag a deletion, and returning
+          // a path that is not there converts "session removed" into an
+          // unreadable-file error further down.
+          await fs.access(hinted);
+          return { filePath: hinted, projectDirName: dir };
+        } catch {
+          // Indexed but gone. The walks below decide whether it moved.
+        }
+      }
+    }
+  }
+
   const config = await readConfig();
   const homes = await getReadableClaudeHomes(config);
 

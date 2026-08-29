@@ -5,6 +5,7 @@ import { resolveSessionJsonl, isValidSessionId } from "@/lib/usage/sessionPath";
 import { parseInsightsFromJsonl } from "@/lib/scanner/insightsMd";
 import type { InsightEntry } from "@/lib/types";
 import { getOrCreateRouteCache } from "@/lib/routeCache";
+import { indexedSessionPath } from "@/lib/data/indexedSessionPath";
 
 // Returns hook events + JSONL-sourced insights for a session.
 // Used by AgentPeekPanel — best-effort; errors return empty arrays.
@@ -23,7 +24,7 @@ async function loadInsightsForSession(
   sessionId: string,
   slug: string,
 ): Promise<InsightEntry[]> {
-  const resolved = await resolveSessionJsonl(sessionId);
+  const resolved = await resolveSessionJsonl(sessionId, { indexedPath: indexedSessionPath });
   if (!resolved) return [];
   const { filePath } = resolved;
 

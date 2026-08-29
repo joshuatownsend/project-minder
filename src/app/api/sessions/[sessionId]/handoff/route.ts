@@ -15,6 +15,8 @@ import type { HandoffFacts, CompactionFidelity } from "@/lib/usage/sessionHandof
 import { generateHandoffDoc } from "@/lib/usage/sessionHandoffDoc";
 import type { HandoffVerbosity } from "@/lib/usage/sessionHandoffDoc";
 import { getOrCreateRouteCache } from "@/lib/routeCache";
+import { resolveSessionJsonl } from "@/lib/usage/sessionPath";
+import { indexedSessionPath } from "@/lib/data/indexedSessionPath";
 
 const VALID_VERBOSITIES = new Set<HandoffVerbosity>([
   "minimal",
@@ -85,17 +87,19 @@ export async function GET(
 
   const facts = extractHandoffFacts(turns);
 
+  // RESOLVED, not reconstructed (#486). This built
+  // `~/.claude/projects/<dir>/<id>.jsonl` by hand, which is wrong twice over:
+  // it assumes the FLAT layout, so a nested subagent transcript was never
+  // found; and it hardcodes `os.homedir()`, so a session in any configured
+  // extra Claude home was never found either. Both failures are silent — the
+  // read misses and fidelity is simply reported as absent, which is
+  // indistinguishable from a session that was never compacted.
   let fidelity: CompactionFidelity | null = null;
-  const projectDirName = turns[0]?.projectDirName;
-  if (projectDirName) {
-    const jsonlPath = path.join(
-      os.homedir(),
-      ".claude",
-      "projects",
-      projectDirName,
-      `${sessionId}.jsonl`
-    );
-    const summary = await readCompactionSummary(jsonlPath);
+  const located = await resolveSessionJsonl(sessionId, {
+    indexedPath: indexedSessionPath,
+  });
+  if (located) {
+    const summary = await readCompactionSummary(located.filePath);
     if (summary) {
       fidelity = scoreCompactionFidelity(facts, summary);
     }

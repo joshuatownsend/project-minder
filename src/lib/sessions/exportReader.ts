@@ -407,7 +407,7 @@ export async function loadExportSource(
 
     let subUnread = 0;
     if (options.sidechains) {
-      const sub = await readSubagentMessages(located.filePath, sessionId);
+      const sub = await readSubagentMessages(located.filePath);
       subUnread = sub.unread;
       if (sub.messages.length > 0) {
         // Appended rather than interleaved: subagent files carry their own
@@ -448,7 +448,14 @@ async function locateTranscript(
 ): Promise<{ filePath: string } | null> {
   if (!source || source === "claude") {
     try {
-      return await resolveSessionJsonl(sessionId);
+      // DYNAMIC, and it has to be. `indexedSessionPath` reaches `db/connection`,
+      // which freezes the `~/.minder` path constant at module-evaluation time —
+      // so a STATIC import here would put it on the graph of every test that
+      // imports this module, before any of them can install an isolated home.
+      // `tests/dbIsolationGuard` enforces that, and caught this import when it
+      // was static. Same reason `data/index.ts` lazy-loads its own DB modules.
+      const { indexedSessionPath } = await import("@/lib/data/indexedSessionPath");
+      return await resolveSessionJsonl(sessionId, { indexedPath: indexedSessionPath });
     } catch {
       return null;
     }
@@ -486,9 +493,21 @@ async function locateTranscript(
  */
 async function readSubagentMessages(
   parentFilePath: string,
-  sessionId: string,
 ): Promise<{ messages: ExportMessage[]; unread: number }> {
-  const dir = path.join(path.dirname(parentFilePath), sessionId, "subagents");
+  // Derived from the RESOLVED PATH, not from the session id (#486).
+  //
+  // Taking the id and assuming `<project-dir>/<id>/subagents` was correct only
+  // for a FLAT transcript. `resolveSessionJsonl` now also returns nested
+  // subagent transcripts at `<project-dir>/<parent>/subagents/<id>.jsonl`, and
+  // for one of those the id-based derivation named
+  // `<…>/subagents/<id>/subagents` — a directory that is not the sibling of the
+  // file that was actually found.
+  //
+  // The basename and the id are the same string today. Deriving from the path
+  // is not a no-op for that reason: it is what stops this making a claim about
+  // LAYOUT that the resolver has already answered.
+  const base = path.basename(parentFilePath, ".jsonl");
+  const dir = path.join(path.dirname(parentFilePath), base, "subagents");
   let entries: string[];
   try {
     entries = (await fs.readdir(dir)).filter((f) => f.toLowerCase().endsWith(".jsonl")).sort();
