@@ -143,9 +143,16 @@ describe("FileCache", () => {
 // parsed value and transcript sizes span orders of magnitude: on the reference
 // corpus 160 files (2.4%) hold 50% of the bytes, p50 160 KB against p99 6.7 MB
 // and a 72 MB maximum. Measured alongside it, parsed `UsageTurn[]` retains
-// ≈2.0x the source bytes in heap, so that corpus fully warm wants ≈5.0 GB —
-// past Node's default limit, with `maxEntries: 25_000` against 5,498 files
-// evicting nothing at all.
+// ~2.0x the source bytes in heap. With `maxEntries: 25_000` against 5,498
+// files the cap evicted nothing at all -- four times larger than the corpus,
+// so the only bound was the size of the user's history.
+//
+// That ratio was then extrapolated to "~5.0 GB, past Node's default limit",
+// and the extrapolation does not hold: a whole-sweep measurement (#515,
+// PR #520) puts the real figure at ~1.8 GB. The sample was drawn to SPAN the
+// size distribution, which over-weights big files against their share of the
+// corpus, and anything over `MAX_SESSION_FILE_SIZE` is never parsed at all.
+// An unbounded cache is still unbounded -- but it was not averting a crash.
 describe("FileCache byte budget (#476)", () => {
   /** Fill the cache with `n` files of `size` bytes each. */
   async function fill(

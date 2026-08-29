@@ -1,7 +1,7 @@
-import { parseAllSessions } from "./parser";
+import { parseAllSessions, streamAllSessions } from "./parser";
 import { classifyTurn } from "./classifier";
 import { computeToolTransitions } from "./toolTransitions";
-import { computeTurnCost, loadPricing } from "./costCalculator";
+import { applyPricing, computeTurnCost, getModelPricing, loadPricing } from "./costCalculator";
 import { groupByBinary, extractBashCommands } from "./shellParser";
 import { groupMcpCalls } from "./mcpParser";
 import { detectOneShotTasks } from "./oneShotDetector";
@@ -12,11 +12,17 @@ import { parseMcpTool } from "./mcpParser";
 import { SKILL_DISPATCH_TOOL } from "./toolNames";
 import { getPeriodStart } from "./periods";
 import { detectSelfCorrectionPerModel } from "./selfCorrection";
-import { bucketByHourDay, toLocalDateStr, type ActivityData } from "./activityBuckets";
+import {
+  bucketByHourDay,
+  toLocalDateStr,
+  type ActivityData,
+  type ActivityTurnInput,
+} from "./activityBuckets";
 import { computeStreaks } from "./streaks";
 import { computeContributionCalendar } from "./contributionCalendar";
-import { computeProjectYield } from "./computeProjectYield";
-import { gatherProjectTurns, projectDirNameCandidates } from "./projectMatch";
+import { computeProjectYieldFromIntervals } from "./computeProjectYield";
+import { projectDirNameCandidates, turnMatchesCandidate } from "./projectMatch";
+import { buildSessionIntervals, type SessionInterval } from "./yieldAnalysis";
 import { readConfig } from "../config";
 import { getClaudeHomes } from "../claudeHome";
 import { getCachedScan } from "@/lib/cache";
@@ -51,50 +57,69 @@ export async function generateUsageReport(
   source?: string,
   home?: string
 ): Promise<UsageReport> {
-  // includeSidechains: fold subagent (Task) turns into the usage aggregates.
-  // Their tokens/cost belong in the totals (A1); session-scoped detectors and
-  // activity aggregates still filter them out below.
-  const sessionMap = await parseAllSessions({ includeSidechains: true });
+  // Streamed, not collected (#515). The map form of this sweep held every
+  // session's turns until the report was finished, and the filters below then
+  // built further arrays on top of it — so the peak scaled with the CORPUS and
+  // did not respond to the cache budget at all. Here each session is filtered,
+  // folded and released, so the peak is the accumulators plus one session, and
+  // measurably follows `MINDER_PARSE_CACHE_MB` instead.
+  //
+  // The FILTER ORDER is preserved exactly, because it is load-bearing: project,
+  // source and home first, then activity from the full history, and only then
+  // the period cut. Activity is deliberately NOT period-filtered — it answers
+  // "when does this developer work", which a one-day window cannot.
+  const acc = createUsageAccumulator(period);
+  const periodStart = getPeriodStart(period);
 
-  let turns: UsageTurn[] = [];
-  for (const sessionTurns of sessionMap.values()) {
-    turns.push(...sessionTurns);
-  }
+  /**
+   * Activity's input, kept for the whole run — but as `{ timestamp }` only,
+   * which is the entirety of what `bucketByHourDay`, `computeStreaks` and
+   * `computeContributionCalendar` read (`ActivityTurnInput`). A few tens of
+   * bytes per primary assistant turn instead of the turn.
+   */
+  const activityInput: ActivityTurnInput[] = [];
 
-  // Project + source filters first (before period) — activity aggregates are
-  // project/source-scoped but use full history (not period-filtered).
-  if (project) {
-    turns = turns.filter((t) => t.projectSlug === project);
-  }
-  if (source) {
-    turns = turns.filter((t) => (t.source ?? "claude") === source);
-  }
-  // Home discriminator (#311): scope the report to turns recorded by ONE
-  // configured Claude home. Strict equality — a turn with no home stamp
-  // (adapter sources, single-session loads) is excluded rather than
-  // guessed, matching the DB backend's `home_key = @home` semantics.
-  if (home) {
-    turns = turns.filter((t) => t.homeKey === home);
-  }
+  await streamAllSessions(
+    async (_sessionId, sessionTurns) => {
+      let turns = sessionTurns;
+      if (project) turns = turns.filter((t) => t.projectSlug === project);
+      if (source) turns = turns.filter((t) => (t.source ?? "claude") === source);
+      // Home discriminator (#311): scope the report to turns recorded by ONE
+      // configured Claude home. Strict equality — a turn with no home stamp
+      // (adapter sources, single-session loads) is excluded rather than
+      // guessed, matching the DB backend's `home_key = @home` semantics.
+      if (home) turns = turns.filter((t) => t.homeKey === home);
+      if (turns.length === 0) return;
 
-  // Activity/streak/heatmap reflect when the developer was working — subagent
-  // turns run inside a parent turn and aren't independent activity, so keep
-  // these on primary turns only (they also drove the historical numbers).
-  const assistantTurnsFullHistory = turns.filter(
-    (t) => t.role === "assistant" && !t.isSidechain
+      // Activity/streak/heatmap reflect when the developer was working —
+      // subagent turns run inside a parent turn and aren't independent
+      // activity, so keep these on primary turns only (they also drove the
+      // historical numbers).
+      for (const t of turns) {
+        if (t.role === "assistant" && !t.isSidechain) {
+          activityInput.push({ timestamp: t.timestamp });
+        }
+      }
+
+      const inPeriod =
+        periodStart === null
+          ? turns
+          : turns.filter((t) => new Date(t.timestamp) >= periodStart);
+      if (inPeriod.length > 0) await acc.addTurns(inPeriod);
+    },
+    // Fold subagent (Task) turns into the usage aggregates: their tokens and
+    // cost belong in the totals (A1). Session-scoped detectors and the activity
+    // aggregates filter them out themselves.
+    { includeSidechains: true }
   );
+
   const activity: ActivityData = {
-    ...bucketByHourDay(assistantTurnsFullHistory),
-    streak: computeStreaks(assistantTurnsFullHistory),
-    contributionCalendar: computeContributionCalendar(assistantTurnsFullHistory),
+    ...bucketByHourDay(activityInput),
+    streak: computeStreaks(activityInput),
+    contributionCalendar: computeContributionCalendar(activityInput),
   };
 
-  const periodStart = getPeriodStart(period);
-  if (periodStart !== null) {
-    turns = turns.filter((t) => new Date(t.timestamp) >= periodStart);
-  }
-
-  const report = await aggregateUsage(turns, period, activity);
+  const report = await acc.finalize(activity);
 
   // Augment with portfolio yield — uses getCachedScan() (no fresh scan
   // triggered) so this is a no-op when the dashboard hasn't loaded yet.
@@ -185,7 +210,15 @@ export async function augmentPortfolioYield(
   const scan = getCachedScan();
   if (!scan || report.projectDetails.length === 0) return;
 
-  const sessionMap = scopeSessionMap(await parseAllSessions(), scope);
+  // Intervals, not turns (#515). `buildSessionIntervals` reduces a session to
+  // one { start, end, cost } record and nothing downstream reads a turn again,
+  // so this streams the sweep and keeps only the reductions — the difference
+  // between kilobytes and the corpus. Without this the streaming report above
+  // would still peak at the corpus, because this runs in the same request.
+  await loadPricing();
+  const costOf = (t: UsageTurn) => applyPricing(getModelPricing(t.model, t.speed), t);
+  /** projectDetails index -> that project's session intervals. */
+  const intervalsFor = new Map<number, SessionInterval[]>();
   // Key by encoded path (e.g. "C--dev-project-minder") so it matches
   // pd.projectDirName from the usage parser, not the scanner's short slug.
   // A UNC-scanned WSL project's turns carry the FOREIGN encoding (the Linux
@@ -201,21 +234,75 @@ export async function augmentPortfolioYield(
     )
   );
 
+  /**
+   * One matcher per project detail, precomputed so the sweep tests a session
+   * against all of them in one pass instead of re-walking the corpus per
+   * project. The predicate is `gatherProjectTurns`'s, unchanged: slug equality
+   * OR any candidate encoding of the project's path, applied to the session's
+   * HEAD turn because a session belongs to one project.
+   *
+   * A session can still match more than one detail — overlapping candidate
+   * encodings are exactly why `projectDirNameCandidates` returns a list — and
+   * it is added to each, which is what the per-project gather did.
+   */
+  const matchers = report.projectDetails.map((pd) => {
+    const path = projectPathMap.get(pd.projectDirName);
+    return path
+      ? {
+          pd,
+          path,
+          slug: pd.projectSlug,
+          candidates: projectDirNameCandidates(path, pathMappings, claudeHomes),
+        }
+      : null;
+  });
+
+  await streamAllSessions(async (_sessionId, turns) => {
+    const head = turns[0];
+    if (!head) return;
+    // Scope BEFORE matching, mirroring `scopeSessionMap`'s head-keyed test —
+    // see the `scope` parameter's note on why every axis has to be threaded.
+    if (scope.source && (head.source ?? "claude") !== scope.source) return;
+    if (scope.home && head.homeKey !== scope.home) return;
+
+    let intervals: SessionInterval[] | null = null;
+    for (let i = 0; i < matchers.length; i++) {
+      const m = matchers[i];
+      if (!m) continue;
+      if (head.projectSlug !== m.slug && !m.candidates.some((c) => turnMatchesCandidate(head, c))) {
+        continue;
+      }
+      // Built at most once per session, and only for a session some project
+      // actually wants.
+      const built = (intervals ??= buildSessionIntervals(turns, costOf));
+      const acc = intervalsFor.get(i);
+      if (acc) acc.push(...built);
+      else intervalsFor.set(i, [...built]);
+    }
+  });
+
   // Run in batches of 5 to avoid spawning too many concurrent git processes
-  // on large portfolios (each computeProjectYield runs git log per project).
+  // on large portfolios (each yield computation runs git log per project).
   const YIELD_BATCH = 5;
-  type YieldResult = { detail: ProjectDetail; result: Awaited<ReturnType<typeof computeProjectYield>> } | null;
+  type YieldResult = { detail: ProjectDetail; result: Awaited<ReturnType<typeof computeProjectYieldFromIntervals>> } | null;
   const results: YieldResult[] = [];
-  for (let i = 0; i < report.projectDetails.length; i += YIELD_BATCH) {
-    const batch = report.projectDetails.slice(i, i + YIELD_BATCH);
+  for (let i = 0; i < matchers.length; i += YIELD_BATCH) {
+    const batch = matchers.slice(i, i + YIELD_BATCH);
     const batchResults = await Promise.all(
-      batch.map(async (pd) => {
-        const path = projectPathMap.get(pd.projectDirName);
-        if (!path) return null;
-        const projectTurns = gatherProjectTurns(sessionMap, pd.projectSlug, path, pathMappings, claudeHomes);
+      batch.map(async (m, j) => {
+        if (!m) return null;
+        const intervals = intervalsFor.get(i + j);
+        // No turns for this project: skipped WITHOUT running git, which is what
+        // the turns-shaped version did by returning early on an empty array.
+        // Letting it through would spawn a `git log` per empty project for a
+        // result the caller discards anyway.
+        if (!intervals || intervals.length === 0) return null;
+        // Re-sorted because this is several sessions' intervals concatenated;
+        // `buildSessionIntervals` only sorts within its own call.
+        intervals.sort((a, b) => a.startMs - b.startMs);
         try {
-          const result = await computeProjectYield(path, projectTurns);
-          return { detail: pd, result };
+          const result = await computeProjectYieldFromIntervals(m.path, intervals);
+          return { detail: m.pd, result };
         } catch {
           return null;
         }
@@ -263,38 +350,32 @@ export async function augmentPortfolioYield(
  * before applying the period filter. Use `emptyActivity()` from
  * `activityBuckets.ts` in tests that don't exercise the activity fields.
  */
-export async function aggregateUsage(
-  turns: UsageTurn[],
-  period: Period,
-  activity: ActivityData
-): Promise<UsageReport> {
-  // `loadPricing` is idempotent — first cold call fetches LiteLLM pricing
-  // and seeds a 24-h FileCache; subsequent calls return immediately.
-  await loadPricing();
-
-  // Classify and cost only assistant turns (user turns have empty model/zero tokens)
-  const assistantTurns = turns.filter((t) => t.role === "assistant");
-  const enriched: { turn: UsageTurn; category: CategoryType; cost: number }[] = [];
-  for (const turn of assistantTurns) {
-    enriched.push({
-      turn,
-      category: classifyTurn(turn),
-      cost: await computeTurnCost(turn),
-    });
-  }
-
+/**
+ * The same aggregation, fed in batches instead of all at once (#515).
+ *
+ * `aggregateUsage` is this with a single `addTurns` call, so the SQL backend's
+ * behaviour is unchanged by construction rather than by inspection. The file
+ * backend feeds one session per call and lets each session's turns go, which is
+ * what removes the corpus from the sweep's peak.
+ *
+ * ## Batches must be session-complete
+ *
+ * Every session-scoped detector here — one-shot tasks, self-correction, tool
+ * transitions — needs a session's turns together. It does NOT need them in the
+ * same batch as any other session's. A caller that split one session across two
+ * `addTurns` calls would see its tasks silently under-counted, so the sweep's
+ * per-session granularity is a requirement, not a convenience.
+ *
+ * Order within a batch is preserved, and batches accumulate in call order, so
+ * feeding sessions in map order produces the same map-insertion order — and
+ * therefore the same tie-breaking in the cost-descending sorts below — as one
+ * flat array did.
+ */
+export function createUsageAccumulator(period: Period) {
   // Single-pass aggregation across all dimensions
   const modelMap = new Map<string, ModelCost>();
   const projectMap = new Map<string, ProjectBreakdown>();
   const categoryMap = new Map<CategoryType, CategoryBreakdown>();
-  /**
-   * Each assistant turn's category, by object identity, so the one-shot walk
-   * below can ask "what was the anchor turn classified as?" without
-   * re-classifying. `classifyTurn` is deterministic, but calling it twice
-   * would make it possible for the spend side and the task side to be
-   * computed under two different classifier versions after a future refactor.
-   */
-  const categoryOfTurn = new Map<UsageTurn, CategoryType>();
   /** Task outcomes per category, keyed by the ANCHOR turn's category (A5). */
   const categoryTasks = new Map<CategoryType, { verified: number; oneShot: number }>();
   const effortMap = new Map<string, EffortBreakdown>();
@@ -350,6 +431,61 @@ export async function aggregateUsage(
   // totals below.
   let subagentCost = 0;
   let subagentTokens = 0;
+
+  /**
+   * Self-correction, accumulated as raw counts rather than as the rates the
+   * detector reports. Rates cannot be merged across batches — averaging them
+   * would weight a one-session batch equally with a thousand-session one — but
+   * `corrected`/`total` add exactly, and the detector already exposes both.
+   */
+  const selfCorrAccum = new Map<string, { corrected: number; total: number }>();
+  /**
+   * The slim projection tool-transition analysis needs: session, timestamp, and
+   * the tool names. Retained for the whole run because the analysis sorts
+   * globally before walking, so it cannot be folded per batch without
+   * reimplementing it — but this holds a few fields per turn instead of the
+   * turn, and the `toolCalls` arrays are the same objects `allToolCalls`
+   * already keeps.
+   */
+  const transitionInputs: { sessionId: string; timestamp: string; toolCalls: ToolCall[] }[] = [];
+  /** DISTINCT sessions seen, for `totalSessions`. Ids only. */
+  const sessionIds = new Set<string>();
+  let assistantTurnCount = 0;
+  // Run-level, because tasks are counted per batch and summed across them.
+  let totalVerified = 0;
+  let totalOneShot = 0;
+
+  async function addTurns(turns: UsageTurn[]): Promise<void> {
+    // `loadPricing` is idempotent — first cold call fetches LiteLLM pricing
+    // and seeds a 24-h FileCache; subsequent calls return immediately.
+    await loadPricing();
+
+    for (const t of turns) sessionIds.add(t.sessionId);
+
+    // Classify and cost only assistant turns (user turns have empty model/zero tokens)
+    const assistantTurns = turns.filter((t) => t.role === "assistant");
+    assistantTurnCount += assistantTurns.length;
+    const enriched: { turn: UsageTurn; category: CategoryType; cost: number }[] = [];
+    for (const turn of assistantTurns) {
+      enriched.push({
+        turn,
+        category: classifyTurn(turn),
+        cost: await computeTurnCost(turn),
+      });
+    }
+
+    /**
+     * Each assistant turn's category, by object identity, so the one-shot walk
+     * below can ask "what was the anchor turn classified as?" without
+     * re-classifying. `classifyTurn` is deterministic, but calling it twice
+     * would make it possible for the spend side and the task side to be
+     * computed under two different classifier versions after a future refactor.
+     *
+     * Per BATCH, not per run: it is only ever consulted for anchor turns in the
+     * same batch, and keeping it for the run would retain every assistant turn
+     * by key — the exact leak #515 exists to remove.
+     */
+    const categoryOfTurn = new Map<UsageTurn, CategoryType>();
 
   for (const { turn, category, cost } of enriched) {
     const tokens = turn.inputTokens + turn.outputTokens + turn.cacheReadTokens + turn.cacheCreateTokens;
@@ -547,22 +683,12 @@ export async function aggregateUsage(
   }
 
 
-  // Top tools (non-MCP)
-  const toolCounts = new Map<string, number>();
-  for (const tc of allToolCalls) {
-    if (!tc.name.startsWith("mcp__")) {
-      toolCounts.set(tc.name, (toolCounts.get(tc.name) || 0) + 1);
-    }
-  }
-
   // Primary (non-subagent) turns for session-scoped detectors. Subagent turns
   // aren't user-verified tasks and their tool flow isn't the developer's, so
   // one-shot and self-correction detection exclude them (A1).
   const primaryTurns = turns.filter((t) => !t.isSidechain);
 
   // One-shot aggregate (needs both user+assistant turns for tool result detection)
-  let totalVerified = 0;
-  let totalOneShot = 0;
   const sessionGroups = new Map<string, UsageTurn[]>();
   for (const t of primaryTurns) {
     const arr = sessionGroups.get(t.sessionId) ?? [];
@@ -620,6 +746,37 @@ export async function aggregateUsage(
       }
     }
   }
+    // Self-correction: run per batch and merge the counts. The detector groups
+    // by session internally, so a session-complete batch yields exactly the
+    // rows a whole-corpus call would have contributed for those sessions.
+    for (const m of detectSelfCorrectionPerModel(primaryTurns).byModel) {
+      const acc = selfCorrAccum.get(m.model) ?? { corrected: 0, total: 0 };
+      acc.corrected += m.corrected;
+      acc.total += m.total;
+      selfCorrAccum.set(m.model, acc);
+    }
+
+    for (const t of assistantTurns) {
+      if (t.isSidechain) continue;
+      transitionInputs.push({
+        sessionId: t.sessionId,
+        timestamp: t.timestamp,
+        toolCalls: t.toolCalls,
+      });
+    }
+  }
+
+  async function finalize(activity: ActivityData): Promise<UsageReport> {
+  // Top tools (non-MCP). Derived from the run's accumulated tool calls, so it
+  // belongs here rather than in a batch — recomputing it per batch would have
+  // thrown away every earlier batch's counts.
+  const toolCounts = new Map<string, number>();
+  for (const tc of allToolCalls) {
+    if (!tc.name.startsWith("mcp__")) {
+      toolCounts.set(tc.name, (toolCounts.get(tc.name) || 0) + 1);
+    }
+  }
+
   for (const eff of effortMap.values()) {
     if (eff.verifiedTasks > 0) eff.oneShotRate = eff.oneShotTasks / eff.verifiedTasks;
   }
@@ -640,21 +797,17 @@ export async function aggregateUsage(
   // Self-correction rate per primary model. The detector groups by
   // sessionId internally and attaches to byModel so the /usage table
   // can render the column without a second join.
-  const selfCorrection = detectSelfCorrectionPerModel(primaryTurns);
-  const selfCorrectionByModel = new Map(
-    selfCorrection.byModel.map((s) => [s.model, s] as const)
-  );
   for (const m of modelMap.values()) {
-    const stats = selfCorrectionByModel.get(m.model);
+    const stats = selfCorrAccum.get(m.model);
     if (stats && stats.total > 0) {
-      m.selfCorrectionRate = stats.rate;
+      // Rate recomputed from the summed counts, never averaged from per-batch
+      // rates — see `selfCorrAccum`.
+      m.selfCorrectionRate = stats.corrected / stats.total;
       m.sessionsAsPrimary = stats.total;
     }
   }
 
-  const toolTransitionData = computeToolTransitions(
-    assistantTurns.filter((t) => !t.isSidechain)
-  );
+  const toolTransitionData = computeToolTransitions(transitionInputs);
 
   // Build projectDetails from accumulators
   const projectDetails: ProjectDetail[] = [...projectDetailAccum.values()]
@@ -690,8 +843,8 @@ export async function aggregateUsage(
     period,
     totalCost,
     totalTokens,
-    totalSessions: new Set(turns.map((t) => t.sessionId)).size,
-    totalTurns: assistantTurns.length,
+    totalSessions: sessionIds.size,
+    totalTurns: assistantTurnCount,
     tokens: { input: totalInput, output: totalOutput, cacheRead: totalCacheRead, cacheWrite: totalCacheWrite },
     cacheHitRate,
     oneShot: {
@@ -770,4 +923,25 @@ export async function aggregateUsage(
     subagentCost,
     subagentTokens,
   };
+  }
+
+  return { addTurns, finalize };
+}
+
+/**
+ * Pure aggregation over a pre-filtered set of turns, resident all at once.
+ *
+ * The single-batch shape of `createUsageAccumulator`. Kept because the SQL
+ * backend hands in turns rehydrated from SQLite and the tests exercise this
+ * signature — and because expressing it in terms of the accumulator is what
+ * guarantees the two cannot drift.
+ */
+export async function aggregateUsage(
+  turns: UsageTurn[],
+  period: Period,
+  activity: ActivityData
+): Promise<UsageReport> {
+  const acc = createUsageAccumulator(period);
+  await acc.addTurns(turns);
+  return acc.finalize(activity);
 }
