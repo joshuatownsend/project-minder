@@ -33,6 +33,7 @@ import {
   endSweepFailureCycle,
   recordSweepFailure,
   directoryExists,
+  pathEntryExists,
 } from "@/lib/sweepFailures";
 
 const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50MB
@@ -792,13 +793,25 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
       // So ENOENT counts only when the HOME itself is gone — a moved or
       // unmounted home, which is a real gap. One extra `stat`, on a path that
       // has already failed, so it costs nothing in the normal case.
+      //
+      // And `projects/` must be absent as an ENTRY, not merely unreadable.
+      // Checking the home alone let a `projects` SYMLINK pointing at a
+      // disconnected drive read as a fresh install: `readdir` gives ENOENT,
+      // the home is right there, and the one case a user most needs told about
+      // was reported as healthy. `pathEntryExists` uses `lstat`, which sees the
+      // broken link (Codex P2, PR #527).
       const code = (err as NodeJS.ErrnoException)?.code;
-      if (code === "ENOENT" && (await directoryExists(home))) {
+      const projectsDir = path.join(home, "projects");
+      if (
+        code === "ENOENT" &&
+        (await directoryExists(home)) &&
+        !(await pathEntryExists(projectsDir))
+      ) {
         // Home present, no `projects/` yet: nothing has been recorded, and
         // nothing is missing.
       } else {
         recordSweepFailure({
-          path: path.join(home, "projects"),
+          path: projectsDir,
           scope: "projects-dir",
           code,
           sweep: "usage",

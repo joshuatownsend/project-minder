@@ -58,6 +58,7 @@ import {
   endSweepFailureCycle,
   recordSweepFailure,
   directoryExists,
+  pathEntryExists,
 } from "@/lib/sweepFailures";
 
 export interface ConversationEntry {
@@ -869,17 +870,44 @@ export async function scanAllSessions(): Promise<SessionSummary[]> {
   // them took time.
   const now = Date.now();
 
-  for (const home of homes) {
-    const projectsDir = path.join(home, "projects");
-    let dirs: string[];
-    try {
-      dirs = await fs.readdir(projectsDir);
-    } catch {
-      // No projects tree in this home — the next one may still have one.
-      continue;
+  // Opened here rather than around the whole function: everything above is
+  // config reading, and a cycle spanning it would republish an empty result for
+  // a caller that bailed before touching the filesystem.
+  beginSweepFailureCycle("sessions");
+  try {
+    for (const home of homes) {
+      const projectsDir = path.join(home, "projects");
+      let dirs: string[];
+      try {
+        dirs = await fs.readdir(projectsDir);
+      } catch (err) {
+        // Recorded, not merely skipped (#513). This reader is reached from
+        // `data/index.ts` on the file backend AND on the first-reconcile
+        // fallback, so on a fresh process where a session-list request meets an
+        // unreadable project and no usage scan has run, discarding the error
+        // here let `/api/claude-homes` answer `complete: true` over a corpus
+        // that was visibly short. (Codex P2, PR #527.)
+        //
+        // Same ENOENT disambiguation as the other two sites: a fresh install
+        // has no `projects/` yet and must not warn, but a dangling symlink
+        // must.
+        const code = (err as NodeJS.ErrnoException)?.code;
+        const benign =
+          code === "ENOENT" &&
+          (await directoryExists(home)) &&
+          !(await pathEntryExists(projectsDir));
+        if (!benign) {
+          recordSweepFailure({
+            path: projectsDir,
+            scope: "projects-dir",
+            code,
+            sweep: "sessions",
+          });
+        }
+        continue;
+      }
+      await scanOneHome(projectsDir, dirs, sessions, liveSet, now);
     }
-    await scanOneHome(projectsDir, dirs, sessions, liveSet, now);
-  }
 
   // Non-Claude harnesses, merged the way `mergeAdapterSessions` merges into
   // `buildAllSessions` (#489). Runs INSIDE the sweep so its files land in
@@ -893,12 +921,17 @@ export async function scanAllSessions(): Promise<SessionSummary[]> {
   // no longer exists.
   getScanCache().retainOnly(liveSet);
 
-  // Sort by most recent activity (endTime) so active sessions appear first
-  sessions.sort((a, b) => {
-    const ta = a.endTime ? new Date(a.endTime).getTime() : 0;
-    const tb = b.endTime ? new Date(b.endTime).getTime() : 0;
-    return tb - ta;
-  });
+    // Sort by most recent activity (endTime) so active sessions appear first
+    sessions.sort((a, b) => {
+      const ta = a.endTime ? new Date(a.endTime).getTime() : 0;
+      const tb = b.endTime ? new Date(b.endTime).getTime() : 0;
+      return tb - ta;
+    });
+  } finally {
+    // `finally`, as at the other two cycle sites: a sweep that threw part way
+    // through still reports what it managed to observe.
+    endSweepFailureCycle("sessions");
+  }
 
   return sessions;
 }
@@ -1189,8 +1222,19 @@ async function scanOneHome(
           }
         }
       }
-    } catch {
-      // Skip inaccessible directories
+    } catch (err) {
+      // Skipped, and now also recorded (#513). A project directory nobody can
+      // list drops that project's whole session history from the list, which is
+      // exactly the "figures are missing rather than zero" case the banner
+      // exists to name. No ENOENT special-case here: this path came back from a
+      // `readdir` of the parent moments ago, so its absence is a genuine change
+      // underfoot rather than a fresh install.
+      recordSweepFailure({
+        path: dirPath,
+        scope: "project-dir",
+        code: (err as NodeJS.ErrnoException)?.code,
+        sweep: "sessions",
+      });
     }
   }
 }
@@ -1854,9 +1898,19 @@ async function scanConversationDirs(
     // install has a home and no `projects/` until the first session is
     // written. It counts only when the HOME itself is gone (Codex P2 +
     // Copilot, PR #527).
+    //
+    // And `projects/` must be absent as an ENTRY — see the identical check in
+    // `usage/parser.ts`. A `projects` symlink onto a disconnected drive fails
+    // `readdir` with ENOENT while the home sits right there, so checking the
+    // home alone reported the one genuinely broken case as a fresh install
+    // (Codex P2, PR #527).
     const code = (err as NodeJS.ErrnoException)?.code;
     const home = path.dirname(projectsDir);
-    if (!(code === "ENOENT" && (await directoryExists(home)))) {
+    const benign =
+      code === "ENOENT" &&
+      (await directoryExists(home)) &&
+      !(await pathEntryExists(projectsDir));
+    if (!benign) {
       recordSweepFailure({
         path: projectsDir,
         scope: "projects-dir",

@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A directory Minder could not read no longer passes as one with nothing in it** (#513). Every sweep over `~/.claude/projects` swallowed its `readdir` failures — a permissions problem, a moved home, a `projects` path that is a file — and carried on. The affected project's sessions, tokens and cost then read as **zero rather than missing**, which is indistinguishable from a quiet week, and `/api/claude-homes` answered `complete: true` over a corpus it had visibly failed to enumerate.
+
+  Failures are now collected per sweep and surfaced: `/api/claude-homes` gains `degraded` (the paths and reasons) and `degradedTotal`, and the existing banner names the directories rather than only the homes Minder deliberately skipped. `complete` now means what it says.
+
+  The collector is **double-buffered**: the previous cycle's result stays readable while the next sweep runs, so a poll landing mid-sweep sees the last complete answer instead of an empty one that reads as "all clear". Overlapping cycles of the same sweep share one result rather than truncating each other, detail is capped at 50 entries while `degradedTotal` stays uncapped, and the record is cleared only by a config change that can actually move the swept set — `claudeHomes`, `pathMappings`, `enabledAdapters` — not by every write, which would erase a live fault on a keyboard-shortcut change.
+
+  **A fresh install is not degraded.** A home with no `projects/` yet is every machine before its first session, so that case stays silent — but only when the directory is genuinely absent. A `projects` **symlink onto a disconnected drive** fails `readdir` with the same `ENOENT` while the home sits right there, so the check asks `lstat` about the path itself; the one genuinely broken case used to be reported as healthy.
+
 ### Changed
 
 - **The session-parse cache is bounded by memory, not by entry count** (#476). `FileCache` capped itself at 25,000 entries while each slot holds one transcript's whole parsed `UsageTurn[]` — and transcript sizes span orders of magnitude, so the cap said nothing about memory. Measured on the reference corpus: 5,498 files, 2.51 GB of JSONL, with **160 files (2.4%) holding 50% of the bytes** (p50 160 KB, p99 6.7 MB, max 72 MB). Parsed turns retain **≈2.0× the source bytes** in heap, so the whole corpus parsed at once is **≈5.0 GB** — past Node's default ~4 GB old-space limit. With the cap four times larger than the corpus, nothing was evicting at all.

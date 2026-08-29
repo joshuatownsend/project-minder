@@ -246,6 +246,28 @@ export function describeSweepFailure(failure: SweepFailure): string {
  * install. ENOENT counts only when the HOME itself is gone — a moved or
  * unmounted home, which is a real gap (Codex P2 + Copilot, PR #527).
  */
+/**
+ * Does a directory ENTRY exist at this path — even a broken one?
+ *
+ * `lstat`, deliberately, and this is the whole point: `readdir` on a symlink
+ * pointing at a disconnected drive or an unmounted filesystem fails with
+ * ENOENT, exactly as it does on a path that was never created. Anything that
+ * `stat`s (or checks the PARENT and infers) reads those two as the same thing
+ * and calls the broken one healthy — which is the case the sweep-failure
+ * record exists to surface (Codex P2, PR #527).
+ *
+ * `lstat` does not follow the link, so it succeeds on the dangling one and
+ * fails only when there is genuinely nothing there.
+ */
+export async function pathEntryExists(target: string): Promise<boolean> {
+  try {
+    await fsPromises.lstat(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function directoryExists(dir: string): Promise<boolean> {
   try {
     const st = await fsPromises.stat(dir);

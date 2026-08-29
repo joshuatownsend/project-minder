@@ -75,6 +75,13 @@ function anyStopped(homes: UnavailableHome[]): boolean {
 export function UnavailableHomesBanner() {
   const [homes, setHomes] = useState<UnavailableHome[]>([]);
   const [degraded, setDegraded] = useState<DegradedPath[]>([]);
+  // Separate from `degraded.length`, which is CAPPED at 50 detail entries. On a
+  // broad fault — a permissions problem near the root of a large tree — the
+  // banner used the array length and told the user that exactly 50 locations
+  // failed, understating it in precisely the case where the number matters
+  // most. The API already returns the uncapped figure; this reads it.
+  // (Codex P2, PR #527, round 4.)
+  const [degradedTotal, setDegradedTotal] = useState(0);
   const [allowRender, setAllowRender] = useState(false);
 
   useEffect(() => {
@@ -92,6 +99,7 @@ export function UnavailableHomesBanner() {
             data: {
               unavailable?: UnavailableHome[];
               degraded?: DegradedPath[];
+              degradedTotal?: number;
             } | null
           ) => {
             // A failed poll leaves the last good answer in place rather than
@@ -106,6 +114,10 @@ export function UnavailableHomesBanner() {
             // keeps its truthiness check because a missing key there means an
             // older server, not a recovery.
             if (data) setDegraded(data.degraded ?? []);
+            // Falls back to the detail length for an older server that does not
+            // send the field — which is what the banner used to show anyway, so
+            // the fallback is the previous behaviour rather than a new guess.
+            if (data) setDegradedTotal(data.degradedTotal ?? (data.degraded ?? []).length);
           }
         )
         .catch(() => {});
@@ -129,9 +141,9 @@ export function UnavailableHomesBanner() {
       ? homes.length === 1
         ? "One Claude home is unavailable"
         : `${homes.length} Claude homes are unavailable`
-      : degraded.length === 1
+      : degradedTotal === 1
         ? "Part of your history could not be read"
-        : `${degraded.length} locations could not be read`;
+        : `${degradedTotal} locations could not be read`;
 
   return (
     <div
@@ -188,9 +200,9 @@ export function UnavailableHomesBanner() {
                 not actionable; the directory and the reason are. Capped,
                 because a tree with a broken ACL near the root produces many
                 and the first few are what a reader needs. */}
-            Could not read {degraded.length === 1 ? "" : `${degraded.length} locations, including `}
+            Could not read {degradedTotal === 1 ? "" : `${degradedTotal} locations, including `}
             {degraded.slice(0, 3).map((d) => `${d.path} (${d.reason})`).join("; ")}
-            {degraded.length > 3 && ", and others"}. Figures from the affected
+            {degradedTotal > 3 && ", and others"}. Figures from the affected
             projects are missing rather than zero.
           </div>
         )}

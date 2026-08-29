@@ -260,23 +260,13 @@ describe("clearing on a configuration change", () => {
   beforeEach(() => clearSweepFailures());
   afterEach(() => clearSweepFailures());
 
-  it("is wired into the config route's invalidation", async () => {
-    // Removing an unreachable extra home must stop it being reported. Nothing
-    // else clears the record — the next sweep would simply not re-record it,
-    // but until that sweep finishes the homes endpoint keeps naming a path the
-    // user has already dealt with, which reads as "the fix did not work"
-    // (Codex P2, PR #527).
-    //
-    // Source-level, because the failure mode is a MISSING CALL and the
-    // behaviour itself is already covered by `clearSweepFailures`'s own test.
-    const { readFile } = await import("node:fs/promises");
-    const route = await readFile("src/app/api/config/route.ts", "utf-8");
-    const fn = route.slice(
-      route.indexOf("function invalidateAll()"),
-      route.indexOf("function invalidateAll()") + 2500
-    );
-    expect(fn).toMatch(/clearSweepFailures\(\)/);
-  });
+  // The "is it wired into the config route" assertion used to live here, and
+  // pinned the call inside `invalidateAll()` — which turned out to be the wrong
+  // place: every config write calls that, including ones that cannot change
+  // which paths get swept, so it erased a live record of an unreadable corpus.
+  // It now lives in `sweepFailuresRound4.test.ts`, asserting BOTH halves (not
+  // in `invalidateAll`, and present in the `corpusShapeChanged` guard) rather
+  // than only that the call exists somewhere nearby.
 
   it("discards both the published and the in-flight record", () => {
     beginSweepFailureCycle("usage");

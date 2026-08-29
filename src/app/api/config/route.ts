@@ -29,12 +29,6 @@ const VALID_SCHEDULE_MODES = SCHEDULE_MODES.map((m) => m.value);
 
 function invalidateAll() {
   invalidateCache();
-  // #513: the sweep-failure record describes the PREVIOUS configuration. If a
-  // user removes an unreachable extra home, nothing else clears it — the next
-  // sweep simply would not re-record it, but until that sweep finishes the
-  // homes endpoint keeps naming a path they have already dealt with, which
-  // reads as "the fix did not work" (Codex P2, PR #527).
-  clearSweepFailures();
   invalidateClaudeConfigRouteCache();
   // Every route cache, not just the two named above — this is the
   // "feature-flag-flip hook" `disposeAllRouteCaches` was written for.
@@ -504,6 +498,22 @@ export async function PATCH(request: NextRequest) {
   // both so the next request recomputes over the new corpus instead of serving
   // the old data for the rest of their TTLs (5 min / 10 min).
   if (corpusShapeChanged) {
+    // #513: the sweep-failure record describes the PREVIOUS configuration. If a
+    // user removes an unreachable extra home, nothing else clears it — the next
+    // sweep simply would not re-record it, but until that sweep finishes the
+    // homes endpoint keeps naming a path they have already dealt with, which
+    // reads as "the fix did not work" (Codex P2, PR #527).
+    //
+    // Gated on `corpusShapeChanged` rather than run from `invalidateAll`, where
+    // it started. Every successful config write calls that function — a
+    // keyboard shortcut, a port override, hiding a project — and none of those
+    // can change which paths get swept, so clearing there ERASED a live record
+    // of an unreadable corpus and left `/api/claude-homes` answering
+    // `complete: true` until whichever sweep owned it happened to run again.
+    // The three flags that set `corpusShapeChanged` (`claudeHomes`,
+    // `pathMappings`, `enabledAdapters`) are exactly the ones that move the
+    // swept set. (Codex P2, PR #527, round 4.)
+    clearSweepFailures();
     efficiencyGradeCache.invalidateGrades();
     invalidateClaudeUsageCache();
     invalidateSessionCategoryCounts();
