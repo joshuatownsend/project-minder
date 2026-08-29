@@ -960,6 +960,36 @@ const MIGRATIONS: Migration[] = [
       ).run();
     },
   },
+  {
+    version: 29,
+    name: "index sessions.derived_version so the mixed-derivation check is free (#478)",
+    up: (db) => {
+      // "Do the rows agree about which formula derived them" has to be asked
+      // per request, and it has to be asked of the DATABASE — the reconcile
+      // runs in a worker thread (`workers/ingestWorker.mjs`) whose `globalThis`
+      // is isolated from the HTTP server's, so no in-process flag or memo can
+      // carry the answer across (Codex P1, PR #525).
+      //
+      // Without an index, `SELECT DISTINCT derived_version ... LIMIT 2` scans
+      // every row whenever the answer is "they agree" — the common case.
+      // MEASURED on a copy of the reference index (6,944 sessions):
+      //
+      //   before   16.1 ms/call
+      //   after     0.555 ms/call
+      //
+      // 29x, on a query that now runs per request. That cost is what drove
+      // three failed attempts to cache the answer instead — a memo, then
+      // boundary invalidation, then a live flag — each defeated by a different
+      // window, and the last by process isolation.
+      //
+      // With the index it reads at most two keys. No cache, no window, nothing
+      // to invalidate, and correct across processes because the evidence is the
+      // shared file rather than either process's memory.
+      db.prepare(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_derived_version ON sessions(derived_version)"
+      ).run();
+    },
+  },
 ];
 
 /**

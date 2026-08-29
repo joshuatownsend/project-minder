@@ -894,3 +894,9 @@ CREATE TABLE home_properties (
   case_sensitive INTEGER,
   probed_at      TEXT NOT NULL
 );
+
+-- Makes the mixed-derivation check (#478) an index probe rather than a full
+-- scan. That check runs per request and cannot be cached: the reconcile lives
+-- in a worker thread whose memory the HTTP server does not share, so the
+-- database is the only place the answer can be read from. Mirrors migration v29.
+CREATE INDEX idx_sessions_derived_version ON sessions(derived_version);

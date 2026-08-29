@@ -1,6 +1,7 @@
 import "server-only";
 import type DatabaseT from "better-sqlite3";
 import { resolveIngestMode } from "./ingestMode";
+import { DERIVED_VERSION } from "./derivationVersion";
 
 // Whether the index has finished populating, recorded as a fact in the index
 // itself rather than inferred by whoever happens to be asking.
@@ -39,6 +40,21 @@ export type IndexBuildState = "building" | "ready";
  * recovery path open forever at a fixed storage cost.
  */
 const ABORTED_RUN_KEEP_LIMIT = 20;
+
+/**
+ * Completed `'rebuild'` rows to keep.
+ *
+ * Bounded for the same reason aborted runs are, and by the same means: a state
+ * this build cannot resolve keeps every sweep recording. A stale row left by a
+ * permanently unparseable file is the case — the pass runs, fails on that one
+ * file, closes its run, and the next sweep sees staleness again.
+ *
+ * Capping the RECORDING instead would be wrong for the reason
+ * `ABORTED_RUN_KEEP_LIMIT` gives: the sweep that finally succeeds still has to
+ * be free to record, however long the fault lasted. Pruning holds the table
+ * flat without taking that away.
+ */
+const REBUILD_RUN_KEEP_LIMIT = 20;
 
 /**
  * Open a run row and return its id.
@@ -193,9 +209,168 @@ export function hasCompletedFullReconcile(db: DatabaseT.Database): boolean {
  * Self-limiting: recording stops as soon as one non-aborted pass exists, so the
  * steady state is still zero rows per sweep.
  */
+/**
+ * Do the index's rows disagree about which formula derived them? (#478)
+ *
+ * ## The question is COEXISTENCE, not staleness
+ *
+ * The first version asked "is any row older than this build" — `<
+ * DERIVED_VERSION` — reasoning that rows from a NEWER build are ones this build
+ * cannot rewrite, so calling them stale would mean a rebuild state that never
+ * ends.
+ *
+ * That holds only when the newer rows are the WHOLE corpus. A newer build that
+ * re-derived part of it before the app rolled back leaves current and newer
+ * versions side by side, `isNewerDerivation` deliberately stops the older
+ * watcher rewriting the newer half, and the five aggregates then serve a
+ * mixture of formulas permanently (Codex P2, PR #525).
+ *
+ * Asking whether more than one version is PRESENT covers every case, and needs
+ * no comparison against the current build at all:
+ *
+ *   uniformly current   one value   consistent — serve it
+ *   uniformly older     one value   consistent, merely derived under the old
+ *                                   formula; the rebuild will move it
+ *   mid-rebuild         two values  MIXED — divert
+ *   rollback remnant    two values  MIXED, and permanently so — divert
+ *   uniformly newer     one value   consistent; nothing this build can or
+ *                                   should do, and no endless rebuild state
+ *
+ * It also retires the `<`-versus-`!=` question that produced the bug, and with
+ * it the need for tests to know what `DERIVED_VERSION` currently is.
+ *
+ * ## Cost
+ *
+ * SQLite stops as soon as it has two distinct values, so the MIXED case — the
+ * one where the answer matters — is cheap. The uniform case is a scan, ~24 ms
+ * on a 6,602-session index, which is why the caller memoizes rather than asking
+ * per request.
+ */
+export function hasMixedDerivations(db: DatabaseT.Database): boolean {
+  try {
+    const rows = db
+      .prepare("SELECT DISTINCT derived_version FROM sessions LIMIT 2")
+      .all() as Array<{ derived_version: number }>;
+    // MIXED: the rows disagree, so any aggregate over them spans two formulas.
+    if (rows.length > 1) return true;
+    // UNIFORMLY STALE still counts. `derivationVersion.ts` defines those rows
+    // as INVALIDATED — "the session is fully re-parsed even when its file mtime
+    // hasn't changed" — so serving them is serving figures this build has
+    // already declared wrong, consistent though they are with each other
+    // (Codex P2, PR #525).
+    //
+    // Directional, exactly as that file requires: "'Stale' means
+    // `stored < DERIVED_VERSION`, never `stored !== DERIVED_VERSION`." A row
+    // stamped ABOVE this build was written by one that knows more, and this
+    // build has nothing better to offer for it — so a uniformly newer index is
+    // left alone rather than diverted forever.
+    return rows.length === 1 && rows[0].derived_version < DERIVED_VERSION;
+  } catch {
+    // Unreadable: do not claim a rebuild. A predicate that cannot read its own
+    // evidence must not be the thing that diverts every aggregate to the slower
+    // path — the same fail-open rule `hasCompletedFullReconcile` states.
+    return false;
+  }
+}
+
+/**
+ * Is the index mid-re-derivation? (#478)
+ *
+ * Asked of the DATABASE, every time, with nothing cached.
+ *
+ * ## Why nothing is cached
+ *
+ * Three attempts at caching this failed, each to a different window, and the
+ * last one to a wall (Codex P1 x4, PR #525):
+ *
+ *  1. a 30-second memo — cached "clean" moments before a rebuild started;
+ *  2. clearing it at the reconcile's edges — the pass awaits pricing, config
+ *     and home discovery before its first write, so a request landing in that
+ *     gap re-cached "clean" anyway;
+ *  3. a live flag set when the first row is re-derived — correct in-process,
+ *     and INVISIBLE in the packaged default, because reconciliation runs in
+ *     `workers/ingestWorker.mjs`, whose `globalThis` the HTTP server does not
+ *     share.
+ *
+ * The third is the one that settles it. Any signal that lives in a process's
+ * memory cannot answer a question about work another process is doing. The
+ * shared database is the only evidence both sides can see, so that is what this
+ * reads — and once it must be read per request, caching it is what created
+ * every one of those windows.
+ *
+ * ## Why that is affordable
+ *
+ * `idx_sessions_derived_version` (migration v29). With it, `DISTINCT ... LIMIT
+ * 2` reads at most two index keys instead of scanning every row to prove they
+ * all agree. Measured on a copy of the reference index (6,944 sessions):
+ * 16.1 ms/call before, 0.555 ms/call after.
+ *
+ * The index is what the issue said mechanism A would need. It is also simpler
+ * and cheaper than the three caches that were tried to avoid adding it.
+ */
+export function isRebuildInProgress(db: DatabaseT.Database): boolean {
+  // Two conditions, and the second one is not redundant.
+  //
+  // `hasMixedDerivations` goes false the instant the last session transaction
+  // commits — but `reconcileAllSessions` refreshes the accumulated
+  // `daily_costs` and `category_costs` tuples AFTER that, so for the length of
+  // that tail every `derived_version` agrees while the rollups the aggregates
+  // read do not yet (Codex P1, PR #525).
+  //
+  // An OPEN `'rebuild'` run covers exactly that tail, and it lives in the
+  // database — which is the property every in-process signal lacked: the
+  // reconcile runs in `workers/ingestWorker.mjs`, whose memory the HTTP server
+  // does not share.
+  return hasMixedDerivations(db) || hasOpenRebuildRun(db);
+}
+
+/**
+ * Is a pass that found stale rows still running?
+ *
+ * Recorded by `recordOptionForSweep` when it sees staleness, and closed in
+ * `reconcileAllSessions`'s `finally` — so it spans the rollup refresh as well
+ * as the session loop.
+ *
+ * NOT a substitute for the row check. A run row says a pass is in flight; it
+ * says nothing about an index left mixed by a crash, a rollback, or a build
+ * that never re-derived at all. The row check answers those and this answers
+ * the tail; neither covers the other.
+ */
+function hasOpenRebuildRun(db: DatabaseT.Database): boolean {
+  try {
+    const row = db
+      .prepare(
+        `SELECT 1 AS ok FROM indexer_runs
+          WHERE finished_at_ms IS NULL AND kind = 'rebuild'
+          LIMIT 1`
+      )
+      .get() as { ok?: number } | undefined;
+    return !!row?.ok;
+  } catch {
+    return false;
+  }
+}
+
 export function recordOptionForSweep(
   db: DatabaseT.Database
 ): { recordRun?: IndexerRunKind } {
+  // A pass that will RE-DERIVE records itself as a `'rebuild'`, so the gate
+  // stays up through the rollup refresh that follows the last session stamp —
+  // see `isRebuildInProgress`. Regardless of readiness, which stays true across
+  // a `DERIVED_VERSION` bump and would otherwise skip exactly this case.
+  //
+  // Gated on REWRITABLE staleness, not on `hasMixedDerivations`. A rollback
+  // remnant — current rows beside newer ones — is mixed forever and there is
+  // nothing this build can do about it, so recording a run for it every 30 s
+  // would be pure accumulation with no tail to cover (Codex P2, PR #525).
+  //
+  // Not while one is open, so a rebuild spanning many sweeps adds one row
+  // rather than one per sweep. And pruned, because a stale row left by a
+  // permanently unparseable file keeps every sweep eligible.
+  if (hasRewritableStaleRows(db) && !hasOpenRebuildRun(db)) {
+    pruneRebuildRuns(db);
+    return { recordRun: "rebuild" };
+  }
   if (hasCompletedFullReconcile(db)) return {};
   // Bounded — by pruning, not by giving up. A sweep records every 30 s while
   // readiness is unestablished, which is ~2,880 rows a day if enumeration keeps
@@ -214,6 +389,42 @@ export function recordOptionForSweep(
  * Never touches a completed row: those are the readiness evidence, and there is
  * at most one that matters anyway (recording stops the moment one exists).
  */
+/**
+ * Are there rows this build can actually rewrite?
+ *
+ * `< DERIVED_VERSION`, the directional rule from `derivationVersion.ts`. Rows
+ * ABOVE this build are not rewritable and never will be by it, which is
+ * precisely why a rollback remnant must not keep starting rebuild passes.
+ */
+function hasRewritableStaleRows(db: DatabaseT.Database): boolean {
+  try {
+    const row = db
+      .prepare("SELECT 1 AS ok FROM sessions WHERE derived_version < ? LIMIT 1")
+      .get(DERIVED_VERSION) as { ok?: number } | undefined;
+    return !!row?.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Keep only the newest `REBUILD_RUN_KEEP_LIMIT` completed rebuild rows. */
+function pruneRebuildRuns(db: DatabaseT.Database): void {
+  try {
+    db.prepare(
+      `DELETE FROM indexer_runs
+        WHERE kind = 'rebuild'
+          AND finished_at_ms IS NOT NULL
+          AND id NOT IN (
+            SELECT id FROM indexer_runs
+             WHERE kind = 'rebuild' AND finished_at_ms IS NOT NULL
+             ORDER BY id DESC LIMIT ?
+          )`
+    ).run(REBUILD_RUN_KEEP_LIMIT);
+  } catch {
+    /* housekeeping must not destabilize ingest */
+  }
+}
+
 function pruneAbortedRuns(db: DatabaseT.Database): void {
   try {
     db.prepare(
