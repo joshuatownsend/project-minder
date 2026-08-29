@@ -238,17 +238,53 @@ describe("the usage sweep reports its own failures", () => {
     expect(read()).toHaveLength(0);
   });
 
-  it("DOES report a home that is gone entirely", async () => {
-    // The other side of the same ENOENT. Nothing is created under `tmpHome`, so
-    // the home itself is missing — a moved or unmounted home, which is a real
-    // gap rather than an empty one.
+  it("does NOT report an absent primary home", async () => {
+    // Nothing is created under `tmpHome`, so `~/.claude` itself is missing.
+    //
+    // This test used to assert the opposite, and the rule it encoded was wrong.
+    // The primary home is added to the sweep whether or not it exists, so on a
+    // fresh machine — or one that only ever ran Codex or Gemini — it is absent
+    // and that is a VALID state, not lost coverage. Warning there would put a
+    // permanent banner on a machine with nothing wrong with it, which is the
+    // same failure the fresh-install case above exists to prevent, one level
+    // up. `ingest.ts` already treated it this way. (Codex P2, PR #527.)
     const { streamAllSessions } = await import("@/lib/usage/parser");
     const { getSweepFailures: read } = await import("@/lib/sweepFailures");
 
     await streamAllSessions(async () => {});
-    const failures = read();
-    expect(failures.length).toBeGreaterThan(0);
-    expect(failures[0].scope).toBe("projects-dir");
+    expect(read()).toHaveLength(0);
+  });
+
+  it("DOES report a CONFIGURED home that is gone entirely", async () => {
+    // The real gap, and what the test above was reaching for: a home the user
+    // explicitly added is history the sweep was expected to read. Its absence
+    // means coverage was lost, where the primary's absence means there was
+    // never anything there.
+    const missing = path.join(tmpHome, "moved-away", ".claude");
+    const stateDir = path.join(tmpHome, ".minder-state");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, ".minder.json"),
+      JSON.stringify({ claudeHomes: [missing] })
+    );
+
+    const prevStateDir = process.env.MINDER_STATE_DIR;
+    process.env.MINDER_STATE_DIR = stateDir;
+    try {
+      vi.resetModules();
+      const { streamAllSessions } = await import("@/lib/usage/parser");
+      const { getSweepFailures: read } = await import("@/lib/sweepFailures");
+
+      await streamAllSessions(async () => {});
+      const failures = read();
+      expect(failures.length).toBeGreaterThan(0);
+      expect(failures[0].scope).toBe("projects-dir");
+      // The CONFIGURED one, not the (absent, benign) primary.
+      expect(failures.some((f) => f.path.startsWith(missing))).toBe(true);
+    } finally {
+      if (prevStateDir === undefined) delete process.env.MINDER_STATE_DIR;
+      else process.env.MINDER_STATE_DIR = prevStateDir;
+    }
   });
 
   it("reports nothing when the tree reads cleanly", async () => {

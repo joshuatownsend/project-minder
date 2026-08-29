@@ -53,6 +53,7 @@ import { isWorktreeEncodedDir } from "./worktreeCheck";
 import { FileCache } from "../usage/cache";
 import type { SessionFile } from "../adapters/types";
 import type { MinderConfig } from "../types";
+import { homeDedupeKey, getPrimaryClaudeHome } from "@/lib/claudeHome";
 import {
   beginSweepFailureCycle,
   endSweepFailureCycle,
@@ -898,10 +899,17 @@ export async function scanAllSessions(): Promise<SessionSummary[]> {
         // Same ENOENT disambiguation as the other two sites: a fresh install
         // has no `projects/` yet and must not warn, but a dangling symlink
         // must.
+        // An absent PRIMARY home is benign: `~/.claude` is always swept whether
+        // or not it exists, so on a fresh machine — or one that only ever ran
+        // Codex or Gemini — it is missing and that is a valid state. Only a
+        // home the user explicitly CONFIGURED going missing means history the
+        // sweep was expected to read. (Codex P2, PR #527.)
         const code = (err as NodeJS.ErrnoException)?.code;
+        const isImplicitPrimary =
+          homeDedupeKey(home) === homeDedupeKey(getPrimaryClaudeHome());
         const benign =
           code === "ENOENT" &&
-          (await directoryExists(home)) &&
+          ((await directoryExists(home)) || isImplicitPrimary) &&
           !(await pathEntryExists(projectsDir));
         if (!benign) {
           recordSweepFailure(
