@@ -26,10 +26,32 @@ async function read(rel: string): Promise<string> {
   return fs.readFile(path.join(COMPONENTS, rel), "utf-8");
 }
 
+/**
+ * Is the explanation reachable without a mouse?
+ *
+ * Two shapes count, and the difference is #391's whole point:
+ *
+ *  - **`<Tooltip>`** — one element, associated by `aria-describedby`, opened by
+ *    hover, focus AND tap. This is the target shape.
+ *  - **`.sr-only` + `aria-hidden`** — #390's answer. It reaches screen readers
+ *    and leaves sighted keyboard and touch users exactly where they were, so it
+ *    is accepted only while the remaining chips are migrated.
+ *
+ * Accepting both is deliberate: a migration that had to land in one commit
+ * across eleven components would be a worse change than one that can go chip by
+ * chip with the guard holding the line behind it.
+ */
+function usesPrimitive(src: string, anchor: string, window = 1400): boolean {
+  const i = src.indexOf(anchor);
+  if (i === -1) return false;
+  return /<Tooltip[\s>]/.test(src.slice(i, i + window));
+}
+
 /** Does the region following `anchor` pair `.sr-only` with `aria-hidden`? */
 function hasAccessiblePair(src: string, anchor: string, window = 1400): boolean {
   const i = src.indexOf(anchor);
   if (i === -1) return false;
+  if (usesPrimitive(src, anchor, window)) return true;
   const region = src.slice(i, i + window);
   // Match the rendered class attribute, not the bare substring: the word
   // "sr-only" now appears in explanatory comments next to several of these
@@ -77,10 +99,15 @@ describe("#380 — load-bearing tooltips are reachable without a mouse", () => {
     // The shared chip renders `compaction loop`, `tool fail streak` and
     // `resume anomaly` — jargon whose entire meaning lived in `title`. Fixing
     // the shared component covers every call site at once.
-    // Anchored on the attribute itself rather than the function declaration:
-    // the region between them is prose, and a comment growing there should not
-    // decide whether this test passes.
-    expect(hasAccessiblePair(src, "      title={title}", 900)).toBe(true);
+    // Migrated to the primitive (#391), so this asserts the stronger property:
+    // the explanation reaches keyboard and touch users too. Anchored on the
+    // function declaration now that the `title` attribute it used to anchor on
+    // is gone.
+    const at = src.indexOf("function QualityChip(");
+    expect(at).toBeGreaterThan(-1);
+    expect(src.slice(at, at + 2200)).toMatch(/<Tooltip[\s>]/);
+    // The mouse-only attribute is gone rather than merely supplemented.
+    expect(src).not.toContain("      title={title}");
   });
 
   it("the git 'status unavailable' caveat is not mouse-only", async () => {
@@ -92,7 +119,12 @@ describe("#380 — load-bearing tooltips are reachable without a mouse", () => {
     // Anchored on the call site, not the message text: the explanation is now a
     // shared constant declared at the top of the file, so matching the literal
     // found the declaration and looked at the wrong 900 characters.
-    expect(hasAccessiblePair(src, "title={GIT_STATUS_UNKNOWN_EXPLANATION}", 900)).toBe(true);
+    // Migrated to the primitive (#391), so this asserts the stronger property
+    // rather than the transitional one: the explanation reaches keyboard and
+    // touch users too, not only screen readers.
+    expect(src).toMatch(/<Tooltip[\s\S]{0,120}GIT_STATUS_UNKNOWN_EXPLANATION/);
+    // And the mouse-only attribute is gone rather than merely supplemented.
+    expect(src).not.toContain("title={GIT_STATUS_UNKNOWN_EXPLANATION}");
   });
 
   it("the effort mix explains why it does not sum to the turn count", async () => {
@@ -129,7 +161,9 @@ describe("#380 — load-bearing tooltips are reachable without a mouse", () => {
     const compactStart = src.indexOf("export function GitStatusCompact");
     expect(compactStart).toBeGreaterThan(-1);
     const compact = src.slice(compactStart);
-    expect(compact).toMatch(/className="sr-only"/);
+    // The variant that actually ships must be the migrated one — the #390
+    // lesson was that a fix can land in a component nothing renders.
+    expect(compact).toMatch(/<Tooltip[\s>]/);
     expect(compact).toContain("GIT_STATUS_UNKNOWN_EXPLANATION");
 
     for (const consumer of ["ProjectCard.tsx", "ProjectDetail.tsx"]) {
@@ -140,22 +174,110 @@ describe("#380 — load-bearing tooltips are reachable without a mouse", () => {
       const variantStart = src.indexOf(`export function ${variant}`);
       const variantEnd = src.indexOf("\nexport function ", variantStart + 1);
       const body = src.slice(variantStart, variantEnd === -1 ? undefined : variantEnd);
+      // Either shape: `<Tooltip>` (the #391 target) or the transitional
+      // `.sr-only` pair. What must not happen is a consumer rendering a
+      // variant that carries NEITHER — the #390 defect.
       expect(body, `${consumer} renders ${variant}, which must carry the caveat`)
-        .toMatch(/className="sr-only"/);
+        .toMatch(/<Tooltip[\s>]|className="sr-only"/);
     }
   });
 
-  it("announces the cache-hit value, not just its definition", async () => {
-    // The percentage lived only in `children`, which the #380 fix marked
-    // aria-hidden — so a screen reader heard "cache hit ratio, >70% is healthy"
+  it("announces the cache-hit value exactly once", async () => {
+    // #390: the percentage lived only in `children`, which the #380 fix marked
+    // aria-hidden — a screen reader heard "cache hit ratio, >70% is healthy"
     // and never the session's actual ratio. The fix that made the chip
-    // accessible removed the one number it existed to report (Codex, #390).
+    // accessible removed the one number it existed to report.
+    //
+    // #391 removed the hiding, so the value is announced as the trigger's own
+    // label. The old assertion — that the accessible text INTERPOLATES the
+    // value — then ratified a defect: it was satisfied precisely by the
+    // duplication that makes a focused chip read "75% cache, 75% cache..."
+    // (Codex P2, PR #519).
+    //
+    // Both halves are asserted, because either alone is satisfied by the
+    // other's failure: dropping the visible label passes the no-duplicate
+    // check, and restoring the prefix passes the value-is-present check.
     const src = await read("SessionsBrowser.tsx");
     const i = src.indexOf("function CacheHitBadge");
     expect(i).toBeGreaterThan(-1);
     const region = src.slice(i, i + 900);
-    // The accessible text must interpolate the value, not restate the label.
-    expect(region).toMatch(/srText=\{`\$\{pct\}% cache\./);
+    // 1. The value is still rendered as the visible, unhidden label.
+    expect(region).toMatch(/>\s*\{pct\}% cache/);
+    // 2. And it is NOT restated in the accessible description. Matching the
+    //    PROP (`srText=`), not the bare word — the region contains a comment
+    //    saying why the prop is gone, and a bare-word check would be failed by
+    //    the explanation rather than by the defect. That is the same way a
+    //    `[data-loading]` mention in a comment silently satisfied a rule in
+    //    the #445 guard.
+    expect(region).not.toMatch(/srText=/);
+  });
+
+  it("does not restate a visible label inside its own description", async () => {
+    // The class, not one instance. A `Tooltip` description carries what the
+    // visible label CANNOT say; once #391 stopped hiding the label, anything
+    // that also restated it made a focused chip announce the same value twice.
+    //
+    // Both value-carrying chips had it, found one round apart (Codex P2, PR
+    // #519): `CacheHitBadge` prefixed its description with the percentage, and
+    // `EffortMixChip` appended the whole level/count list. Asserted together so
+    // the next one is caught by the rule rather than by a reviewer.
+    const effort = await read("EffortMixChip.tsx");
+    const explanation = effort.slice(
+      effort.indexOf("const explanation ="),
+      effort.indexOf("return (")
+    );
+    expect(explanation).not.toMatch(/entries\.map/);
+    // The visible label is still the mix — the fix is not "drop the counts".
+    expect(effort).toMatch(/\{entries\.map\(\(\[level, n\]\) =>/);
+  });
+
+  it("keeps a QualityChip description from restating its own label", async () => {
+    // The rule, corrected. The previous version said an interpolated `title`
+    // duplicates and a CONSTANT one cannot — which was the wrong half. Every
+    // fixed-jargon chip in the browser opened its description with its own
+    // label ("compaction loop" under a chip reading `compaction loop`), so a
+    // focused chip announced the jargon twice, exactly as the interpolated ones
+    // did (Codex P2, PR #519, one round after the interpolation rule landed).
+    //
+    // Checked for literal children, which is every fixed-jargon chip. Chips
+    // whose children are an expression are covered by the interpolation rule
+    // below; the two together are what "the description says what the label
+    // cannot" reduces to in a source-level test.
+    const src = await read("SessionsBrowser.tsx");
+    const uses = [
+      ...src.matchAll(/<QualityChip[^>]*?\stitle="([^"]+)"[^>]*>\s*([^<{][^<]*?)\s*<\/QualityChip>/g),
+    ];
+    // The rule is worthless if it matches nothing — these chips are the reason
+    // it exists, so require that it found them.
+    expect(uses.length).toBeGreaterThanOrEqual(4);
+    for (const [, title, label] of uses) {
+      expect(
+        title.toLowerCase(),
+        `description restates the label "${label}"`
+      ).not.toContain(label.toLowerCase());
+    }
+  });
+
+  it("keeps QualityChip descriptions free of interpolated values", async () => {
+    // STRUCTURAL, because naming instances did not converge: the cache ratio,
+    // the effort mix and the worktree branch were the same defect found in
+    // three consecutive review rounds (Codex P2 x3, PR #519). Each fix closed
+    // one call site and left the rule unstated, so the next one was written the
+    // same way.
+    //
+    // The rule: a `QualityChip` explains a fixed piece of jargon, so its
+    // `title` is a constant. An interpolated `title` is, by construction, the
+    // VALUE the visible label already carries — which `aria-describedby` then
+    // makes a screen reader say twice. A chip that genuinely needs dynamic
+    // context that the label does not carry is a different component (see
+    // `EffortMixChip`, which computes its sentence and states no counts).
+    const src = await read("SessionsBrowser.tsx");
+    const titles = [...src.matchAll(/<QualityChip[^>]*?\stitle=\{([^}]*)\}/g)].map(
+      (m) => m[1]
+    );
+    for (const t of titles) {
+      expect(t, `QualityChip title interpolates a value: ${t}`).not.toContain("${");
+    }
   });
 
   it("uses .sr-only rather than aria-label on generic spans", async () => {

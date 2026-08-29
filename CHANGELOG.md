@@ -22,6 +22,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Tooltips that keyboard and touch users can actually reach** (#391). #380 established that `title` is a mouse-only affordance, and #390 answered it with `.sr-only` + `aria-hidden` — which reaches screen readers and leaves the other two audiences #380 named exactly where they were: `.sr-only` is visually clipped, and `title` still does not appear on focus in any major browser.
+
+  A new `<Tooltip>` primitive opens on **hover, focus and tap**, dismisses on leave, blur, Escape and outside click, and carries the explanation in **one** element associated by `aria-describedby` — so the `.sr-only` duplicate of the same sentence is gone rather than added to. Two copies of one string is how #380's fix drifted onto the effort *panel* and missed the effort *chip*.
+
+  Migrated first: **Git status**, which the issue calls the case that matters — its “status unavailable” chip sits exactly where “N uncommitted” would, so a reader who could not reach the tooltip saw no dirty count and concluded the repo was clean. Then `QualityChip` (which every quality badge in the app inherits) and `EffortMixChip`. The compact “?” variant is now visibly underlined: a glyph that explains itself only on hover gives a keyboard or touch user no reason to think there is anything to reach.
+
+  Positioning is clamped to the viewport rather than flipped sides — a tooltip that jumps across its trigger near an edge moves out from under the pointer that summoned it — and the arithmetic lives in a pure module with its own tests, since this repo's test environment has no DOM.
+
 - **Every loading state is now detectable from outside the component** (#445). The app had three unrelated loading idioms with no shared marker — `<Skeleton>` (findable via `.animate-pulse`), a plain “Loading…” sentence in ~20 components, and bespoke inline-styled placeholder boxes in ~25 more that carried no class, no attribute and no text. Nothing outside a component could answer “is this view still loading?”.
 
   That had already shipped: the screenshot pipeline gates on `.animate-pulse`, so it was blind to the other two and published `status.png` as four empty grey bars, `config.png` with every tab count reading `0`, and four more shots mid-load — all live on the public landing page until someone noticed by eye.

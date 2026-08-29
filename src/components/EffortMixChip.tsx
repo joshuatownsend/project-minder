@@ -1,6 +1,7 @@
 "use client";
 
 import { compareEffort } from "@/lib/usage/effort";
+import { Tooltip } from "@/components/ui/tooltip";
 
 /**
  * Per-session reasoning-effort mix (A2) — e.g. `high×12 · xhigh×3`.
@@ -24,28 +25,43 @@ export function EffortMixChip({ mix }: { mix?: Record<string, number> }) {
 
   const counted = entries.reduce((s, [, n]) => s + n, 0);
 
+  // The mix itself is NOT restated here. It used to be — the trailing
+  // `high 12, xhigh 3` existed because #380's fix marked the visible label
+  // `aria-hidden`, so the description was the only place a screen reader could
+  // hear the counts. #391 stopped hiding the label, and the list became a
+  // duplicate: a focused chip announced every level and count twice (Codex P2,
+  // PR #519 — the same defect the cache-hit chip had one round earlier).
+  //
+  // The rule this leaves behind: a `Tooltip` description carries what the
+  // visible label CANNOT say. Once the label is reachable, restating it is a
+  // stutter, not redundancy for safety.
+  const explanation =
+    `Reasoning effort across ${counted} turn${counted === 1 ? "" : "s"} that ` +
+    `recorded it. Turns written before Claude Code reported effort are not ` +
+    `counted, so this need not sum to the session's turn count.`;
+
   return (
-    <span
-      style={{
-        fontFamily: "var(--font-mono)",
-        fontSize: "0.62rem",
-        color: "var(--text-muted)",
-        background: "var(--bg-elevated)",
-        border: "1px solid var(--border-subtle)",
-        borderRadius: "3px",
-        padding: "1px 5px",
-        flexShrink: 0,
-      }}
-      title={`Reasoning effort across ${counted} turn${counted === 1 ? "" : "s"} that recorded it. Turns written before Claude Code ~2.1.212 have no effort and are not counted here, so this can be fewer than the session's total turns.`}
-    >
-      {/* #380: without this, "why doesn't the mix add up to the turn count?"
-          is answerable only with a mouse. The issue lists this chip as already
-          fixed by #379 — that fix landed on the effort PANEL, not here. */}
-      <span className="sr-only">
-        {`Reasoning effort across ${counted} turn${counted === 1 ? "" : "s"} that recorded it. Turns written before Claude Code ~2.1.212 have no effort and are not counted here, so this can be fewer than the session's total turns. Mix: `}
-        {entries.map(([level, n]) => `${level} ${n}`).join(", ")}
+    // #391: through `Tooltip` rather than `title` + `.sr-only`. "Why doesn't
+    // the mix add up to the turn count?" is now answerable by hover, keyboard
+    // focus AND tap — and the sentence exists once instead of being kept in
+    // step across two copies, which is how #380's fix drifted onto the effort
+    // PANEL and missed this chip.
+    <Tooltip content={explanation}>
+      <span
+        style={{
+          fontFamily: "var(--font-mono)",
+          fontSize: "0.62rem",
+          color: "var(--text-muted)",
+          background: "var(--bg-elevated)",
+          border: "1px solid var(--border-subtle)",
+          borderRadius: "3px",
+          padding: "1px 5px",
+          flexShrink: 0,
+          cursor: "help",
+        }}
+      >
+        {entries.map(([level, n]) => `${level}×${n}`).join(" · ")}
       </span>
-      <span aria-hidden="true">{entries.map(([level, n]) => `${level}×${n}`).join(" · ")}</span>
-    </span>
+    </Tooltip>
   );
 }

@@ -41,6 +41,7 @@ const DELEGATION_BADGE_EXPLANATION = (label: string) =>
   `${label}. Counted across this session and every subagent it spawned, since Claude Code's caps apply to the whole session. A session that hits one is silently truncated rather than finishing. The caps are configurable, so this reports the count reached, not that anything was blocked.`;
 import { EntrypointChip } from "@/components/EntrypointChip";
 import { entrypointBucket, entrypointLabel, compareEntrypoint } from "@/lib/usage/entrypoint";
+import { Tooltip } from "@/components/ui/tooltip";
 
 type SortOption = "relevance" | "recent" | "longest" | "tokens" | "oneshot";
 
@@ -107,20 +108,10 @@ type QualityChipTone = "good" | "neutral" | "warn" | "error";
 function QualityChip({
   tone,
   title,
-  srText,
   children,
 }: {
   tone: QualityChipTone;
   title: string;
-  /**
-   * Accessible text, when the visible label carries information `title` does
-   * not. Defaults to `title`, which is right for a chip whose label is a fixed
-   * piece of jargon (`compaction loop`) — but wrong for one whose label is a
-   * measured VALUE. Hiding the children then dropped the number and announced
-   * only its definition: "cache hit ratio, >70% is healthy" with no ratio
-   * (Codex review, #390).
-   */
-  srText?: string;
   children: React.ReactNode;
 }) {
   const tokens =
@@ -143,29 +134,36 @@ function QualityChip({
     // Fixed here, in the shared component, rather than at each call site —
     // every quality chip in the app inherits it.
     //
-    // KNOWN LIMIT, stated rather than papered over (Codex review of #380).
-    // `.sr-only` is visually clipped, so this reaches screen readers and does
-    // NOT help a sighted keyboard or touch user — two of the three audiences
-    // the issue names. Closing that needs a tooltip primitive that opens on
-    // focus and tap, which is a shared-UI change rather than a per-chip one.
-    // Tracked in #391. This is a real improvement for one audience, not the
-    // whole fix.
-    <span
-      title={title}
-      style={{
-        fontFamily: "var(--font-mono)",
-        fontSize: "0.65rem",
-        color: tokens.color,
-        background: tokens.bg,
-        border: `1px solid ${tokens.border}`,
-        borderRadius: "3px",
-        padding: "1px 5px",
-        flexShrink: 0,
-      }}
+    // That limit is closed as of #391. `Tooltip` opens on hover, keyboard
+    // FOCUS and tap, and carries the explanation in one element associated by
+    // `aria-describedby` — so all three audiences the issue named reach it,
+    // and the `.sr-only` duplicate of the same sentence is gone. Two copies of
+    // one string is a drift waiting to happen.
+    // `content={title}`, not the old `srText ?? title`: #390 added `srText`
+    // because hiding `children` dropped a value-carrying label's number, and
+    // #391 stopped hiding them — so the prefix made a focused chip announce
+    // "75% cache, 75% cache. Cache hit ratio..." (Codex P2, round 5). The prop
+    // is removed rather than defaulted; its reason for existing is gone.
+    <Tooltip
+      content={title}
+      className="quality-chip"
     >
-      <span className="sr-only">{srText ?? title}</span>
-      <span aria-hidden="true">{children}</span>
-    </span>
+      <span
+        style={{
+          fontFamily: "var(--font-mono)",
+          fontSize: "0.65rem",
+          color: tokens.color,
+          background: tokens.bg,
+          border: `1px solid ${tokens.border}`,
+          borderRadius: "3px",
+          padding: "1px 5px",
+          flexShrink: 0,
+          cursor: "help",
+        }}
+      >
+        {children}
+      </span>
+    </Tooltip>
   );
 }
 
@@ -178,10 +176,9 @@ function CacheHitBadge({ ratio }: { ratio: number }) {
   return (
     <QualityChip
       tone={tone}
+      // No `srText`: the ratio reaches a screen reader as the chip's own
+      // visible label now, so repeating it in the description said it twice.
       title={definition}
-      // The value first, then what it means — the ratio is the fact this chip
-      // exists to report, and it is the one piece `title` never carried.
-      srText={`${pct}% cache. ${definition}`}
     >
       {pct}% cache
     </QualityChip>
@@ -190,7 +187,12 @@ function CacheHitBadge({ ratio }: { ratio: number }) {
 
 function CompactionLoopBadge() {
   return (
-    <QualityChip tone="error" title="Compaction loop detected — Claude was burning tokens cycling on the same context without progress.">
+    // None of these descriptions restates its own label. They used to open
+    // with it — "compaction loop" under a chip reading `compaction loop` — so
+    // a focused chip announced the jargon, then the jargon again. Constant
+    // titles duplicate exactly as readily as interpolated ones; that they
+    // could not was the wrong half of the rule (Codex P2, PR #519).
+    <QualityChip tone="error" title="Claude was burning tokens cycling on the same context without making progress.">
       compaction loop
     </QualityChip>
   );
@@ -198,7 +200,7 @@ function CompactionLoopBadge() {
 
 function ToolFailureStreakBadge() {
   return (
-    <QualityChip tone="error" title="Tool-failure streak detected — 5+ consecutive tool calls errored at >50% rate.">
+    <QualityChip tone="error" title="5+ consecutive tool calls errored, at over a 50% failure rate.">
       tool fail streak
     </QualityChip>
   );
@@ -206,7 +208,7 @@ function ToolFailureStreakBadge() {
 
 function ResumeAnomalyBadge() {
   return (
-    <QualityChip tone="warn" title="Resume anomaly detected — large output token spike after a compact boundary, suggesting context reconstruction.">
+    <QualityChip tone="warn" title="A large output-token spike followed a compact boundary, which suggests the context was being reconstructed.">
       resume anomaly
     </QualityChip>
   );
@@ -214,7 +216,7 @@ function ResumeAnomalyBadge() {
 
 function ThinkingBadge() {
   return (
-    <QualityChip tone="neutral" title="Session contained thinking blocks (extended reasoning).">
+    <QualityChip tone="neutral" title="Extended reasoning blocks were recorded for this session.">
       thinking
     </QualityChip>
   );
@@ -445,7 +447,12 @@ function SessionRow({
             </span>
           )}
           {session.isWorktree && session.gitBranch && (
-            <QualityChip tone="neutral" title={`Worktree session — branch: ${session.gitBranch}`}>
+            // The branch is NOT interpolated into the description: it is
+            // already the visible label, so embedding it made a focused chip
+            // announce "feature/foo, Worktree session — branch: feature/foo"
+            // (Codex P2, PR #519 — the third chip with this defect). The
+            // description says only what the label cannot: what the label IS.
+            <QualityChip tone="neutral" title="Worktree session — the label is the git branch it runs on.">
               {session.gitBranch}
             </QualityChip>
           )}
