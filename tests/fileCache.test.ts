@@ -473,6 +473,22 @@ describe("observe() — seen but not read (#522)", () => {
     expect(cache.corpusSize).toBe(0);
   });
 
+  it("clear() drops observed files as well", async () => {
+    // "Drop everything" has to mean everything, or the fingerprint survives a
+    // reset — `corpusSize` non-zero and `maxMtimeMs()` pinned to a file the
+    // cache no longer knows anything about (Codex P2, PR #524).
+    mockStat.mockResolvedValue(statResult(4000, 100));
+    const cache = new FileCache<string>();
+    await cache.getOrCompute("/read", async () => "parsed");
+    await cache.observe("/seen");
+    expect(cache.corpusSize).toBe(2);
+    expect(cache.maxMtimeMs()).toBe(4000);
+
+    cache.clear();
+    expect(cache.corpusSize).toBe(0);
+    expect(cache.maxMtimeMs()).toBe(0);
+  });
+
   it("prunes observed files in retainOnly", async () => {
     mockStat.mockResolvedValue(statResult(1000, 100));
     const cache = new FileCache<string>();

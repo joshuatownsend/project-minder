@@ -302,6 +302,11 @@ export class FileCache<T> {
   clear(): void {
     this.slots.clear();
     this.meta.clear();
+    // `observed` too. It is the second half of the corpus, so leaving it
+    // populated made "drop everything" leave `corpusSize` non-zero and
+    // `maxMtimeMs()` pinned to a file this cache no longer knows anything
+    // about (Codex P2, PR #524).
+    this.observed.clear();
     this.retainedBytes = 0;
   }
 
