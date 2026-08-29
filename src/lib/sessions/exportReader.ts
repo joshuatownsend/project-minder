@@ -479,6 +479,22 @@ async function locateTranscript(
 }
 
 /**
+ * The `<projects>/<project-dir>` a transcript lives under, or null when the path
+ * is not inside a Claude projects tree.
+ *
+ * Both layouts collapse to the same answer, which is the point: the flat
+ * `<projects>/<dir>/<id>.jsonl` and the nested
+ * `<projects>/<dir>/<parent>/subagents/<id>.jsonl` both belong to `<dir>`.
+ */
+function projectRootFromTranscript(filePath: string): string | null {
+  const resolved = path.resolve(filePath);
+  const parts = resolved.split(/[\\/]/);
+  const i = parts.lastIndexOf("projects");
+  if (i < 0 || i + 1 >= parts.length) return null;
+  return parts.slice(0, i + 2).join(path.sep);
+}
+
+/**
  * Read modern subagent transcripts.
  *
  * As of Claude Code ~v2.1.150 subagent conversations no longer appear as
@@ -494,20 +510,25 @@ async function locateTranscript(
 async function readSubagentMessages(
   parentFilePath: string,
 ): Promise<{ messages: ExportMessage[]; unread: number }> {
-  // Derived from the RESOLVED PATH, not from the session id (#486).
+  // Derived from the PROJECT directory, not from the transcript's own folder.
   //
-  // Taking the id and assuming `<project-dir>/<id>/subagents` was correct only
-  // for a FLAT transcript. `resolveSessionJsonl` now also returns nested
-  // subagent transcripts at `<project-dir>/<parent>/subagents/<id>.jsonl`, and
-  // for one of those the id-based derivation named
-  // `<…>/subagents/<id>/subagents` — a directory that is not the sibling of the
-  // file that was actually found.
+  // Delegated agents live at `<project-dir>/<session-id>/subagents/*.jsonl` —
+  // one level under the project, keyed by the delegating session. Taking
+  // `path.dirname(parentFilePath)` is correct only when the transcript is FLAT.
+  // For a nested one at `<project-dir>/<parent>/subagents/agent-x.jsonl` it
+  // named `<…>/subagents/agent-x/subagents`, which does not exist under that
+  // layout — so exporting an `agent-*` session with sidechains enabled found
+  // nothing, and said so silently (Codex P2, PR #526).
   //
-  // The basename and the id are the same string today. Deriving from the path
-  // is not a no-op for that reason: it is what stops this making a claim about
-  // LAYOUT that the resolver has already answered.
+  // Anchoring on the project directory gives `<project-dir>/agent-x/subagents`,
+  // which is where the sweep in `usage/parser.ts` enumerates them: it walks
+  // every session directory under a project and looks for `subagents` inside
+  // each. Both layouts now resolve through the same rule.
   const base = path.basename(parentFilePath, ".jsonl");
-  const dir = path.join(path.dirname(parentFilePath), base, "subagents");
+  const projectRoot = projectRootFromTranscript(parentFilePath);
+  const dir = projectRoot
+    ? path.join(projectRoot, base, "subagents")
+    : path.join(path.dirname(parentFilePath), base, "subagents");
   let entries: string[];
   try {
     entries = (await fs.readdir(dir)).filter((f) => f.toLowerCase().endsWith(".jsonl")).sort();

@@ -20,6 +20,7 @@ import { getReadableClaudeHomes } from "@/lib/claudeHome";
 // `agent-<hex>` at once. `parser.ts` re-exports from here, so external callers
 // (the `/api/sessions/[sessionId]/*` routes) keep their import path.
 import { isValidSessionId, isSubagentSessionId } from "@/lib/sessionId";
+import { normalizePathKey } from "@/lib/platform";
 export { isValidSessionId };
 
 /** Walk `<home>/projects/<dir>/<sessionId>.jsonl` across every readable
@@ -58,6 +59,23 @@ export interface ResolveSessionOptions {
  * `<dir>`. Deriving it from the PATH is what stops a caller re-deriving it from
  * the id and assuming the flat shape (#486).
  */
+/**
+ * Is this path inside one of the homes we are allowed to touch?
+ *
+ * Compared on NORMALIZED keys, not raw strings: the same home reaches us as
+ * `\\wsl$\\Ubuntu\\…` from one source and `\\wsl.localhost\\Ubuntu\\…` from
+ * another, and on Windows the casing differs between the config entry and what
+ * the index recorded. `normalizePathKey` is what every other home comparison in
+ * this codebase uses, so this agrees with them by construction.
+ */
+function isUnderReadableHome(filePath: string, homes: readonly string[]): boolean {
+  const key = normalizePathKey(filePath);
+  return homes.some((home) => {
+    const prefix = normalizePathKey(home);
+    return key === prefix || key.startsWith(prefix.endsWith("/") ? prefix : prefix + "/");
+  });
+}
+
 export function projectDirNameFromPath(filePath: string): string | null {
   const parts = path.resolve(filePath).split(/[\\/]/);
   const i = parts.lastIndexOf("projects");
@@ -72,7 +90,19 @@ export async function resolveSessionJsonl(
 ): Promise<{ filePath: string; projectDirName: string } | null> {
   if (!isValidSessionId(sessionId)) return null;
 
-  // The index first, when a caller supplied one. Exact, one lookup, and it
+  // Homes FIRST, even on the hinted path. `getReadableClaudeHomes` is what
+  // enforces the never-wake invariant (#307/#308): a home inside a stopped WSL
+  // distro is excluded WITHOUT being touched, because touching a `\\wsl$` UNC
+  // path auto-starts the VM.
+  //
+  // The index retains rows for sessions in such a home, so an unconditional
+  // `fs.access` on a hinted path would reach straight past that exclusion and
+  // start the distro — from peek, handoff, attribution, export or live metrics,
+  // none of which the user would connect to WSL starting (Codex P1, PR #526).
+  const config = await readConfig();
+  const homes = await getReadableClaudeHomes(config);
+
+  // The index next, when a caller supplied one. Exact, one lookup, and it
   // carries the real layout — so nothing downstream has to guess whether the
   // transcript is flat or nested.
   if (options.indexedPath) {
@@ -84,7 +114,7 @@ export async function resolveSessionJsonl(
       // answer. Fall through to the walks.
       hinted = null;
     }
-    if (hinted) {
+    if (hinted && isUnderReadableHome(hinted, homes)) {
       const dir = projectDirNameFromPath(hinted);
       if (dir) {
         try {
@@ -99,9 +129,6 @@ export async function resolveSessionJsonl(
       }
     }
   }
-
-  const config = await readConfig();
-  const homes = await getReadableClaudeHomes(config);
 
   const scanned: { projectsDir: string; dirs: string[] }[] = [];
   for (const [i, home] of homes.entries()) {

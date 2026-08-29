@@ -101,6 +101,43 @@ describe("resolveSessionJsonl with an index hint (#486)", () => {
     });
   });
 
+  it("never touches a hinted path outside the readable homes", async () => {
+    // THE never-wake invariant (#307/#308). `getReadableClaudeHomes` excludes a
+    // home inside a stopped WSL distro WITHOUT touching it, because touching a
+    // `\\\\wsl$` UNC path auto-starts the VM.
+    //
+    // The index retains rows for sessions in such a home, so an unconditional
+    // `fs.access` on a hinted path reached straight past that exclusion — and
+    // would have started the distro from peek, handoff, attribution, export or
+    // live metrics, none of which a user would connect to WSL starting
+    // (Codex P1, PR #526).
+    //
+    // Asserted on the ACCESS, not the result: the walk returns null here
+    // either way, so a return-value assertion would pass with the bug present.
+    const target = await writeTranscript(path.join("-home-me-dev-app", "s1.jsonl"));
+    const outsider = path.join(tmpHome, "not-a-home", "projects", "-x", "s9.jsonl");
+    await fs.mkdir(path.dirname(outsider), { recursive: true });
+    await fs.writeFile(outsider, "{}\n");
+
+    const { resolveSessionJsonl } = await import("@/lib/usage/sessionPath");
+    const accessed: string[] = [];
+    const realAccess = fs.access.bind(fs);
+    vi.spyOn(fs, "access").mockImplementation(async (p, ...rest) => {
+      accessed.push(String(p));
+      return realAccess(p as string, ...(rest as []));
+    });
+
+    const resolved = await resolveSessionJsonl("s9", {
+      indexedPath: async () => outsider,
+    });
+
+    // The hinted path is outside every readable home, so it is never probed.
+    expect(accessed).not.toContain(outsider);
+    // And the walk answered on its own terms — `s9` is not in the real home.
+    expect(resolved).toBeNull();
+    expect(target).toContain("-home-me-dev-app");
+  });
+
   it("falls back to the walk when the index has no row", async () => {
     const target = await writeTranscript(path.join("-home-me-dev-app", "s1.jsonl"));
     const { resolveSessionJsonl } = await import("@/lib/usage/sessionPath");
