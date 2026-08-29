@@ -179,5 +179,10 @@ describe("the component pairs clamping with a bound", () => {
     // portaled, so a trigger-only containment test dismissed it on the very
     // gesture meant to scroll it — and touch has no hover hold to fall back on.
     expect(src).toMatch(/tipRef\.current\?\.contains\(target\)/);
+    // And BLUR must not undo it. A touch landing on the portaled tooltip also
+    // blurs the trigger, and on touch the pin is the only hold — so the same
+    // gesture would have been dismissed by the other handler.
+    expect(src).toMatch(/pointerInsideTip/);
+    expect(src).toMatch(/focusMovedIntoTip/);
   });
 });

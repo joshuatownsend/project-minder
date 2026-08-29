@@ -106,6 +106,21 @@ export function Tooltip({
    */
   const HOVER_EXIT_MS = 120;
   const exitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * A pointer is currently down INSIDE the tooltip.
+   *
+   * Blur releases the pin (a keyboard user tabbing away expects the tooltip
+   * gone) — but a touch that lands on the portaled tooltip also blurs the
+   * trigger, and on touch the pin is the ONLY hold. So the gesture meant to
+   * scroll the tooltip dismissed it instead, which is the same defect the
+   * outside-pointerdown check just fixed, arriving through the other handler
+   * (Codex P2, PR #519).
+   *
+   * A ref rather than state: it is read inside an event handler and must never
+   * schedule a render of its own — a re-render between the pointerdown and the
+   * blur is exactly the race this exists to avoid.
+   */
+  const pointerInsideTip = useRef(false);
 
   const cancelHoverExit = useCallback(() => {
     if (exitTimer.current !== null) {
@@ -177,17 +192,28 @@ export function Tooltip({
       // no hover hold left to keep it open (Codex P2, PR #519).
       const insideTrigger = triggerRef.current?.contains(target) ?? false;
       const insideTip = tipRef.current?.contains(target) ?? false;
+      pointerInsideTip.current = insideTip;
       if (!insideTrigger && !insideTip) setPinned(false);
     };
     // Reposition rather than close: a tooltip that vanishes when the page
     // scrolls under a stationary pointer reads as a glitch.
+    // Released on pointerUP wherever it happens, including outside the
+    // tooltip — a drag that starts on the tip and ends elsewhere must not leave
+    // the flag stuck true, or the next blur would silently keep the pin.
+    const onUp = () => {
+      pointerInsideTip.current = false;
+    };
     window.addEventListener("keydown", onKey);
     window.addEventListener("pointerdown", onDown);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
     window.addEventListener("scroll", place, true);
     window.addEventListener("resize", place);
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
       window.removeEventListener("scroll", place, true);
       window.removeEventListener("resize", place);
     };
@@ -310,9 +336,15 @@ export function Tooltip({
       // Safe for touch, which is what the pin exists for: a tap focuses the
       // trigger, so tapping elsewhere blurs it, and the outside-pointerdown
       // handler clears the pin independently for any browser where it does not.
-      onBlur={() => {
+      onBlur={(e) => {
         setFocused(false);
-        setPinned(false);
+        // Keep the pin when focus is leaving BECAUSE of the tooltip. Two ways
+        // to tell, because neither covers both input modes: `relatedTarget` is
+        // the element receiving focus and is reliable for a click, but is
+        // frequently null on touch — where the pointer flag is what knows.
+        const to = e.relatedTarget as Node | null;
+        const focusMovedIntoTip = to !== null && (tipRef.current?.contains(to) ?? false);
+        if (!focusMovedIntoTip && !pointerInsideTip.current) setPinned(false);
       }}
       onClick={(e) => {
         // **Stop the event.** Every migrated chip lives inside a `<Link>` —
