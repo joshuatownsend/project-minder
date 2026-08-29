@@ -231,6 +231,33 @@ describe("#380 — load-bearing tooltips are reachable without a mouse", () => {
     expect(effort).toMatch(/\{entries\.map\(\(\[level, n\]\) =>/);
   });
 
+  it("keeps a QualityChip description from restating its own label", async () => {
+    // The rule, corrected. The previous version said an interpolated `title`
+    // duplicates and a CONSTANT one cannot — which was the wrong half. Every
+    // fixed-jargon chip in the browser opened its description with its own
+    // label ("compaction loop" under a chip reading `compaction loop`), so a
+    // focused chip announced the jargon twice, exactly as the interpolated ones
+    // did (Codex P2, PR #519, one round after the interpolation rule landed).
+    //
+    // Checked for literal children, which is every fixed-jargon chip. Chips
+    // whose children are an expression are covered by the interpolation rule
+    // below; the two together are what "the description says what the label
+    // cannot" reduces to in a source-level test.
+    const src = await read("SessionsBrowser.tsx");
+    const uses = [
+      ...src.matchAll(/<QualityChip[^>]*?\stitle="([^"]+)"[^>]*>\s*([^<{][^<]*?)\s*<\/QualityChip>/g),
+    ];
+    // The rule is worthless if it matches nothing — these chips are the reason
+    // it exists, so require that it found them.
+    expect(uses.length).toBeGreaterThanOrEqual(4);
+    for (const [, title, label] of uses) {
+      expect(
+        title.toLowerCase(),
+        `description restates the label "${label}"`
+      ).not.toContain(label.toLowerCase());
+    }
+  });
+
   it("keeps QualityChip descriptions free of interpolated values", async () => {
     // STRUCTURAL, because naming instances did not converge: the cache ratio,
     // the effort mix and the worktree branch were the same defect found in

@@ -187,7 +187,12 @@ function CacheHitBadge({ ratio }: { ratio: number }) {
 
 function CompactionLoopBadge() {
   return (
-    <QualityChip tone="error" title="Compaction loop detected — Claude was burning tokens cycling on the same context without progress.">
+    // None of these descriptions restates its own label. They used to open
+    // with it — "compaction loop" under a chip reading `compaction loop` — so
+    // a focused chip announced the jargon, then the jargon again. Constant
+    // titles duplicate exactly as readily as interpolated ones; that they
+    // could not was the wrong half of the rule (Codex P2, PR #519).
+    <QualityChip tone="error" title="Claude was burning tokens cycling on the same context without making progress.">
       compaction loop
     </QualityChip>
   );
@@ -195,7 +200,7 @@ function CompactionLoopBadge() {
 
 function ToolFailureStreakBadge() {
   return (
-    <QualityChip tone="error" title="Tool-failure streak detected — 5+ consecutive tool calls errored at >50% rate.">
+    <QualityChip tone="error" title="5+ consecutive tool calls errored, at over a 50% failure rate.">
       tool fail streak
     </QualityChip>
   );
@@ -203,7 +208,7 @@ function ToolFailureStreakBadge() {
 
 function ResumeAnomalyBadge() {
   return (
-    <QualityChip tone="warn" title="Resume anomaly detected — large output token spike after a compact boundary, suggesting context reconstruction.">
+    <QualityChip tone="warn" title="A large output-token spike followed a compact boundary, which suggests the context was being reconstructed.">
       resume anomaly
     </QualityChip>
   );
@@ -211,7 +216,7 @@ function ResumeAnomalyBadge() {
 
 function ThinkingBadge() {
   return (
-    <QualityChip tone="neutral" title="Session contained thinking blocks (extended reasoning).">
+    <QualityChip tone="neutral" title="Extended reasoning blocks were recorded for this session.">
       thinking
     </QualityChip>
   );

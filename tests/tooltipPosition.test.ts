@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  tooltipTop,
   tooltipAbove,
   tooltipLeft,
   VIEWPORT_MARGIN,
@@ -74,5 +75,60 @@ describe("tooltipAbove", () => {
   it("treats an exact fit as room", () => {
     expect(tooltipAbove(rect(0, 20, 48), 40, 8)).toBe(true);
     expect(tooltipAbove(rect(0, 20, 47), 40, 8)).toBe(false);
+  });
+});
+
+describe("tooltipTop", () => {
+  const VIEWPORT = 800;
+  /** A chip with plenty of room on both sides. */
+  const mid = { left: 100, right: 160, top: 400, bottom: 420, width: 60 };
+
+  it("prefers above when the tooltip fits there", () => {
+    expect(tooltipTop(mid, 40, VIEWPORT)).toBe(400 - 40 - 8);
+  });
+
+  it("goes below when there is no room above", () => {
+    const high = { ...mid, top: 10, bottom: 30 };
+    expect(tooltipTop(high, 40, VIEWPORT)).toBe(30 + 8);
+  });
+
+  it("never places the tooltip past the bottom edge", () => {
+    // The case that shipped unclamped: no room above, and not enough below
+    // either, on a short or zoomed viewport. `trigger.bottom + margin` put the
+    // lower half of a wrapped explanation off-screen.
+    const short = { left: 10, right: 60, top: 20, bottom: 40, width: 50 };
+    const top = tooltipTop(short, 120, 150);
+    expect(top + 120).toBeLessThanOrEqual(150 - 8);
+    expect(top).toBeGreaterThanOrEqual(8);
+  });
+
+  it("picks the roomier side when the tooltip fits on neither", () => {
+    // Near the bottom of a short viewport: above has more space than below, so
+    // clipping should happen upward rather than always downward.
+    const low = { left: 10, right: 60, top: 100, bottom: 120, width: 50 };
+    expect(tooltipTop(low, 90, 140)).toBeLessThan(120);
+  });
+
+  it("pins a tooltip taller than the viewport to the top margin", () => {
+    // Matches `tooltipLeft`'s behaviour for one wider than the viewport: losing
+    // the END of the text is the readable failure, losing the start is not.
+    expect(tooltipTop(mid, 900, VIEWPORT)).toBe(8);
+  });
+
+  it("has ONE discontinuity, and it is the side flip", () => {
+    // `tooltipLeft` is monotonic — nudging the trigger right never moves the
+    // tooltip left — and the obvious vertical analogue is FALSE, deliberately.
+    // As the trigger descends past the point where the tooltip fits above, the
+    // placement flips from below to above and the top jumps upward. Asserting
+    // monotonicity here would have been asserting that the side-choice does not
+    // work; what is worth pinning is that the flip happens exactly once.
+    let flips = 0;
+    let previous = -Infinity;
+    for (let top = 0; top < 700; top += 5) {
+      const t = tooltipTop({ left: 10, right: 60, top, bottom: top + 20, width: 50 }, 60, 800);
+      if (t < previous) flips++;
+      previous = t;
+    }
+    expect(flips).toBe(1);
   });
 });

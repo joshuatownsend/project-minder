@@ -2,11 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import {
-  tooltipAbove,
-  tooltipLeft,
-  VIEWPORT_MARGIN,
-} from "@/lib/ui/tooltipPosition";
+import { tooltipLeft, tooltipTop } from "@/lib/ui/tooltipPosition";
 
 /**
  * A tooltip that three audiences can actually reach (#391).
@@ -111,12 +107,12 @@ export function Tooltip({
     const trigger = triggerRef.current?.getBoundingClientRect();
     const tip = tipRef.current?.getBoundingClientRect();
     if (!trigger || !tip) return;
-    const above = tooltipAbove(trigger, tip.height);
     setPos({
       left: tooltipLeft(trigger, tip.width, window.innerWidth),
-      top: above
-        ? trigger.top - tip.height - VIEWPORT_MARGIN
-        : trigger.bottom + VIEWPORT_MARGIN,
+      // Both axes clamped by the pure module. The vertical side-choice AND its
+      // clamp live in `tooltipTop` rather than being spelled out here, because
+      // spelling it out here is how the below case shipped unclamped.
+      top: tooltipTop(trigger, tip.height, window.innerHeight),
     });
   }, []);
 

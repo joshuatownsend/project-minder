@@ -57,3 +57,41 @@ export function tooltipAbove(
 ): boolean {
   return trigger.top - tooltipHeight - margin >= 0;
 }
+
+/**
+ * The tooltip's `top`, in viewport coordinates.
+ *
+ * `tooltipAbove` answers WHICH SIDE and stops there, which left the below case
+ * unclamped: on a short or zoomed viewport a wrapped explanation placed at
+ * `trigger.bottom + margin` runs off the bottom edge, and the primitive's
+ * promise of viewport-clamped positioning held on one axis only (Codex P2,
+ * PR #519).
+ *
+ * Three steps, in order:
+ *
+ * 1. Above if it fits there, which is `tooltipAbove`'s rule unchanged — above
+ *    is where a reader looks and it does not cover the row beneath.
+ * 2. Otherwise the side with MORE room, so a tooltip that fits neither is
+ *    clipped as little as possible rather than always downward.
+ * 3. Clamped into the viewport either way.
+ *
+ * A tooltip TALLER than the viewport pins to the top margin, matching
+ * `tooltipLeft`'s behaviour for one wider than the viewport: the readable
+ * failure is losing the end of the text, not the beginning.
+ */
+export function tooltipTop(
+  trigger: Rect,
+  tooltipHeight: number,
+  viewportHeight: number,
+  margin: number = VIEWPORT_MARGIN
+): number {
+  const roomAbove = trigger.top - margin;
+  const roomBelow = viewportHeight - trigger.bottom - margin;
+  const above = tooltipAbove(trigger, tooltipHeight, margin) || roomAbove > roomBelow;
+  const desired = above
+    ? trigger.top - tooltipHeight - margin
+    : trigger.bottom + margin;
+  const max = viewportHeight - tooltipHeight - margin;
+  if (max < margin) return margin;
+  return Math.min(Math.max(desired, margin), max);
+}
