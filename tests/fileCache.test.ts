@@ -382,3 +382,121 @@ describe("FileCache byte budget (#476)", () => {
     expect(cache.bytes).toBe(cache.size * 10);
   });
 });
+
+describe("observe() — seen but not read (#522)", () => {
+  it("counts toward the corpus without claiming the file was read", async () => {
+    mockStat.mockResolvedValue(statResult(1000, 100));
+    const cache = new FileCache<string>();
+
+    await cache.getOrCompute("/read", async () => "parsed");
+    expect(cache.corpusSize).toBe(1);
+
+    await cache.observe("/skipped");
+    // Both halves count: a duplicate's alternate is part of the corpus even
+    // though nothing parsed it, and a fingerprint that omitted it could not
+    // tell "the preferred copy was deleted and this took over" from "nothing
+    // changed".
+    expect(cache.corpusSize).toBe(2);
+  });
+
+  it("a failed read REMOVES the file from the corpus, so recovery is visible", async () => {
+    // The property, and the one my first attempt at this got wrong.
+    //
+    // `observe` gave a file a way into the corpus without being read. So an
+    // alternate could already be present when its read failed — and a later
+    // success with mtime and size unchanged (permissions restored, touching
+    // only ctime) then moved NEITHER half of the `(maxMtime, corpusSize)`
+    // fingerprint. `getSessionCategoryCounts()` would keep serving the
+    // histogram it cached during the failure (Codex P2, PR #524).
+    //
+    // Tracking observed files in their own map does not fix that on its own —
+    // the count is one either way, and I verified that by mutation before
+    // believing it. What fixes it is the failure REMOVING the file, so the
+    // count moves 1 -> 0 -> 1 and each transition invalidates.
+    mockStat.mockResolvedValue(statResult(1000, 100));
+    const cache = new FileCache<string>();
+
+    await cache.observe("/x");
+    expect(cache.corpusSize).toBe(1);
+
+    await expect(
+      cache.getOrCompute("/x", async () => {
+        throw new Error("transient EACCES");
+      })
+    ).rejects.toThrow();
+    // MOVED. This is the assertion the previous version lacked.
+    expect(cache.corpusSize).toBe(0);
+
+    // Same file, same mtime, same size — and the fingerprint moves back.
+    await cache.getOrCompute("/x", async () => "parsed");
+    expect(cache.corpusSize).toBe(1);
+  });
+
+  it("counts one file once, however it entered the corpus", async () => {
+    // `meta` and `observed` must stay disjoint, or `corpusSize` adding them
+    // double-counts a file that has been both.
+    mockStat.mockResolvedValue(statResult(1000, 100));
+    const cache = new FileCache<string>();
+
+    await cache.observe("/x");
+    await cache.getOrCompute("/x", async () => "parsed");
+    expect(cache.corpusSize).toBe(1);
+
+    await cache.observe("/x");
+    expect(cache.corpusSize).toBe(1);
+  });
+
+  it("carries an observed file's mtime into the fingerprint", async () => {
+    // The alternate can be the NEWEST file on disk. If its mtime did not reach
+    // `maxMtimeMs`, an ETag would say "unchanged" across a swap that changed
+    // the answer.
+    const cache = new FileCache<string>();
+    mockStat.mockResolvedValueOnce(statResult(1000, 100));
+    await cache.getOrCompute("/old", async () => "parsed");
+    expect(cache.maxMtimeMs()).toBe(1000);
+
+    mockStat.mockResolvedValueOnce(statResult(5000, 100));
+    await cache.observe("/newer");
+    expect(cache.maxMtimeMs()).toBe(5000);
+  });
+
+  it("drops a file that vanished between enumeration and the stat", async () => {
+    const cache = new FileCache<string>();
+    mockStat.mockResolvedValueOnce(statResult(1000, 100));
+    await cache.observe("/gone");
+    expect(cache.corpusSize).toBe(1);
+
+    mockStat.mockRejectedValueOnce(new Error("ENOENT"));
+    await cache.observe("/gone");
+    // A deletion has to move the fingerprint, in both halves — the same rule
+    // `getOrCompute` follows when its own stat fails.
+    expect(cache.corpusSize).toBe(0);
+  });
+
+  it("clear() drops observed files as well", async () => {
+    // "Drop everything" has to mean everything, or the fingerprint survives a
+    // reset — `corpusSize` non-zero and `maxMtimeMs()` pinned to a file the
+    // cache no longer knows anything about (Codex P2, PR #524).
+    mockStat.mockResolvedValue(statResult(4000, 100));
+    const cache = new FileCache<string>();
+    await cache.getOrCompute("/read", async () => "parsed");
+    await cache.observe("/seen");
+    expect(cache.corpusSize).toBe(2);
+    expect(cache.maxMtimeMs()).toBe(4000);
+
+    cache.clear();
+    expect(cache.corpusSize).toBe(0);
+    expect(cache.maxMtimeMs()).toBe(0);
+  });
+
+  it("prunes observed files in retainOnly", async () => {
+    mockStat.mockResolvedValue(statResult(1000, 100));
+    const cache = new FileCache<string>();
+    await cache.observe("/a");
+    await cache.observe("/b");
+    expect(cache.corpusSize).toBe(2);
+
+    cache.retainOnly(new Set(["/a"]));
+    expect(cache.corpusSize).toBe(1);
+  });
+});

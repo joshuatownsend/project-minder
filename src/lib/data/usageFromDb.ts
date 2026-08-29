@@ -39,6 +39,7 @@ import { computeContributionCalendar } from "@/lib/usage/contributionCalendar";
 import { computeToolTransitions } from "@/lib/usage/toolTransitions";
 import type { ToolTransitionsTurn } from "@/lib/usage/toolTransitions";
 import { readHomeCaseSensitivity } from "@/lib/db/homeCaseSensitivity";
+import { compareCodePoints } from "@/lib/usage/compareNames";
 
 // SQL-aggregate read path for /api/usage. Builds a `UsageReport`
 // directly from `SELECT SUM(...) GROUP BY ...` queries against the
@@ -131,6 +132,23 @@ export function needsReconcileAfterV3(db: DatabaseT.Database): boolean {
  * construction instead of by coincidence of character set. The `[A-Za-z]--`
  * shape is the one `canonicalizeDirName` tests for (`usage/parser.ts:72`).
  */
+/**
+ * Descending by cost, then ascending by name — BINARY, matching SQLite's
+ * default collation so the two backends order the same ties identically
+ * (#522, Codex P2 on PR #524).
+ *
+ * These sorts run in JS rather than SQL because they follow a MERGE step that
+ * changes the ordering the query established, so the tie-break has to be
+ * restated here rather than relying on the `ORDER BY`.
+ */
+function byCostThenName<T>(name: (x: T) => string): (a: T, b: T) => number {
+  return (a, b) => {
+    const d = (b as { cost: number }).cost - (a as { cost: number }).cost;
+    if (d !== 0) return d;
+    return compareCodePoints(name(a), name(b));
+  };
+}
+
 function foldDirNameForIdentity(
   dirName: string,
   /**
@@ -350,7 +368,11 @@ function queryBySource(db: DatabaseT.Database, f: FilterParams): SourceBreakdown
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY s.source
-       ORDER BY cost DESC`
+       -- Tie-break by name (#522). Unlike the file backend there is no
+       -- insertion order to fall back on: SQLite's sort is not stable, so a tie
+       -- is resolved by whatever the plan happens to emit, and that changes
+       -- with an index or a row count.
+       ORDER BY cost DESC, s.source ASC`
     )
     .all(f) as SourceRow[];
 
@@ -381,7 +403,7 @@ function queryByModel(db: DatabaseT.Database, f: FilterParams): ModelCost[] {
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY t.model
-       ORDER BY cost DESC`
+       ORDER BY cost DESC, t.model ASC`
     )
     .all(f) as ModelCost[];
 }
@@ -421,7 +443,7 @@ function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdo
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY s.project_slug, s.project_dir_name, s.home_key
-       ORDER BY cost DESC`
+       ORDER BY cost DESC, s.project_slug ASC, s.project_dir_name ASC`
     )
     .all(f) as Array<ProjectBreakdown & { homeKey: string | null }>;
 
@@ -460,7 +482,11 @@ function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdo
   // NULL homeKey → omitted, matching the file backend (homeKey is absent on
   // rows whose turns carry no home stamp) so the two backends serialize alike.
   return [...merged.values()]
-    .sort((a, b) => b.cost - a.cost)
+    .sort(
+      byCostThenName(
+        (r) => `${r.projectSlug}\u0000${r.projectDirName}\u0000${r.homeKey ?? ""}`
+      )
+    )
     .map(({ homeKey, ...rest }) => (homeKey === null ? rest : { ...rest, homeKey }));
 }
 
@@ -489,7 +515,7 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
            AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
          GROUP BY t.category
-         ORDER BY cost DESC`
+         ORDER BY cost DESC, t.category ASC`
       )
       .all(f) as Array<{
         category: string; turns: number; tokens: number; cost: number;
@@ -523,7 +549,7 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
        WHERE (@startDay IS NULL OR day >= @startDay)
          AND (@project IS NULL OR project_slug = @project)
        GROUP BY category
-       ORDER BY cost DESC`
+       ORDER BY cost DESC, category ASC`
     )
     .all(f) as Array<{ category: string; turns: number; tokens: number; cost: number }>;
 
@@ -779,7 +805,7 @@ function queryBySkillCost(db: DatabaseT.Database, f: FilterParams): SkillCost[] 
       // `EffortBreakdown.oneShotRate`.
       ...(r.verifiedTasks > 0 ? { oneShotRate: r.oneShotTasks / r.verifiedTasks } : {}),
     }))
-    .sort((a, b) => b.cost - a.cost);
+    .sort(byCostThenName((r) => r.skill));
 }
 
 /**
@@ -888,11 +914,11 @@ function queryByMcpCost(db: DatabaseT.Database, f: FilterParams): McpServerCost[
   for (const row of merged.values()) {
     const tools = toolsByServer.get(row.key);
     if (tools && tools.size > 0) {
-      row.tools = [...tools.values()].sort((a, b) => b.cost - a.cost);
+      row.tools = [...tools.values()].sort(byCostThenName((t) => t.tool));
     }
   }
 
-  return [...merged.values()].sort((a, b) => b.cost - a.cost);
+  return [...merged.values()].sort(byCostThenName((r) => r.key));
 }
 
 function queryDaily(db: DatabaseT.Database, f: FilterParams): DailyBucket[] {
@@ -939,7 +965,9 @@ function queryTopTools(db: DatabaseT.Database, f: FilterParams): [string, number
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY tu.tool_name
-       ORDER BY count DESC
+       -- This one is LIMITed, so a tie at the boundary decided membership: a
+       -- tool appeared in one run's report and not the next (#522).
+       ORDER BY count DESC, tu.tool_name ASC
        LIMIT 15`
     )
     .all(f) as Array<{ name: string; count: number }>;
@@ -1180,7 +1208,7 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY s.project_slug
-       ORDER BY cost DESC`
+       ORDER BY cost DESC, s.project_slug ASC`
     )
     .all(f) as Array<{ projectSlug: string; projectDirName: string; cost: number; turns: number }>;
   if (headers.length === 0) return [];
@@ -1211,7 +1239,7 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
              AND s.home_key = ?
              AND s.project_slug IN (${placeholders})
            GROUP BY s.project_slug, t.category
-           ORDER BY cost DESC`
+           ORDER BY cost DESC, s.project_slug ASC, t.category ASC`
         )
         .all(f.periodStart, f.periodStart, f.home, ...slugs)
     : db
@@ -1222,7 +1250,7 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
            WHERE (? IS NULL OR cc.day >= ?)
              AND cc.project_slug IN (${placeholders})
            GROUP BY cc.project_slug, cc.category
-           ORDER BY cost DESC`
+           ORDER BY cost DESC, cc.project_slug ASC, cc.category ASC`
         )
         .all(f.startDay, f.startDay, ...slugs)) as Array<{
     projectSlug: string;
@@ -1247,7 +1275,9 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
          AND (? IS NULL OR s.home_key = ?)
          AND s.project_slug IN (${placeholders})
        GROUP BY s.project_slug, tu.tool_name
-       ORDER BY s.project_slug, count DESC`
+       -- Five rows per project are taken from this, so a tie at the cutoff
+       -- decided MEMBERSHIP and not just order (#522).
+       ORDER BY s.project_slug, count DESC, tu.tool_name ASC`
     )
     .all(f.periodStart, f.periodStart, f.home, f.home, ...slugs) as Array<{
     projectSlug: string;

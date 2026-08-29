@@ -113,6 +113,26 @@ export class FileCache<T> {
    */
   private readonly meta = new Map<string, { mtimeMs: number; size: number }>();
 
+  /**
+   * Files the sweep SAW but deliberately did not read.
+   *
+   * Separate from `meta` on purpose. `meta` means "successfully read", and that
+   * is load-bearing: `getOrCompute` writes it only after a parse resolves, so a
+   * file that failed to read stays out of the corpus and a later successful
+   * retry MOVES the fingerprint even when mtime and size are unchanged. That is
+   * the #498 defect — an EACCES'd transcript whose permissions were restored,
+   * touching ctime and nothing else.
+   *
+   * Registering an unread file in `meta` would have re-opened exactly that hole
+   * for a duplicate's alternate: stat-only registration would make a later
+   * genuine read look like no change at all (Codex P2, PR #524).
+   *
+   * A path is in AT MOST ONE of the two — `observe` moves it here, a successful
+   * `getOrCompute` moves it back — so the corpus is their union and counting it
+   * needs no deduplication.
+   */
+  private readonly observed = new Map<string, { mtimeMs: number; size: number }>();
+
   constructor(opts: FileCacheOptions<T> = {}) {
     this.maxEntries = opts.maxEntries ?? 5000;
     this.maxBytes = opts.maxBytes ?? Infinity;
@@ -136,7 +156,11 @@ export class FileCache<T> {
    * `size`, which counts RESIDENT values — see `meta`.
    */
   get corpusSize(): number {
-    return this.meta.size;
+    // Both halves: files read, and files seen and skipped. A duplicate's
+    // alternate is part of the corpus even though nothing parsed it, and a
+    // fingerprint that omitted it could not tell "the preferred copy was
+    // deleted and the alternate took over" from "nothing changed".
+    return this.meta.size + this.observed.size;
   }
 
   /**
@@ -145,6 +169,42 @@ export class FileCache<T> {
    * Returns `undefined` if the file can't be stat'd (deleted, permission, etc.)
    * — the caller decides whether absence is fatal.
    */
+  /**
+   * Record a file in the CORPUS without parsing or retaining it.
+   *
+   * The corpus fingerprint — `corpusSize` and `maxMtimeMs()` — is what route
+   * ETags and the category histogram are keyed on, and it is built from `meta`,
+   * which only `getOrCompute` used to write. So a file the sweep SAW but chose
+   * not to parse was invisible to it.
+   *
+   * That became reachable with #522's duplicate handling: when one session id
+   * has two copies, only the preferred one is parsed. Delete that copy and the
+   * alternate takes over — but the fingerprint could be identical either side
+   * of the swap, because the count stays at one and a single file's removal
+   * rarely moves a maximum taken over thousands. `getSessionCategoryCounts()`
+   * then serves its indefinitely-cached histogram for a corpus that changed
+   * (Codex P2, PR #524).
+   *
+   * One `stat`, no read, no slot, no bytes against the budget. Called only for
+   * duplicate alternates, which are pathological to begin with.
+   */
+  async observe(filePath: string): Promise<void> {
+    try {
+      const stat = await fs.stat(filePath);
+      // Into `observed`, and OUT of `meta` — a file that is only being stat'd
+      // this cycle is no longer one this cache has read, and leaving a stale
+      // "read" record for it is what would mask a later real read.
+      this.meta.delete(filePath);
+      this.observed.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size });
+    } catch {
+      // Gone between enumeration and here. Out of the corpus entirely, for the
+      // same reason `getOrCompute` drops it: a deletion has to move the
+      // fingerprint.
+      this.meta.delete(filePath);
+      this.observed.delete(filePath);
+    }
+  }
+
   async getOrCompute(
     filePath: string,
     factory: (filePath: string) => Promise<T>
@@ -157,6 +217,7 @@ export class FileCache<T> {
       // both halves of the fingerprint.
       this.drop(filePath);
       this.meta.delete(filePath);
+      this.observed.delete(filePath);
       return undefined;
     }
 
@@ -176,12 +237,37 @@ export class FileCache<T> {
     if (existing) return existing;
 
     const promise = (async () => {
-      const value = await factory(filePath);
+      let value: T;
+      try {
+        value = await factory(filePath);
+      } catch (err) {
+        // OUT of the corpus, not merely absent from it.
+        //
+        // Not adding a failed read was enough while `meta` was the only way in:
+        // a file that never parsed was never there. `observe` gave it a second
+        // door (#522), so an alternate could already be in the corpus when its
+        // read failed — and then a later success with mtime and size unchanged
+        // (permissions restored, touching only ctime) moved neither half of the
+        // `(maxMtime, corpusSize)` fingerprint. `getSessionCategoryCounts()`
+        // would serve the histogram cached during the failure indefinitely.
+        //
+        // Removing it makes the failure itself move the fingerprint, so the
+        // recovery moves it back. That is the #498 rule — "a later successful
+        // retry genuinely changes this map, even with identical file metadata"
+        // — extended to a file that got in without being read (Codex P2,
+        // PR #524).
+        this.meta.delete(filePath);
+        this.observed.delete(filePath);
+        throw err;
+      }
       // AFTER the factory resolves, never on the way past (Codex P1, PR #514).
       // `stat` succeeding says nothing about the read: a transient EACCES or
       // EBUSY, or a write racing the read, rejects here, and a file that did
       // not parse is not part of the corpus this describes.
       this.meta.set(filePath, { mtimeMs, size });
+      // Read now, so it is no longer merely observed. Keeps the two maps
+      // disjoint, which is what lets `corpusSize` add them.
+      this.observed.delete(filePath);
       // Replace, not add: a changed file already has a slot, and forgetting to
       // subtract the old size is how a running total silently drifts upward
       // until the cache evicts everything.
@@ -216,6 +302,11 @@ export class FileCache<T> {
   clear(): void {
     this.slots.clear();
     this.meta.clear();
+    // `observed` too. It is the second half of the corpus, so leaving it
+    // populated made "drop everything" leave `corpusSize` non-zero and
+    // `maxMtimeMs()` pinned to a file this cache no longer knows anything
+    // about (Codex P2, PR #524).
+    this.observed.clear();
     this.retainedBytes = 0;
   }
 
@@ -247,6 +338,9 @@ export class FileCache<T> {
     for (const path of [...this.meta.keys()]) {
       if (!liveSet.has(path)) this.meta.delete(path);
     }
+    for (const path of [...this.observed.keys()]) {
+      if (!liveSet.has(path)) this.observed.delete(path);
+    }
   }
 
   /**
@@ -261,6 +355,13 @@ export class FileCache<T> {
   maxMtimeMs(): number {
     let max = 0;
     for (const entry of this.meta.values()) {
+      if (entry.mtimeMs > max) max = entry.mtimeMs;
+    }
+    // Observed-but-unread files count too. They are part of the corpus, and a
+    // duplicate's alternate becoming the newest file on disk has to move this
+    // — otherwise the ETag says "unchanged" across a swap that changed the
+    // answer.
+    for (const entry of this.observed.values()) {
       if (entry.mtimeMs > max) max = entry.mtimeMs;
     }
     return max;
