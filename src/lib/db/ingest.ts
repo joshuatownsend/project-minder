@@ -629,12 +629,27 @@ async function readJsonlSession(
    * ordinary session that is exactly right and those turns are skipped by the
    * primary path. In a file at `<project>/<parent>/subagents/<id>.jsonl` every
    * entry carries the flag — sampled on a real transcript, 50 of 50 — because
-   * the whole file IS the sidechain. Skipping them all left a session with no
-   * primary turns: `turn_count` structurally zero, `text_preview` empty, and a
-   * detail page that opened successfully onto nothing.
+   * the whole file IS the sidechain.
    *
-   * So for these files the flag is not a reason to skip. Their entries are
-   * PRIMARY for this session, which is what they are: its own conversation.
+   * Before this, such a file reached only the sidechain COLLECTOR, which
+   * records one assistant row per turn for cost and carries no user turns and
+   * no text previews. The rows existed; there was simply nothing renderable in
+   * them, so the detail page opened successfully onto an empty timeline.
+   *
+   * These files therefore go through the PRIMARY writer, which produces real
+   * turns with prose — but the rows it writes for them keep `is_sidechain = 1`.
+   * That is the whole design, and the second attempt at it: writing them as
+   * primary made the timeline work and silently moved every aggregate keyed on
+   * the flag. `querySubagentTotals` defines `subagentCost`/`subagentTokens` as
+   * `is_sidechain = 1`, so delegated spend would have VANISHED from the
+   * subagent breakout, while one-shot rates, activity streaks and the billed
+   * engagement report — all `is_sidechain = 0` — would have absorbed a
+   * generated delegation prompt as human work. (Codex P1 x2, PR #528.)
+   *
+   * So the flag keeps meaning what it meant, every consumer of it is
+   * untouched, and exactly one reader changes: the session-detail timeline,
+   * which stops filtering on it when the file is a delegated transcript. The
+   * turns are primary FOR THE TIMELINE and nothing else.
    */
   const isDelegatedAgentTranscript = parseSubagentParentSessionId(filePath) !== undefined;
   const canonicalDir = canonicalizeDirName(projectDirName);
@@ -1484,7 +1499,10 @@ async function readJsonlSession(
         turnDurationMs: null,
         hasThinking: hasTurnThinking ? 1 : 0,
         textOffset: fromOffset + thisLineOffset,
-        isSidechain: 0,
+        // 1 for a delegated transcript — see the note on
+        // `isDelegatedAgentTranscript`. The row is written by the primary
+        // writer so it carries prose; the FLAG still says whose work it was.
+        isSidechain: isDelegatedAgentTranscript ? 1 : 0,
         effort: entry.effort,
         requestId: (entry as { requestId?: string }).requestId,
         attributionSkill: entry.attributionSkill,
@@ -1581,7 +1599,7 @@ async function readJsonlSession(
         turnDurationMs: null,
         hasThinking: 0,
         textOffset: null,
-        isSidechain: 0,
+        isSidechain: isDelegatedAgentTranscript ? 1 : 0,
       });
 
       // Status inference: walk this user turn's content for
@@ -1718,7 +1736,15 @@ async function readJsonlSession(
   // `sessions.turn_count` (a session-summary field, primary-only, mirrored by
   // the file-parse ClaudeUsageStats) excludes subagent turns. The usage totals
   // read `COUNT(*)`/`SUM` over the `turns` rows directly and DO include them.
-  const primaryTurnCount = turns.length;
+  //
+  // Counted by the FLAG, not by which writer produced the row. A delegated
+  // transcript's turns go through the primary writer so they carry prose for
+  // the timeline, but they keep `is_sidechain = 1` — and `turn_count` is a
+  // primary-only summary field, so it must follow the flag. Using
+  // `turns.length` here made a delegated transcript report a real turn count,
+  // which put it back in the sessions list (its exclusion is `turn_count > 0`)
+  // and into the Claude-usage totals. (#487.)
+  const primaryTurnCount = turns.filter((t) => t.isSidechain === 0).length;
 
   // A1: append subagent (sidechain) turns as `turns` rows now — AFTER the
   // primary detectors above (status/one-shot/quality/work-mode/resume all ran
@@ -1870,15 +1896,37 @@ async function readJsonlSession(
       initialPrompt,
       lastPrompt,
       turnCount: primaryTurnCount,
-      userTurnCount,
-      assistantTurnCount,
-      toolCallCount,
-      errorCount,
-      inputTokens,
-      outputTokens,
-      cacheCreateTokens,
-      cacheReadTokens,
-      costUsd,
+      // Every one of these is a PRIMARY-ONLY summary field, and a delegated
+      // transcript has no primary turns — so they are zero for it, exactly as
+      // they were before #487 sent its entries through this writer.
+      //
+      // The tokens and cost are NOT lost: they live on the turn rows, which
+      // carry `is_sidechain = 1`, and the usage rollups derive from those rows
+      // rather than from this summary. What is withheld here is only the
+      // session CARD's own figures, which describe work the user's session did.
+      ...(isDelegatedAgentTranscript
+        ? {
+            userTurnCount: 0,
+            assistantTurnCount: 0,
+            toolCallCount: 0,
+            errorCount: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheCreateTokens: 0,
+            cacheReadTokens: 0,
+            costUsd: 0,
+          }
+        : {
+            userTurnCount,
+            assistantTurnCount,
+            toolCallCount,
+            errorCount,
+            inputTokens,
+            outputTokens,
+            cacheCreateTokens,
+            cacheReadTokens,
+            costUsd,
+          }),
       cacheHitRatio,
       maxContextFill,
       hasCompactionLoop,

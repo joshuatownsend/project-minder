@@ -244,27 +244,16 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
             session_kind, ai_title, entrypoint,
             derived_version
      FROM sessions
-     -- turn_count > 0 no longer excludes delegated-agent transcripts, and
-     -- used to only by accident: their turns were all is_sidechain, so the
-     -- count was structurally zero. #487 makes those turns primary — the file
-     -- IS the agent's conversation — so the count is now real and they would
-     -- appear here.
-     --
-     -- They are still kept out, and now deliberately: they are not sessions the
-     -- user started, and on a delegation-heavy history they would roughly
-     -- double the list. Reachable by link from the parent session, which is
-     -- where their context actually is.
-     --
-     -- Filtered in JS below rather than by a SQL LIKE on the path, because
-     -- parseSubagentParentSessionId is the authority on that path shape and a
-     -- pattern match would misread a project directory that happens to contain
-     -- the word "subagents".
+     -- turn_count counts PRIMARY turns only. Sidechain-only rows (subagent
+     -- transcripts ingested from <session>/subagents/*.jsonl — needed so
+     -- their token spend reaches the usage rollups) aren't sessions the
+     -- user ran and would render as blank zero-turn cards; keep them out
+     -- of the browser.
      WHERE turn_count > 0
      ORDER BY end_ts DESC`
   ).all() as SessionRow[];
 
-  const rows = headers.filter((h) => parseSubagentParentSessionId(h.file_path) === undefined);
-  if (rows.length === 0) return [];
+  if (headers.length === 0) return [];
 
   // Stitch per-session breakdown maps. Each query returns flat rows
   // keyed by session_id; we group in JS into Maps the assembly loop
@@ -280,13 +269,10 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
   );
 
   // #395: what the delegation roll-up needs, over ALL sessions — not just the
-  // ones in `rows`. Subagent transcripts are excluded from the list above (they
-  // are not sessions the user ran), yet their tool calls are exactly what the
-  // roll-up is for. Querying them separately is the point, not an oversight.
-  //
-  // #487 changed WHICH exclusion does that job — `turn_count > 0` used to, only
-  // by accident — but not the fact of it, so this query is unaffected: it never
-  // read the header set to begin with.
+  // ones in `headers`. Subagent transcripts are excluded from the header query
+  // by `turn_count > 0` (they are not sessions the user ran), yet their tool
+  // calls are exactly what the roll-up is for. Querying them separately is the
+  // point, not an oversight.
   const sidechainToolsBySession = groupCounts(
     prepCached(
       db,
@@ -419,7 +405,7 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
 
   const now = Date.now();
   const result: SessionSummary[] = [];
-  for (const h of rows) {
+  for (const h of headers) {
     const toolUsage = toolsBySession.get(h.session_id) ?? {};
     const skillsUsed = skillsBySession.get(h.session_id) ?? {};
     const modelsUsed = modelsBySession.get(h.session_id) ?? [];

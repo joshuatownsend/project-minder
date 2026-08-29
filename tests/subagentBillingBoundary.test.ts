@@ -5,20 +5,29 @@ import { promises as fs } from "fs";
 import { installIsolatedState } from "./_helpers/isolatedState";
 
 /**
- * PR #528 review — the two things #487's change reached that it should not.
+ * #487 — the boundary that keeps a delegated agent's turns out of everything
+ * except its own timeline.
  *
- * #487 makes a delegated agent's turns PRIMARY, because the file is that
- * agent's own conversation and the detail page needs them. Two consumers were
- * relying on those turns being invisible, and neither said so:
+ * The fix routes a `<parent>/subagents/*.jsonl` transcript through the writer
+ * that produces real turns, because the sidechain collector produced only
+ * assistant rows with no prose and the detail page rendered nothing. The first
+ * attempt also wrote those rows as `is_sidechain = 0`, and that silently moved
+ * every aggregate keyed on the flag:
  *
- *  1. The **billed engagement report** treats unrecognized user prose as a
- *     human at a keyboard. A delegated transcript's user turns are generated
- *     delegation prompts, so each would open an attended block and earn tail
- *     credit — on a figure that becomes a client invoice. (Codex P1.)
+ *  - `querySubagentTotals` defines `subagentCost`/`subagentTokens` as
+ *    `is_sidechain = 1`, so delegated spend would have VANISHED from the
+ *    subagent breakout.
+ *  - The billed engagement report, one-shot rates and activity streaks are all
+ *    `is_sidechain = 0` and would have ABSORBED it. Engagement is the sharp
+ *    one: it reads unrecognized user prose as a human at a keyboard, and a
+ *    delegated transcript's user turns are generated delegation prompts
+ *    ("review this module"), so each would have opened an attended block and
+ *    earned tail credit on a figure that becomes a client invoice.
  *
- *  2. `tool_call_count` was made to depend on **where the producer split
- *     lines**: the first line of a message counted its blocks while a
- *     continuation line's were dropped before the dedupe. (Copilot.)
+ * (Codex P1 ×2, PR #528.) The rows therefore keep `is_sidechain = 1`, and this
+ * file is the regression guard on that: it asserts the consequences, not the
+ * implementation, so it still fails if some later change routes these turns
+ * back onto the primary side by another route.
  */
 
 let driverAvailable: boolean;
@@ -52,7 +61,6 @@ const USAGE = {
   cache_read_input_tokens: 0,
 };
 
-/** A user turn with real prose — what the engagement classifier reads. */
 const userLine = (ts: string, text: string, isSidechain: boolean) =>
   JSON.stringify({
     type: "user",
@@ -100,15 +108,14 @@ beforeEach(() => {
   tmpHome = state.tmpHome();
 });
 
-describe.skipIf(!driverAvailable)("delegated transcripts and the billed hours", () => {
-  it("does not bill a generated delegation prompt as human engagement", async () => {
+describe.skipIf(!driverAvailable)("delegated transcripts keep their provenance", () => {
+  it("renders its own timeline while staying out of the billed hours", async () => {
     const { conn, mig, ingest } = await reload();
     expect((await mig.initDb()).error).toBeNull();
     const db = (await conn.getDb())!;
 
-    // A root session with NO human prose at all, so any hours the report
-    // produces can only have come from the delegated file. Its assistant turns
-    // carry no user text to attend to.
+    // A root session with NO human prose at all, so any hours the engagement
+    // report produces can only have come from the delegated file.
     const { projectsDir } = await write(path.join("C--dev-myapp", "beef01.jsonl"), [
       assistantLine("2026-08-01T10:00:00Z", "m1", [{ type: "text", text: "ok" }], false),
     ]);
@@ -117,24 +124,39 @@ describe.skipIf(!driverAvailable)("delegated transcripts and the billed hours", 
     // timestamps far enough apart to open and sustain an attended block.
     await write(path.join("C--dev-myapp", "beef01", "subagents", "agent-1.jsonl"), [
       userLine("2026-08-01T10:05:00Z", "review this module and report what you find", true),
-      assistantLine("2026-08-01T10:06:00Z", "s0", [{ type: "text", text: "reviewed" }], true),
+      assistantLine("2026-08-01T10:06:00Z", "s0", [{ type: "text", text: "reviewed it" }], true),
       userLine("2026-08-01T10:20:00Z", "now check the other one the same way", true),
-      assistantLine("2026-08-01T10:21:00Z", "s1", [{ type: "text", text: "done" }], true),
+      assistantLine("2026-08-01T10:21:00Z", "s1", [{ type: "text", text: "checked it" }], true),
     ]);
 
     const stats = await ingest.reconcileAllSessions(db, { projectsDir });
     expect(stats.errors).toBe(0);
 
-    // The premise, asserted before anything is concluded from it: the delegated
-    // rows really are indexed and really are primary now. Without this the test
-    // would pass just as well if ingest had stopped walking `subagents/`.
-    const nested = db
+    // ── The premise, asserted before anything is concluded from it ──────────
+    // The rows are there, they carry PROSE (which is what was missing before —
+    // the collector wrote assistant rows with a null preview), and they carry
+    // the flag. Without this the test would pass just as well if ingest had
+    // stopped walking `subagents/` altogether.
+    const rows = db
       .prepare(
-        "SELECT COUNT(*) AS n FROM turns WHERE session_id = 'agent-1' AND is_sidechain = 0"
+        "SELECT is_sidechain, role, text_preview FROM turns WHERE session_id = 'agent-1' ORDER BY turn_index"
       )
-      .get() as { n: number };
-    expect(nested.n).toBeGreaterThan(0);
+      .all() as Array<{ is_sidechain: number; role: string; text_preview: string | null }>;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.is_sidechain === 1)).toBe(true);
+    expect(rows.some((r) => r.role === "user")).toBe(true);
+    expect(rows.some((r) => (r.text_preview ?? "").includes("review this module"))).toBe(true);
 
+    // ── The timeline renders anyway ────────────────────────────────────────
+    const { loadSessionDetailFromDb } = await import("@/lib/data/sessionDetailFromDb");
+    const detail = await loadSessionDetailFromDb(db, "agent-1");
+    expect(detail).not.toBeNull();
+    expect(detail!.timeline.length).toBeGreaterThan(0);
+    // Known text, not just a count: a timeline of the right length built from
+    // the wrong rows would satisfy a length check.
+    expect(JSON.stringify(detail!.timeline)).toContain("review this module");
+
+    // ── And none of it is billable ─────────────────────────────────────────
     const { loadEngagementReportFromSql } = await import("@/lib/data/engagementFromDb");
     const { resolveEngagementConfig } = await import("@/lib/engagement/config");
     const report = loadEngagementReportFromSql(db, {
@@ -142,23 +164,30 @@ describe.skipIf(!driverAvailable)("delegated transcripts and the billed hours", 
       timeZone: "UTC",
       config: resolveEngagementConfig({}),
     });
-
-    // Zero, not merely "small". There is no human in this fixture.
+    // Zero, not merely "small". There is no human in this fixture, so a
+    // threshold would have passed against the bug at a low enough count.
     expect(report.totalHours).toBe(0);
     expect(report.byProject).toHaveLength(0);
 
-    // And the drop is DISCLOSED rather than silent — a billing report that
-    // quietly discards rows it declined to count is the provenance gap the
-    // disclosure line exists to close.
-    expect(report.excludedAutomatedSessions).toBeGreaterThan(0);
+    // ── And the session card reports no work of its own ────────────────────
+    // `turn_count` is a primary-only summary field. It is also what keeps these
+    // out of the sessions list, so a non-zero value here would put a blank
+    // delegated card in front of the user as well as moving the usage totals.
+    const summary = db
+      .prepare(
+        "SELECT turn_count, input_tokens, cost_usd FROM sessions WHERE session_id = 'agent-1'"
+      )
+      .get() as { turn_count: number; input_tokens: number; cost_usd: number };
+    expect(summary.turn_count).toBe(0);
+    expect(summary.input_tokens).toBe(0);
   });
 
   it("counts a delegated agent's tool calls the same however the lines split", async () => {
     // `tool_call_count` must describe what the file did, not how its producer
     // chose to chunk it. Two transcripts with the SAME two calls — one message
     // carrying both blocks, versus a continuation line carrying the second —
-    // must agree. Before the fix the continuation block was dropped before the
-    // dedupe, so the split file counted 1 and the whole file counted 2.
+    // must agree. An earlier revision skipped the block before the dedupe, so
+    // the split file counted 1 and the whole file counted 2 (Copilot, PR #528).
     const { conn, mig, ingest } = await reload();
     expect((await mig.initDb()).error).toBeNull();
     const db = (await conn.getDb())!;
@@ -178,7 +207,7 @@ describe.skipIf(!driverAvailable)("delegated transcripts and the billed hours", 
       ),
     ]);
 
-    // Same two calls, second one arriving on a continuation of the same message.
+    // Same two calls, the second arriving on a continuation of the same message.
     await write(path.join("C--dev-myapp", "beef02", "subagents", "split.jsonl"), [
       userLine("2026-08-01T10:05:00Z", "scan", true),
       assistantLine("2026-08-01T10:06:00Z", "p0", [toolBlock("p_1", "WebSearch")], true),
@@ -187,19 +216,23 @@ describe.skipIf(!driverAvailable)("delegated transcripts and the billed hours", 
 
     expect((await ingest.reconcileAllSessions(db, { projectsDir })).errors).toBe(0);
 
+    // Read from `sidechain_tool_uses`, which is where a delegated agent's calls
+    // live — `sessions.tool_call_count` is a primary-only summary field and is
+    // zero for these, by the same rule as `turn_count`.
     const counts = db
       .prepare(
-        "SELECT session_id, tool_call_count FROM sessions WHERE session_id IN ('whole','split') ORDER BY session_id"
+        `SELECT session_id, COUNT(*) AS n FROM sidechain_tool_uses
+          WHERE session_id IN ('whole','split') GROUP BY session_id ORDER BY session_id`
       )
-      .all() as Array<{ session_id: string; tool_call_count: number }>;
+      .all() as Array<{ session_id: string; n: number }>;
 
     expect(counts).toHaveLength(2);
-    // Absolute, not just equal to each other: two counts that agreed at zero
-    // would satisfy a parity check while proving nothing.
-    expect(counts.map((c) => c.tool_call_count)).toEqual([2, 2]);
+    // Absolute, not just equal to each other: two counts agreeing at zero would
+    // satisfy a parity check while proving nothing.
+    expect(counts.map((c) => c.n)).toEqual([2, 2]);
 
-    // And the rows still stayed out of `tool_uses` — the #511 boundary this PR
-    // is careful not to cross.
+    // And they stayed out of `tool_uses` — the #511 boundary this change is
+    // careful not to cross.
     const primary = db
       .prepare("SELECT COUNT(*) AS n FROM tool_uses WHERE session_id IN ('whole','split')")
       .get() as { n: number };

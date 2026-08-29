@@ -11,6 +11,7 @@ import { isWorktreeFilePath } from "@/lib/scanner/worktreeCheck";
 import { readSubagentMetaSync } from "@/lib/scanner/subagentMeta";
 import { enrichSubagentsFromOtel } from "@/lib/scanner/subagentEnrichment";
 import type { SubagentMeta } from "@/lib/scanner/subagentMeta";
+import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptPath";
 import type {
   SessionDetail,
   TimelineEvent,
@@ -245,15 +246,30 @@ export async function loadSessionDetailFromDb(
   // in JS without a separate `SELECT DISTINCT model` round-trip.
   // `tool_result_preview` lets us detect tool-result-only user turns
   // (file-parse skips them; see `buildTimeline`).
+  // `is_sidechain = 0` everywhere else, and DELIBERATELY not here when the
+  // session is a delegated agent's own transcript (#487).
+  //
+  // In such a file every turn carries the flag, because the whole file is the
+  // sidechain — so this filter matched nothing and the page rendered an empty
+  // timeline, which reads as "this agent did no work". The turns keep the flag
+  // (every aggregate built on it stays exactly as it was, including the
+  // `is_sidechain = 1` subagent-spend breakout); it is this ONE read that stops
+  // treating the flag as a reason to hide them, because here they are not a
+  // digression from someone else's conversation — they ARE the conversation.
+  //
+  // `parseSubagentParentSessionId` decides, not a `LIKE '%subagents%'`: it is
+  // the authority on that path shape, and a second hand-copied definition is
+  // the failure this wave keeps unwinding.
+  const isDelegated = parseSubagentParentSessionId(session.file_path) !== undefined;
   const turns = prepCached(db,
       `SELECT turn_index, ts, role, model, is_error,
               text_preview, tool_result_preview, output_tokens, turn_duration_ms, has_thinking
        FROM turns
        WHERE session_id = ?
-         AND is_sidechain = 0
+         AND (is_sidechain = 0 OR ?)
        ORDER BY turn_index`
     )
-    .all(sessionId) as TurnRow[];
+    .all(sessionId, isDelegated ? 1 : 0) as TurnRow[];
 
   const tools = prepCached(db,
       `SELECT turn_index, sequence_in_turn, tool_use_id, ts, tool_name,

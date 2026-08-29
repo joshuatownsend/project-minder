@@ -217,22 +217,10 @@ describe.skipIf(!driverAvailable)("data façade — getClaudeUsage backend parit
       .prepare("SELECT session_id, turn_count FROM sessions WHERE session_id = ?")
       .get(AGENT_SESSION) as { session_id: string; turn_count: number } | undefined;
     expect(nested).toBeDefined();
-    // And stored the way the fix reasons about — which #487 CHANGED, so this
-    // assertion is inverted from what it said when #480 landed.
-    //
-    // It used to read `toBe(0)`: a nested transcript's turns were all
-    // `is_sidechain`, so the row carried a structural zero and the exclusion
-    // below had nothing to do. That zero was also the blank-timeline defect,
-    // and #487 makes those turns primary because the file IS the delegated
-    // agent's own conversation. So the row now carries REAL turns, and the
-    // exclusion that keeps this card at 2 conversations went from decorative
-    // to load-bearing in the same change.
-    //
-    // Asserted as non-zero rather than deleted: a premise that the nested row
-    // is indexed AND carries weight is exactly what makes the assertions below
-    // discriminating. If ingest ever stopped walking `subagents/`, this line
-    // fails instead of the fixture quietly ceasing to exercise anything.
-    expect(nested!.turn_count).toBeGreaterThan(0);
+    // And stored the way the fix reasons about: a sidechain-only transcript
+    // carries zero primary turns, which is why counting it as a conversation
+    // was incoherent rather than merely inconsistent.
+    expect(nested!.turn_count).toBe(0);
 
     const dbResult = await dbFacade.getClaudeUsage(projectPaths);
     expect(dbResult.meta.backend).toBe("db");

@@ -189,53 +189,21 @@ function collectStats(
 
   // One prepare per call (variable-shape SQL). The route's 10-min
   // cache absorbs the per-prepare cost; under churn that's pennies.
-  // Selected per row and summed in JS rather than by SQL `SUM`, because every
-  // total here must exclude nested subagent transcripts and the authority on
-  // "is this one" is `parseSubagentParentSessionId`, not a `LIKE` pattern (see
-  // note 3 above).
-  //
-  // Until #487 a plain `SUM` over every row was correct BY ACCIDENT: a nested
-  // row's aggregates were primary-only and its turns were all `is_sidechain`,
-  // so it contributed a structural zero to each column and there was nothing
-  // to exclude. #487 makes those turns primary — the file IS the agent's own
-  // conversation — so the row now carries real turns and real tokens, and an
-  // unfiltered SUM would start folding delegated work into a card whose
-  // file-parse counterpart never even opens those files. The exclusion was
-  // always the intent; it is now also load-bearing.
-  const rows = db
+  const totals = db
     .prepare(
-      `SELECT file_path, turn_count, input_tokens, output_tokens,
-              cache_create_tokens, cache_read_tokens, cost_usd, error_count
+      `SELECT COUNT(*) AS row_count,
+              COALESCE(SUM(turn_count), 0) AS total_turns,
+              COALESCE(SUM(input_tokens), 0) AS input_tokens,
+              COALESCE(SUM(output_tokens), 0) AS output_tokens,
+              COALESCE(SUM(cache_create_tokens), 0) AS cache_create_tokens,
+              COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+              COALESCE(SUM(cost_usd), 0) AS cost_usd,
+              COALESCE(SUM(error_count), 0) AS error_count
        FROM sessions
        WHERE project_dir_name IN (${placeholders})
          AND source = 'claude'`
     )
-    .all(...allowedDirs) as Array<{
-    file_path: string;
-    turn_count: number;
-    input_tokens: number;
-    output_tokens: number;
-    cache_create_tokens: number;
-    cache_read_tokens: number;
-    cost_usd: number;
-    error_count: number;
-  }>;
-
-  const primary = rows.filter(
-    (r) => parseSubagentParentSessionId(r.file_path) === undefined
-  );
-  const sum = (pick: (r: (typeof primary)[number]) => number) =>
-    primary.reduce((acc, r) => acc + (pick(r) || 0), 0);
-  const totals: TotalsRow = {
-    row_count: rows.length,
-    total_turns: sum((r) => r.turn_count),
-    input_tokens: sum((r) => r.input_tokens),
-    output_tokens: sum((r) => r.output_tokens),
-    cache_create_tokens: sum((r) => r.cache_create_tokens),
-    cache_read_tokens: sum((r) => r.cache_read_tokens),
-    cost_usd: sum((r) => r.cost_usd),
-    error_count: sum((r) => r.error_count),
-  };
+    .get(...allowedDirs) as TotalsRow;
 
   // Zero indexed rows keeps the previous meaning: the façade reads a
   // zero `conversationCount` as "indexer warming up" and falls through
@@ -256,7 +224,16 @@ function collectStats(
   // definition. (A stored column was considered and rejected in that
   // module's docblock — a not-yet-re-derived row would silently have no
   // link.)
-  stats.conversationCount = primary.length;
+  const paths = db
+    .prepare(
+      `SELECT file_path FROM sessions
+       WHERE project_dir_name IN (${placeholders})
+         AND source = 'claude'`
+    )
+    .all(...allowedDirs) as Array<{ file_path: string }>;
+  stats.conversationCount = paths.filter(
+    (r) => parseSubagentParentSessionId(r.file_path) === undefined
+  ).length;
   stats.totalTurns = totals.total_turns;
   stats.inputTokens = totals.input_tokens;
   stats.outputTokens = totals.output_tokens;
@@ -286,17 +263,9 @@ function collectStats(
   // `<synthetic>` is the file-parse path's "no model" sentinel for
   // turns that don't have a real assistant model (e.g. system-only
   // entries). Both backends exclude it from `modelsUsed`.
-  //
-  // `t.is_sidechain = 0` no longer excludes nested subagent transcripts, and
-  // used to only by accident — every turn in such a file carried the flag, so
-  // the predicate removed the whole file as a side effect of removing sidechain
-  // turns. #487 makes those turns primary, so the file's model would now leak
-  // into a card whose file-parse counterpart never opens it. `s.file_path` is
-  // selected so the SAME predicate used for the totals above decides here too,
-  // rather than a second SQL-shaped definition of "nested".
   const models = db
     .prepare(
-      `SELECT DISTINCT t.model AS model, s.file_path AS file_path
+      `SELECT DISTINCT t.model AS model
        FROM turns t
        JOIN sessions s USING (session_id)
        WHERE s.project_dir_name IN (${placeholders})
@@ -306,17 +275,9 @@ function collectStats(
          AND t.model IS NOT NULL
          AND t.model <> '<synthetic>'`
     )
-    .all(...allowedDirs) as Array<ModelRow & { file_path: string }>;
+    .all(...allowedDirs) as ModelRow[];
 
-  // DISTINCT ran over (model, file_path), so a model used in several files
-  // arrives more than once — deduped here, after the nested files are dropped.
-  stats.modelsUsed = [
-    ...new Set(
-      models
-        .filter((m) => parseSubagentParentSessionId(m.file_path) === undefined)
-        .map((m) => m.model)
-    ),
-  ];
+  stats.modelsUsed = models.map((m) => m.model);
 
   return stats;
 }
