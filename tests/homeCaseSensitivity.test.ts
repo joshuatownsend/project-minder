@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
-import { flipCase, probeCaseSensitivity } from "@/lib/db/homeCaseSensitivity";
+import {
+  flipCase,
+  probeCaseSensitivity,
+  readHomeCaseSensitivity,
+  recordHomeCaseSensitivity,
+} from "@/lib/db/homeCaseSensitivity";
+import { normalizePathKey } from "@/lib/platform";
 
 /**
  * #416 — the volume's case-sensitivity, answered where it is knowable.
@@ -110,5 +116,79 @@ describe("probeCaseSensitivity", () => {
     }
 
     expect(await probeCaseSensitivity(tmp)).toBe(!actuallyInsensitive);
+  });
+});
+
+let driverAvailable = false;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("better-sqlite3");
+  driverAvailable = true;
+} catch {
+  driverAvailable = false;
+}
+
+describe.skipIf(!driverAvailable)("recordHomeCaseSensitivity", () => {
+  /** A throwaway in-memory DB with just the table under test. */
+  async function makeDb() {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Database = require("better-sqlite3");
+    const db = new Database(":memory:");
+    db.prepare(
+      `CREATE TABLE home_properties (
+         home_key       TEXT PRIMARY KEY,
+         case_sensitive INTEGER,
+         probed_at      TEXT NOT NULL
+       )`
+    ).run();
+    return db;
+  }
+
+  it("keeps a recorded verdict when a later probe is inconclusive", async () => {
+    // A transient EACCES or EIO on a network-mounted home makes the probe
+    // return null. Overwriting a recorded verdict with NULL would un-fold that
+    // home's projects until some later reconcile happened to succeed — a real
+    // report regressing on a filesystem blip (Codex P2, PR #523).
+    //
+    // The main reconcile already preserves that home's SESSIONS after the same
+    // listing failure, so this is about matching it rather than being the one
+    // place a blip is destructive.
+    const db = await makeDb();
+    try {
+      const home = path.join(tmp, "mac");
+      const key = normalizePathKey(home);
+
+      // A real verdict, recorded directly: this test is about the WRITE path's
+      // conflict behaviour, not about re-deriving the probe's answer.
+      db.prepare(
+        "INSERT INTO home_properties (home_key, case_sensitive, probed_at) VALUES (?, 0, ?)"
+      ).run(key, "2026-03-01T00:00:00Z");
+
+      // `<home>/projects` does not exist, so the probe cannot conclude.
+      await recordHomeCaseSensitivity(db, [home]);
+
+      expect(readHomeCaseSensitivity(db).get(key)).toBe(false);
+      // And the attempt is still recorded, so "when did we last look" stays true.
+      const row = db
+        .prepare("SELECT probed_at FROM home_properties WHERE home_key = ?")
+        .get(key) as { probed_at: string };
+      expect(row.probed_at).not.toBe("2026-03-01T00:00:00Z");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("omits an unknown home from the verdict map rather than guessing", async () => {
+    const db = await makeDb();
+    try {
+      const home = path.join(tmp, "never-probed");
+      await recordHomeCaseSensitivity(db, [home]);
+      // A NULL row reads as absent: callers must not be able to tell "no row"
+      // from "row with no verdict", because both mean the same thing and only
+      // one of them would otherwise need handling.
+      expect(readHomeCaseSensitivity(db).has(normalizePathKey(home))).toBe(false);
+    } finally {
+      db.close();
+    }
   });
 });

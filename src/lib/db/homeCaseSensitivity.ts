@@ -247,7 +247,17 @@ export async function recordHomeCaseSensitivity(
         `INSERT INTO home_properties (home_key, case_sensitive, probed_at)
          VALUES (@home_key, @case_sensitive, @probed_at)
          ON CONFLICT(home_key) DO UPDATE SET
-           case_sensitive = excluded.case_sensitive,
+           -- COALESCE, so an INCONCLUSIVE probe never erases a verdict that
+           -- was reached. A transient EACCES or EIO on a network-mounted home
+           -- makes readdir fail and the probe return null; overwriting a
+           -- recorded 0 with NULL would un-fold that home's projects until
+           -- some later reconcile happened to succeed — a real report
+           -- regressing on a transient filesystem error (Codex P2, PR #523).
+           --
+           -- The main reconcile already preserves that home's sessions after
+           -- the same listing failure; this now matches it rather than being
+           -- the one place a blip is destructive.
+           case_sensitive = COALESCE(excluded.case_sensitive, home_properties.case_sensitive),
            probed_at = excluded.probed_at`
       ).run({
         home_key: normalizePathKey(home),
