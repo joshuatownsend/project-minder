@@ -263,38 +263,32 @@ export async function augmentPortfolioYield(
  * before applying the period filter. Use `emptyActivity()` from
  * `activityBuckets.ts` in tests that don't exercise the activity fields.
  */
-export async function aggregateUsage(
-  turns: UsageTurn[],
-  period: Period,
-  activity: ActivityData
-): Promise<UsageReport> {
-  // `loadPricing` is idempotent — first cold call fetches LiteLLM pricing
-  // and seeds a 24-h FileCache; subsequent calls return immediately.
-  await loadPricing();
-
-  // Classify and cost only assistant turns (user turns have empty model/zero tokens)
-  const assistantTurns = turns.filter((t) => t.role === "assistant");
-  const enriched: { turn: UsageTurn; category: CategoryType; cost: number }[] = [];
-  for (const turn of assistantTurns) {
-    enriched.push({
-      turn,
-      category: classifyTurn(turn),
-      cost: await computeTurnCost(turn),
-    });
-  }
-
+/**
+ * The same aggregation, fed in batches instead of all at once (#515).
+ *
+ * `aggregateUsage` is this with a single `addTurns` call, so the SQL backend's
+ * behaviour is unchanged by construction rather than by inspection. The file
+ * backend feeds one session per call and lets each session's turns go, which is
+ * what removes the corpus from the sweep's peak.
+ *
+ * ## Batches must be session-complete
+ *
+ * Every session-scoped detector here — one-shot tasks, self-correction, tool
+ * transitions — needs a session's turns together. It does NOT need them in the
+ * same batch as any other session's. A caller that split one session across two
+ * `addTurns` calls would see its tasks silently under-counted, so the sweep's
+ * per-session granularity is a requirement, not a convenience.
+ *
+ * Order within a batch is preserved, and batches accumulate in call order, so
+ * feeding sessions in map order produces the same map-insertion order — and
+ * therefore the same tie-breaking in the cost-descending sorts below — as one
+ * flat array did.
+ */
+export function createUsageAccumulator(period: Period) {
   // Single-pass aggregation across all dimensions
   const modelMap = new Map<string, ModelCost>();
   const projectMap = new Map<string, ProjectBreakdown>();
   const categoryMap = new Map<CategoryType, CategoryBreakdown>();
-  /**
-   * Each assistant turn's category, by object identity, so the one-shot walk
-   * below can ask "what was the anchor turn classified as?" without
-   * re-classifying. `classifyTurn` is deterministic, but calling it twice
-   * would make it possible for the spend side and the task side to be
-   * computed under two different classifier versions after a future refactor.
-   */
-  const categoryOfTurn = new Map<UsageTurn, CategoryType>();
   /** Task outcomes per category, keyed by the ANCHOR turn's category (A5). */
   const categoryTasks = new Map<CategoryType, { verified: number; oneShot: number }>();
   const effortMap = new Map<string, EffortBreakdown>();
@@ -350,6 +344,61 @@ export async function aggregateUsage(
   // totals below.
   let subagentCost = 0;
   let subagentTokens = 0;
+
+  /**
+   * Self-correction, accumulated as raw counts rather than as the rates the
+   * detector reports. Rates cannot be merged across batches — averaging them
+   * would weight a one-session batch equally with a thousand-session one — but
+   * `corrected`/`total` add exactly, and the detector already exposes both.
+   */
+  const selfCorrAccum = new Map<string, { corrected: number; total: number }>();
+  /**
+   * The slim projection tool-transition analysis needs: session, timestamp, and
+   * the tool names. Retained for the whole run because the analysis sorts
+   * globally before walking, so it cannot be folded per batch without
+   * reimplementing it — but this holds a few fields per turn instead of the
+   * turn, and the `toolCalls` arrays are the same objects `allToolCalls`
+   * already keeps.
+   */
+  const transitionInputs: { sessionId: string; timestamp: string; toolCalls: ToolCall[] }[] = [];
+  /** DISTINCT sessions seen, for `totalSessions`. Ids only. */
+  const sessionIds = new Set<string>();
+  let assistantTurnCount = 0;
+  // Run-level, because tasks are counted per batch and summed across them.
+  let totalVerified = 0;
+  let totalOneShot = 0;
+
+  async function addTurns(turns: UsageTurn[]): Promise<void> {
+    // `loadPricing` is idempotent — first cold call fetches LiteLLM pricing
+    // and seeds a 24-h FileCache; subsequent calls return immediately.
+    await loadPricing();
+
+    for (const t of turns) sessionIds.add(t.sessionId);
+
+    // Classify and cost only assistant turns (user turns have empty model/zero tokens)
+    const assistantTurns = turns.filter((t) => t.role === "assistant");
+    assistantTurnCount += assistantTurns.length;
+    const enriched: { turn: UsageTurn; category: CategoryType; cost: number }[] = [];
+    for (const turn of assistantTurns) {
+      enriched.push({
+        turn,
+        category: classifyTurn(turn),
+        cost: await computeTurnCost(turn),
+      });
+    }
+
+    /**
+     * Each assistant turn's category, by object identity, so the one-shot walk
+     * below can ask "what was the anchor turn classified as?" without
+     * re-classifying. `classifyTurn` is deterministic, but calling it twice
+     * would make it possible for the spend side and the task side to be
+     * computed under two different classifier versions after a future refactor.
+     *
+     * Per BATCH, not per run: it is only ever consulted for anchor turns in the
+     * same batch, and keeping it for the run would retain every assistant turn
+     * by key — the exact leak #515 exists to remove.
+     */
+    const categoryOfTurn = new Map<UsageTurn, CategoryType>();
 
   for (const { turn, category, cost } of enriched) {
     const tokens = turn.inputTokens + turn.outputTokens + turn.cacheReadTokens + turn.cacheCreateTokens;
@@ -547,22 +596,12 @@ export async function aggregateUsage(
   }
 
 
-  // Top tools (non-MCP)
-  const toolCounts = new Map<string, number>();
-  for (const tc of allToolCalls) {
-    if (!tc.name.startsWith("mcp__")) {
-      toolCounts.set(tc.name, (toolCounts.get(tc.name) || 0) + 1);
-    }
-  }
-
   // Primary (non-subagent) turns for session-scoped detectors. Subagent turns
   // aren't user-verified tasks and their tool flow isn't the developer's, so
   // one-shot and self-correction detection exclude them (A1).
   const primaryTurns = turns.filter((t) => !t.isSidechain);
 
   // One-shot aggregate (needs both user+assistant turns for tool result detection)
-  let totalVerified = 0;
-  let totalOneShot = 0;
   const sessionGroups = new Map<string, UsageTurn[]>();
   for (const t of primaryTurns) {
     const arr = sessionGroups.get(t.sessionId) ?? [];
@@ -620,6 +659,37 @@ export async function aggregateUsage(
       }
     }
   }
+    // Self-correction: run per batch and merge the counts. The detector groups
+    // by session internally, so a session-complete batch yields exactly the
+    // rows a whole-corpus call would have contributed for those sessions.
+    for (const m of detectSelfCorrectionPerModel(primaryTurns).byModel) {
+      const acc = selfCorrAccum.get(m.model) ?? { corrected: 0, total: 0 };
+      acc.corrected += m.corrected;
+      acc.total += m.total;
+      selfCorrAccum.set(m.model, acc);
+    }
+
+    for (const t of assistantTurns) {
+      if (t.isSidechain) continue;
+      transitionInputs.push({
+        sessionId: t.sessionId,
+        timestamp: t.timestamp,
+        toolCalls: t.toolCalls,
+      });
+    }
+  }
+
+  async function finalize(activity: ActivityData): Promise<UsageReport> {
+  // Top tools (non-MCP). Derived from the run's accumulated tool calls, so it
+  // belongs here rather than in a batch — recomputing it per batch would have
+  // thrown away every earlier batch's counts.
+  const toolCounts = new Map<string, number>();
+  for (const tc of allToolCalls) {
+    if (!tc.name.startsWith("mcp__")) {
+      toolCounts.set(tc.name, (toolCounts.get(tc.name) || 0) + 1);
+    }
+  }
+
   for (const eff of effortMap.values()) {
     if (eff.verifiedTasks > 0) eff.oneShotRate = eff.oneShotTasks / eff.verifiedTasks;
   }
@@ -640,21 +710,17 @@ export async function aggregateUsage(
   // Self-correction rate per primary model. The detector groups by
   // sessionId internally and attaches to byModel so the /usage table
   // can render the column without a second join.
-  const selfCorrection = detectSelfCorrectionPerModel(primaryTurns);
-  const selfCorrectionByModel = new Map(
-    selfCorrection.byModel.map((s) => [s.model, s] as const)
-  );
   for (const m of modelMap.values()) {
-    const stats = selfCorrectionByModel.get(m.model);
+    const stats = selfCorrAccum.get(m.model);
     if (stats && stats.total > 0) {
-      m.selfCorrectionRate = stats.rate;
+      // Rate recomputed from the summed counts, never averaged from per-batch
+      // rates — see `selfCorrAccum`.
+      m.selfCorrectionRate = stats.corrected / stats.total;
       m.sessionsAsPrimary = stats.total;
     }
   }
 
-  const toolTransitionData = computeToolTransitions(
-    assistantTurns.filter((t) => !t.isSidechain)
-  );
+  const toolTransitionData = computeToolTransitions(transitionInputs);
 
   // Build projectDetails from accumulators
   const projectDetails: ProjectDetail[] = [...projectDetailAccum.values()]
@@ -690,8 +756,8 @@ export async function aggregateUsage(
     period,
     totalCost,
     totalTokens,
-    totalSessions: new Set(turns.map((t) => t.sessionId)).size,
-    totalTurns: assistantTurns.length,
+    totalSessions: sessionIds.size,
+    totalTurns: assistantTurnCount,
     tokens: { input: totalInput, output: totalOutput, cacheRead: totalCacheRead, cacheWrite: totalCacheWrite },
     cacheHitRate,
     oneShot: {
@@ -770,4 +836,25 @@ export async function aggregateUsage(
     subagentCost,
     subagentTokens,
   };
+  }
+
+  return { addTurns, finalize };
+}
+
+/**
+ * Pure aggregation over a pre-filtered set of turns, resident all at once.
+ *
+ * The single-batch shape of `createUsageAccumulator`. Kept because the SQL
+ * backend hands in turns rehydrated from SQLite and the tests exercise this
+ * signature — and because expressing it in terms of the accumulator is what
+ * guarantees the two cannot drift.
+ */
+export async function aggregateUsage(
+  turns: UsageTurn[],
+  period: Period,
+  activity: ActivityData
+): Promise<UsageReport> {
+  const acc = createUsageAccumulator(period);
+  await acc.addTurns(turns);
+  return acc.finalize(activity);
 }
