@@ -107,6 +107,9 @@ function ApplyPopover({ unit, source, excludeTargetSlugs, onClose }: ApplyPopove
   // as busy indefinitely. Settled in a `finally`, so failure settles it too.
   const [pending, setPending] = useState(true);
   const [projects, setProjects] = useState<ProjectData[] | null>(null);
+  // See `ApplyTemplateModal`: failed and empty are different answers, and only
+  // one of them is the user's fault to fix (Codex P2, PR #521).
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [targetSlug, setTargetSlug] = useState<string>("");
   const policies = policiesFor(unit.kind);
   const [conflict, setConflict] = useState<ConflictPolicy>(policies[0]);
@@ -125,7 +128,10 @@ function ApplyPopover({ unit, source, excludeTargetSlugs, onClose }: ApplyPopove
         setProjects(filtered);
         if (filtered[0]) setTargetSlug(filtered[0].slug);
       })
-      .catch(() => undefined)
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setLoadError(e instanceof Error ? e.message : "Failed to load projects");
+      })
       .finally(() => {
         if (!cancelled) setPending(false);
       });
@@ -212,6 +218,10 @@ function ApplyPopover({ unit, source, excludeTargetSlugs, onClose }: ApplyPopove
           </span>
           {pending ? (
             <span data-loading="true" style={{ color: "var(--text-muted)" }}>loading…</span>
+          ) : loadError ? (
+            <span style={{ color: "var(--status-error-text, var(--accent))" }}>
+              couldn&apos;t load projects: {loadError}
+            </span>
           ) : !projects || projects.length === 0 ? (
             <span style={{ color: "var(--text-muted)" }}>no other projects available</span>
           ) : (
