@@ -815,7 +815,7 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
           scope: "projects-dir",
           code,
           sweep: "usage",
-        });
+        }, sweepToken);
       }
       // No projects dir in this home
     }

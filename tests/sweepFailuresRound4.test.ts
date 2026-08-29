@@ -313,3 +313,94 @@ describe("round 5 — the collector tells the truth about what failed", () => {
     expect(getSweepFailures().map((f) => f.path)).toEqual(["/still-broken"]);
   });
 });
+
+describe("round 6 — the invalidation guard reaches the writes too", () => {
+  it("drops records from a sweep the config change invalidated", async () => {
+    // Guarding only `end` was half a fix. The stale sweep goes on RUNNING and
+    // goes on finding failures, and those landed in the replacement cycle's
+    // pending result by sweep name — so paths from the old configuration were
+    // published by the replacement, which is exactly what the generation check
+    // was added to stop. (Codex P2, PR #527.)
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      getSweepFailures,
+      getSweepFailureTotal,
+      clearSweepFailures: clear,
+    } = await import("@/lib/sweepFailures");
+
+    const stale = beginSweepFailureCycle("usage");
+    recordSweepFailure({ path: "/before", scope: "projects-dir", sweep: "usage" }, stale);
+
+    clear(); // the user removes the unreachable home
+
+    const fresh = beginSweepFailureCycle("usage");
+    // The invalidated sweep is still walking, and still finding things.
+    recordSweepFailure({ path: "/removed-home", scope: "projects-dir", sweep: "usage" }, stale);
+    recordSweepFailure({ path: "/still-broken", scope: "projects-dir", sweep: "usage" }, fresh);
+    endSweepFailureCycle("usage", stale); // no-op
+    endSweepFailureCycle("usage", fresh);
+
+    // Only the replacement's finding, and the count agrees with the detail —
+    // the stale record must not reach `total` either, which it would if it were
+    // merely filtered at read time.
+    expect(getSweepFailures().map((f) => f.path)).toEqual(["/still-broken"]);
+    expect(getSweepFailureTotal()).toBe(1);
+  });
+
+  it("does not let the project-scoped scan overwrite the full scan's result", async () => {
+    // `scanConversationDirs` skips every directory outside its allow-set, so
+    // the project-scoped Claude-usage scan enumerates strictly LESS than the
+    // full session-list scan. While both published under `sessions`, a clean
+    // scoped scan replaced a project-directory failure the full scan had found
+    // and `/api/claude-homes` reported `complete: true` over a session list
+    // that was still short by that directory. (Codex P2, PR #527.)
+    //
+    // Asserted at the collector, where the sharing was: the two sweeps publish
+    // independently and `getSweepFailures` merges them.
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      getSweepFailures,
+    } = await import("@/lib/sweepFailures");
+
+    const full = beginSweepFailureCycle("sessions");
+    recordSweepFailure(
+      { path: "/unreadable-project", scope: "project-dir", sweep: "sessions" },
+      full
+    );
+    endSweepFailureCycle("sessions", full);
+
+    // The scoped scan runs afterwards and finds nothing, because the broken
+    // directory is not in its allow-set.
+    const scoped = beginSweepFailureCycle("sessions-scoped");
+    endSweepFailureCycle("sessions-scoped", scoped);
+
+    expect(getSweepFailures().map((f) => f.path)).toEqual(["/unreadable-project"]);
+  });
+
+  it("still merges the two session sweeps when they find the same thing", async () => {
+    // The other half: separate names must not undo the location dedup, or the
+    // split would trade one wrong count for another.
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      getSweepFailureTotal,
+    } = await import("@/lib/sweepFailures");
+
+    const same = { path: "/both-see-this", scope: "projects-dir" as const };
+
+    const full = beginSweepFailureCycle("sessions");
+    recordSweepFailure({ ...same, sweep: "sessions" }, full);
+    endSweepFailureCycle("sessions", full);
+
+    const scoped = beginSweepFailureCycle("sessions-scoped");
+    recordSweepFailure({ ...same, sweep: "sessions-scoped" }, scoped);
+    endSweepFailureCycle("sessions-scoped", scoped);
+
+    expect(getSweepFailureTotal()).toBe(1);
+  });
+});

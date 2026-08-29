@@ -59,6 +59,7 @@ import {
   recordSweepFailure,
   directoryExists,
   pathEntryExists,
+  type SweepName,
 } from "@/lib/sweepFailures";
 
 export interface ConversationEntry {
@@ -906,7 +907,7 @@ export async function scanAllSessions(): Promise<SessionSummary[]> {
         }
         continue;
       }
-      await scanOneHome(projectsDir, dirs, sessions, liveSet, now);
+      await scanOneHome(projectsDir, dirs, sessions, liveSet, now, sweepToken);
     }
 
   // Non-Claude harnesses, merged the way `mergeAdapterSessions` merges into
@@ -1183,7 +1184,14 @@ async function scanOneHome(
   dirs: string[],
   sessions: SessionSummary[],
   liveSet: Set<string>,
-  now: number
+  now: number,
+  /**
+   * The cycle token from the caller's `beginSweepFailureCycle`. Threaded rather
+   * than read from the module, so a sweep invalidated mid-flight by a config
+   * change cannot write into the replacement cycle that started after it
+   * (Codex P2, PR #527).
+   */
+  sweepToken: number
 ): Promise<void> {
   for (const dir of dirs) {
     const dirPath = path.join(projectsDir, dir);
@@ -1229,12 +1237,15 @@ async function scanOneHome(
       // exists to name. No ENOENT special-case here: this path came back from a
       // `readdir` of the parent moments ago, so its absence is a genuine change
       // underfoot rather than a fresh install.
-      recordSweepFailure({
-        path: dirPath,
-        scope: "project-dir",
-        code: (err as NodeJS.ErrnoException)?.code,
-        sweep: "sessions",
-      });
+      recordSweepFailure(
+        {
+          path: dirPath,
+          scope: "project-dir",
+          code: (err as NodeJS.ErrnoException)?.code,
+          sweep: "sessions",
+        },
+        sweepToken
+      );
     }
   }
 }
@@ -1834,16 +1845,21 @@ export async function scanClaudeConversationsForProjects(
 
   // Cleared at the START, so a scan that throws part way through still leaves
   // behind what it observed (#513).
-  const sweepToken = beginSweepFailureCycle("sessions");
+  const sweepToken = beginSweepFailureCycle("sessions-scoped");
   const parts: ClaudeUsageStats[] = [];
   try {
     for (const home of homes) {
-      parts.push(await scanConversationDirs(path.join(home, "projects"), allowedDirs));
+      parts.push(
+        await scanConversationDirs(path.join(home, "projects"), allowedDirs, {
+          sweep: "sessions-scoped",
+          token: sweepToken,
+        })
+      );
     }
   } finally {
     // See the usage sweep: published in a `finally` so a scan that threw still
     // reports what it observed.
-    endSweepFailureCycle("sessions", sweepToken);
+    endSweepFailureCycle("sessions-scoped", sweepToken);
   }
   return mergeClaudeUsageStats(parts);
 }
@@ -1878,7 +1894,23 @@ function mergeClaudeUsageStats(parts: ClaudeUsageStats[]): ClaudeUsageStats {
 
 async function scanConversationDirs(
   projectsDir: string,
-  allowedDirs?: Set<string>
+  allowedDirs?: Set<string>,
+  /**
+   * Which sweep this walk belongs to, and the token it was opened under.
+   *
+   * The sweep NAME is a corpus, not a caller. This function skips every
+   * directory outside `allowedDirs`, so the project-scoped Claude-usage scan
+   * enumerates strictly less than the full session-list scan — and while both
+   * published under `sessions`, a clean scoped scan replaced a project-directory
+   * failure the full scan had found. `/api/claude-homes` then reported
+   * `complete: true` while the session list was still short by that unreadable
+   * directory. (Codex P2, PR #527.)
+   *
+   * Omitted by the unscoped caller, which opens no cycle of its own; its
+   * failures are dropped by `recordSweepFailure`'s no-cycle guard exactly as
+   * they were before.
+   */
+  cycle?: { sweep: SweepName; token: number }
 ): Promise<ClaudeUsageStats> {
   const aggregate: ClaudeUsageStats = {
     totalTokens: 0, inputTokens: 0, outputTokens: 0,
@@ -1911,12 +1943,17 @@ async function scanConversationDirs(
       (await directoryExists(home)) &&
       !(await pathEntryExists(projectsDir));
     if (!benign) {
-      recordSweepFailure({
-        path: projectsDir,
-        scope: "projects-dir",
-        code,
-        sweep: "sessions",
-      });
+      if (cycle) {
+        recordSweepFailure(
+          {
+            path: projectsDir,
+            scope: "projects-dir",
+            code,
+            sweep: cycle.sweep,
+          },
+          cycle.token
+        );
+      }
     }
     return aggregate;
   }
@@ -2006,12 +2043,17 @@ async function scanConversationDirs(
       // One project directory lost from this scan. Reported at that
       // granularity rather than as "the home is gone" — different problems,
       // different fixes (#513).
-      recordSweepFailure({
-        path: dirPath,
-        scope: "project-dir",
-        code: (err as NodeJS.ErrnoException)?.code,
-        sweep: "sessions",
-      });
+      if (cycle) {
+        recordSweepFailure(
+          {
+            path: dirPath,
+            scope: "project-dir",
+            code: (err as NodeJS.ErrnoException)?.code,
+            sweep: cycle.sweep,
+          },
+          cycle.token
+        );
+      }
     }
   }
 

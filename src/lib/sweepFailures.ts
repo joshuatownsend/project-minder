@@ -44,7 +44,17 @@ export type SweepFailureScope =
   | "project-dir";
 
 /** Which sweep hit it. Two read the same tree on different schedules. */
-export type SweepName = "usage" | "sessions";
+/**
+ * Sweeps publish independently, so a name is a CORPUS, not a caller.
+ *
+ * `sessions-scoped` exists because the project-scoped Claude-usage scan skips
+ * every directory outside its allow-set: sharing the `sessions` name let a
+ * clean scoped scan replace a project-directory failure that the full
+ * session-list scan had found, so `/api/claude-homes` said `complete: true`
+ * while the session list was still short by that directory.
+ * (Codex P2, PR #527.)
+ */
+export type SweepName = "usage" | "sessions" | "sessions-scoped";
 
 export interface SweepFailure {
   /** The directory that could not be enumerated. */
@@ -211,7 +221,14 @@ export function sweepFailureKey(failure: SweepFailure): string {
   return `${failure.scope}|${failure.path}`;
 }
 
-export function recordSweepFailure(failure: SweepFailure): void {
+export function recordSweepFailure(failure: SweepFailure, token?: number): void {
+  // A caller invalidated by a mid-sweep `clearSweepFailures()` must not write
+  // into the replacement cycle either. Guarding only `end` was half a fix: the
+  // stale sweep goes on running and goes on finding failures, and those landed
+  // in the new cycle's pending result by sweep NAME — so paths from the old
+  // configuration were published by the replacement, which is the very thing
+  // the generation check was added to stop. (Codex P2, PR #527.)
+  if (token !== undefined && token !== generation()) return;
   const result = pending().get(failure.sweep);
   if (!result) {
     // No cycle started — a sweep that records without `beginSweepFailureCycle`
