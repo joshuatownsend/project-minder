@@ -244,15 +244,31 @@ function retireVerified(sweep: SweepName, verified: Set<string>): void {
     const kept = result.items.filter(
       (f) => !(f.scope === "projects-dir" && verified.has(f.path))
     );
-    if (kept.length === result.items.length) continue;
+
+    // Counted from `seen`, not from `items`, and that difference is the whole
+    // point. `items` stops at the 50-entry detail cap while `seen` holds every
+    // key the cycle recorded, so subtracting only the retained details left
+    // `total` positive for the capped ones — with more than 50 homes down and
+    // then recovered, `/api/claude-homes` stayed degraded indefinitely while
+    // naming nothing. (Codex P2, PR #527.)
+    const seen = new Set(result.seen);
+    let retired = 0;
+    for (const key of result.seen) {
+      const path = key.startsWith("projects-dir|") ? key.slice("projects-dir|".length) : null;
+      if (path !== null && verified.has(path)) {
+        seen.delete(key);
+        retired++;
+      }
+    }
+    if (retired === 0 && kept.length === result.items.length) continue;
+
     published().set(name, {
       ...result,
       items: kept,
-      // The total follows the detail down, or the banner would keep counting a
-      // location it no longer names. Floored at the detail length so a cycle
-      // that had entries past the cap cannot end up claiming fewer failures
-      // than it is still listing.
-      total: Math.max(kept.length, result.total - (result.items.length - kept.length)),
+      seen,
+      // Floored at the detail length so a cycle whose `seen` had been capped
+      // cannot end up claiming fewer failures than it is still listing.
+      total: Math.max(kept.length, result.total - retired),
     });
   }
 }

@@ -164,13 +164,19 @@ describe("the record is cleared by corpus changes only", () => {
     const body = route.slice(start, route.indexOf("\n}", start));
     expect(body).not.toMatch(/clearSweepFailures\(\)/);
 
-    // And it still happens where it belongs. `corpusShapeChanged` is set by
-    // exactly the three settings that move the swept set: `claudeHomes`,
-    // `pathMappings`, `enabledAdapters`.
-    const guardStart = route.indexOf("if (corpusShapeChanged) {");
-    expect(guardStart).toBeGreaterThan(-1);
-    const guard = route.slice(guardStart, route.indexOf("\n  }", guardStart));
-    expect(guard).toMatch(/clearSweepFailures\(\)/);
+    // And it still happens, gated on the Claude home paths ACTUALLY changing.
+    // `corpusShapeChanged` — where round 4 put it — was itself too wide: it
+    // also fires for `pathMappings` and `enabledAdapters`, neither of which
+    // changes which directories get enumerated, so clearing on them erased a
+    // live diagnostic about a directory that is still unreadable.
+    // (Codex P2, PR #527, round 9.)
+    expect(route).toMatch(/if \(claudeHomePathsChanged\) clearSweepFailures\(\);/);
+
+    // And the narrower flag is set from a COMPARISON, not from the key being
+    // present. A Settings save posts every field, so `Array.isArray(body.claudeHomes)`
+    // alone would clear the record on every unrelated save — the same defect
+    // one level down.
+    expect(route).toMatch(/claudeHomePathsChanged\s*=\s*\n?\s*before\.length !== homes\.length/);
   });
 });
 
@@ -551,5 +557,66 @@ describe("round 8 — a fixed directory stops being reported", () => {
     endSweepFailureCycle("usage", fresh);
 
     expect(getSweepFailures()).toHaveLength(1);
+  });
+});
+
+describe("round 9 — three more ways the record was cleared or kept wrongly", () => {
+  it("retires capped entries too, not just the ones it can still name", async () => {
+    // `items` stops at the 50-entry detail cap while `seen` holds every key the
+    // cycle recorded. Subtracting only the retained details left `total`
+    // positive for the capped ones, so with more than 50 homes down and then
+    // recovered, `/api/claude-homes` stayed degraded indefinitely while naming
+    // nothing. (Codex P2, PR #527.)
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      recordSweepSuccess,
+      getSweepFailures,
+      getSweepFailureTotal,
+    } = await import("@/lib/sweepFailures");
+
+    const homes = Array.from({ length: 60 }, (_, i) => `/home-${i}/projects`);
+
+    const t1 = beginSweepFailureCycle("sessions");
+    for (const h of homes) {
+      recordSweepFailure({ path: h, scope: "projects-dir", sweep: "sessions" }, t1);
+    }
+    endSweepFailureCycle("sessions", t1);
+
+    // The premise, and the reason this test exists: more failures than the
+    // detail cap retains.
+    expect(getSweepFailures().length).toBe(50);
+    expect(getSweepFailureTotal()).toBe(60);
+
+    // Every one of them comes back.
+    const t2 = beginSweepFailureCycle("usage");
+    for (const h of homes) recordSweepSuccess("usage", h, t2);
+    endSweepFailureCycle("usage", t2);
+
+    expect(getSweepFailures()).toHaveLength(0);
+    // Zero, not 10. A banner reporting "10 locations could not be read" while
+    // naming none is the state this fixes.
+    expect(getSweepFailureTotal()).toBe(0);
+  });
+
+  it("keeps the previous result when the usage sweep aborts before enumerating", async () => {
+    // `readConfig()` / `getReadableClaudeHomes()` rejecting is not evidence
+    // about the filesystem. Opening the cycle before them meant the `finally`
+    // published an empty result as this pass's answer, erasing a known failure
+    // and reporting `complete: true` on the strength of a pass that never
+    // touched a directory. (Codex P2, PR #527.)
+    //
+    // Source-level: provoking a `readConfig` rejection means mocking a module
+    // the sweep imports dynamically, and the assertion that actually matters is
+    // ORDER — that no cycle exists before those two awaits.
+    const { readFile } = await import("node:fs/promises");
+    const text = await readFile("src/lib/usage/parser.ts", "utf-8");
+
+    const homesAt = text.indexOf("const homes = await getReadableClaudeHomes(config);");
+    const cycleAt = text.indexOf('beginSweepFailureCycle("usage")');
+    expect(homesAt).toBeGreaterThan(-1);
+    expect(cycleAt).toBeGreaterThan(-1);
+    expect(cycleAt).toBeGreaterThan(homesAt);
   });
 });

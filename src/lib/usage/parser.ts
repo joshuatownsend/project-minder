@@ -762,14 +762,22 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
   // shrank silently and `complete: true` was still reported. Cleared at the
   // START, so a pass that throws part way through still leaves behind what it
   // observed.
-  const sweepToken = beginSweepFailureCycle("usage");
-  try {
-
   // Sweep every readable Claude home (primary + config.claudeHomes) — a home
   // inside a stopped WSL distro is excluded for the cycle rather than woken.
   // Each subdir keeps its own home so file paths resolve into the right tree.
+  //
+  // Read BEFORE the cycle opens, deliberately. If either of these rejects — a
+  // transient config read, a WSL lookup that times out — the `finally` below
+  // would still end a cycle that had enumerated nothing and publish its empty
+  // result as this pass's answer, erasing a known failure and reporting
+  // `complete: true` on the strength of a pass that never touched the
+  // filesystem. A cycle now exists only once there is something to sweep.
+  // (Codex P2, PR #527.)
   const config = await readConfig();
   const homes = await getReadableClaudeHomes(config);
+
+  const sweepToken = beginSweepFailureCycle("usage");
+  try {
   const subdirs: { home: string; dirName: string }[] = [];
   for (const home of homes) {
     try {

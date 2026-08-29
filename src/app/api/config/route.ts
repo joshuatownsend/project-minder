@@ -69,6 +69,18 @@ export async function PATCH(request: NextRequest) {
   // does, and leaving it out meant a user could enable Codex and go on seeing
   // grades computed without it. (Codex P2, PR #490.)
   let corpusShapeChanged = false;
+  /**
+   * Narrower than `corpusShapeChanged`, and separate from it on purpose.
+   *
+   * `corpusShapeChanged` also fires for `pathMappings` and `enabledAdapters`,
+   * which change what the usage rollups MEAN but not which Claude directories
+   * `sweepSessions` and `scanAllSessions` enumerate. Clearing the sweep-failure
+   * record on those erased a live diagnostic about a directory that is still
+   * unreadable, and `/api/claude-homes` then answered `complete: true` until a
+   * full sweep happened to run again. Only a change to the Claude home PATH SET
+   * can make a recorded path stop being swept. (Codex P2, PR #527.)
+   */
+  let claudeHomePathsChanged = false;
   const patches: Patch[] = [];
 
   // S5 — widening devRoots is a sensitive write (it gates validateProjectPath /
@@ -95,6 +107,12 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "claudeHomes elements must be strings" }, { status: 400 });
     }
     const homes = (body.claudeHomes as string[]).map((h) => h.trim()).filter(Boolean);
+    // Compared against what is on disk, not merely "the key was present": a
+    // Settings save posts every field, so treating any `claudeHomes` in the
+    // body as a change would clear the record on every unrelated save.
+    const before = (await readConfig()).claudeHomes ?? [];
+    claudeHomePathsChanged =
+      before.length !== homes.length || before.some((h, i) => h !== homes[i]);
     patches.push((c) => { c.claudeHomes = homes; });
     corpusShapeChanged = true;
   }
@@ -494,6 +512,20 @@ export async function PATCH(request: NextRequest) {
   });
   if (newPricingRules !== undefined) setPricingRules(newPricingRules);
   invalidateAll();
+  // The sweep-failure record describes the PREVIOUS set of swept paths, and
+  // nothing else clears it — the next sweep simply would not re-record a home
+  // the user has removed, but until that sweep finishes the homes endpoint
+  // keeps naming a path they have already dealt with, which reads as "the fix
+  // did not work".
+  //
+  // Gated on the Claude home paths ACTUALLY changing. It started inside
+  // `invalidateAll()`, which every config write calls — a keyboard shortcut, a
+  // port override — and was then narrowed to `corpusShapeChanged`, which still
+  // fires for `pathMappings` and `enabledAdapters`. Neither of those changes
+  // which directories get enumerated, so clearing on them erased a live
+  // diagnostic about a directory that is still unreadable.
+  // (Codex P2, PR #527, rounds 4 and 9.)
+  if (claudeHomePathsChanged) clearSweepFailures();
   // Grades and the portfolio usage slot depend on the file-parse sweep; drop
   // both so the next request recomputes over the new corpus instead of serving
   // the old data for the rest of their TTLs (5 min / 10 min).
@@ -504,16 +536,6 @@ export async function PATCH(request: NextRequest) {
     // homes endpoint keeps naming a path they have already dealt with, which
     // reads as "the fix did not work" (Codex P2, PR #527).
     //
-    // Gated on `corpusShapeChanged` rather than run from `invalidateAll`, where
-    // it started. Every successful config write calls that function — a
-    // keyboard shortcut, a port override, hiding a project — and none of those
-    // can change which paths get swept, so clearing there ERASED a live record
-    // of an unreadable corpus and left `/api/claude-homes` answering
-    // `complete: true` until whichever sweep owned it happened to run again.
-    // The three flags that set `corpusShapeChanged` (`claudeHomes`,
-    // `pathMappings`, `enabledAdapters`) are exactly the ones that move the
-    // swept set. (Codex P2, PR #527, round 4.)
-    clearSweepFailures();
     efficiencyGradeCache.invalidateGrades();
     invalidateClaudeUsageCache();
     invalidateSessionCategoryCounts();
