@@ -184,5 +184,9 @@ describe("the component pairs clamping with a bound", () => {
     // gesture would have been dismissed by the other handler.
     expect(src).toMatch(/pointerInsideTip/);
     expect(src).toMatch(/focusMovedIntoTip/);
+    // And reopening starts at the top. The tip stays MOUNTED while hidden — the
+    // property that lets `aria-describedby` reach it — so `scrollTop` outlives
+    // a dismissal unless it is reset.
+    expect(src).toMatch(/tipRef\.current\.scrollTop = 0/);
   });
 });

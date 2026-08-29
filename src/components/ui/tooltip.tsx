@@ -174,6 +174,15 @@ export function Tooltip({
 
   useEffect(() => {
     if (!open) return;
+    // Back to the top on every open. The tip is deliberately kept MOUNTED while
+    // hidden — that is what lets `aria-describedby` reach it and what removed
+    // the `.sr-only` duplicate — so its `scrollTop` survives a dismissal.
+    // Without this, a user who scrolled an overflowing tooltip to the end,
+    // dismissed it, and reopened the same trigger found it still at the end,
+    // with the first line of the explanation above the fold (Codex P2, PR #519).
+    //
+    // Before `place()`, so the reset cannot be seen: both run before paint.
+    if (tipRef.current) tipRef.current.scrollTop = 0;
     place();
     // Escape closes, and so does a click anywhere else — the two dismissals a
     // tap-opened tooltip needs, since there is no "leave" on touch.
