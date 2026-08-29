@@ -1001,13 +1001,6 @@ async function readJsonlSession(
           textChanged = true;
         }
       } else if (b?.type === "tool_use") {
-        // A delegated agent's calls are collected into `sidechain_tool_uses`
-        // instead, and must not ALSO enter the primary collection — they would
-        // be counted twice and would move onto the path #511 exists to move
-        // deliberately (23 `FROM tool_uses` sites read that table with no
-        // sidechain predicate). Skipped here, before the dedupe, so nothing
-        // downstream sees them at all (#487).
-        if (isDelegatedAgentTranscript) continue;
         const id = typeof b.id === "string" ? b.id : null;
         // The 22 measured exact duplicates repeat their `tool_use_id`. This is
         // where the A6 guard's real job survives the union.
@@ -1041,8 +1034,19 @@ async function readJsonlSession(
       // double-count them and move them onto the primary path #511 exists to
       // move deliberately.
       const built = buildToolUses(newTools, turn.toolUses.length, open);
-      turn.toolUses.push(...built);
-      turn.usageTurn.toolCalls.push(...newTools.map(toToolCall));
+      // Suppressed at the STORE, not at the parse. A delegated agent's calls
+      // belong in `sidechain_tool_uses` rather than `tool_uses` (#487, with the
+      // move itself left to #511) — but skipping the block earlier, before the
+      // dedupe, also dropped it from `toolCallCount` and from the pending-id
+      // tracking that `open` feeds, while the first line of the same message
+      // still counted its blocks. That made the count depend on where the
+      // producer happened to split lines: the same tool call counted or not
+      // according to whether it arrived on the first line or a continuation.
+      // (Copilot, PR #528.)
+      if (!isDelegatedAgentTranscript) {
+        turn.toolUses.push(...built);
+        turn.usageTurn.toolCalls.push(...newTools.map(toToolCall));
+      }
       toolCallCount += built.length;
       // Pending tool_use ids belong to the CURRENT last assistant turn only.
       // A continuation arriving after later turns (the 3,639-line gap above)
@@ -1413,11 +1417,16 @@ async function readJsonlSession(
       // for truncation detection, which is about what the file CONTAINS and is
       // true regardless of which table the rows land in.
       const primaryToolBlocks = isDelegatedAgentTranscript ? [] : toolBlocks;
-      const toolUses = buildToolUses(primaryToolBlocks, 0, openMessage);
-      // Counted from `toolBlocks`, not `primaryToolBlocks`: `tool_call_count`
-      // describes the work the session did, and a delegated agent's calls are
-      // still work it performed.
-      toolCallCount += toolBlocks.length;
+      // Built from every block and counted from the RESULT, then narrowed for
+      // storage. Counting `toolBlocks.length` instead would disagree with the
+      // continuation path above, which counts what `buildToolUses` returned —
+      // and `buildToolUses` drops an unkeyable block, so the two would differ
+      // by exactly those. `tool_call_count` describes the work the session did,
+      // and a delegated agent's calls are still work it performed, so it counts
+      // them; only the ROWS are withheld.
+      const allToolUses = buildToolUses(toolBlocks, 0, openMessage);
+      toolCallCount += allToolUses.length;
+      const toolUses = isDelegatedAgentTranscript ? [] : allToolUses;
 
       const usageTurn: UsageTurn = {
         timestamp,

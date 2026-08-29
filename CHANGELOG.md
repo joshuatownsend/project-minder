@@ -18,6 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
   Three exclusions elsewhere were resting on the old zero without saying so — the sessions list, the "Claude Code Usage" card's totals, and its `modelsUsed` all filtered nested transcripts out *by accident*, via `turn_count > 0` or `is_sidechain = 0`, predicates that removed the whole file only because its turns happened to be structurally invisible. Each now states the exclusion it always meant, using the same path predicate. **Delegated transcripts remain out of the sessions list** — they are not sessions you started, and on a delegation-heavy history they would roughly double it — and stay reachable by link from the parent session, where their context actually is.
 
+  **The billed engagement report excludes them explicitly.** It reads unrecognized user prose as a human at a keyboard, and a delegated transcript's user turns are generated delegation prompts — "review this module" — each of which would have opened an attended block and earned tail credit on a figure that becomes a client invoice. `is_sidechain = 0` used to keep them out for free. They are now filtered before allocation, so the concurrency discount is computed over human rows only, and they are added to the "N automated sessions excluded" disclosure rather than dropped silently.
+
   `DERIVED_VERSION` moves 22 → 23, so existing indexes re-derive these rows.
 
 ### Changed

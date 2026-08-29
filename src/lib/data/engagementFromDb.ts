@@ -5,6 +5,7 @@ import { periodSinceIso } from "@/lib/usage/period";
 import { buildEngagementReport, projectKeyOf, type EngagementTurnRow } from "@/lib/engagement/aggregator";
 import type { EngagementConfig, EngagementReport } from "@/lib/engagement/types";
 import { startOfLocalDay, type ConcurrencyPolicy } from "@/lib/engagement/allocate";
+import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptPath";
 
 /**
  * SQL-backed human-engagement report.
@@ -116,6 +117,7 @@ export function loadEngagementReportFromSql(
        s.project_dir_name     AS projectDirName,
        s.project_slug         AS projectSlug,
        s.home_key             AS homeKey,
+       s.file_path            AS filePath,
        t.session_id           AS sessionId,
        t.ts                   AS ts,
        t.role                 AS role,
@@ -127,7 +129,36 @@ export function loadEngagementReportFromSql(
        AND ${HAS_PER_TURN_TIMESTAMPS}
        AND (@periodStart IS NULL OR t.ts >= @periodStart)
      ORDER BY t.ts`,
-  ).all({ periodStart }) as EngagementTurnRow[];
+  ).all({ periodStart }) as Array<EngagementTurnRow & { filePath: string }>;
+
+  /**
+   * A delegated agent's transcript is not a human at a keyboard.
+   *
+   * `t.is_sidechain = 0` used to exclude these for free, because every turn in
+   * such a file carried the flag. #487 makes them primary — the file IS the
+   * agent's own conversation, and the session detail page needs them — so they
+   * now arrive here, where the user turns are GENERATED DELEGATION PROMPTS
+   * ("review this module") that this report reads as unrecognized human prose.
+   * Each would open an attended block and earn tail credit, on a figure that
+   * becomes a client invoice. (Codex P1, PR #528.)
+   *
+   * Filtered here rather than by a SQL `file_path NOT LIKE '%subagents%'`, for
+   * the reason recorded in `sessionsListFromDb`: `parseSubagentParentSessionId`
+   * is the authority on that path shape, and a second hand-copied definition is
+   * the failure this wave keeps unwinding. It also runs BEFORE allocation, so
+   * the concurrency discount is computed over the human rows only — filtering
+   * afterwards would leave every retained block discounted against work that
+   * was never billable.
+   */
+  const humanRows: EngagementTurnRow[] = [];
+  const delegatedSessionIds = new Set<string>();
+  for (const r of rows) {
+    if (parseSubagentParentSessionId(r.filePath) !== undefined) {
+      delegatedSessionIds.add(r.sessionId);
+      continue;
+    }
+    humanRows.push(r);
+  }
 
   // Counted against the true period bound, not the over-fetched one — this is
   // a disclosure figure shown to the user ("N automated sessions excluded"),
@@ -139,14 +170,19 @@ export function loadEngagementReportFromSql(
        AND (@bound IS NULL OR s.end_ts >= @bound)`,
   ).get({ bound: clipFromMs === null ? null : new Date(clipFromMs).toISOString() }) as { n: number };
 
-  const report = buildEngagementReport(rows, {
+  const report = buildEngagementReport(humanRows, {
     period,
     timeZone,
     config,
     policy,
     clipFromMs,
     clipToMs: nowMs,
-    excludedAutomatedSessions: excluded?.n ?? 0,
+    // The delegated sessions join the disclosure rather than vanishing from
+    // it. They ARE automated sessions excluded from the figure, and a billing
+    // report that quietly drops rows it declined to count is exactly the
+    // provenance gap the disclosure exists to close. Counted from the rows
+    // actually dropped above, so it can never disagree with what was filtered.
+    excludedAutomatedSessions: (excluded?.n ?? 0) + delegatedSessionIds.size,
   });
 
   if (!project) return report;
