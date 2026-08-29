@@ -539,6 +539,15 @@ interface ParsedSession {
    * 1,260 subagent transcripts.
    */
   sidechainToolUses: Map<string, string>;
+  /**
+   * Timeline-grade detail for the same calls, present only for a delegated
+   * transcript (#487). Optional: an ordinary session's sidechain turns have no
+   * turn rows to order against and carry the lean form alone.
+   */
+  delegatedToolUses?: Map<
+    string,
+    { turnIndex: number; ts: string | null; tool: ParsedToolUse }
+  >;
   turns: ParsedTurn[];
   // (day, project, model) tuples to recompute in daily_costs after this
   // session is replaced.
@@ -1058,7 +1067,11 @@ async function readJsonlSession(
       // producer happened to split lines: the same tool call counted or not
       // according to whether it arrived on the first line or a continuation.
       // (Copilot, PR #528.)
-      if (!isDelegatedAgentTranscript) {
+      if (isDelegatedAgentTranscript) {
+        // Ordered against the turn this line merged INTO, not against the line
+        // — which is the whole reason the ids alone were not enough.
+        collectDelegatedTools(built, turn.turnIndex, turn.ts);
+      } else {
         turn.toolUses.push(...built);
         turn.usageTurn.toolCalls.push(...newTools.map(toToolCall));
       }
@@ -1133,6 +1146,37 @@ async function readJsonlSession(
    * 37,394 observed (Codex review of #428).
    */
   const sidechainToolUses = new Map<string, string>();
+
+  /**
+   * The same calls, with everything a TIMELINE needs (#487).
+   *
+   * `sidechainToolUses` above answers the roll-up question — how much tool work
+   * happened below this session — and a name and an id are enough for that. A
+   * delegated agent's own detail page asks a different question and needs
+   * ORDER and ARGUMENTS, which that map cannot carry. Populated only for
+   * delegated transcripts, where the turn rows exist to order against; an
+   * ordinary session's sidechain turns have no turn rows of their own, so they
+   * keep the lean form and their extra columns stay NULL.
+   *
+   * Keyed by `tool_use_id` for the same reason as the map: one JSONL line per
+   * content block means a block can be re-logged, and the id is what makes
+   * `INSERT OR IGNORE` settle it without dedupe state surviving between parses.
+   */
+  const delegatedToolUses = new Map<
+    string,
+    { turnIndex: number; ts: string | null; tool: ParsedToolUse }
+  >();
+  function collectDelegatedTools(
+    tools: ParsedToolUse[],
+    turnIndex: number,
+    ts: string | null
+  ): void {
+    for (const tool of tools) {
+      if (!tool.toolUseId) continue;
+      if (delegatedToolUses.has(tool.toolUseId)) continue;
+      delegatedToolUses.set(tool.toolUseId, { turnIndex, ts, tool });
+    }
+  }
   function collectSidechainTools(content: unknown): void {
     if (!Array.isArray(content)) return;
     for (const b of content as Array<{ type?: string; name?: unknown; id?: unknown }>) {
@@ -1442,6 +1486,9 @@ async function readJsonlSession(
       const allToolUses = buildToolUses(toolBlocks, 0, openMessage);
       toolCallCount += allToolUses.length;
       const toolUses = isDelegatedAgentTranscript ? [] : allToolUses;
+      if (isDelegatedAgentTranscript) {
+        collectDelegatedTools(allToolUses, turnIndex, timestamp);
+      }
 
       const usageTurn: UsageTurn = {
         timestamp,
@@ -1901,6 +1948,7 @@ async function readJsonlSession(
       fileSize,
       byteOffset: safeOffset,
       sidechainToolUses,
+      delegatedToolUses,
       startTs,
       endTs,
       primaryModel,
@@ -2106,16 +2154,42 @@ function safeComputeQuality(
 function writeSidechainToolUses(
   db: DatabaseT.Database,
   sessionId: string,
-  toolUses: Map<string, string>
+  toolUses: Map<string, string>,
+  /**
+   * The timeline-grade form, for a delegated transcript (#487). Where an entry
+   * exists for a `tool_use_id` its columns are written too; where it does not —
+   * an ordinary session's sidechain turns, which have no turn rows to order
+   * against — they stay NULL and the detail reader treats that as "no ordering
+   * available" rather than "turn 0".
+   */
+  detailed?: Map<string, { turnIndex: number; ts: string | null; tool: ParsedToolUse }>
 ): number {
   if (toolUses.size === 0) return 0;
   const stmt = db.prepare(
-    `INSERT OR IGNORE INTO sidechain_tool_uses (session_id, tool_use_id, tool_name)
-     VALUES (?, ?, ?)`
+    `INSERT OR IGNORE INTO sidechain_tool_uses
+       (session_id, tool_use_id, tool_name,
+        turn_index, sequence_in_turn, ts,
+        agent_name, skill_name, arguments_json, file_path, file_op)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   let rows = 0;
   for (const [toolUseId, toolName] of toolUses) {
-    rows += Number(stmt.run(sessionId, toolUseId, toolName).changes ?? 0);
+    const d = detailed?.get(toolUseId);
+    rows += Number(
+      stmt.run(
+        sessionId,
+        toolUseId,
+        toolName,
+        d?.turnIndex ?? null,
+        d?.tool.sequenceInTurn ?? null,
+        d?.ts ?? null,
+        d?.tool.agentName ?? null,
+        d?.tool.skillName ?? null,
+        d?.tool.argumentsJson ?? null,
+        d?.tool.filePath ?? null,
+        d?.tool.fileOp ?? null
+      ).changes ?? 0
+    );
   }
   return rows;
 }
@@ -2290,7 +2364,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
   // away on a rewrite, so this pass rebuilds them exactly; the same statement
   // serves `appendSessionTail`, which does NOT delete first and relies on the
   // id key to ignore what it has already stored.
-  rows += writeSidechainToolUses(db, s.sessionId, s.sidechainToolUses);
+  rows += writeSidechainToolUses(db, s.sessionId, s.sidechainToolUses, s.delegatedToolUses);
 
   // A1 one-to-many session metadata. DELETE-then-INSERT rather than INSERT OR
   // IGNORE: these have no natural unique key (the same hook command runs many
@@ -2866,7 +2940,7 @@ function appendSessionTail(
   // recorded. Keyed on `tool_use_id`, so a call re-logged across the boundary
   // between two windows settles to one row rather than being counted twice —
   // see `writeSidechainToolUses`.
-  rows += writeSidechainToolUses(db, sessionId, parsed.sidechainToolUses);
+  rows += writeSidechainToolUses(db, sessionId, parsed.sidechainToolUses, parsed.delegatedToolUses);
 
   for (const t of parsed.turns) {
     insertTurn.run({

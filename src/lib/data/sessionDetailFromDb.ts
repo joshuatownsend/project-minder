@@ -271,14 +271,37 @@ export async function loadSessionDetailFromDb(
     )
     .all(sessionId, isDelegated ? 1 : 0) as TurnRow[];
 
-  const tools = prepCached(db,
-      `SELECT turn_index, sequence_in_turn, tool_use_id, ts, tool_name,
-              agent_name, skill_name, arguments_json, file_path, file_op
-       FROM tool_uses
-       WHERE session_id = ?
-       ORDER BY turn_index, sequence_in_turn`
-    )
-    .all(sessionId) as ToolRow[];
+  // A delegated agent's calls live in `sidechain_tool_uses`, not `tool_uses`,
+  // and this is the reader that has to know it (#487). The timeline and the
+  // file-operations list are both built from these rows, so reading only
+  // `tool_uses` rendered a tool-heavy delegated session as prose with no
+  // actions — and dropped a tool-only assistant turn entirely — while the
+  // file-parse backend, reading the JSONL directly, showed them.
+  // (Codex P1, PR #528.)
+  //
+  // The two tables carry the same columns for these rows as of schema v30.
+  // `turn_index IS NOT NULL` is the discriminator: a row written before v30, or
+  // one belonging to an ordinary session's sidechain turns (which have no turn
+  // rows to order against), has no ordering and must not be rendered at turn 0.
+  // Such a session simply shows no tool events, exactly as it did before —
+  // until its next re-derivation fills them in.
+  const tools = (
+    isDelegated
+      ? prepCached(db,
+          `SELECT turn_index, sequence_in_turn, tool_use_id, ts, tool_name,
+                  agent_name, skill_name, arguments_json, file_path, file_op
+           FROM sidechain_tool_uses
+           WHERE session_id = ? AND turn_index IS NOT NULL
+           ORDER BY turn_index, sequence_in_turn`
+        )
+      : prepCached(db,
+          `SELECT turn_index, sequence_in_turn, tool_use_id, ts, tool_name,
+                  agent_name, skill_name, arguments_json, file_path, file_op
+           FROM tool_uses
+           WHERE session_id = ?
+           ORDER BY turn_index, sequence_in_turn`
+        )
+  ).all(sessionId) as ToolRow[];
 
   // PRs harvested at ingest time from `gh pr create` tool_results (T2.2).
   // Ordered by (pr_number, repo, pr_url) ASC — pr_number is the primary

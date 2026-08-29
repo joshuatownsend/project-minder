@@ -370,6 +370,19 @@ CREATE TABLE sidechain_tool_uses (
   session_id  TEXT NOT NULL,
   tool_use_id TEXT NOT NULL,
   tool_name   TEXT NOT NULL,
+  -- Schema v30 (#487). Everything below is what a TIMELINE needs and a roll-up
+  -- does not: order, time, and arguments. All nullable — a row written before
+  -- #487, or one belonging to an ordinary session's sidechain turns (which have
+  -- no turn rows of their own), carries NULLs and the detail reader treats that
+  -- as "no ordering available" rather than "turn 0".
+  turn_index       INTEGER,
+  sequence_in_turn INTEGER,
+  ts               TEXT,
+  agent_name       TEXT,
+  skill_name       TEXT,
+  arguments_json   TEXT,
+  file_path        TEXT,
+  file_op          TEXT,
   PRIMARY KEY (session_id, tool_use_id),
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 ) WITHOUT ROWID;

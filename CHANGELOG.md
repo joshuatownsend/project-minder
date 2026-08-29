@@ -18,6 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
   Delegated transcripts remain out of the sessions list. They are not sessions you started, and on a delegation-heavy history they would roughly double it; they stay reachable by link from the parent session, where their context is.
 
+  **The agent's tool events render too**, not just its prose. The timeline and the Files tab are both built from tool rows, and a delegated agent's calls live in a separate table that only ever needed a name and an id — enough for the "how much work happened below this session" roll-up it was built for, and not enough to place a call in a timeline. Schema v30 adds the ordering, timing and arguments. Without them a tool-heavy delegated session showed prose and no actions, and a tool-only turn disappeared entirely, while the file-parse backend showed both.
+
   `DERIVED_VERSION` moves 22 → 23, so existing indexes re-derive these rows.
 
 ### Changed

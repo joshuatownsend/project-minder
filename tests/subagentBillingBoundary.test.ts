@@ -182,6 +182,65 @@ describe.skipIf(!driverAvailable)("delegated transcripts keep their provenance",
     expect(summary.input_tokens).toBe(0);
   });
 
+  it("renders the agent's TOOL events, not just its prose", async () => {
+    // The timeline and the file-operations list are both built from tool rows,
+    // and a delegated agent's calls live in `sidechain_tool_uses` rather than
+    // `tool_uses`. Reading only the latter rendered a tool-heavy delegated
+    // session as prose with no actions — and dropped a tool-only assistant turn
+    // entirely — while the file-parse backend, reading the JSONL directly,
+    // showed them. A backend divergence, not just a gap. (Codex P1, PR #528.)
+    const { conn, mig, ingest } = await reload();
+    expect((await mig.initDb()).error).toBeNull();
+    const db = (await conn.getDb())!;
+
+    const { projectsDir } = await write(path.join("C--dev-myapp", "beef04.jsonl"), [
+      assistantLine("2026-08-01T10:00:00Z", "m1", [{ type: "text", text: "ok" }], false),
+    ]);
+
+    await write(path.join("C--dev-myapp", "beef04", "subagents", "tooly.jsonl"), [
+      userLine("2026-08-01T10:05:00Z", "find the flaky test", true),
+      // A TOOL-ONLY assistant turn: no prose at all. This is the turn that
+      // vanished completely, so a timeline that merely looked short would not
+      // have caught it.
+      assistantLine("2026-08-01T10:06:00Z", "t0", [
+        { type: "tool_use", id: "t_1", name: "Read", input: { file_path: "/repo/flaky.test.ts" } },
+      ], true),
+      assistantLine("2026-08-01T10:07:00Z", "t1", [{ type: "text", text: "found it" }], true),
+    ]);
+
+    expect((await ingest.reconcileAllSessions(db, { projectsDir })).errors).toBe(0);
+
+    // The premise: the row is in the sidechain table WITH ordering, which is
+    // what schema v30 added. A row with a NULL turn_index cannot be placed and
+    // is deliberately not rendered, so this is the thing under test.
+    const stored = db
+      .prepare(
+        `SELECT tool_name, turn_index, arguments_json FROM sidechain_tool_uses
+          WHERE session_id = 'tooly'`
+      )
+      .all() as Array<{ tool_name: string; turn_index: number | null; arguments_json: string | null }>;
+    expect(stored).toHaveLength(1);
+    expect(stored[0].tool_name).toBe("Read");
+    expect(stored[0].turn_index).not.toBeNull();
+    expect(stored[0].arguments_json ?? "").toContain("flaky.test.ts");
+
+    const { loadSessionDetailFromDb } = await import("@/lib/data/sessionDetailFromDb");
+    const detail = await loadSessionDetailFromDb(db, "tooly");
+    expect(detail).not.toBeNull();
+
+    // The tool event reaches the timeline...
+    expect(JSON.stringify(detail!.timeline)).toContain("Read");
+    // ...and the file operation reaches the Files tab, which is the half a
+    // timeline-only assertion would have missed.
+    expect(JSON.stringify(detail!.fileOperations ?? [])).toContain("flaky.test.ts");
+
+    // And none of it leaked into `tool_uses`, which is the boundary #511 owns.
+    const primary = db
+      .prepare("SELECT COUNT(*) AS n FROM tool_uses WHERE session_id = 'tooly'")
+      .get() as { n: number };
+    expect(primary.n).toBe(0);
+  });
+
   it("does not let a delegated prompt reclassify the agent's spend", async () => {
     // The prose is STORED (the timeline needs it) but must not become
     // `userIntentText` on the following assistant turn, which is what
