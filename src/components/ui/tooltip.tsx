@@ -205,7 +205,19 @@ export function Tooltip({
           dismiss();
         }
       }}
-      onBlur={() => setFocused(false)}
+      // Blur clears the PIN as well as the focus-hold. Enter/Space pins on top
+      // of the focus that is already holding the tooltip open, so releasing
+      // only `focused` here left the tooltip visible indefinitely after the
+      // user tabbed away — and activating several chips in turn left a trail of
+      // them overlapping on screen. (Codex P2, round 6.)
+      //
+      // Safe for touch, which is what the pin exists for: a tap focuses the
+      // trigger, so tapping elsewhere blurs it, and the outside-pointerdown
+      // handler clears the pin independently for any browser where it does not.
+      onBlur={() => {
+        setFocused(false);
+        setPinned(false);
+      }}
       onClick={(e) => {
         // **Stop the event.** Every migrated chip lives inside a `<Link>` —
         // `QualityChip` and `EffortMixChip` inside `SessionRow`'s, the compact
