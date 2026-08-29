@@ -36,16 +36,26 @@ interface AgentPeekPanelProps {
 }
 
 export function AgentPeekPanel({ session, onClose }: AgentPeekPanelProps) {
+  // #518: a flag that is definitively CLEARED, not an emptiness test. `!data`
+  // reads as "still loading" AND as "the peek failed" — and this panel swallows
+  // its errors deliberately (peek is best-effort), so the failed case was the
+  // one guaranteed to leave the marker mounted forever.
+  const [pending, setPending] = useState(false);
   const [data, setData] = useState<PeekData | null>(null);
   const [activeTab, setActiveTab] = useState<PeekTab>("hooks");
 
   useEffect(() => {
-    if (!session) { setData(null); setActiveTab("hooks"); return; }
+    if (!session) { setData(null); setPending(false); setActiveTab("hooks"); return; }
     let aborted = false;
+    setPending(true);
     fetch(`/api/agent-view/peek?slug=${encodeURIComponent(session.projectSlug)}&sessionId=${encodeURIComponent(session.sessionId)}`)
       .then((r) => r.json())
       .then((d) => { if (!aborted) setData(d as PeekData); })
-      .catch(() => { /* peek is best-effort */ });
+      .catch(() => { /* peek is best-effort */ })
+      // Best-effort still has to SETTLE. Swallowing the error left `data` null
+      // forever, which both `[data-loading]` blocks below read as "loading"
+      // (#518) — so a failed peek pinned the whole page as busy.
+      .finally(() => { if (!aborted) setPending(false); });
     return () => { aborted = true; };
   }, [session?.sessionId, session?.projectSlug]);
 
@@ -178,9 +188,9 @@ export function AgentPeekPanel({ session, onClose }: AgentPeekPanelProps) {
                   (last 5 min)
                 </span>
               </SectionLabel>
-              {!data ? (
+              {pending ? (
                 <div data-loading="true" style={{ fontSize: "0.7rem", color: "var(--text-3,#8a8c8f)" }}>Loading…</div>
-              ) : data.hookEvents.length === 0 ? (
+              ) : !data || data.hookEvents.length === 0 ? (
                 <div style={{ fontSize: "0.7rem", color: "var(--text-3,#8a8c8f)" }}>
                   No hook events. Enable Live Activity in Settings to see them.
                 </div>
@@ -219,9 +229,9 @@ export function AgentPeekPanel({ session, onClose }: AgentPeekPanelProps) {
           {activeTab === "notes" && (
             <section>
               <SectionLabel>Insights this session</SectionLabel>
-              {!data ? (
+              {pending ? (
                 <div data-loading="true" style={{ fontSize: "0.7rem", color: "var(--text-3,#8a8c8f)" }}>Loading…</div>
-              ) : data.insightsThisSession.length === 0 ? (
+              ) : !data || data.insightsThisSession.length === 0 ? (
                 <div style={{ fontSize: "0.7rem", color: "var(--text-3,#8a8c8f)", lineHeight: 1.5 }}>
                   No insights captured yet. Use{" "}
                   <code style={{ fontFamily: "var(--font-mono,monospace)", background: "var(--card-bg-2,#1a1a1a)", padding: "0 4px", borderRadius: 3 }}>

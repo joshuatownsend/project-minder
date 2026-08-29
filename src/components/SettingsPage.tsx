@@ -119,6 +119,9 @@ export function SettingsPage() {
 
   useEffect(() => {
     let cancelled = false;
+    // Raised where the request starts, not only at declaration (#518).
+    // `showToast` is a dependency, so this effect can re-run.
+    setConfigPending(true);
     fetch("/api/config")
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);

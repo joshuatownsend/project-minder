@@ -48,6 +48,12 @@ interface MemoryEditorProps {
 }
 
 export function MemoryEditor({ entry, onSaved }: MemoryEditorProps) {
+  // #518: a flag that is definitively CLEARED, not an emptiness test.
+  // `!data` reads as "still loading" AND as "the request failed" — a
+  // failed fetch leaves the state exactly as empty as a pending one, so the
+  // marker never cleared and every `[data-loading]` consumer read the page
+  // as busy indefinitely. Settled in a `finally`, so failure settles it too.
+  const [pending, setPending] = useState(true);
   const [data, setData] = useState<FileResponse | null>(null);
   const [draft, setDraft] = useState<string>("");
   const [mode, setMode] = useState<EditorMode>("view");
@@ -66,6 +72,7 @@ export function MemoryEditor({ entry, onSaved }: MemoryEditorProps) {
   useEffect(() => {
     const ctrl = new AbortController();
     setData(null);
+    setPending(true);
     setError(null);
     setMode("view");
     setConflict(false);
@@ -77,6 +84,11 @@ export function MemoryEditor({ entry, onSaved }: MemoryEditorProps) {
       .catch((e: Error) => {
         if (e.name === "AbortError") return;
         setError(e.message);
+      })
+      .finally(() => {
+        // See #518. Not on abort — the effect re-run that aborted this one sets
+        // `pending` true again and owns clearing it.
+        if (!ctrl.signal.aborted) setPending(false);
       });
     return () => {
       ctrl.abort();
@@ -139,8 +151,11 @@ export function MemoryEditor({ entry, onSaved }: MemoryEditorProps) {
   if (error && !data) {
     return <p style={{ ...errorTextStyle, padding: "20px 0" }}>{error}</p>;
   }
-  if (!data) {
+  if (pending) {
     return <p data-loading="true" style={{ ...mutedStyle, padding: "20px 0" }}>Loading</p>;
+  }
+  if (!data) {
+    return <p style={{ ...mutedStyle, padding: "20px 0" }}>Nothing to show.</p>;
   }
 
   const dirty = draft !== data.content;

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import type { MinderConfig } from "@/lib/types";
 import { S } from "./styles";
 import { OtelSection } from "./OtelSection";
-import { useQuota } from "@/hooks/useQuota";
+import { useQuotaState } from "@/hooks/useQuota";
 
 export function IntegrationsSection({
   config,
@@ -18,7 +18,7 @@ export function IntegrationsSection({
   const [tokenConfigured, setTokenConfigured] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const quota = useQuota();
+  const { quota, pending: quotaPending } = useQuotaState();
 
   useEffect(() => {
     fetch("/api/secrets/telegram")
@@ -80,11 +80,12 @@ export function IntegrationsSection({
         <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)", marginBottom: "12px" }}>
           Claude Max Quota
         </div>
-        {quota === null ? (
+        {/* #518: see `CostSection` — the flag, not the emptiness. */}
+        {quotaPending ? (
           <div data-loading="true" style={S.muted}>Loading…</div>
-        ) : !quota.configured ? (
+        ) : !quota || !quota.configured ? (
           <div style={S.muted}>
-            {quota.reason}
+            {quota ? quota.reason : "Quota unavailable."}
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>

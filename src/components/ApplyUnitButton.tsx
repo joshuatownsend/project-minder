@@ -100,7 +100,16 @@ interface ApplyPopoverProps {
 }
 
 function ApplyPopover({ unit, source, excludeTargetSlugs, onClose }: ApplyPopoverProps) {
+  // #518: a flag that is definitively CLEARED, not an emptiness test.
+  // `!projects` reads as "still loading" AND as "the request failed" — a
+  // failed fetch leaves the state exactly as empty as a pending one, so the
+  // marker never cleared and every `[data-loading]` consumer read the page
+  // as busy indefinitely. Settled in a `finally`, so failure settles it too.
+  const [pending, setPending] = useState(true);
   const [projects, setProjects] = useState<ProjectData[] | null>(null);
+  // See `ApplyTemplateModal`: failed and empty are different answers, and only
+  // one of them is the user's fault to fix (Codex P2, PR #521).
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [targetSlug, setTargetSlug] = useState<string>("");
   const policies = policiesFor(unit.kind);
   const [conflict, setConflict] = useState<ConflictPolicy>(policies[0]);
@@ -110,6 +119,19 @@ function ApplyPopover({ unit, source, excludeTargetSlugs, onClose }: ApplyPopove
 
   useEffect(() => {
     let cancelled = false;
+    // Reset before the retry. Several callers build `excludeTargetSlugs` inline,
+    // so this effect re-runs on every render of theirs — and without this a
+    // failure latched: a later SUCCESSFUL load left the old error on screen
+    // beside the freshly loaded list (Codex P2, PR #521).
+    setPending(true);
+    setLoadError(null);
+    // The TARGET is part of this request's state too. Leaving it behind meant a
+    // refresh that returned zero eligible projects showed "no other projects
+    // available" while Preview and Apply stayed enabled — gated on `targetSlug`,
+    // which still held the previous, now-excluded project. The buttons looked
+    // right and would have applied to a project the list had just hidden
+    // (Codex P2, PR #521).
+    setTargetSlug("");
     fetch("/api/projects")
       .then((r) => r.json())
       .then((data: { projects: ProjectData[] }) => {
@@ -119,7 +141,13 @@ function ApplyPopover({ unit, source, excludeTargetSlugs, onClose }: ApplyPopove
         setProjects(filtered);
         if (filtered[0]) setTargetSlug(filtered[0].slug);
       })
-      .catch(() => undefined);
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setLoadError(e instanceof Error ? e.message : "Failed to load projects");
+      })
+      .finally(() => {
+        if (!cancelled) setPending(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -201,9 +229,13 @@ function ApplyPopover({ unit, source, excludeTargetSlugs, onClose }: ApplyPopove
           <span style={{ fontSize: "0.62rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
             target project
           </span>
-          {!projects ? (
+          {pending ? (
             <span data-loading="true" style={{ color: "var(--text-muted)" }}>loading…</span>
-          ) : projects.length === 0 ? (
+          ) : loadError ? (
+            <span style={{ color: "var(--status-error-text, var(--accent))" }}>
+              couldn&apos;t load projects: {loadError}
+            </span>
+          ) : !projects || projects.length === 0 ? (
             <span style={{ color: "var(--text-muted)" }}>no other projects available</span>
           ) : (
             <select

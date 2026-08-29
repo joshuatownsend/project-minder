@@ -24,6 +24,12 @@ const SCOPE_ORDER: MemoryScope[] = ["user", "project", "auto"];
 type ScopeFilter = MemoryScope | "all";
 
 export function MemoryBrowser() {
+  // #518: a flag that is definitively CLEARED, not an emptiness test.
+  // `!entries` reads as "still loading" AND as "the request failed", because a
+  // failed fetch leaves the state exactly as empty as a pending one — so the
+  // marker never cleared and every `[data-loading]` consumer read the page as
+  // busy forever. Settled in a `finally` so failure settles it too.
+  const [pending, setPending] = useState(true);
   const [entries, setEntries] = useState<MemoryFileEntry[] | null>(null);
   const [indexSummaries, setIndexSummaries] = useState<MemoryIndexSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -36,6 +42,13 @@ export function MemoryBrowser() {
   // Unread filter rides in the URL so the server's 30d cutoff is the single
   // source of truth — the client never recomputes "what counts as unread".
   async function reload(unread: boolean, signal?: AbortSignal) {
+      // A REQUEST OWNS ITS OWN STATE FROM THE START. Setting `pending` true only
+      // at declaration covers the first request and no other: these reload on a
+      // filter change, a prop change, or after a mutation, and a re-run left the
+      // previous answer on screen with no marker — and a previous FAILURE
+      // showing after a later success (Codex P2 + Copilot x3, PR #521).
+    setPending(true);
+    setError(null);
     try {
       const url = unread ? "/api/memory?unread=true" : "/api/memory";
       const r = await fetch(url, { signal });
@@ -50,6 +63,12 @@ export function MemoryBrowser() {
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") return;
       setError(e instanceof Error ? e.message : "Failed to load memory files");
+    } finally {
+      // NOT on abort: the request that superseded this one owns the flag, and
+      // clearing it here would flash a settled-but-empty view between the two.
+      // Strict Mode aborts the first fetch of every effect pair in development,
+      // so this is the common path, not an edge case.
+      if (!signal?.aborted) setPending(false);
     }
   }
 
@@ -129,8 +148,11 @@ export function MemoryBrowser() {
   if (error) {
     return <p style={{ padding: "40px 0", color: "var(--status-error-text, var(--accent))" }}>{error}</p>;
   }
-  if (!entries) {
+  if (pending) {
     return <p data-loading="true" style={{ padding: "40px 0", color: "var(--text-muted)" }}>Loading</p>;
+  }
+  if (!entries) {
+    return <p style={{ padding: "40px 0", color: "var(--text-muted)" }}>No memory files found.</p>;
   }
 
   return (

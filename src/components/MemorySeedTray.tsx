@@ -35,6 +35,12 @@ const TYPE_COLOR: Record<SeedCandidate["type"], string> = {
 };
 
 export function MemorySeedTray() {
+  // #518: a flag that is definitively CLEARED, not an emptiness test.
+  // `!data` reads as "still loading" AND as "the request failed" — a
+  // failed fetch leaves the state exactly as empty as a pending one, so the
+  // marker never cleared and every `[data-loading]` consumer read the page
+  // as busy indefinitely. Settled in a `finally`, so failure settles it too.
+  const [pending, setPending] = useState(true);
   const [data, setData] = useState<SeedResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [anchorPath, setAnchorPath] = useState<string>("");
@@ -47,6 +53,13 @@ export function MemorySeedTray() {
   }
 
   async function reload(anchor: string, signal?: AbortSignal) {
+      // A REQUEST OWNS ITS OWN STATE FROM THE START. Setting `pending` true only
+      // at declaration covers the first request and no other: these reload on a
+      // filter change, a prop change, or after a mutation, and a re-run left the
+      // previous answer on screen with no marker — and a previous FAILURE
+      // showing after a later success (Codex P2 + Copilot x3, PR #521).
+    setPending(true);
+    setError(null);
     try {
       const url = anchor ? `/api/memory/seed?anchor=${encodeURIComponent(anchor)}` : "/api/memory/seed";
       const r = await fetch(url, { signal });
@@ -64,6 +77,12 @@ export function MemorySeedTray() {
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") return;
       setError(e instanceof Error ? e.message : "Failed to load seed candidates");
+    } finally {
+      // NOT on abort: the request that superseded this one owns the flag,
+      // and clearing it here would flash a settled-but-empty view between
+      // the two. Strict Mode aborts the first fetch of every effect pair in
+      // development, so this is the common path rather than an edge case.
+      if (!signal?.aborted) setPending(false);
     }
   }
 
@@ -136,8 +155,11 @@ export function MemorySeedTray() {
   if (error) {
     return <p style={{ padding: "40px 0", color: "var(--accent)" }}>{error}</p>;
   }
-  if (!data) {
+  if (pending) {
     return <p data-loading="true" style={{ padding: "40px 0", color: "var(--text-muted)" }}>Loading</p>;
+  }
+  if (!data) {
+    return <p style={{ padding: "40px 0", color: "var(--text-muted)" }}>No seed candidates.</p>;
   }
 
   return (

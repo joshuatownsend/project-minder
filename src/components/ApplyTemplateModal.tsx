@@ -36,7 +36,18 @@ const POLICIES_BY_KIND: Record<UnitKind, ConflictPolicy[]> = {
 };
 
 export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
+  // #518: a flag that is definitively CLEARED, not an emptiness test.
+  // `!projects` reads as "still loading" AND as "the request failed" — a
+  // failed fetch leaves the state exactly as empty as a pending one, so the
+  // marker never cleared and every `[data-loading]` consumer read the page
+  // as busy indefinitely. Settled in a `finally`, so failure settles it too.
+  const [pending, setPending] = useState(true);
   const [projects, setProjects] = useState<ProjectData[] | null>(null);
+  // A FAILURE IS NOT AN EMPTY RESULT. Separating pending from empty and then
+  // collapsing failed into empty just moves the lie one state over: "no
+  // eligible target projects" told a user with a dozen of them that they had
+  // none, and left Preview/Apply enabled to do nothing (Codex P2, PR #521).
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [targetMode, setTargetMode] = useState<"existing" | "new">("existing");
   const [existingSlug, setExistingSlug] = useState("");
   const [newName, setNewName] = useState("");
@@ -65,6 +76,14 @@ export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
 
   useEffect(() => {
     let cancelled = false;
+    // The manifest can change under this modal, and the derived state has to
+    // follow the CURRENT request rather than the previous one — otherwise the
+    // marker, the list and `hasTarget` describe a manifest that is no longer
+    // selected while the new fetch is in flight (Copilot, PR #521).
+    setPending(true);
+    setLoadError(null);
+    setProjects(null);
+    setExistingSlug("");
     async function loadProjects() {
       const res = await fetch("/api/projects");
       const data = (await res.json()) as { projects: ProjectData[] };
@@ -77,7 +96,18 @@ export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
       setProjects(filtered);
       if (filtered[0]) setExistingSlug(filtered[0].slug);
     }
-    loadProjects();
+    // `.catch` as well as `.finally`, because `loadProjects` had NO rejection
+     // handler at all: a failed `/api/projects` produced an unhandled rejection
+     // AND left the chip reading "loading projects…" for the life of the modal.
+    loadProjects()
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setLoadError(e instanceof Error ? e.message : "Failed to load projects");
+      })
+      .finally(() => {
+        // Not when superseded — the re-run owns the flag.
+        if (!cancelled) setPending(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -140,6 +170,12 @@ export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
     setResult(r);
   }
 
+  // Derived from `buildRequest` rather than restated, so the button's enabled
+  // state and the request's precondition cannot drift apart. `buildRequest` is
+  // pure over state — it reads, allocates and returns — so calling it per
+  // render to ask "would this produce a request?" is free of side effects.
+  const hasTarget = buildRequest(true) !== null;
+
   return (
     <div
       role="dialog"
@@ -199,9 +235,13 @@ export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
           </div>
 
           {targetMode === "existing" ? (
-            !projects ? (
+            pending ? (
               <span data-loading="true" style={mutedText}>loading projects…</span>
-            ) : projects.length === 0 ? (
+            ) : loadError ? (
+              <span style={{ ...mutedText, color: "var(--status-error-text, var(--accent))" }}>
+                couldn&apos;t load projects: {loadError}
+              </span>
+            ) : !projects || projects.length === 0 ? (
               <span style={mutedText}>no eligible target projects</span>
             ) : (
               <select
@@ -360,10 +400,13 @@ export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
           <button onClick={onClose} disabled={busy} style={secondaryButton(busy)}>
             cancel
           </button>
-          <button onClick={onPreview} disabled={busy} style={secondaryButton(busy)}>
+          {/* Disabled with no target, not merely inert: both handlers returned
+              silently on an empty `existingSlug`, so a failed project load left
+              two live-looking buttons that did nothing (Codex P2, PR #521). */}
+          <button onClick={onPreview} disabled={busy || !hasTarget} style={secondaryButton(busy || !hasTarget)}>
             {busy ? "…" : "preview"}
           </button>
-          <button onClick={onApply} disabled={busy} style={primaryButton(busy)}>
+          <button onClick={onApply} disabled={busy || !hasTarget} style={primaryButton(busy || !hasTarget)}>
             {busy ? "applying…" : "apply"}
           </button>
         </div>
