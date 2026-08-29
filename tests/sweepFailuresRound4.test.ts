@@ -751,3 +751,79 @@ describe("round 12 — an entry redundant with the primary home is not a change"
     expect(keys(["D:\\elsewhere\\.claude"])).not.toEqual(keys([]));
   });
 });
+
+describe("round 13 — the capped arithmetic told the truth in neither direction", () => {
+  it("deduplicates the entries past the DETAIL cap, not just the named ones", async () => {
+    // `items` stops at 50 while `seen` tracks up to 2,000 keys. Deduplicating
+    // only what was still named and adding each cycle's overflow blind meant 60
+    // directories that BOTH sweeps tripped over reported 70 locations — each
+    // cycle contributing 10 undeduplicated residuals. The keys were right there
+    // the whole time. (Codex P2, PR #527.)
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      getSweepFailureTotal,
+      getSweepFailures,
+    } = await import("@/lib/sweepFailures");
+
+    const dirs = Array.from({ length: 60 }, (_, i) => `/home/projects/p-${i}`);
+
+    for (const sweep of ["usage", "sessions"] as const) {
+      const t = beginSweepFailureCycle(sweep);
+      for (const d of dirs) {
+        recordSweepFailure({ path: d, scope: "project-dir", sweep }, t);
+      }
+      endSweepFailureCycle(sweep, t);
+    }
+
+    // The premise: both cycles overflowed the DETAIL cap, so the old formula's
+    // blind residual is in play.
+    expect(getSweepFailures().length).toBe(50);
+    // 60 locations, not 70. Two sweeps walking one tree find one set of faults.
+    expect(getSweepFailureTotal()).toBe(60);
+  });
+
+  it("still counts a location only one sweep found", async () => {
+    // The counterpart: deduplicating by key must not merge distinct paths, or
+    // the total would collapse toward whichever sweep saw fewest.
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      getSweepFailureTotal,
+    } = await import("@/lib/sweepFailures");
+
+    const t1 = beginSweepFailureCycle("usage");
+    recordSweepFailure({ path: "/shared", scope: "project-dir", sweep: "usage" }, t1);
+    recordSweepFailure({ path: "/only-usage", scope: "project-dir", sweep: "usage" }, t1);
+    endSweepFailureCycle("usage", t1);
+
+    const t2 = beginSweepFailureCycle("sessions");
+    recordSweepFailure({ path: "/shared", scope: "project-dir", sweep: "sessions" }, t2);
+    endSweepFailureCycle("sessions", t2);
+
+    expect(getSweepFailureTotal()).toBe(2);
+  });
+
+  it("keeps the banner visible when only the count survives", async () => {
+    // `retireVerified` can clear every retained DETAIL while failures past the
+    // 50-entry cap remain counted. A `degraded.length` visibility gate then hid
+    // the banner outright while the API went on reporting incomplete coverage —
+    // the silence this whole feature exists to end, arriving through its own
+    // cap. (Codex P2, PR #527.)
+    //
+    // Source-level: this suite has no DOM, so the component cannot be rendered.
+    // The assertion is that neither the visibility gate nor the detail block
+    // keys off the capped array.
+    const { readFile } = await import("node:fs/promises");
+    const text = await readFile("src/components/UnavailableHomesBanner.tsx", "utf-8");
+
+    expect(text).toMatch(/homes\.length === 0 && degradedTotal === 0\)\) return null;/);
+    expect(text).not.toMatch(/homes\.length === 0 && degraded\.length === 0/);
+    // And the detail block is gated on the total as well, with count-only copy
+    // for the case where nothing is left to name.
+    expect(text).toMatch(/\{degradedTotal > 0 && \(/);
+    expect(text).toMatch(/degraded\.length === 0 \? \(/);
+  });
+});

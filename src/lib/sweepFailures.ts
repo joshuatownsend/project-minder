@@ -424,17 +424,28 @@ export function getSweepFailures(): SweepFailure[] {
  * the count would understate it precisely when it matters.
  */
 export function getSweepFailureTotal(): number {
-  // Deduplicated across sweeps for everything still in the detail arrays, then
-  // plus whatever each cycle counted past its detail cap.
+  // The union of the KEYS, not the detail arrays plus a residual.
   //
-  // That residual cannot be deduplicated — the paths behind it were never
-  // retained — so on a fault broad enough to blow the cap in two sweeps at
-  // once the total can still overstate. Documented rather than hidden, and in
-  // that direction on purpose: this figure exists to tell a user their corpus
-  // is incomplete, and the failure that matters is understating it.
-  let residual = 0;
-  for (const r of published().values()) residual += Math.max(0, r.total - r.items.length);
-  return getSweepFailures().length + residual;
+  // `items` stops at 50 while `seen` tracks up to 2,000 `scope|path` keys, so
+  // the earlier formula deduplicated only what was still named and added each
+  // cycle's overflow blind: 60 directories that both sweeps tripped over
+  // reported 70 locations, since each contributed 10 undeduplicated residuals.
+  // Those residuals were deduplicable all along — the keys are right there.
+  // (Codex P2, PR #527.)
+  //
+  // What genuinely cannot be deduplicated is what a cycle counted past its own
+  // TRACKING cap, where the key was never kept. That is added per cycle and can
+  // still overstate on a fault broad enough to blow 2,000 keys in two sweeps at
+  // once — documented rather than hidden, and in that direction on purpose:
+  // this figure exists to tell a user their corpus is incomplete, and the
+  // failure that matters is understating it.
+  const keys = new Set<string>();
+  let beyondTracking = 0;
+  for (const r of published().values()) {
+    for (const key of r.seen.keys()) keys.add(key);
+    beyondTracking += Math.max(0, r.total - r.seen.size);
+  }
+  return keys.size + beyondTracking;
 }
 
 /**

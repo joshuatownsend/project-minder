@@ -135,7 +135,12 @@ export function UnavailableHomesBanner() {
     };
   }, []);
 
-  if (!allowRender || (homes.length === 0 && degraded.length === 0)) return null;
+  // Gated on the TOTAL, not on the detail array. `retireVerified` can clear
+  // every retained detail while failures past the 50-entry cap remain counted,
+  // so a `degraded.length` gate hid the banner outright while the API went on
+  // reporting incomplete coverage — the silence this whole feature exists to
+  // end, arriving through its own cap. (Codex P2, PR #527.)
+  if (!allowRender || (homes.length === 0 && degradedTotal === 0)) return null;
 
   const color = "var(--warn)";
   // Two different problems, and the headline names whichever is present. A home
@@ -199,16 +204,31 @@ export function UnavailableHomesBanner() {
             {anyStopped(homes) && " Minder will not start a stopped distro to check."}
           </div>
         )}
-        {degraded.length > 0 && (
+        {degradedTotal > 0 && (
           <div style={{ color: "var(--text-3)", marginTop: 4 }}>
             {/* The paths, not just a count. "Something could not be read" is
                 not actionable; the directory and the reason are. Capped,
                 because a tree with a broken ACL near the root produces many
                 and the first few are what a reader needs. */}
-            Could not read {degradedTotal === 1 ? "" : `${degradedTotal} locations, including `}
-            {degraded.slice(0, 3).map((d) => `${d.path} (${d.reason})`).join("; ")}
-            {degradedTotal > 3 && ", and others"}. Figures from the affected
-            projects are missing rather than zero.
+            {degraded.length === 0 ? (
+              // Count-only copy. The paths are the actionable part and are
+              // normally shown, but they can all have been retired while the
+              // count has not — saying nothing at all would be worse than
+              // saying how many.
+              <>
+                Could not read {degradedTotal}{" "}
+                {degradedTotal === 1 ? "location" : "locations"}. Figures from the
+                affected projects are missing rather than zero.
+              </>
+            ) : (
+              <>
+                Could not read{" "}
+                {degradedTotal === 1 ? "" : `${degradedTotal} locations, including `}
+                {degraded.slice(0, 3).map((d) => `${d.path} (${d.reason})`).join("; ")}
+                {degradedTotal > 3 && ", and others"}. Figures from the affected
+                projects are missing rather than zero.
+              </>
+            )}
           </div>
         )}
       </div>
