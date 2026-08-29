@@ -819,7 +819,11 @@ describe("round 13 — the capped arithmetic told the truth in neither direction
     const { readFile } = await import("node:fs/promises");
     const text = await readFile("src/components/UnavailableHomesBanner.tsx", "utf-8");
 
-    expect(text).toMatch(/homes\.length === 0 && degradedTotal === 0\)\) return null;/);
+    // The gate keys off the TOTAL, never the capped array. It also carries an
+    // `indexIncomplete` term as of round 15, so this asserts the part that
+    // matters — `degradedTotal`, not `degraded.length` — rather than pinning
+    // the whole expression, which would break on every later addition to it.
+    expect(text).toMatch(/homes\.length === 0 && degradedTotal === 0/);
     expect(text).not.toMatch(/homes\.length === 0 && degraded\.length === 0/);
     // And the detail block is gated on the total as well, with count-only copy
     // for the case where nothing is left to name.
@@ -897,5 +901,112 @@ describe("round 14 — the DB reconcile's own incompleteness counts too", () => 
     expect(route).toMatch(
       /complete: unavailable\.length === 0 && degradedTotal === 0 && !indexIncomplete/
     );
+  });
+});
+
+describe("round 15 — the DB verdict has to survive, and be shown", () => {
+  let dbAvailable: boolean;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("better-sqlite3");
+    dbAvailable = true;
+  } catch {
+    dbAvailable = false;
+  }
+
+  it.skipIf(!dbAvailable)("prefers the flag over the last RECORDED run", async () => {
+    // `recordOptionForSweep` deliberately stops writing `indexer_runs` once a
+    // clean pass exists — those rows clear a readiness latch, they are not a
+    // log — so the steady-state 30 s sweeps record nothing. Reading the latest
+    // RECORDED run therefore answered with the startup pass forever, and a
+    // permissions failure appearing later stayed invisible. (Codex P2, #527.)
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(":memory:");
+    db.prepare("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)").run();
+    db.prepare(
+      `CREATE TABLE indexer_runs (
+         id INTEGER PRIMARY KEY, kind TEXT, started_at_ms INTEGER,
+         finished_at_ms INTEGER, error TEXT, aborted INTEGER
+       )`
+    ).run();
+
+    const { lastFullPassWasIncomplete, recordFullPassVerdict } = await import(
+      "@/lib/db/indexerRuns"
+    );
+
+    // The startup pass succeeded and was recorded. Recording then stopped.
+    db.prepare(
+      "INSERT INTO indexer_runs (kind, started_at_ms, finished_at_ms, aborted) VALUES ('reconcile', 1, 2, 0)"
+    ).run();
+    expect(lastFullPassWasIncomplete(db as never)).toBe(false);
+
+    // A later unrecorded sweep hits a permissions failure. The run table still
+    // says the last recorded pass was clean — the flag is what carries it.
+    recordFullPassVerdict(db as never, true);
+    expect(lastFullPassWasIncomplete(db as never)).toBe(true);
+
+    // And recovery clears it, or the warning would be permanent.
+    recordFullPassVerdict(db as never, false);
+    expect(lastFullPassWasIncomplete(db as never)).toBe(false);
+
+    db.close();
+  });
+
+  it.skipIf(!dbAvailable)("falls back to the run row for an index with no flag", async () => {
+    // An index written before the flag existed must not read as healthy just
+    // because `meta` has no row yet.
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(":memory:");
+    db.prepare("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)").run();
+    db.prepare(
+      `CREATE TABLE indexer_runs (
+         id INTEGER PRIMARY KEY, kind TEXT, started_at_ms INTEGER,
+         finished_at_ms INTEGER, error TEXT, aborted INTEGER
+       )`
+    ).run();
+    db.prepare(
+      "INSERT INTO indexer_runs (kind, started_at_ms, finished_at_ms, aborted) VALUES ('reconcile', 1, 2, 1)"
+    ).run();
+
+    const { lastFullPassWasIncomplete } = await import("@/lib/db/indexerRuns");
+    expect(lastFullPassWasIncomplete(db as never)).toBe(true);
+    db.close();
+  });
+
+  it("shows the DB-only incomplete state in the banner", async () => {
+    // The reconcile reports through the API rather than the collector, so this
+    // state arrives with `degradedTotal: 0` and no unavailable homes — which
+    // the visibility gate treated as "nothing to say". (Codex P2, PR #527.)
+    //
+    // Source-level: no DOM in this suite, and the defect is a missing term in a
+    // gate plus a missing branch.
+    const { readFile } = await import("node:fs/promises");
+    const text = await readFile("src/components/UnavailableHomesBanner.tsx", "utf-8");
+
+    expect(text).toMatch(/degradedTotal === 0 && !indexIncomplete\)/);
+    expect(text).toMatch(/The index did not finish reading your history/);
+    // Derived from `complete` rather than a field of its own, so the client
+    // cannot disagree with the endpoint about whether the corpus was whole.
+    expect(text).toMatch(/const whole = data\.complete \?\? true;/);
+  });
+
+  it("gives the reconcile the same dangling-symlink distinction", async () => {
+    // The file sweeps gained the `lstat` check earlier in this PR and the
+    // reconcile did not — which mattered from the moment `/api/claude-homes`
+    // started reading this pass's verdict, since a `projects` symlink onto a
+    // disconnected drive fails `readdir` with ENOENT exactly as an absent path
+    // does. (Codex P2, PR #527.)
+    const { readFile } = await import("node:fs/promises");
+    const text = await readFile("src/lib/db/ingest.ts", "utf-8");
+
+    expect(text).toMatch(/async function isMissingDirError/);
+    expect(text).toMatch(/pathEntryExists/);
+    // Every call site awaits it. `!promise` is always false, so an un-awaited
+    // one would silently stop counting failures at that site — a gate that
+    // proves nothing, which is the failure class this repo keeps unwinding.
+    const calls = [...text.matchAll(/isMissingDirError\(/g)];
+    // One definition plus three call sites.
+    expect(calls.length).toBe(4);
+    expect([...text.matchAll(/await isMissingDirError\(/g)].length).toBe(3);
   });
 });

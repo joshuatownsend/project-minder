@@ -160,8 +160,12 @@ describe("describeSweepFailure", () => {
       sweep: "usage",
     });
     expect(home).not.toBe(project);
-    expect(home).toContain("Claude home");
-    expect(project).toContain("project directory");
+    // "Claude PROJECTS directory", not "Claude home". The path on a
+    // `projects-dir` failure is `<home>/projects`, so naming the home sent a
+    // reader to check something that is right there and readable, and the
+    // warning then read as spurious. (Copilot, PR #527.)
+    expect(home).toContain("Claude projects directory");
+    expect(project).toContain("one project directory");
   });
 
   it("still says something useful for an errno it does not know", () => {

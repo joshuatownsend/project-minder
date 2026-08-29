@@ -87,6 +87,15 @@ export function UnavailableHomesBanner() {
   // most. The API already returns the uncapped figure; this reads it.
   // (Codex P2, PR #527, round 4.)
   const [degradedTotal, setDegradedTotal] = useState(0);
+  /**
+   * The DB reconcile's own verdict, which no in-process sweep can see.
+   *
+   * That pass runs in a worker and reports through the API rather than the
+   * collector, so it arrives with `degradedTotal: 0` and no unavailable homes —
+   * a state the banner had no way to render and therefore stayed silent for.
+   * (Codex P2, PR #527.)
+   */
+  const [indexIncomplete, setIndexIncomplete] = useState(false);
   const [allowRender, setAllowRender] = useState(false);
 
   useEffect(() => {
@@ -105,6 +114,7 @@ export function UnavailableHomesBanner() {
               unavailable?: UnavailableHome[];
               degraded?: DegradedPath[];
               degradedTotal?: number;
+              complete?: boolean;
             } | null
           ) => {
             // A failed poll leaves the last good answer in place rather than
@@ -123,6 +133,20 @@ export function UnavailableHomesBanner() {
             // send the field — which is what the banner used to show anyway, so
             // the fallback is the previous behaviour rather than a new guess.
             if (data) setDegradedTotal(data.degradedTotal ?? (data.degraded ?? []).length);
+            // Derived from `complete` rather than a field of its own: the
+            // endpoint already publishes the whole-corpus answer, and asking
+            // for a second field would let the two disagree. `complete === true`
+            // with figures the client cannot account for is exactly the index
+            // case. An older server sends no `complete`, and `?? true` keeps it
+            // silent rather than warning about a field it never sent.
+            if (data) {
+              const whole = data.complete ?? true;
+              setIndexIncomplete(
+                !whole &&
+                  (data.unavailable ?? []).length === 0 &&
+                  (data.degradedTotal ?? (data.degraded ?? []).length) === 0
+              );
+            }
           }
         )
         .catch(() => {});
@@ -140,7 +164,8 @@ export function UnavailableHomesBanner() {
   // so a `degraded.length` gate hid the banner outright while the API went on
   // reporting incomplete coverage — the silence this whole feature exists to
   // end, arriving through its own cap. (Codex P2, PR #527.)
-  if (!allowRender || (homes.length === 0 && degradedTotal === 0)) return null;
+  if (!allowRender || (homes.length === 0 && degradedTotal === 0 && !indexIncomplete))
+    return null;
 
   const color = "var(--warn)";
   // Two different problems, and the headline names whichever is present. A home
@@ -151,9 +176,11 @@ export function UnavailableHomesBanner() {
       ? homes.length === 1
         ? "One Claude home is unavailable"
         : `${homes.length} Claude homes are unavailable`
-      : degradedTotal === 1
-        ? "Part of your history could not be read"
-        : `${degradedTotal} locations could not be read`;
+      : degradedTotal === 0 && indexIncomplete
+        ? "The index did not finish reading your history"
+        : degradedTotal === 1
+          ? "Part of your history could not be read"
+          : `${degradedTotal} locations could not be read`;
 
   return (
     <div
@@ -202,6 +229,15 @@ export function UnavailableHomesBanner() {
             entirely; the index still reports whatever it recorded when the home
             was last reachable.
             {anyStopped(homes) && " Minder will not start a stopped distro to check."}
+          </div>
+        )}
+        {degradedTotal === 0 && indexIncomplete && (
+          <div style={{ color: "var(--text-3)", marginTop: 4 }}>
+            The last full index pass could not list one or more directories, so
+            figures from the affected projects are missing rather than zero. The
+            paths are not named here because the pass runs in a background
+            worker and reports only whether it read through; the next sweep that
+            succeeds clears this.
           </div>
         )}
         {degradedTotal > 0 && (

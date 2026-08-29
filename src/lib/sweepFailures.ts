@@ -476,13 +476,23 @@ export function clearSweepFailures(): void {
  * names the thing to change.
  */
 export function describeSweepFailure(failure: SweepFailure): string {
+  // "this Claude home" was wrong, and misleadingly so: the path on a
+  // `projects-dir` failure is `<home>/projects`, not the home. A reader told
+  // their home could not be listed goes and checks the home — which is right
+  // there and readable — and concludes the warning is spurious. The broken
+  // `projects` symlink case, which this PR added detection for, is exactly
+  // where that misdirection costs the most. (Copilot, PR #527.)
   const what =
     failure.scope === "projects-dir"
-      ? "this Claude home could not be listed"
+      ? "this Claude projects directory could not be listed"
       : "one project directory could not be listed";
   switch (failure.code) {
     case "ENOENT":
-      return `${what} — it no longer exists`;
+      // Not "it no longer exists": the `lstat` distinction this PR added means
+      // a reported ENOENT is a path that IS there and cannot be resolved — a
+      // link to a disconnected drive — since a genuinely absent one is treated
+      // as a fresh install and never recorded.
+      return `${what} — the path could not be resolved (a link to a drive that is not connected?)`;
     case "EACCES":
     case "EPERM":
       return `${what} — permission denied`;

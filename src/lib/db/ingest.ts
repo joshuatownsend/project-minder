@@ -7,6 +7,7 @@ import { promises as fs } from "fs";
 import type DatabaseT from "better-sqlite3";
 import {
   beginIndexerRun,
+  recordFullPassVerdict,
   finishIndexerRun,
   type IndexerRunKind,
 } from "./indexerRuns";
@@ -3796,8 +3797,21 @@ async function reconcileAdapterSessionFile(
  * a path that exists but is not a directory. Those mean a corpus that may well
  * be there was not read.
  */
-function isMissingDirError(err: unknown): boolean {
-  return (err as NodeJS.ErrnoException | null)?.code === "ENOENT";
+async function isMissingDirError(err: unknown, dir?: string): Promise<boolean> {
+  if ((err as NodeJS.ErrnoException | null)?.code !== "ENOENT") return false;
+  // ENOENT is AMBIGUOUS and the benign reading is only one of two.
+  //
+  // A `projects` symlink pointing at a disconnected drive fails `readdir` with
+  // ENOENT exactly as a path that was never created does — so treating every
+  // ENOENT as "simply not there" reported the one genuinely broken case as a
+  // healthy pass. The file sweeps gained this distinction earlier in this PR
+  // and the reconcile did not, which mattered from the moment
+  // `/api/claude-homes` started reading this pass's verdict. (Codex P2, #527.)
+  //
+  // `lstat` does not follow the link, so it succeeds on the dangling one.
+  if (!dir) return true;
+  const { pathEntryExists } = await import("@/lib/sweepFailures");
+  return !(await pathEntryExists(dir));
 }
 
 /** Human-readable `indexer_runs.error` for a pass that completed (or half did). */
@@ -3822,6 +3836,16 @@ export async function reconcileAllSessions(
     stats = await runReconcileAllSessions(db, options);
     return stats;
   } finally {
+    // EVERY full pass, whether or not it recorded a run row.
+    //
+    // `recordOptionForSweep` deliberately stops writing `indexer_runs` once a
+    // clean pass exists — those rows clear a readiness latch, they are not a
+    // log — so the steady-state 30 s sweeps record nothing. Anything reading
+    // the latest RECORDED run therefore answered with the startup pass
+    // forever, and a permissions failure appearing later stayed invisible.
+    // The verdict is a current-state flag and belongs in `meta`.
+    // (Codex P2, PR #527.)
+    recordFullPassVerdict(db, stats === undefined || stats.enumerationFailures > 0);
     // `finally`, not the happy path: a pass that threw still has to stop
     // reading as in-progress, or a killed reconcile latches the row open and
     // `closeOrphanedIndexerRuns` becomes the only thing that can clear it.
@@ -3964,7 +3988,7 @@ async function runReconcileAllSessions(
       // Not the same as a home the never-wake gate deliberately skipped, and
       // not the same as a root that simply is not there — see
       // `isMissingDirError`.
-      if (!isMissingDirError(err)) stats.enumerationFailures++;
+      if (!(await isMissingDirError(err, dir))) stats.enumerationFailures++;
       // A projects dir that can't be listed — missing primary tree (a
       // WSL-only Claude setup, or a non-Claude user), a distro that stopped
       // mid-cycle, a transient UNC error — shields its rows from the prune
@@ -4016,7 +4040,12 @@ async function runReconcileAllSessions(
       // A project dir that vanished between the home listing and this read is
       // the corpus changing under us, not a read we failed — the next sweep
       // sees the true state. Only a real read failure counts.
-      if (!isMissingDirError(err)) stats.enumerationFailures++;
+      //
+      // No `dir` argument, deliberately: an ENOENT here is the corpus moving,
+      // not a link to nowhere, so it stays benign without an `lstat`. Awaited
+      // because the predicate is async now — `!promise` is always false, which
+      // would have silently stopped counting every failure at this site.
+      if (!(await isMissingDirError(err))) stats.enumerationFailures++;
       // A dir that LISTED in the home enumeration but fails its own readdir
       // (distro stopped mid-cycle, transient UNC/EIO error) must not read as
       // "all its sessions vanished" — shield its rows from the prune pass
@@ -4045,7 +4074,11 @@ async function runReconcileAllSessions(
         // that ARE there went unseen, and a pass that never saw them must not
         // record itself as having read the corpus through. Same predicate as
         // the two enumeration loops above (#471).
-        if (!isMissingDirError(err)) stats.enumerationFailures++;
+        //
+        // No `dir` argument, for the same reason as the site above: an absent
+        // `subagents/` is the common case, and a dangling link there is not a
+        // shape this layout produces.
+        if (!(await isMissingDirError(err))) stats.enumerationFailures++;
       }
     }
     for (const filePath of filePaths) {

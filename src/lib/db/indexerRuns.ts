@@ -290,8 +290,65 @@ export function getIndexBuildState(db: DatabaseT.Database): IndexBuildState {
  * Scoped to full-corpus kinds. A tail or watcher pass reads one file and
  * cannot speak to whether the corpus was enumerable.
  */
+const SWEEP_VERDICT_KEY = "last_full_sweep_incomplete";
+
+/**
+ * Record whether the full pass that just finished read the corpus through.
+ *
+ * Written to `meta` on EVERY full reconcile, and that is the point rather than
+ * a duplicate of the run row. `recordOptionForSweep` deliberately stops writing
+ * `indexer_runs` rows once any clean full pass exists — the rows exist to clear
+ * a readiness latch, not to log — so the steady-state 30-second sweeps record
+ * nothing. Reading the latest RECORDED run therefore answered with the startup
+ * pass forever, and a permissions failure appearing later stayed invisible.
+ * (Codex P2, PR #527.)
+ *
+ * One row, overwritten. This is a current-state flag, not a history.
+ */
+export function recordFullPassVerdict(
+  db: DatabaseT.Database,
+  incomplete: boolean
+): void {
+  try {
+    db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(
+      SWEEP_VERDICT_KEY,
+      incomplete ? "1" : "0"
+    );
+  } catch {
+    // A diagnostic must never be the thing that fails an ingest pass.
+  }
+}
+
+/**
+ * Did the most recent full pass fail to read something it was supposed to?
+ *
+ * The DB reconcile has its own enumeration-failure count, but it never reached
+ * the sweep-failure collector — so on a DB-backed setup (the default) where
+ * neither instrumented file sweep runs, `/api/claude-homes` answered
+ * `complete: true` over an index pass explicitly marked incomplete.
+ * (Codex P2, PR #527.)
+ *
+ * Read from the DATABASE rather than from a collector, and that is the whole
+ * reason this lives here: the reconcile runs in `workers/ingestWorker.mjs`,
+ * whose `globalThis` is isolated from the HTTP server's, so no in-process
+ * record could cross. #478 established the same seam for the same reason —
+ * the shared file is the evidence both processes can see.
+ */
 export function lastFullPassWasIncomplete(db: DatabaseT.Database): boolean {
   try {
+    const flag = db
+      .prepare("SELECT value FROM meta WHERE key = ?")
+      .get(SWEEP_VERDICT_KEY) as { value: string } | undefined;
+    if (flag) return flag.value === "1";
+  } catch {
+    // Fall through to the run row.
+  }
+  try {
+    // Fallback for an index written before the flag existed, and only until its
+    // next full pass sets one. Scoped to full-corpus kinds: a tail or watcher
+    // pass reads one file and cannot speak to whether the corpus was
+    // enumerable, so an unscoped query would let a later clean tail mask an
+    // aborted reconcile.
     const row = db
       .prepare(
         `SELECT aborted FROM indexer_runs
