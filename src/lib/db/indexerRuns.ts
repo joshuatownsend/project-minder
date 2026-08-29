@@ -233,45 +233,75 @@ export function hasStaleDerivations(db: DatabaseT.Database, currentVersion: numb
 }
 
 /**
- * Is a re-derivation pass running right now? (#478)
+ * Is the index mid-re-derivation? (#478)
  *
- * The per-request half. An OPEN `'rebuild'` run means a pass that found stale
- * rows has started and not yet finished, which is exactly the window in which a
- * derived-value aggregate would sum across two formulas.
+ * ## This asks about STALE ROWS, not about a running pass
  *
- * Orphans are handled by `closeOrphanedIndexerRuns` at watcher start, for the
- * same reason it exists for `'reconcile'`: without it, a kill mid-rebuild would
- * leave this true for the life of the index.
+ * The first version asked whether an open `'rebuild'` run existed, and review
+ * found that proxy wrong in BOTH directions (Codex P1 + P2, Copilot, PR #525):
+ *
+ *  - **Too narrow.** In production the re-derivation happens during the INITIAL
+ *    reconcile, which `runInitialReconcile` records as `'reconcile'` — so the
+ *    predicate was false for the entire real rebuild, which is the case the
+ *    issue is about.
+ *  - **Too wide, then too narrow again.** A pass that finishes with some files
+ *    unparseable leaves their old-version rows in place and closes its run, so
+ *    diversion stopped while the index was still a mixture. And recording a run
+ *    per 30 s sweep accumulated `indexer_runs` rows for as long as any row
+ *    stayed stale.
+ *
+ * The condition the aggregates actually care about is "are there rows derived
+ * under an older formula", so that is what this answers. No run bookkeeping, no
+ * accumulation, and nothing to keep in step with where a pass happens to be
+ * recorded.
+ *
+ * ## Why this is affordable
+ *
+ * `hasStaleDerivations` is a full scan when the answer is "none" — 24 ms on a
+ * 6,602-session index — which is why the issue ruled out asking it per request
+ * without an index and a migration.
+ *
+ * Memoized instead. One scan per `STALE_MEMO_TTL_MS`, and every request inside
+ * that window reads a boolean. The window is the cost of the answer being up to
+ * 30 s old, and both ways of being wrong are benign: briefly serving SQL just
+ * after a rebuild starts, or briefly serving file-parse just after it ends —
+ * and file-parse is the MORE correct answer of the two, not merely the slower
+ * one, because it derives with the current formula.
+ *
+ * On `globalThis` so it survives HMR module reloads, matching the other caches
+ * in this codebase.
  */
+const STALE_MEMO_TTL_MS = 30_000;
+
+const globalForRuns = globalThis as unknown as {
+  __minderStaleDerivationMemo?: { at: number; value: boolean };
+};
+
 export function isRebuildInProgress(db: DatabaseT.Database): boolean {
-  try {
-    const row = db
-      .prepare(
-        `SELECT 1 AS ok FROM indexer_runs
-          WHERE finished_at_ms IS NULL AND kind = 'rebuild'
-          LIMIT 1`
-      )
-      .get() as { ok?: number } | undefined;
-    return !!row?.ok;
-  } catch {
-    return false;
-  }
+  const now = Date.now();
+  const memo = globalForRuns.__minderStaleDerivationMemo;
+  if (memo && now - memo.at < STALE_MEMO_TTL_MS) return memo.value;
+  const value = hasStaleDerivations(db, DERIVED_VERSION);
+  globalForRuns.__minderStaleDerivationMemo = { at: now, value };
+  return value;
+}
+
+/**
+ * Drop the memo. For tests, and for a caller that has just finished writing
+ * rows and wants the next read to reflect them rather than waiting out the TTL.
+ */
+export function clearStaleDerivationMemo(): void {
+  globalForRuns.__minderStaleDerivationMemo = undefined;
 }
 
 export function recordOptionForSweep(
   db: DatabaseT.Database
 ): { recordRun?: IndexerRunKind } {
-  // A REBUILD is recorded regardless of readiness (#478). Readiness answers
-  // "has a full pass ever completed", which stays true through a
-  // `DERIVED_VERSION` bump — so the self-limiting check below would skip
-  // recording during exactly the window whose whole point is that the index is
-  // complete but internally inconsistent.
-  //
-  // Checked first, and it costs a full scan of `sessions` on the common
-  // no-stale-rows case. Once per sweep, not once per request, which is what
-  // makes it affordable: `isRebuildInProgress` is the per-request predicate and
-  // it is a rowid lookup.
-  if (hasStaleDerivations(db, DERIVED_VERSION)) return { recordRun: "rebuild" };
+  // NOTE: a `DERIVED_VERSION` rebuild is deliberately NOT recorded as a run
+  // here. It was, briefly, and review showed run bookkeeping is the wrong
+  // carrier for that question — see `isRebuildInProgress`, which asks about
+  // stale ROWS instead. Recording one per sweep also grew `indexer_runs` for as
+  // long as any row stayed stale (Copilot, PR #525).
   if (hasCompletedFullReconcile(db)) return {};
   // Bounded — by pruning, not by giving up. A sweep records every 30 s while
   // readiness is unestablished, which is ~2,880 rows a day if enumeration keeps
