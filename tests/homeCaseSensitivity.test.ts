@@ -8,7 +8,7 @@ import {
   readHomeCaseSensitivity,
   recordHomeCaseSensitivity,
 } from "@/lib/db/homeCaseSensitivity";
-import { normalizePathKey } from "@/lib/platform";
+import { normalizePathKey, sessionFileHomeKey } from "@/lib/platform";
 
 /**
  * #416 — the volume's case-sensitivity, answered where it is knowable.
@@ -173,6 +173,40 @@ describe.skipIf(!driverAvailable)("recordHomeCaseSensitivity", () => {
         .prepare("SELECT probed_at FROM home_properties WHERE home_key = ?")
         .get(key) as { probed_at: string };
       expect(row.probed_at).not.toBe("2026-03-01T00:00:00Z");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("records a key that matches what a session stores, trailing separator or not", async () => {
+    // A configured `claudeHomes` entry ending in a separator normalized to a
+    // key WITH the trailing slash, while `path.join` drops it and
+    // `sessionFileHomeKey` stores the prefix without it — so the row was
+    // written under a key no session could ever carry, and the verdict was
+    // silently never applied (Codex P2, PR #523).
+    const db = await makeDb();
+    try {
+      const home = path.join(tmp, "mac");
+      await fs.mkdir(path.join(home, "projects", "-Users-me-Dev-app"), { recursive: true });
+
+      // The same home, written the two ways a config file might hold it.
+      await recordHomeCaseSensitivity(db, [home + path.sep]);
+      const withSep = db
+        .prepare("SELECT home_key FROM home_properties")
+        .all() as Array<{ home_key: string }>;
+
+      db.prepare("DELETE FROM home_properties").run();
+      await recordHomeCaseSensitivity(db, [home]);
+      const withoutSep = db
+        .prepare("SELECT home_key FROM home_properties")
+        .all() as Array<{ home_key: string }>;
+
+      expect(withSep).toHaveLength(1);
+      expect(withSep[0].home_key).toBe(withoutSep[0].home_key);
+      // And it is the key a session under that home would carry.
+      expect(withSep[0].home_key).toBe(
+        sessionFileHomeKey(path.join(home, "projects", "-Users-me-Dev-app", "s.jsonl"))
+      );
     } finally {
       db.close();
     }

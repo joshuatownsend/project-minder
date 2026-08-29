@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import type * as DatabaseT from "better-sqlite3";
-import { normalizePathKey } from "@/lib/platform";
+import { normalizePathKey, sessionFileHomeKey } from "@/lib/platform";
 
 /**
  * Is the filesystem holding a Claude home case-SENSITIVE? (#416)
@@ -260,7 +260,16 @@ export async function recordHomeCaseSensitivity(
            case_sensitive = COALESCE(excluded.case_sensitive, home_properties.case_sensitive),
            probed_at = excluded.probed_at`
       ).run({
-        home_key: normalizePathKey(home),
+        // Derived exactly as a SESSION's `home_key` is — by truncating a path
+        // under `<home>/projects` — rather than by normalizing the home string
+        // in parallel. A configured entry ending in a separator normalizes to a
+        // key with a trailing slash, while `path.join` drops it and
+        // `sessionFileHomeKey` stores the prefix without it, so the row would
+        // never have matched any session (Codex P2, PR #523).
+        //
+        // Sharing the derivation makes the two agree by construction instead of
+        // by both happening to be written the same way.
+        home_key: sessionFileHomeKey(path.join(home, "projects", "x")) ?? normalizePathKey(home),
         case_sensitive: verdict === null ? null : verdict ? 1 : 0,
         probed_at: new Date().toISOString(),
       });
