@@ -27,6 +27,22 @@ interface UnavailableHome {
   reason: string;
 }
 
+/**
+ * An enumeration the SWEEPS could not complete (#513).
+ *
+ * Distinct from `UnavailableHome`, which is a home Minder decided not to touch.
+ * These are directories it DID try to read and could not — a disconnected
+ * drive, a moved home, changed permissions, one project directory with a
+ * restrictive ACL. #479 could only report the first kind, so the corpus quietly
+ * shrank for every case of the second.
+ */
+interface DegradedPath {
+  path: string;
+  scope: "projects-dir" | "project-dir";
+  sweep: "usage" | "sessions";
+  reason: string;
+}
+
 const POLL_MS = 60_000;
 
 /**
@@ -58,6 +74,7 @@ function anyStopped(homes: UnavailableHome[]): boolean {
 
 export function UnavailableHomesBanner() {
   const [homes, setHomes] = useState<UnavailableHome[]>([]);
+  const [degraded, setDegraded] = useState<DegradedPath[]>([]);
   const [allowRender, setAllowRender] = useState(false);
 
   useEffect(() => {
@@ -70,12 +87,27 @@ export function UnavailableHomesBanner() {
     const poll = () => {
       fetch("/api/claude-homes")
         .then((r) => (r.ok ? r.json() : null))
-        .then((data: { unavailable?: UnavailableHome[] } | null) => {
-          // A failed poll leaves the last good answer in place rather than
-          // clearing the banner — a network blip is not evidence the home came
-          // back, and flickering a warning off and on is worse than stale.
-          if (!cancelled && data?.unavailable) setHomes(data.unavailable);
-        })
+        .then(
+          (
+            data: {
+              unavailable?: UnavailableHome[];
+              degraded?: DegradedPath[];
+            } | null
+          ) => {
+            // A failed poll leaves the last good answer in place rather than
+            // clearing the banner — a network blip is not evidence the home
+            // came back, and flickering a warning off and on is worse than
+            // stale.
+            if (cancelled) return;
+            if (data?.unavailable) setHomes(data.unavailable);
+            // `??` NOT `if (data?.degraded)`: an empty array is the RECOVERY
+            // signal, and treating it as "no news" would pin the banner up
+            // after the permissions were fixed. The unavailable list above
+            // keeps its truthiness check because a missing key there means an
+            // older server, not a recovery.
+            if (data) setDegraded(data.degraded ?? []);
+          }
+        )
         .catch(() => {});
     };
     poll();
@@ -86,13 +118,20 @@ export function UnavailableHomesBanner() {
     };
   }, []);
 
-  if (!allowRender || homes.length === 0) return null;
+  if (!allowRender || (homes.length === 0 && degraded.length === 0)) return null;
 
   const color = "var(--warn)";
+  // Two different problems, and the headline names whichever is present. A home
+  // Minder DECLINED to read is not the same as one it tried to read and could
+  // not, and a reader who is told the wrong one goes looking in the wrong place.
   const headline =
-    homes.length === 1
-      ? "One Claude home is unavailable"
-      : `${homes.length} Claude homes are unavailable`;
+    homes.length > 0
+      ? homes.length === 1
+        ? "One Claude home is unavailable"
+        : `${homes.length} Claude homes are unavailable`
+      : degraded.length === 1
+        ? "Part of your history could not be read"
+        : `${degraded.length} locations could not be read`;
 
   return (
     <div
@@ -137,6 +176,18 @@ export function UnavailableHomesBanner() {
           was last reachable.
           {anyStopped(homes) && " Minder will not start a stopped distro to check."}
         </div>
+        {degraded.length > 0 && (
+          <div style={{ color: "var(--text-3)", marginTop: 4 }}>
+            {/* The paths, not just a count. "Something could not be read" is
+                not actionable; the directory and the reason are. Capped,
+                because a tree with a broken ACL near the root produces many
+                and the first few are what a reader needs. */}
+            Could not read {degraded.length === 1 ? "" : `${degraded.length} locations, including `}
+            {degraded.slice(0, 3).map((d) => `${d.path} (${d.reason})`).join("; ")}
+            {degraded.length > 3 && ", and others"}. Figures from the affected
+            projects are missing rather than zero.
+          </div>
+        )}
       </div>
     </div>
   );

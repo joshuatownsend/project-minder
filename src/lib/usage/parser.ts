@@ -28,6 +28,10 @@ import { resolveSessionJsonl } from "./sessionPath";
 import { readConfig } from "@/lib/config";
 import { getReadableClaudeHomes } from "@/lib/claudeHome";
 import { normalizePathKey } from "@/lib/platform";
+import {
+  beginSweepFailureCycle,
+  recordSweepFailure,
+} from "@/lib/sweepFailures";
 
 const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -750,6 +754,11 @@ type SessionVisitor = (sessionId: string, turns: UsageTurn[]) => void | Promise<
  */
 async function sweepSessions(visit: SessionVisitor): Promise<void> {
   const cache = getFileCache();
+  // #513: the failures below used to be caught and discarded, so the corpus
+  // shrank silently and `complete: true` was still reported. Cleared at the
+  // START, so a pass that throws part way through still leaves behind what it
+  // observed.
+  beginSweepFailureCycle("usage");
 
   // Sweep every readable Claude home (primary + config.claudeHomes) — a home
   // inside a stopped WSL distro is excluded for the cycle rather than woken.
@@ -769,7 +778,18 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
       // configured order, so the primary home wins over a later-configured one.
       dirNames.sort();
       for (const dirName of dirNames) subdirs.push({ home, dirName });
-    } catch {
+    } catch (err) {
+      // Still not fatal — a home that cannot be listed must not take the sweep
+      // down — but no longer SILENT. A fresh install legitimately has no
+      // `projects` directory; a disconnected drive, a moved home and a
+      // permissions change do not, and they used to be indistinguishable from
+      // it (#513).
+      recordSweepFailure({
+        path: path.join(home, "projects"),
+        scope: "projects-dir",
+        code: (err as NodeJS.ErrnoException)?.code,
+        sweep: "usage",
+      });
       // No projects dir in this home
     }
   }
@@ -909,7 +929,17 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
               /* no subagents dir for this session — the common case */
             }
           }
-        } catch {
+        } catch (err) {
+          // One encoded project directory with a restrictive ACL loses that
+          // project's whole history from every usage aggregate. Reported at
+          // this granularity rather than as "the home is gone", because those
+          // are different problems with different fixes (#513).
+          recordSweepFailure({
+            path: dirPath,
+            scope: "project-dir",
+            code: (err as NodeJS.ErrnoException)?.code,
+            sweep: "usage",
+          });
           perDir[i + k] = [];
           return;
         }

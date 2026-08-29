@@ -53,6 +53,10 @@ import { isWorktreeEncodedDir } from "./worktreeCheck";
 import { FileCache } from "../usage/cache";
 import type { SessionFile } from "../adapters/types";
 import type { MinderConfig } from "../types";
+import {
+  beginSweepFailureCycle,
+  recordSweepFailure,
+} from "@/lib/sweepFailures";
 
 export interface ConversationEntry {
   type?: string;
@@ -1782,6 +1786,9 @@ export async function scanClaudeConversationsForProjects(
   const homes = await getReadableClaudeHomes(config);
   const allowedDirs = new Set(projectPaths.map((p) => encodePath(p)));
 
+  // Cleared at the START, so a scan that throws part way through still leaves
+  // behind what it observed (#513).
+  beginSweepFailureCycle("sessions");
   const parts: ClaudeUsageStats[] = [];
   for (const home of homes) {
     parts.push(await scanConversationDirs(path.join(home, "projects"), allowedDirs));
@@ -1829,7 +1836,21 @@ async function scanConversationDirs(
   };
 
   let dirs: string[];
-  try { dirs = await fs.readdir(projectsDir); } catch { return aggregate; }
+  try {
+    dirs = await fs.readdir(projectsDir);
+  } catch (err) {
+    // Not fatal — a home that cannot be listed must not take the scan down —
+    // but no longer SILENT. A fresh install legitimately has no `projects`
+    // directory; a disconnected drive, a moved home and a permissions change do
+    // not, and they were indistinguishable from it (#513).
+    recordSweepFailure({
+      path: projectsDir,
+      scope: "projects-dir",
+      code: (err as NodeJS.ErrnoException)?.code,
+      sweep: "sessions",
+    });
+    return aggregate;
+  }
 
   // Load persistent disk cache for incremental parsing
   const diskCache = await readDiskCache();
@@ -1912,7 +1933,17 @@ async function scanConversationDirs(
           );
         }
       }
-    } catch { /* skip */ }
+    } catch (err) {
+      // One project directory lost from this scan. Reported at that
+      // granularity rather than as "the home is gone" — different problems,
+      // different fixes (#513).
+      recordSweepFailure({
+        path: dirPath,
+        scope: "project-dir",
+        code: (err as NodeJS.ErrnoException)?.code,
+        sweep: "sessions",
+      });
+    }
   }
 
   if (cacheChanged) {

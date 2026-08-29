@@ -3,6 +3,10 @@ import { NextResponse } from "next/server";
 import { readConfig } from "@/lib/config";
 import { partitionClaudeHomes } from "@/lib/claudeHome";
 import { demoMode } from "@/lib/demo/demoMode";
+import {
+  getSweepFailures,
+  describeSweepFailure,
+} from "@/lib/sweepFailures";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +48,7 @@ export async function GET(): Promise<NextResponse> {
     const demo = NextResponse.json({
       readable: [],
       unavailable: [],
+      degraded: [],
       complete: true,
     });
     demo.headers.set("X-Minder-Homes-Unavailable", "0");
@@ -53,11 +58,42 @@ export async function GET(): Promise<NextResponse> {
   const config = await readConfig();
   const { readable, unavailable } = await partitionClaudeHomes(config);
 
+  // #513: enumeration failures the SWEEPS hit, rather than a second opinion
+  // about readability. `unavailable` is the never-wake exclusion — a decision
+  // made BEFORE reading — and it is the only kind #479 could report. Everything
+  // else that shrinks the corpus (a disconnected drive, a moved home, changed
+  // permissions, a `projects` path that is a file, one project directory with a
+  // restrictive ACL) shows up only as a failed `readdir` inside a reader, and
+  // those were caught and discarded.
+  //
+  // These are what was ACTUALLY read, so they cannot disagree with the corpus
+  // the way an independent probe would — which is what PR #510 spent five
+  // rounds establishing before the probe was withdrawn.
+  const degraded = getSweepFailures().map((f) => ({
+    path: f.path,
+    scope: f.scope,
+    sweep: f.sweep,
+    reason: describeSweepFailure(f),
+  }));
+
   const response = NextResponse.json({
     readable,
     unavailable,
-    /** True when every configured home answered. The UI's one-bit question. */
-    complete: unavailable.length === 0,
+    /**
+     * Enumerations that failed during the most recent sweep of each reader.
+     * Empty until a sweep has run, which is honest: nothing has been read yet,
+     * so nothing is known to have failed.
+     */
+    degraded,
+    /**
+     * True when every configured home answered AND nothing failed to enumerate.
+     *
+     * `unavailable.length === 0` alone was the UI's one-bit question and it was
+     * answering a narrower one: "no home was deliberately skipped". A corpus
+     * short by a project directory nobody could list reported `complete: true`
+     * (#513).
+     */
+    complete: unavailable.length === 0 && degraded.length === 0,
   });
   // Same convention as `X-Minder-Backend`: the fact rides a header too, so a
   // client that only cares whether coverage is whole does not have to parse
@@ -66,5 +102,11 @@ export async function GET(): Promise<NextResponse> {
     "X-Minder-Homes-Unavailable",
     String(unavailable.length),
   );
+  // Its own header rather than folded into the count above: that one counts
+  // HOMES deliberately skipped, and a failed project-directory listing is
+  // neither a home nor deliberate. Merging them would make a client that
+  // watches the existing header start reporting "homes unavailable" for a
+  // permissions problem two levels down.
+  response.headers.set("X-Minder-Sweep-Degraded", String(degraded.length));
   return response;
 }
