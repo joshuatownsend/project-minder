@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { describe, it, expect } from "vitest";
 import {
   tooltipTop,
@@ -112,6 +113,13 @@ describe("tooltipTop", () => {
   it("pins a tooltip taller than the viewport to the top margin", () => {
     // Matches `tooltipLeft`'s behaviour for one wider than the viewport: losing
     // the END of the text is the readable failure, losing the start is not.
+    //
+    // POSITION only. This case is not survivable by arithmetic alone — a 900px
+    // box in an 800px viewport overflows wherever it is put — so the component
+    // pairs this with `maxHeight: calc(100vh - 16px)` and `overflowY: auto`,
+    // and becomes pointer-interactive while open so the overflow can actually
+    // be scrolled. A test that accepted this number WITHOUT that pairing was
+    // ratifying clipped, unreadable text (Codex P2, PR #519).
     expect(tooltipTop(mid, 900, VIEWPORT)).toBe(8);
   });
 
@@ -130,5 +138,21 @@ describe("tooltipTop", () => {
       previous = t;
     }
     expect(flips).toBe(1);
+  });
+});
+
+describe("the component pairs clamping with a bound", () => {
+  // `tooltipTop` can only choose a POSITION. A tooltip taller than the viewport
+  // overflows wherever it is placed, so the arithmetic is only half the promise
+  // this primitive makes — the other half is a bounded, scrollable box, and it
+  // lives in the component's style object where no unit test naturally looks.
+  // Asserted here rather than left implicit, because the position test above
+  // reads as complete on its own and is exactly what let the gap ship.
+  it("bounds the height, scrolls the overflow, and can be pointed at", async () => {
+    const src = await readFile("src/components/ui/tooltip.tsx", "utf-8");
+    expect(src).toMatch(/maxHeight:/);
+    expect(src).toMatch(/overflowY:\s*"auto"/);
+    // A scrollable box behind `pointerEvents: "none"` is not scrollable.
+    expect(src).toMatch(/pointerEvents:\s*open \? "auto" : "none"/);
   });
 });

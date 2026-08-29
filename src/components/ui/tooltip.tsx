@@ -148,6 +148,12 @@ export function Tooltip({
   const tip = (
   <span
     ref={tipRef}
+    // Hovering the TOOLTIP counts as hovering, so moving the pointer onto it to
+    // scroll or read does not dismiss it. Without this the portal makes the
+    // trigger fire `mouseleave` the moment the pointer crosses onto the tip,
+    // and a scrollable tooltip could never actually be scrolled.
+    onMouseEnter={() => setHovered(true)}
+    onMouseLeave={() => setHovered(false)}
     id={id}
     role="tooltip"
     // Always rendered. `aria-describedby` reaches it whether or not it is
@@ -159,6 +165,14 @@ export function Tooltip({
       top: pos?.top ?? 0,
       zIndex: 60,
       maxWidth: "min(320px, calc(100vw - 16px))",
+      // Bounded on BOTH axes, and scrollable when it hits the bound. Clamping
+      // the position alone is not enough: a tooltip taller than the viewport
+      // pins to the top margin and the remainder simply runs off the bottom,
+      // unreadable by exactly the keyboard and touch users this primitive
+      // exists for (Codex P2, PR #519). Under browser zoom or a short landscape
+      // viewport that is an ordinary case, not a pathological one.
+      maxHeight: "calc(100vh - 16px)",
+      overflowY: "auto",
       padding: "6px 8px",
       borderRadius: "var(--radius)",
       border: "1px solid var(--border-subtle)",
@@ -169,7 +183,12 @@ export function Tooltip({
       fontWeight: 400,
       textAlign: "left",
       whiteSpace: "normal",
-      pointerEvents: "none",
+      // Interactive WHILE OPEN, inert otherwise. A bounded, scrollable tooltip
+      // that cannot be pointed at is not readable — `pointerEvents: "none"`
+      // would leave the overflow above unreachable by mouse and by touch, which
+      // is the half of the fix that matters. Inert when closed so an invisible
+      // element never swallows a click on the row beneath it.
+      pointerEvents: open ? "auto" : "none",
       boxShadow: "0 4px 16px rgba(0,0,0,.35)",
       visibility: open && pos ? "visible" : "hidden",
       opacity: open && pos ? 1 : 0,
