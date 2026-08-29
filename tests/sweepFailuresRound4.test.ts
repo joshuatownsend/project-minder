@@ -827,3 +827,75 @@ describe("round 13 — the capped arithmetic told the truth in neither direction
     expect(text).toMatch(/degraded\.length === 0 \? \(/);
   });
 });
+
+describe("round 14 — the DB reconcile's own incompleteness counts too", () => {
+  let dbAvailable: boolean;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("better-sqlite3");
+    dbAvailable = true;
+  } catch {
+    dbAvailable = false;
+  }
+
+  it.skipIf(!dbAvailable)("reads the last full pass's verdict from the run row", async () => {
+    // The DB reconcile counts its own enumeration failures and marks the run
+    // `aborted`, but it never reached the sweep-failure collector — so on a
+    // DB-backed setup (the DEFAULT, where neither instrumented file sweep need
+    // ever run) `/api/claude-homes` answered `complete: true` over an index
+    // pass explicitly marked incomplete. (Codex P2, PR #527.)
+    //
+    // Read from the DATABASE, not a collector, and that is the load-bearing
+    // part: the reconcile runs in `workers/ingestWorker.mjs`, whose
+    // `globalThis` is isolated from the HTTP server's, so no in-process record
+    // could cross. #478 established the same seam for the same reason.
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(":memory:");
+    db.prepare(
+      `CREATE TABLE indexer_runs (
+         id INTEGER PRIMARY KEY, kind TEXT, started_at_ms INTEGER,
+         finished_at_ms INTEGER, error TEXT, aborted INTEGER
+       )`
+    ).run();
+
+    const { lastFullPassWasIncomplete } = await import("@/lib/db/indexerRuns");
+
+    // Nothing recorded yet: nothing is known to have failed.
+    expect(lastFullPassWasIncomplete(db as never)).toBe(false);
+
+    const add = (kind: string, finished: number, aborted: number) =>
+      db
+        .prepare(
+          "INSERT INTO indexer_runs (kind, started_at_ms, finished_at_ms, aborted) VALUES (?,?,?,?)"
+        )
+        .run(kind, finished - 10, finished, aborted);
+
+    add("reconcile", 1000, 1);
+    expect(lastFullPassWasIncomplete(db as never)).toBe(true);
+
+    // A later CLEAN full pass clears it — otherwise the banner would be
+    // permanent once anything ever went wrong.
+    add("reconcile", 2000, 0);
+    expect(lastFullPassWasIncomplete(db as never)).toBe(false);
+
+    // A tail pass reads one file and cannot speak to the corpus, so it must not
+    // become the answer — with `kind` unscoped, this row would mask the
+    // aborted reconcile below it.
+    add("tail", 3000, 0);
+    add("reconcile", 2500, 1);
+    expect(lastFullPassWasIncomplete(db as never)).toBe(true);
+
+    db.close();
+  });
+
+  it("is wired into the endpoint's completeness answer", async () => {
+    // Source-level: the route is a Next module this suite cannot execute, and
+    // the failure mode is a MISSING TERM in a boolean.
+    const { readFile } = await import("node:fs/promises");
+    const route = await readFile("src/app/api/claude-homes/route.ts", "utf-8");
+    expect(route).toMatch(/lastFullPassWasIncomplete/);
+    expect(route).toMatch(
+      /complete: unavailable\.length === 0 && degradedTotal === 0 && !indexIncomplete/
+    );
+  });
+});

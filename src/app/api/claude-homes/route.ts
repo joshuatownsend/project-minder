@@ -79,6 +79,36 @@ export async function GET(): Promise<NextResponse> {
   // The TRUE count, which can exceed the detail list: the cap bounds what a
   // banner can render, not what is reported (Codex P2, PR #527).
   const degradedTotal = getSweepFailureTotal();
+
+  /**
+   * The DB reconcile's own verdict on whether it read through.
+   *
+   * Read from the run row rather than the collector because that pass runs in
+   * `workers/ingestWorker.mjs`, whose `globalThis` is isolated from this
+   * process's — the same seam #478 established, and for the same reason: the
+   * shared file is the only evidence both sides can see.
+   *
+   * `probeInitStatus` rather than `initDb`, per this repo's rule about routes
+   * bypassing the retry/classification layer. A DB that is absent or still
+   * warming reports nothing here: "not yet known to have failed" is honest,
+   * and the file sweeps above already answer for the `MINDER_USE_DB=0` case.
+   */
+  let indexIncomplete = false;
+  try {
+    const { probeInitStatus } = await import("@/lib/data");
+    const status = await probeInitStatus();
+    if (status.state === "success") {
+      const { getDb } = await import("@/lib/db/connection");
+      const db = await getDb();
+      if (db) {
+        const { lastFullPassWasIncomplete } = await import("@/lib/db/indexerRuns");
+        indexIncomplete = lastFullPassWasIncomplete(db);
+      }
+    }
+  } catch {
+    // Never let a completeness PROBE be the thing that breaks the endpoint that
+    // reports completeness.
+  }
   const degraded = getSweepFailures().map((f) => ({
     path: f.path,
     scope: f.scope,
@@ -109,7 +139,17 @@ export async function GET(): Promise<NextResponse> {
      * would matter most.
      */
     degradedTotal,
-    complete: unavailable.length === 0 && degradedTotal === 0,
+    /**
+     * ...and the DB reconcile read through as well.
+     *
+     * That pass has its own enumeration-failure count and cannot publish it to
+     * the collector — it runs in a worker whose `globalThis` is isolated from
+     * this process's — so it persists the fact on its run row instead. Without
+     * this term, a DB-backed setup (the default, where neither instrumented
+     * file sweep need ever run) answered `complete: true` over an index pass
+     * explicitly marked incomplete. (Codex P2, PR #527.)
+     */
+    complete: unavailable.length === 0 && degradedTotal === 0 && !indexIncomplete,
   });
   // Same convention as `X-Minder-Backend`: the fact rides a header too, so a
   // client that only cares whether coverage is whole does not have to parse

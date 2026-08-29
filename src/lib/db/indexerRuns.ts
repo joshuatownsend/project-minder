@@ -271,3 +271,39 @@ export function getIndexBuildState(db: DatabaseT.Database): IndexBuildState {
   if (resolveIngestMode(process.env) === "off") return "ready";
   return hasCompletedFullReconcile(db) ? "ready" : "building";
 }
+
+/**
+ * Did the most recent full pass fail to read something it was supposed to?
+ *
+ * The DB reconcile has its own enumeration-failure count and already persists
+ * it as `aborted` on the run row — but it never reached the sweep-failure
+ * collector, so on a DB-backed setup (the default) where neither instrumented
+ * file sweep runs, `/api/claude-homes` answered `complete: true` over an index
+ * pass explicitly marked incomplete. (Codex P2, PR #527.)
+ *
+ * Read from the DATABASE rather than from a collector, and that is the whole
+ * reason this lives here: the reconcile runs in `workers/ingestWorker.mjs`,
+ * whose `globalThis` is isolated from the HTTP server's, so no in-process
+ * record could cross. #478 established the same seam for the same reason —
+ * the shared file is the evidence both processes can see.
+ *
+ * Scoped to full-corpus kinds. A tail or watcher pass reads one file and
+ * cannot speak to whether the corpus was enumerable.
+ */
+export function lastFullPassWasIncomplete(db: DatabaseT.Database): boolean {
+  try {
+    const row = db
+      .prepare(
+        `SELECT aborted FROM indexer_runs
+          WHERE finished_at_ms IS NOT NULL AND kind IN ('reconcile','rebuild')
+          ORDER BY finished_at_ms DESC LIMIT 1`
+      )
+      .get() as { aborted: number } | undefined;
+    return row?.aborted === 1;
+  } catch {
+    // No table yet, or an index too old to have one. "Nothing is known to have
+    // failed" is the honest answer there, and it is what every other read in
+    // this file falls back to.
+    return false;
+  }
+}

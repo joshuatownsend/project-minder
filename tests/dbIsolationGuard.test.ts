@@ -731,6 +731,13 @@ describe("database isolation convention", () => {
     // nothing, that test would pass by vacuity.
     const openers = [...runtimeDbOpeners()].map(rel).sort();
     expect(openers).toEqual([
+      // #513: the endpoint reports whether the corpus was fully read, and the
+      // DB reconcile's own verdict lives on its run row — the reconcile runs in
+      // a worker whose `globalThis` cannot reach this process, so the shared
+      // file is the only evidence. Opened dynamically, behind `probeInitStatus`
+      // and a try/catch, so a probe can never break the endpoint that reports
+      // completeness.
+      "src/app/api/claude-homes/route.ts",
       "src/lib/bootstrap.ts",
       "src/lib/memory/usageTracker.ts",
       "src/lib/usage/agentCostFromOtel.ts",

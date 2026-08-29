@@ -7,6 +7,21 @@ import { GET as adapterConfigGET } from "@/app/api/adapters/[id]/config/route";
 import { GET as claudeHomesGET } from "@/app/api/claude-homes/route";
 import { demoPlans } from "@/lib/demo/plans";
 import { preserveEnvVars } from "./_helpers/preserveEnv";
+import { installIsolatedState } from "./_helpers/isolatedState";
+
+/**
+ * Isolated even though every test here runs in DEMO mode and the routes return
+ * their fixture bodies before touching a database.
+ *
+ * `/api/claude-homes` gained a runtime `import()` of the DB layer in #513 — it
+ * reads the last full index pass's verdict, which lives on a run row because
+ * the reconcile runs in a worker whose `globalThis` cannot reach the server's.
+ * The demo guard sits above that and the probe is unreachable here, but "the
+ * early return happens to come first" is an ordering argument, and ordering
+ * changes. Isolation costs nothing and does not depend on being right about
+ * which branch runs.
+ */
+installIsolatedState({ prefix: "pm-demo-route-guards-" });
 
 // #421 — a bare `delete process.env.X` in teardown restores this file's own
 // assignment and destroys anything it INHERITED, and vitest reuses a worker
