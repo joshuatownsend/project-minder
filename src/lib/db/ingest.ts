@@ -14,7 +14,11 @@ import { canonicalizeDirName, mostFrequent } from "@/lib/usage/parser";
 import { getClaudeHomes, getReadableClaudeHomes } from "@/lib/claudeHome";
 import { normalizePathKey, sessionFileHomeKey } from "@/lib/platform";
 import { recordHomeCaseSensitivity } from "./homeCaseSensitivity";
-import { clearStaleDerivationMemo } from "./indexerRuns";
+import {
+  clearStaleDerivationMemo,
+  clearDerivationChanged,
+  markDerivationChanged,
+} from "./indexerRuns";
 import { chunkText } from "./textChunks";
 import type { ConversationEntry } from "@/lib/scanner/claudeConversations";
 import { projectSlugFromDirName } from "@/lib/sessions/projectIdentity";
@@ -3236,6 +3240,15 @@ export async function reconcileSessionFile(
     ) {
       return empty;
     }
+    // Past the gate with an out-of-date stamp: this row is about to be
+    // rewritten under the current formula while its neighbours still carry the
+    // old one. THAT is where the mixture starts, and it is the moment the
+    // aggregates have to start diverting (#478). Announced here rather than
+    // inferred from a scan, because a scan running seconds earlier legitimately
+    // saw a uniform index.
+    if (existing && existing.derived_version < DERIVED_VERSION) {
+      markDerivationChanged();
+    }
   }
 
   // Decide between tail-append and full-replace. The tail path is only
@@ -3829,12 +3842,14 @@ export async function reconcileAllSessions(
   // end makes it see uniformity again rather than diverting for another 30 s
   // after the rebuild has finished.
   clearStaleDerivationMemo();
+  clearDerivationChanged();
   let stats: IngestStats | undefined;
   try {
     stats = await runReconcileAllSessions(db, options);
     return stats;
   } finally {
     clearStaleDerivationMemo();
+    clearDerivationChanged();
     // `finally`, not the happy path: a pass that threw still has to stop
     // reading as in-progress, or a killed reconcile latches the row open and
     // `closeOrphanedIndexerRuns` becomes the only thing that can clear it.

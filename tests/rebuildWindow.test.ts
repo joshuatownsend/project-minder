@@ -249,6 +249,48 @@ describe("every consumer of the rebuild window is wired to it (#478)", () => {
     expect(compare).toMatch(/buildNotComparable\(/);
   });
 
+  it("fires the instant a row is re-derived, without waiting for the memo", async () => {
+    // The memo is a 30-second window on a value that changes DURING a long
+    // operation, and clearing it at the pass boundaries was not enough: between
+    // the entry-time clear and the first write, the reconcile awaits pricing,
+    // configuration and home discovery, so a request landing in that gap
+    // re-cached "the rows agree" and held it for the rest of the window while
+    // the rebuild ran (Codex P1 x3, PR #525 — three findings, one cause).
+    const { isRebuildInProgress, markDerivationChanged, clearDerivationChanged, clearStaleDerivationMemo } =
+      await import("@/lib/db/indexerRuns");
+    const db = makeDb();
+    try {
+      // A UNIFORM index, and a memo that has just cached that fact.
+      db.prepare("INSERT INTO sessions VALUES ('a', 20), ('b', 20)").run();
+      expect(isRebuildInProgress(db)).toBe(false);
+
+      // The first row is re-derived. No scan has re-run and the memo still
+      // says "agree" — the live signal is what makes this observable now.
+      markDerivationChanged();
+      expect(isRebuildInProgress(db)).toBe(true);
+
+      clearDerivationChanged();
+      clearStaleDerivationMemo();
+      expect(isRebuildInProgress(db)).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("announces the re-derivation from the ingest gate, and clears at both edges", async () => {
+    // Source-level, like the wiring test: what goes wrong is a MISSING CALL.
+    const { readFile } = await import("node:fs/promises");
+    const src = await readFile("src/lib/db/ingest.ts", "utf-8");
+    // Set where the rewrite is DECIDED, not where the row is written — the
+    // mixture begins at the decision.
+    expect(src).toMatch(/existing\.derived_version < DERIVED_VERSION\)\s*\{\s*markDerivationChanged\(\);/);
+    const fn = src.slice(
+      src.indexOf("export async function reconcileAllSessions"),
+      src.indexOf("export async function reconcileAllSessions") + 2200
+    );
+    expect((fn.match(/clearDerivationChanged\(\)/g) ?? []).length).toBeGreaterThanOrEqual(2);
+  });
+
   it("invalidates the memo at both reconcile edges", async () => {
     // The memo is a 30-second window on a question the reconcile is about to
     // change the answer to. A request that cached "the rows agree" moments

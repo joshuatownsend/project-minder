@@ -288,9 +288,44 @@ const STALE_MEMO_TTL_MS = 30_000;
 
 const globalForRuns = globalThis as unknown as {
   __minderStaleDerivationMemo?: { at: number; value: boolean };
+  __minderDerivationChanged?: boolean;
 };
 
+/**
+ * The current pass has re-derived at least one row.
+ *
+ * The memo alone could not carry this. A time window over a value that changes
+ * DURING a long operation has to be invalidated by the operation, and clearing
+ * it at the pass boundaries was not enough: between the entry-time clear and
+ * the first write, `runReconcileAllSessions` awaits pricing, configuration and
+ * home discovery, so a request landing in that gap re-cached "the rows agree"
+ * and held it for the next 30 seconds while the rebuild ran (Codex P1 x3,
+ * PR #525 — three findings, one cause).
+ *
+ * Set by the ingest path at the moment it decides to rewrite a row whose
+ * `derived_version` is not current. That instant is exactly when the mixture
+ * begins: before it the index is uniformly OLD, which is internally consistent
+ * and correctly not diverted.
+ *
+ * So this is not a second source of truth for the same fact — it is the
+ * EVENT the memo cannot observe in time, and the scan remains the answer for
+ * every state that outlives a pass (a rollback remnant, a rebuild interrupted
+ * by a restart).
+ */
+export function markDerivationChanged(): void {
+  globalForRuns.__minderDerivationChanged = true;
+}
+
+/** Called at pass boundaries, with the memo. */
+export function clearDerivationChanged(): void {
+  globalForRuns.__minderDerivationChanged = false;
+}
+
 export function isRebuildInProgress(db: DatabaseT.Database): boolean {
+  // The live signal first, and it is not memoized — the whole point is that it
+  // is true the instant the first row is re-derived, without waiting for a
+  // scan window to lapse.
+  if (globalForRuns.__minderDerivationChanged) return true;
   const now = Date.now();
   const memo = globalForRuns.__minderStaleDerivationMemo;
   if (memo && now - memo.at < STALE_MEMO_TTL_MS) return memo.value;
