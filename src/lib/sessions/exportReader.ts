@@ -6,6 +6,7 @@ import { resolveSessionJsonl } from "@/lib/usage/sessionPath";
 import { getAdapter } from "@/lib/adapters";
 import type { SessionDetail } from "@/lib/types";
 import type { ExportBlock, ExportMessage, ExportMeta } from "./markdownExport";
+import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptPath";
 
 /**
  * Impure half of the session exporter: sources the message bodies.
@@ -479,22 +480,6 @@ async function locateTranscript(
 }
 
 /**
- * The `<projects>/<project-dir>` a transcript lives under, or null when the path
- * is not inside a Claude projects tree.
- *
- * Both layouts collapse to the same answer, which is the point: the flat
- * `<projects>/<dir>/<id>.jsonl` and the nested
- * `<projects>/<dir>/<parent>/subagents/<id>.jsonl` both belong to `<dir>`.
- */
-function projectRootFromTranscript(filePath: string): string | null {
-  const resolved = path.resolve(filePath);
-  const parts = resolved.split(/[\\/]/);
-  const i = parts.lastIndexOf("projects");
-  if (i < 0 || i + 1 >= parts.length) return null;
-  return parts.slice(0, i + 2).join(path.sep);
-}
-
-/**
  * Read modern subagent transcripts.
  *
  * As of Claude Code ~v2.1.150 subagent conversations no longer appear as
@@ -510,28 +495,44 @@ function projectRootFromTranscript(filePath: string): string | null {
 async function readSubagentMessages(
   parentFilePath: string,
 ): Promise<{ messages: ExportMessage[]; unread: number }> {
-  // Derived from the PROJECT directory, not from the transcript's own folder.
+  // TWO layouts, and the second one is flat.
   //
-  // Delegated agents live at `<project-dir>/<session-id>/subagents/*.jsonl` —
-  // one level under the project, keyed by the delegating session. Taking
-  // `path.dirname(parentFilePath)` is correct only when the transcript is FLAT.
-  // For a nested one at `<project-dir>/<parent>/subagents/agent-x.jsonl` it
-  // named `<…>/subagents/agent-x/subagents`, which does not exist under that
-  // layout — so exporting an `agent-*` session with sidechains enabled found
-  // nothing, and said so silently (Codex P2, PR #526).
+  // A top-level session's delegates live at `<project>/<id>/subagents/*.jsonl`.
+  // A subagent that itself delegates does NOT nest under its own id — it writes
+  // into the same `subagents/` directory as its spawner. That is measured, not
+  // assumed: `subagentTranscriptPath.ts` records 1,260 transcripts on the
+  // reference corpus all resolving by that rule, and notes that flatness is
+  // exactly the property that makes `depth` unrecoverable.
   //
-  // Anchoring on the project directory gives `<project-dir>/agent-x/subagents`,
-  // which is where the sweep in `usage/parser.ts` enumerates them: it walks
-  // every session directory under a project and looks for `subagents` inside
-  // each. Both layouts now resolve through the same rule.
-  const base = path.basename(parentFilePath, ".jsonl");
-  const projectRoot = projectRootFromTranscript(parentFilePath);
-  const dir = projectRoot
-    ? path.join(projectRoot, base, "subagents")
-    : path.join(path.dirname(parentFilePath), base, "subagents");
+  // So for a nested transcript the directory to read is its OWN, and the file
+  // itself has to be excluded from it. Deriving `<…>/agent-x/subagents` — which
+  // is what both my previous attempts did, first from the id and then from the
+  // project root — names a directory that does not exist under this layout, so
+  // exporting an `agent-*` session with sidechains enabled found nothing and
+  // said so silently (Codex P2 x2, PR #526).
+  //
+  // A consequence worth stating: because the layout is flat, an agent's own
+  // delegates are indistinguishable from its SIBLINGS. This reads the whole
+  // directory, which is what the data supports — the alternative is reading
+  // nothing, and the tree structure simply is not recorded.
+  const nested = parseSubagentParentSessionId(parentFilePath) !== undefined;
+  const dir = nested
+    ? path.dirname(parentFilePath)
+    : path.join(
+        path.dirname(parentFilePath),
+        path.basename(parentFilePath, ".jsonl"),
+        "subagents"
+      );
+  const selfName = path.basename(parentFilePath);
   let entries: string[];
   try {
-    entries = (await fs.readdir(dir)).filter((f) => f.toLowerCase().endsWith(".jsonl")).sort();
+    entries = (await fs.readdir(dir))
+      .filter((f) => f.toLowerCase().endsWith(".jsonl"))
+      // Not the transcript we are exporting. In the nested case its own file is
+      // in this directory, and including it would repeat the whole conversation
+      // inside its own sidechain section.
+      .filter((f) => f !== selfName)
+      .sort();
   } catch {
     return { messages: [], unread: 0 };
   }
