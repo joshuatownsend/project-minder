@@ -212,6 +212,25 @@ describe("#380 — load-bearing tooltips are reachable without a mouse", () => {
     expect(region).not.toMatch(/srText=/);
   });
 
+  it("does not restate a visible label inside its own description", async () => {
+    // The class, not one instance. A `Tooltip` description carries what the
+    // visible label CANNOT say; once #391 stopped hiding the label, anything
+    // that also restated it made a focused chip announce the same value twice.
+    //
+    // Both value-carrying chips had it, found one round apart (Codex P2, PR
+    // #519): `CacheHitBadge` prefixed its description with the percentage, and
+    // `EffortMixChip` appended the whole level/count list. Asserted together so
+    // the next one is caught by the rule rather than by a reviewer.
+    const effort = await read("EffortMixChip.tsx");
+    const explanation = effort.slice(
+      effort.indexOf("const explanation ="),
+      effort.indexOf("return (")
+    );
+    expect(explanation).not.toMatch(/entries\.map/);
+    // The visible label is still the mix — the fix is not "drop the counts".
+    expect(effort).toMatch(/\{entries\.map\(\(\[level, n\]\) =>/);
+  });
+
   it("uses .sr-only rather than aria-label on generic spans", async () => {
     // ARIA does not reliably name a generic element and some screen readers
     // drop it, which is why the issue prescribes `.sr-only` for spans. The
