@@ -79,6 +79,25 @@ export function Tooltip({
   /** Set by a tap or Enter/Space; dismissed by Escape or an outside pointer. */
   const [pinned, setPinned] = useState(false);
   const open = hovered || focused || pinned;
+
+  /**
+   * Escape means gone — so it clears ALL THREE holds, `hovered` included.
+   *
+   * Splitting one boolean into three (Codex P2, round 4) made Escape a partial
+   * dismissal: it released the pin and the focus but not the hover, so a
+   * mouse-and-keyboard user resting the pointer on a trigger pressed Escape and
+   * the tooltip stayed exactly where it was. The documented dismissal silently
+   * required moving the pointer as well. (Codex P2, round 5.)
+   *
+   * Clearing `hovered` under a stationary pointer is safe rather than sticky:
+   * no `mouseenter` is owed until the pointer leaves and returns, which is
+   * precisely the gesture that should bring the tooltip back.
+   */
+  const dismiss = useCallback(() => {
+    setHovered(false);
+    setFocused(false);
+    setPinned(false);
+  }, []);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const triggerRef = useRef<HTMLSpanElement | null>(null);
   const tipRef = useRef<HTMLSpanElement | null>(null);
@@ -107,12 +126,7 @@ export function Tooltip({
     // Escape closes, and so does a click anywhere else — the two dismissals a
     // tap-opened tooltip needs, since there is no "leave" on touch.
     const onKey = (e: KeyboardEvent) => {
-      // Escape releases the pin AND the focus-hold: a keyboard user pressing it
-      // expects the tooltip gone, not to have to move focus as well.
-      if (e.key === "Escape") {
-        setPinned(false);
-        setFocused(false);
-      }
+      if (e.key === "Escape") dismiss();
     };
     const onDown = (e: PointerEvent) => {
       // `pointerdown`, so a PointerEvent — and `e.target` can be null or a
@@ -133,7 +147,7 @@ export function Tooltip({
       window.removeEventListener("scroll", place, true);
       window.removeEventListener("resize", place);
     };
-  }, [open, place]);
+  }, [open, place, dismiss]);
 
   const tip = (
   <span
@@ -188,8 +202,7 @@ export function Tooltip({
           e.preventDefault();
           setPinned(true);
         } else if (e.key === "Escape") {
-          setPinned(false);
-          setFocused(false);
+          dismiss();
         }
       }}
       onBlur={() => setFocused(false)}
