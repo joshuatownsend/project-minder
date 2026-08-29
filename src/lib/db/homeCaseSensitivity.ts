@@ -217,6 +217,31 @@ export async function recordHomeCaseSensitivity(
       // become `project_dir_name`, so it is the one whose case behaviour the
       // grouping identity actually depends on. A home root and its subtree can
       // sit on different volumes (a bind-mounted or symlinked `projects/`).
+      //
+      // KNOWN LIMITATION, and a deliberate one. The two spellings appear
+      // because the SOURCE volume is case-insensitive, so a setup where the
+      // source and `<home>/projects` differ is not fully covered:
+      //
+      //   - source insensitive, projects SENSITIVE (a Linux `.claude` on ext4
+      //     with projects on an SMB mount): Claude creates two directories for
+      //     one real project, this probe says "sensitive", and the split
+      //     REMAINS. Not fixed.
+      //   - source sensitive, projects INSENSITIVE: `<home>/projects` already
+      //     maps both encodings to one directory, so there is no split to fix
+      //     and folding is a no-op.
+      //
+      // The alternative — decode each `project_dir_name` back to a real path
+      // and probe THAT — was considered and rejected (Codex P2, PR #523). It
+      // reintroduces exactly the shape #479's review spent five rounds
+      // removing: a verdict recomputed per PROJECT, costing N filesystem
+      // round-trips per scan and N network round-trips over UNC, against paths
+      // that frequently no longer exist. It would also have to answer for a
+      // project whose source volume is gone, which is the common case for old
+      // sessions.
+      //
+      // The uncovered case fails CONSERVATIVELY — it leaves the rows split,
+      // which is visible and recoverable, rather than merging projects that
+      // are genuinely distinct. Recorded on #416 rather than left implicit.
       const verdict = await probeCaseSensitivity(path.join(home, "projects"));
       db.prepare(
         `INSERT INTO home_properties (home_key, case_sensitive, probed_at)
