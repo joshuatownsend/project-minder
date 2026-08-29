@@ -46,6 +46,9 @@ const globalForParser = globalThis as unknown as {
      *  that resolved the OLD homes. */
     configKey: string;
   };
+  /** Tail of the sweep chain — see `sweepGate`. Ordering only; never awaited
+   *  for a value. */
+  __usageSweepGate?: Promise<unknown>;
 };
 
 function getFileCache(): FileCache<UsageTurn[]> {
@@ -692,7 +695,45 @@ export async function parseSessionTurnsWithMeta(
 
 // ── All-sessions parser with mtime caching ───────────────────────────────────
 
-async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
+/**
+ * Called once per session the sweep parses, in sweep order.
+ *
+ * `duplicate` is true when this session id was already emitted earlier in the
+ * same sweep. The two shapes built on this core resolve that differently, and
+ * deliberately: the map form ignores the flag and lets the later entry win,
+ * which is byte-for-byte what it did before this became a visitor; the
+ * streaming form skips duplicates, because a consumer folding turns into
+ * running totals cannot un-add the first copy the way `Map.set` replaces it.
+ *
+ * In practice both resolve the same corpus — session ids are UUIDs, so a
+ * duplicate means one session reachable through two homes (a WSL tree also
+ * mapped from Windows), where the two parses are of the same transcript.
+ */
+type SessionVisitor = (
+  sessionId: string,
+  turns: UsageTurn[],
+  info: { duplicate: boolean }
+) => void | Promise<void>;
+
+/**
+ * The one sweep. Walks every readable Claude home plus every enabled adapter
+ * and hands each parsed session to `visit` as it is produced.
+ *
+ * Extracted from `buildAllSessions` for #515: that function accumulated every
+ * session's turns into a map and held it until its consumer finished, so a
+ * report materialised the WHOLE corpus at once — measured at ≈5.0 GB against a
+ * 2.51 GB source tree (parsed turns retain ≈2.0× their bytes), which is past
+ * Node's default ~4 GB old-space limit. `FileCache`'s byte budget (#476) cannot
+ * help there: evicting a slot only drops a second reference to an array the
+ * caller's map still holds.
+ *
+ * A visitor rather than an async generator, because the sweep's concurrency is
+ * `Promise.all` over batches of five and a generator cannot yield from inside
+ * those callbacks. Restructuring them would have rewritten the per-file and
+ * per-directory error containment (the `continue`-vs-`return` split below),
+ * which is load-bearing and was itself review-derived.
+ */
+async function sweepSessions(visit: SessionVisitor): Promise<void> {
   const cache = getFileCache();
 
   // Sweep every readable Claude home (primary + config.claudeHomes) — a home
@@ -711,7 +752,10 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
       // No projects dir in this home
     }
   }
-  const result = new Map<string, UsageTurn[]>();
+  // Session ids emitted so far, so `visit` can be told whether it is seeing a
+  // repeat. Ids only — this is the one thing the sweep still accumulates, and
+  // it is ~5.5k strings rather than the corpus.
+  const emitted = new Set<string>();
   // Track every JSONL we observed during this sweep so we can evict slots for
   // files that were deleted since the last call. Without this, `maxMtimeMs()`
   // keeps reflecting a deleted file's mtime forever and ETags stick to a
@@ -834,7 +878,9 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
 
           if (turns && turns.length > 0) {
             const sessionId = path.basename(filePath, ".jsonl");
-            result.set(sessionId, turns);
+            const duplicate = emitted.has(sessionId);
+            emitted.add(sessionId);
+            await visit(sessionId, turns, { duplicate });
           }
         }
       })
@@ -856,7 +902,7 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
   // is already source-aware: it filters on `t.source ?? "claude"` and builds its
   // by-source breakdown from the same turns (`aggregator.ts:69,474`). Confirmed
   // against that code rather than taken on the issue's word.
-  await mergeAdapterSessions(config, cache, result, liveSet);
+  await mergeAdapterSessions(config, cache, visit, emitted, liveSet);
 
   // Evict slots for files that disappeared since the last sweep. This keeps
   // `maxMtimeMs()` honest as a change signal for ETag computation.
@@ -866,6 +912,26 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
   // be re-parsed every time AND `maxMtimeMs()` would ignore adapter edits,
   // leaving ETags claiming "unchanged" across a real change.
   cache.retainOnly(liveSet);
+}
+
+/**
+ * The map shape of the sweep: every session's turns, resident at once.
+ *
+ * **Costs the whole corpus in heap** — see `sweepSessions`. Kept because
+ * several consumers genuinely index by session id (`runFileAgentUsage`,
+ * `runFileSkillUsage`, the per-project analytics routes), and converting all of
+ * them in one change would have been a worse diff than converting the one that
+ * was measured at 5 GB. New callers that only fold should use
+ * `streamAllSessions` instead.
+ */
+async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
+  const result = new Map<string, UsageTurn[]>();
+  // Ignores `duplicate` on purpose: `Map.set` overwriting the earlier entry is
+  // exactly what this did before the visitor existed, and preserving it keeps
+  // this path bit-identical rather than nearly so.
+  await sweepSessions((sessionId, turns) => {
+    result.set(sessionId, turns);
+  });
   return result;
 }
 
@@ -887,7 +953,8 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
 async function mergeAdapterSessions(
   config: MinderConfig,
   cache: ReturnType<typeof getFileCache>,
-  result: Map<string, UsageTurn[]>,
+  visit: SessionVisitor,
+  emitted: Set<string>,
   liveSet: Set<string>
 ): Promise<void> {
   // Dynamic import, and it has to be: `@/lib/adapters` registers the Claude
@@ -968,7 +1035,7 @@ async function mergeAdapterSessions(
           // every usage aggregate to make room for an adapter's — a worse
           // failure than the reverse, and invisible in the totals. Adapter ids
           // are UUIDs in practice, so this is a guard, not a live case.
-          if (result.has(sessionId)) {
+          if (emitted.has(sessionId)) {
             warnOnceParser(
               `adapter-id-collision:${sessionId}`,
               `[usage] ${adapter.id} session ${sessionId} collides with an ` +
@@ -976,7 +1043,8 @@ async function mergeAdapterSessions(
             );
             return;
           }
-          result.set(sessionId, turns);
+          emitted.add(sessionId);
+          await visit(sessionId, turns, { duplicate: false });
         })
       );
     }
@@ -988,6 +1056,35 @@ function warnOnceParser(key: string, message: string): void {
   if (_warnedParser.has(key)) return;
   _warnedParser.add(key);
   console.warn(message);
+}
+
+/**
+ * Serializes sweeps against each other. Not a lock on the FileCache — a lock on
+ * `retainOnly`, which is the one part of a sweep that is destructive and whose
+ * correctness depends on having seen every live file. Two sweeps running at
+ * once each evict the other's files.
+ */
+function sweepGate(): Promise<unknown> {
+  return globalForParser.__usageSweepGate ?? Promise.resolve();
+}
+function setSweepGate(p: Promise<unknown>): void {
+  // Swallow rejection on the GATE only. The caller still awaits its own
+  // promise and sees the error; the gate exists to order the next sweep, and a
+  // failed sweep must not poison every sweep after it.
+  globalForParser.__usageSweepGate = p.catch(() => undefined);
+}
+
+/**
+ * What makes two sweeps "the same sweep". Shared by the map and streaming entry
+ * points so a streamer can join an in-flight map sweep only when it would have
+ * produced the same corpus.
+ */
+function sweepConfigKey(cfg: MinderConfig): string {
+  return JSON.stringify([
+    cfg.claudeHomes ?? [],
+    cfg.pathMappings ?? [],
+    cfg.enabledAdapters ?? [],
+  ]);
 }
 
 export async function parseAllSessions(
@@ -1005,18 +1102,19 @@ export async function parseAllSessions(
   // sessions, so a caller arriving after an adapter was toggled in Settings must
   // start a fresh sweep rather than await one that resolved the old adapter set.
   // Without it the toggle appears to do nothing until the process restarts.
-  const configKey = JSON.stringify([
-    inFlightCfg.claudeHomes ?? [],
-    inFlightCfg.pathMappings ?? [],
-    inFlightCfg.enabledAdapters ?? [],
-  ]);
+  const configKey = sweepConfigKey(inFlightCfg);
   let slot = globalForParser.__usageAllSessionsInFlight;
   if (!slot || slot.configKey !== configKey) {
-    const promise = buildAllSessions().finally(() => {
-      if (globalForParser.__usageAllSessionsInFlight?.promise === promise) {
-        globalForParser.__usageAllSessionsInFlight = undefined;
-      }
-    });
+    // Behind the same gate as `streamAllSessions`, for the `retainOnly`
+    // reason documented there.
+    const promise = sweepGate()
+      .then(() => buildAllSessions())
+      .finally(() => {
+        if (globalForParser.__usageAllSessionsInFlight?.promise === promise) {
+          globalForParser.__usageAllSessionsInFlight = undefined;
+        }
+      });
+    setSweepGate(promise);
     slot = { promise, configKey };
     globalForParser.__usageAllSessionsInFlight = slot;
   }
@@ -1032,6 +1130,71 @@ export async function parseAllSessions(
     if (primary.length > 0) filtered.set(sid, primary);
   }
   return filtered;
+}
+
+/**
+ * Fold every session's turns WITHOUT holding the corpus (#515).
+ *
+ * `visit` is called once per session, in sweep order, with that session's
+ * turns. The array is released as soon as `visit` returns, so a consumer that
+ * folds into running totals has a peak proportional to its own accumulators
+ * plus one session — not to the corpus. `parseAllSessions` is the same sweep
+ * with `result.set` as its visitor, and costs the corpus.
+ *
+ * Sidechain filtering matches `parseAllSessions`: primary-only by default,
+ * `includeSidechains` to see subagent turns. Filtered per session rather than
+ * by building a second map, which is what the map form has to do.
+ *
+ * ## Sharing a sweep with the map form
+ *
+ * Three cases, and the ordering between them is the whole design:
+ *
+ * 1. A map sweep for the SAME config is already in flight — await it and
+ *    iterate what it produced. Joining costs no additional memory (that map is
+ *    being built either way) and avoids parsing the corpus twice.
+ * 2. Otherwise this runs its own sweep, serialized behind `sweepGate` along
+ *    with every other sweep. Concurrent streamers therefore run one after
+ *    another against a warm `FileCache` rather than in parallel.
+ * 3. The gate is not an optimisation. `sweepSessions` ends with
+ *    `cache.retainOnly(liveSet)`, so two interleaved sweeps would each evict
+ *    the files only the other saw — dropping them from `maxMtimeMs()` and
+ *    leaving ETags claiming "unchanged" across a real edit.
+ *
+ * Deliberately not a broadcast/tee of one sweep to many subscribers: nothing
+ * here needs it, and it would put backpressure between unrelated consumers.
+ */
+export async function streamAllSessions(
+  visit: (sessionId: string, turns: UsageTurn[]) => void | Promise<void>,
+  options: { includeSidechains?: boolean } = {}
+): Promise<void> {
+  const project = (turns: UsageTurn[]): UsageTurn[] =>
+    options.includeSidechains ? turns : turns.filter((t) => !t.isSidechain);
+
+  const cfg = await readConfig();
+  const configKey = sweepConfigKey(cfg);
+
+  const slot = globalForParser.__usageAllSessionsInFlight;
+  if (slot && slot.configKey === configKey) {
+    const full = await slot.promise;
+    for (const [sessionId, turns] of full) {
+      const projected = project(turns);
+      if (projected.length > 0) await visit(sessionId, projected);
+    }
+    return;
+  }
+
+  const run = sweepGate().then(() =>
+    sweepSessions(async (sessionId, turns, info) => {
+      // Skip repeats rather than replace them: a fold cannot un-add the first
+      // copy the way the map form's `Map.set` overwrites it. See
+      // `SessionVisitor`.
+      if (info.duplicate) return;
+      const projected = project(turns);
+      if (projected.length > 0) await visit(sessionId, projected);
+    })
+  );
+  setSweepGate(run);
+  await run;
 }
 
 /**
