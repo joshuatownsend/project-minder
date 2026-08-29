@@ -551,6 +551,34 @@ export async function PATCH(request: NextRequest) {
   // diagnostic about a directory that is still unreadable.
   // (Codex P2, PR #527, rounds 4 and 9.)
   if (claudeHomePathsChanged) clearSweepFailures();
+
+  /**
+   * The PERSISTED verdict clears on the WIDER gate, and the difference is real
+   * rather than an oversight.
+   *
+   * `clearSweepFailures` above is gated on the Claude home path set, because
+   * the file sweeps enumerate exactly those directories. The DB reconcile's
+   * corpus is broader — it also walks whatever the enabled adapters discover —
+   * so disabling an adapter whose discovery caused the failure changes what
+   * that pass reads without changing a single Claude home.
+   * `corpusShapeChanged` is the set of settings that move it.
+   * (Codex P2, PR #527.)
+   */
+  if (corpusShapeChanged) {
+    try {
+      const { probeInitStatus } = await import("@/lib/data");
+      if ((await probeInitStatus()).state === "success") {
+        const { getDb } = await import("@/lib/db/connection");
+        const db = await getDb();
+        if (db) {
+          const { clearPersistedSweepVerdict } = await import("@/lib/db/indexerRuns");
+          clearPersistedSweepVerdict(db);
+        }
+      }
+    } catch {
+      // Never let a diagnostic reset be the thing that fails a config write.
+    }
+  }
   // Grades and the portfolio usage slot depend on the file-parse sweep; drop
   // both so the next request recomputes over the new corpus instead of serving
   // the old data for the rest of their TTLs (5 min / 10 min).

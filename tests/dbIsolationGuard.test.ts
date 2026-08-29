@@ -738,6 +738,12 @@ describe("database isolation convention", () => {
       // and a try/catch, so a probe can never break the endpoint that reports
       // completeness.
       "src/app/api/claude-homes/route.ts",
+      // #513: clears the persisted full-pass verdict when the corpus changes.
+      // The in-process collector reset beside it cannot reach that flag — the
+      // reconcile that writes it runs in a worker, so the DB is the only shared
+      // seam. Opened dynamically, behind `probeInitStatus` and a try/catch, so
+      // a diagnostic reset can never fail a config write.
+      "src/app/api/config/route.ts",
       "src/lib/bootstrap.ts",
       "src/lib/memory/usageTracker.ts",
       "src/lib/usage/agentCostFromOtel.ts",

@@ -46,6 +46,19 @@ vi.mock("@/lib/memory/seedCategoryCounts", () => ({
 }));
 
 import { PATCH } from "@/app/api/config/route";
+import { installIsolatedState } from "../_helpers/isolatedState";
+
+/**
+ * Isolated because `/api/config` gained a runtime `import()` of the DB layer in
+ * #513: a corpus change clears the persisted full-pass verdict, which lives in
+ * the database because the reconcile that writes it runs in a worker whose
+ * `globalThis` cannot reach the server's.
+ *
+ * The branch is unreachable for most cases here, but "this test happens not to
+ * take that path" is an argument about today's control flow. Isolation does not
+ * depend on being right about which branch runs.
+ */
+installIsolatedState({ prefix: "pm-configroute-" });
 
 function patchRequest(body: unknown): NextRequest {
   return new NextRequest("http://localhost:4100/api/config", {

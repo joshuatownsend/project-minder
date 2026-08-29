@@ -272,24 +272,7 @@ export function getIndexBuildState(db: DatabaseT.Database): IndexBuildState {
   return hasCompletedFullReconcile(db) ? "ready" : "building";
 }
 
-/**
- * Did the most recent full pass fail to read something it was supposed to?
- *
- * The DB reconcile has its own enumeration-failure count and already persists
- * it as `aborted` on the run row — but it never reached the sweep-failure
- * collector, so on a DB-backed setup (the default) where neither instrumented
- * file sweep runs, `/api/claude-homes` answered `complete: true` over an index
- * pass explicitly marked incomplete. (Codex P2, PR #527.)
- *
- * Read from the DATABASE rather than from a collector, and that is the whole
- * reason this lives here: the reconcile runs in `workers/ingestWorker.mjs`,
- * whose `globalThis` is isolated from the HTTP server's, so no in-process
- * record could cross. #478 established the same seam for the same reason —
- * the shared file is the evidence both processes can see.
- *
- * Scoped to full-corpus kinds. A tail or watcher pass reads one file and
- * cannot speak to whether the corpus was enumerable.
- */
+/** `meta` key holding the latest full-pass verdict; see the two functions below. */
 const SWEEP_VERDICT_KEY = "last_full_sweep_incomplete";
 
 /**
@@ -320,6 +303,28 @@ export function recordFullPassVerdict(
 }
 
 /**
+ * Forget the persisted verdict, because the corpus it described is gone.
+ *
+ * The in-process collector is cleared on a config change for exactly this
+ * reason; the persisted flag needed the same treatment and did not have it, so
+ * removing an unreadable home left `complete: false` standing until another
+ * full reconcile ran — indefinitely if the indexer is disabled or stopped.
+ * (Codex P2, PR #527.)
+ *
+ * DELETED rather than set to "0": absence means "no full pass has reported
+ * since the corpus changed", which is the honest state and is exactly what the
+ * run-row fallback below already handles. Writing "0" would assert a clean pass
+ * that never happened.
+ */
+export function clearPersistedSweepVerdict(db: DatabaseT.Database): void {
+  try {
+    db.prepare("DELETE FROM meta WHERE key = ?").run(SWEEP_VERDICT_KEY);
+  } catch {
+    // A diagnostic reset must never fail a config write.
+  }
+}
+
+/**
  * Did the most recent full pass fail to read something it was supposed to?
  *
  * The DB reconcile has its own enumeration-failure count, but it never reached
@@ -333,6 +338,10 @@ export function recordFullPassVerdict(
  * whose `globalThis` is isolated from the HTTP server's, so no in-process
  * record could cross. #478 established the same seam for the same reason —
  * the shared file is the evidence both processes can see.
+ *
+ * The run-row fallback is scoped to full-corpus kinds. A tail or watcher pass
+ * reads one file and cannot speak to whether the corpus was enumerable, so an
+ * unscoped query would let a later clean tail mask an aborted reconcile.
  */
 export function lastFullPassWasIncomplete(db: DatabaseT.Database): boolean {
   try {

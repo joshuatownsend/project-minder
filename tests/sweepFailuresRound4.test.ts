@@ -1010,3 +1010,85 @@ describe("round 15 — the DB verdict has to survive, and be shown", () => {
     expect([...text.matchAll(/await isMissingDirError\(/g)].length).toBe(3);
   });
 });
+
+describe("round 16 — the persisted verdict is not exempt from the reset", () => {
+  let dbAvailable: boolean;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("better-sqlite3");
+    dbAvailable = true;
+  } catch {
+    dbAvailable = false;
+  }
+
+  it.skipIf(!dbAvailable)("forgets the verdict when the corpus changes", async () => {
+    // The in-process collector is cleared on a config change for exactly this
+    // reason; the persisted flag was not, so removing an unreadable home left
+    // `complete: false` standing until another full reconcile ran —
+    // indefinitely if the indexer is disabled or stopped. (Codex P2, #527.)
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(":memory:");
+    db.prepare("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)").run();
+
+    const { recordFullPassVerdict, lastFullPassWasIncomplete, clearPersistedSweepVerdict } =
+      await import("@/lib/db/indexerRuns");
+
+    recordFullPassVerdict(db as never, true);
+    expect(lastFullPassWasIncomplete(db as never)).toBe(true);
+
+    clearPersistedSweepVerdict(db as never);
+    expect(lastFullPassWasIncomplete(db as never)).toBe(false);
+
+    // DELETED, not set to "0". Absence means "no full pass has reported since
+    // the corpus changed", which is what the run-row fallback is for; a stored
+    // "0" would assert a clean pass that never ran.
+    const row = db
+      .prepare("SELECT value FROM meta WHERE key = 'last_full_sweep_incomplete'")
+      .get();
+    expect(row).toBeUndefined();
+
+    db.close();
+  });
+
+  it("clears it on the WIDER corpus gate than the collector uses", async () => {
+    // The file sweeps enumerate the Claude home paths, so the collector clears
+    // on those. The DB reconcile also walks whatever the enabled adapters
+    // discover, so disabling one can change what it reads without changing a
+    // single home — which is why these two resets have different gates.
+    const { readFile } = await import("node:fs/promises");
+    const route = await readFile("src/app/api/config/route.ts", "utf-8");
+
+    expect(route).toMatch(/if \(claudeHomePathsChanged\) clearSweepFailures\(\);/);
+    // The CALL, not merely the destructuring import beside it — replacing the
+    // invocation while leaving the import in place passed the looser check,
+    // which is the whole failure mode a source-level assertion invites.
+    expect(route).toMatch(/clearPersistedSweepVerdict\(db\);/);
+    // The persisted clear sits under `corpusShapeChanged`, not the narrower flag.
+    const at = route.indexOf("clearPersistedSweepVerdict");
+    const gate = route.lastIndexOf("if (corpusShapeChanged) {", at);
+    const narrower = route.lastIndexOf("if (claudeHomePathsChanged)", at);
+    expect(gate).toBeGreaterThan(narrower);
+  });
+
+  it("describes an ENOENT without picking one of its two causes", async () => {
+    // A recorded ENOENT is never "a fresh install with no projects/ yet" —
+    // that case is deliberately silent. It is either the HOME being gone or the
+    // `projects` entry being unresolvable, and naming only one sends the reader
+    // down the wrong fix path. My first wording named only the dangling link,
+    // which is as misleading as the "Claude home" wording it replaced.
+    // (Copilot, PR #527.)
+    const { describeSweepFailure } = await import("@/lib/sweepFailures");
+    const msg = describeSweepFailure({
+      path: "/x/projects",
+      scope: "projects-dir",
+      code: "ENOENT",
+      sweep: "usage",
+    });
+
+    expect(msg).toContain("home may be gone");
+    expect(msg).toContain("not connected");
+    // And it no longer claims the path is simply absent, which is the one
+    // reading that cannot be true of a recorded ENOENT.
+    expect(msg).not.toContain("no longer exists");
+  });
+});

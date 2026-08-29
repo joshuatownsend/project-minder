@@ -337,10 +337,11 @@ export function recordSweepSuccess(
 /**
  * Record one failed enumeration.
  *
- * Bounded. A tree with thousands of unreadable project directories would
- * otherwise turn a diagnostic into a memory leak, and the banner cannot render
- * a thousand rows anyway — the count is what a reader needs past the first
- * handful.
+ * Bounds the DETAIL only — never the count (`getSweepFailureTotal` reads the
+ * keys, which outlive it). A tree with thousands of unreadable project
+ * directories would otherwise turn a diagnostic into a memory leak, and the
+ * banner cannot render a thousand rows anyway; past the first handful, the
+ * count is what a reader needs.
  */
 const MAX_PER_SWEEP = 50;
 
@@ -417,11 +418,25 @@ export function getSweepFailures(): SweepFailure[] {
 }
 
 /**
- * How many failures there actually were, including any past the detail cap.
+ * How many distinct LOCATIONS failed, across every sweep.
+ *
+ * Two caps sit behind this and they do different jobs, which the earlier
+ * "including any past the detail cap" phrasing flattened into one:
+ *
+ *   - `MAX_PER_SWEEP` (50) bounds the DETAIL a cycle retains. It does not bound
+ *     this count at all — the keys outlive the detail, and deduplicating them
+ *     across sweeps is what makes one broken directory found by both sweeps
+ *     count once.
+ *   - `MAX_TRACKED_KEYS` (2,000) bounds the KEYS. Only past that does a cycle
+ *     lose the ability to deduplicate, and what it counted beyond it is added
+ *     per cycle — so a fault broad enough to blow 2,000 keys in two sweeps at
+ *     once can still overstate. That direction is deliberate: this figure
+ *     exists to tell a user their corpus is incomplete, and the failure that
+ *     matters is understating it.
  *
  * Separate from `getSweepFailures().length` on purpose: a broad fault is
- * exactly the case where the two differ, and reporting the capped length as
- * the count would understate it precisely when it matters.
+ * exactly the case where the two differ, and reporting the capped detail
+ * length as the count would understate it precisely when it matters.
  */
 export function getSweepFailureTotal(): number {
   // The union of the KEYS, not the detail arrays plus a residual.
@@ -488,11 +503,16 @@ export function describeSweepFailure(failure: SweepFailure): string {
       : "one project directory could not be listed";
   switch (failure.code) {
     case "ENOENT":
-      // Not "it no longer exists": the `lstat` distinction this PR added means
-      // a reported ENOENT is a path that IS there and cannot be resolved — a
-      // link to a disconnected drive — since a genuinely absent one is treated
-      // as a fresh install and never recorded.
-      return `${what} — the path could not be resolved (a link to a drive that is not connected?)`;
+      // Two situations reach here, and the message has to fit both or it
+      // sends the reader down the wrong path.
+      //
+      // A recorded ENOENT is never "a fresh install with no `projects/` yet" —
+      // that case is deliberately silent. It is either the HOME being gone
+      // (moved, unmounted, a WSL distro that vanished) or the `projects` entry
+      // being there but unresolvable (a link to a disconnected drive). My first
+      // wording named only the second, which is as misleading as the "Claude
+      // home" wording it replaced. (Copilot, PR #527.)
+      return `${what} — it could not be found (the home may be gone, or a link may point at a drive that is not connected)`;
     case "EACCES":
     case "EPERM":
       return `${what} — permission denied`;
