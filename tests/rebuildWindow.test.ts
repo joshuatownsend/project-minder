@@ -257,6 +257,59 @@ describe.skipIf(!driverAvailable)("recordOptionForSweep (#478)", () => {
     }
   });
 
+  it("does not record a rebuild for a rollback remnant", async () => {
+    // Current rows beside NEWER ones are mixed forever — `isNewerDerivation`
+    // stops this build rewriting the newer half — so there is nothing for a
+    // pass to do and no rollup tail to cover. Recording one every 30 s would be
+    // pure accumulation (Codex P2, PR #525).
+    //
+    // The DIVERSION still fires for this state; only the recording does not.
+    // Asserted together, because the two conditions are deliberately different
+    // and a "simplification" that unified them would break one.
+    const { recordOptionForSweep, isRebuildInProgress } = await import(
+      "@/lib/db/indexerRuns"
+    );
+    const { DERIVED_VERSION: V } = await import("@/lib/db/derivationVersion");
+    const db = makeDb();
+    try {
+      db.prepare(
+        "INSERT INTO indexer_runs (started_at_ms, finished_at_ms, kind, aborted) VALUES (1, 2, 'reconcile', 0)"
+      ).run();
+      db.prepare("INSERT INTO sessions VALUES ('a', ?), ('b', ?)").run(V, V + 1);
+
+      expect(isRebuildInProgress(db)).toBe(true);
+      expect(recordOptionForSweep(db)).toEqual({});
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps completed rebuild rows bounded", async () => {
+    // A stale row left by a permanently unparseable file keeps every sweep
+    // eligible to record. Capping the RECORDING would be wrong for the reason
+    // `ABORTED_RUN_KEEP_LIMIT` gives — the sweep that finally succeeds still
+    // has to be free to record — so the rows are pruned instead.
+    const { recordOptionForSweep } = await import("@/lib/db/indexerRuns");
+    const { DERIVED_VERSION: V } = await import("@/lib/db/derivationVersion");
+    const db = makeDb();
+    try {
+      db.prepare("INSERT INTO sessions VALUES ('a', ?)").run(V - 1);
+      const insert = db.prepare(
+        "INSERT INTO indexer_runs (started_at_ms, finished_at_ms, kind, aborted) VALUES (?, ?, 'rebuild', 0)"
+      );
+      for (let i = 0; i < 60; i++) insert.run(i, i + 1);
+
+      // Still records — that is the point — and prunes on the way.
+      expect(recordOptionForSweep(db)).toEqual({ recordRun: "rebuild" });
+      const left = db
+        .prepare("SELECT COUNT(*) AS c FROM indexer_runs WHERE kind = 'rebuild'")
+        .get() as { c: number };
+      expect(left.c).toBeLessThanOrEqual(20);
+    } finally {
+      db.close();
+    }
+  });
+
   it("does not record a SECOND rebuild while one is open", async () => {
     // A rebuild spanning many 30 s sweeps must add one row, not one per sweep.
     const { recordOptionForSweep } = await import("@/lib/db/indexerRuns");

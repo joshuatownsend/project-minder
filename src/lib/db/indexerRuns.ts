@@ -42,6 +42,21 @@ export type IndexBuildState = "building" | "ready";
 const ABORTED_RUN_KEEP_LIMIT = 20;
 
 /**
+ * Completed `'rebuild'` rows to keep.
+ *
+ * Bounded for the same reason aborted runs are, and by the same means: a state
+ * this build cannot resolve keeps every sweep recording. A stale row left by a
+ * permanently unparseable file is the case — the pass runs, fails on that one
+ * file, closes its run, and the next sweep sees staleness again.
+ *
+ * Capping the RECORDING instead would be wrong for the reason
+ * `ABORTED_RUN_KEEP_LIMIT` gives: the sweep that finally succeeds still has to
+ * be free to record, however long the fault lasted. Pruning holds the table
+ * flat without taking that away.
+ */
+const REBUILD_RUN_KEEP_LIMIT = 20;
+
+/**
  * Open a run row and return its id.
  *
  * Written as its own statement rather than inside the reconcile's transaction:
@@ -339,14 +354,21 @@ function hasOpenRebuildRun(db: DatabaseT.Database): boolean {
 export function recordOptionForSweep(
   db: DatabaseT.Database
 ): { recordRun?: IndexerRunKind } {
-  // A pass that will re-derive records itself as a `'rebuild'`, so the gate
+  // A pass that will RE-DERIVE records itself as a `'rebuild'`, so the gate
   // stays up through the rollup refresh that follows the last session stamp —
   // see `isRebuildInProgress`. Regardless of readiness, which stays true across
   // a `DERIVED_VERSION` bump and would otherwise skip exactly this case.
   //
-  // Only when one is not already open, so a rebuild spanning many 30 s sweeps
-  // adds one row rather than one per sweep (Copilot, PR #525).
-  if (hasMixedDerivations(db) && !hasOpenRebuildRun(db)) {
+  // Gated on REWRITABLE staleness, not on `hasMixedDerivations`. A rollback
+  // remnant — current rows beside newer ones — is mixed forever and there is
+  // nothing this build can do about it, so recording a run for it every 30 s
+  // would be pure accumulation with no tail to cover (Codex P2, PR #525).
+  //
+  // Not while one is open, so a rebuild spanning many sweeps adds one row
+  // rather than one per sweep. And pruned, because a stale row left by a
+  // permanently unparseable file keeps every sweep eligible.
+  if (hasRewritableStaleRows(db) && !hasOpenRebuildRun(db)) {
+    pruneRebuildRuns(db);
     return { recordRun: "rebuild" };
   }
   if (hasCompletedFullReconcile(db)) return {};
@@ -367,6 +389,42 @@ export function recordOptionForSweep(
  * Never touches a completed row: those are the readiness evidence, and there is
  * at most one that matters anyway (recording stops the moment one exists).
  */
+/**
+ * Are there rows this build can actually rewrite?
+ *
+ * `< DERIVED_VERSION`, the directional rule from `derivationVersion.ts`. Rows
+ * ABOVE this build are not rewritable and never will be by it, which is
+ * precisely why a rollback remnant must not keep starting rebuild passes.
+ */
+function hasRewritableStaleRows(db: DatabaseT.Database): boolean {
+  try {
+    const row = db
+      .prepare("SELECT 1 AS ok FROM sessions WHERE derived_version < ? LIMIT 1")
+      .get(DERIVED_VERSION) as { ok?: number } | undefined;
+    return !!row?.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Keep only the newest `REBUILD_RUN_KEEP_LIMIT` completed rebuild rows. */
+function pruneRebuildRuns(db: DatabaseT.Database): void {
+  try {
+    db.prepare(
+      `DELETE FROM indexer_runs
+        WHERE kind = 'rebuild'
+          AND finished_at_ms IS NOT NULL
+          AND id NOT IN (
+            SELECT id FROM indexer_runs
+             WHERE kind = 'rebuild' AND finished_at_ms IS NOT NULL
+             ORDER BY id DESC LIMIT ?
+          )`
+    ).run(REBUILD_RUN_KEEP_LIMIT);
+  } catch {
+    /* housekeeping must not destabilize ingest */
+  }
+}
+
 function pruneAbortedRuns(db: DatabaseT.Database): void {
   try {
     db.prepare(
