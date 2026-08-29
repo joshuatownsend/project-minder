@@ -87,11 +87,18 @@ function getFileCache(): FileCache<UsageTurn[]> {
     // On the reference corpus (5,498 transcripts, 2.51 GB of JSONL), parsed
     // `UsageTurn[]` retains ≈2.0x the source bytes in heap — 153 files spanning
     // the size distribution, 57 MB of source against 114 MB of retained heap.
-    // A fully warm cache of that corpus therefore wants ≈5.0 GB, which is past
-    // Node's default ~4 GB old-space limit. With `maxEntries: 25_000` against
-    // 5,498 files, NOTHING was evicting: the cap was four times larger than the
-    // corpus, so the only thing bounding this cache was the size of the user's
-    // history.
+    // With `maxEntries: 25_000` against 5,498 files NOTHING was evicting: the
+    // cap was four times larger than the corpus, so the only thing bounding
+    // this cache was the size of the user's history. That is what the byte
+    // budget fixes.
+    //
+    // The ≈2.0x ratio does NOT extrapolate to the whole corpus, and #515
+    // originally said it did — "≈5.0 GB, past Node's ~4 GB limit". A
+    // whole-sweep measurement puts the real figure at ~1.8 GB. The sample was
+    // drawn to span the size distribution, which over-weights the big files
+    // relative to their share of the corpus, and anything over
+    // `MAX_SESSION_FILE_SIZE` is never parsed at all. The bound is worth having
+    // because an unbounded cache is unbounded; it was not averting a crash.
     //
     // The default budget is 1 GiB of source (≈2 GiB heap), which leaves room
     // for the rest of the process under the default limit. Raise it with
@@ -698,22 +705,27 @@ export async function parseSessionTurnsWithMeta(
 /**
  * Called once per session the sweep parses, in sweep order.
  *
- * `duplicate` is true when this session id was already emitted earlier in the
- * same sweep. The two shapes built on this core resolve that differently, and
- * deliberately: the map form ignores the flag and lets the later entry win,
- * which is byte-for-byte what it did before this became a visitor; the
- * streaming form skips duplicates, because a consumer folding turns into
- * running totals cannot un-add the first copy the way `Map.set` replaces it.
+ * A session id is emitted AT MOST ONCE. Repeats are dropped in the core, so
+ * both shapes built on it resolve duplicates identically — first copy wins.
  *
- * In practice both resolve the same corpus — session ids are UUIDs, so a
- * duplicate means one session reachable through two homes (a WSL tree also
- * mapped from Windows), where the two parses are of the same transcript.
+ * The first version let each shape decide: the map form kept `Map.set`'s
+ * last-wins because that is what it did before the visitor existed, and the
+ * streaming form skipped repeats because a fold cannot un-add the first copy.
+ * That was two answers to one question, and it was observable — a streaming
+ * caller that JOINS an in-flight map sweep sees the map's answer, so the same
+ * request could report different tokens depending on whether an unrelated
+ * sweep happened to be running (Codex P2, PR #520).
+ *
+ * First-wins rather than last-wins because it is the only one a fold can
+ * implement, and because `mergeAdapterSessions` already resolved collisions
+ * that way and said why: keeping the entry that is already there never deletes
+ * a real session's turns to make room.
+ *
+ * Session ids are UUIDs, so a duplicate means one session reachable through two
+ * homes — a WSL tree also mapped from Windows — where both copies are of the
+ * same transcript.
  */
-type SessionVisitor = (
-  sessionId: string,
-  turns: UsageTurn[],
-  info: { duplicate: boolean }
-) => void | Promise<void>;
+type SessionVisitor = (sessionId: string, turns: UsageTurn[]) => void | Promise<void>;
 
 /**
  * The one sweep. Walks every readable Claude home plus every enabled adapter
@@ -721,11 +733,14 @@ type SessionVisitor = (
  *
  * Extracted from `buildAllSessions` for #515: that function accumulated every
  * session's turns into a map and held it until its consumer finished, so a
- * report materialised the WHOLE corpus at once — measured at ≈5.0 GB against a
- * 2.51 GB source tree (parsed turns retain ≈2.0× their bytes), which is past
- * Node's default ~4 GB old-space limit. `FileCache`'s byte budget (#476) cannot
- * help there: evicting a slot only drops a second reference to an array the
- * caller's map still holds.
+ * report materialised the WHOLE corpus at once and its peak scaled with the
+ * corpus rather than with any bound. `FileCache`'s byte budget (#476) cannot
+ * help there — evicting a slot only drops a SECOND reference to an array the
+ * caller's map still holds — which is why the map form's measured peak barely
+ * moves when `MINDER_PARSE_CACHE_MB` is cut by 8x while the streaming form's
+ * halves. (#515 originally claimed ~5.0 GB and an out-of-memory risk; that was
+ * an extrapolation, and the measured figure is ~1.8 GB. The unbounded scaling
+ * is the real defect, not a crash.)
  *
  * A visitor rather than an async generator, because the sweep's concurrency is
  * `Promise.all` over batches of five and a generator cannot yield from inside
@@ -756,6 +771,63 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
   // repeat. Ids only — this is the one thing the sweep still accumulates, and
   // it is ~5.5k strings rather than the corpus.
   const emitted = new Set<string>();
+
+  /**
+   * Visitors run ONE AT A TIME, in the order sessions finished parsing.
+   *
+   * Parsing is `Promise.all` over batches of five, so without this the visitor
+   * calls overlap — and the usage visitor awaits per turn while costing, so a
+   * short session could finish updating every accumulator map before a long
+   * session that started earlier. The map path could not do that: `result.set`
+   * is synchronous, so the interleaving ended there and the consumer walked the
+   * map in one fixed order. Several report arrays sort by a single descending
+   * key and fall back to insertion order for ties — `byModel`, `byProject`,
+   * `byCategory`, `topTools` (Codex P2, PR #520).
+   *
+   * ENQUEUE, DO NOT AWAIT, at the call sites. `emit` fixes a session's place in
+   * the queue at the moment its parse completed, which is exactly where
+   * `result.set` put it — so the fold sees the map path's order. Awaiting each
+   * emission instead (the first attempt) stalled the per-directory file loop
+   * behind a slow visit, which delayed later parses and therefore CHANGED that
+   * order — the opposite of the intent (Codex P2, round 2).
+   *
+   * The queue is bounded, because an unbounded one would hold every session's
+   * turns whenever the visitor is slower than the parser and hand #515 its own
+   * defect back. `QUEUE_LIMIT` sessions may wait; past that the sweep drains
+   * before enqueueing more. The bound is still strictly better than the map
+   * path, which held all of them unconditionally.
+   *
+   * Order therefore matches the map path except under sustained visitor
+   * backpressure, where memory is bounded instead. Tie ordering is not stable
+   * run-to-run in either shape anyway — see #522.
+   */
+  const QUEUE_LIMIT = 5;
+  let queued = 0;
+  let visitChain: Promise<void> = Promise.resolve();
+  // The FIRST visitor error, rethrown after the queue drains. The chain itself
+  // must not reject — a rejected chain would skip every visit behind it — but
+  // the failure cannot be swallowed either, or a sweep would report success
+  // having folded nothing.
+  let visitError: unknown;
+  let visitFailed = false;
+
+  const emit = async (sessionId: string, turns: UsageTurn[]): Promise<void> => {
+    queued++;
+    visitChain = visitChain.then(async () => {
+      try {
+        await visit(sessionId, turns);
+      } catch (e) {
+        if (!visitFailed) {
+          visitFailed = true;
+          visitError = e;
+        }
+      } finally {
+        queued--;
+      }
+    });
+    // Backpressure only at the bound, so the common path never stalls a parse.
+    if (queued >= QUEUE_LIMIT) await visitChain;
+  };
   // Track every JSONL we observed during this sweep so we can evict slots for
   // files that were deleted since the last call. Without this, `maxMtimeMs()`
   // keeps reflecting a deleted file's mtime forever and ETags stick to a
@@ -878,9 +950,10 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
 
           if (turns && turns.length > 0) {
             const sessionId = path.basename(filePath, ".jsonl");
-            const duplicate = emitted.has(sessionId);
+            // First copy wins, in the core, for every shape. See `SessionVisitor`.
+            if (emitted.has(sessionId)) continue;
             emitted.add(sessionId);
-            await visit(sessionId, turns, { duplicate });
+            await emit(sessionId, turns);
           }
         }
       })
@@ -902,7 +975,7 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
   // is already source-aware: it filters on `t.source ?? "claude"` and builds its
   // by-source breakdown from the same turns (`aggregator.ts:69,474`). Confirmed
   // against that code rather than taken on the issue's word.
-  await mergeAdapterSessions(config, cache, visit, emitted, liveSet);
+  await mergeAdapterSessions(config, cache, emit, emitted, liveSet);
 
   // Evict slots for files that disappeared since the last sweep. This keeps
   // `maxMtimeMs()` honest as a change signal for ETag computation.
@@ -911,6 +984,11 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
   // Omitting them would evict every adapter slot on each sweep, so they would
   // be re-parsed every time AND `maxMtimeMs()` would ignore adapter edits,
   // leaving ETags claiming "unchanged" across a real change.
+  // Drain. The call sites enqueue without awaiting, so this is where the tail
+  // of the queue is actually run — and where a visitor's failure surfaces.
+  await visitChain;
+  if (visitFailed) throw visitError;
+
   cache.retainOnly(liveSet);
 }
 
@@ -926,9 +1004,12 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
  */
 async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
   const result = new Map<string, UsageTurn[]>();
-  // Ignores `duplicate` on purpose: `Map.set` overwriting the earlier entry is
-  // exactly what this did before the visitor existed, and preserving it keeps
-  // this path bit-identical rather than nearly so.
+  // No duplicate handling here any more — the core emits each id once, so
+  // `Map.set` cannot be reached twice for the same key. This path is no longer
+  // bit-identical to its pre-visitor self in exactly one case (two homes
+  // holding different copies of one session id, where the LATER copy used to
+  // win); that divergence is the price of the two shapes agreeing, and the
+  // agreement is what makes a report independent of concurrent sweeps.
   await sweepSessions((sessionId, turns) => {
     result.set(sessionId, turns);
   });
@@ -953,7 +1034,9 @@ async function buildAllSessions(): Promise<Map<string, UsageTurn[]>> {
 async function mergeAdapterSessions(
   config: MinderConfig,
   cache: ReturnType<typeof getFileCache>,
-  visit: SessionVisitor,
+  // The SERIALIZED emitter, not the raw visitor — this walks adapter files in
+  // `Promise.all` batches too, so it needs the same ordering guarantee.
+  emit: (sessionId: string, turns: UsageTurn[]) => Promise<void>,
   emitted: Set<string>,
   liveSet: Set<string>
 ): Promise<void> {
@@ -1044,7 +1127,7 @@ async function mergeAdapterSessions(
             return;
           }
           emitted.add(sessionId);
-          await visit(sessionId, turns, { duplicate: false });
+          await emit(sessionId, turns);
         })
       );
     }
@@ -1184,11 +1267,7 @@ export async function streamAllSessions(
   }
 
   const run = sweepGate().then(() =>
-    sweepSessions(async (sessionId, turns, info) => {
-      // Skip repeats rather than replace them: a fold cannot un-add the first
-      // copy the way the map form's `Map.set` overwrites it. See
-      // `SessionVisitor`.
-      if (info.duplicate) return;
+    sweepSessions(async (sessionId, turns) => {
       const projected = project(turns);
       if (projected.length > 0) await visit(sessionId, projected);
     })

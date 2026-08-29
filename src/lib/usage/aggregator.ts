@@ -58,10 +58,11 @@ export async function generateUsageReport(
   home?: string
 ): Promise<UsageReport> {
   // Streamed, not collected (#515). The map form of this sweep held every
-  // session's turns until the report was finished — ~5.0 GB on the reference
-  // corpus, past Node's default heap limit — and the filters below then built
-  // further arrays on top of it. Here each session is filtered, folded and
-  // released, so the peak is the accumulators plus one session.
+  // session's turns until the report was finished, and the filters below then
+  // built further arrays on top of it — so the peak scaled with the CORPUS and
+  // did not respond to the cache budget at all. Here each session is filtered,
+  // folded and released, so the peak is the accumulators plus one session, and
+  // measurably follows `MINDER_PARSE_CACHE_MB` instead.
   //
   // The FILTER ORDER is preserved exactly, because it is load-bearing: project,
   // source and home first, then activity from the full history, and only then

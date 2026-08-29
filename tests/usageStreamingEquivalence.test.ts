@@ -6,9 +6,9 @@ import type { UsageTurn } from "@/lib/usage/types";
  *
  * `generateUsageReport` used to flatten the whole corpus into one array and
  * hand it to `aggregateUsage`. It now folds one session at a time and releases
- * it, which is what removes ~5.0 GB from the sweep's peak. The refactor is only
- * worth having if the report is byte-for-byte what it was, so that is what is
- * asserted: the same fixture through both shapes, compared whole.
+ * it, so the peak follows the cache budget instead of the corpus. The refactor
+ * is only worth having if the report is byte-for-byte what it was, so that is
+ * what is asserted: the same fixture through both shapes, compared whole.
  *
  * Comparing the WHOLE report, not a handful of headline fields. The fields most
  * at risk from a batching change are not the totals — those are sums, and sums
