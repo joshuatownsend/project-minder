@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 
 /**
  * #478 — a `DERIVED_VERSION` rebuild is a distinct unavailability from a first
@@ -49,12 +49,6 @@ function makeDb() {
   `);
   return db;
 }
-
-beforeEach(async () => {
-  // The memo lives on `globalThis`, so it survives between test files.
-  const { clearStaleDerivationMemo } = await import("@/lib/db/indexerRuns");
-  clearStaleDerivationMemo();
-});
 
 describe.skipIf(!driverAvailable)("hasMixedDerivations (#478)", () => {
   /**
@@ -143,55 +137,49 @@ describe.skipIf(!driverAvailable)("hasMixedDerivations (#478)", () => {
 });
 
 describe.skipIf(!driverAvailable)("isRebuildInProgress (#478)", () => {
-  it("tracks STALE ROWS, not an open run", async () => {
-    // The first version asked whether an open `'rebuild'` run existed, and that
-    // proxy was wrong both ways: the production rebuild happens during the
-    // INITIAL reconcile, recorded as `'reconcile'` (so it never fired), and a
-    // pass that finishes with files unparseable closes its run while leaving
-    // the index mixed (so it stopped firing too early). Codex P1 + P2, #525.
-    const { isRebuildInProgress, clearStaleDerivationMemo } = await import(
-      "@/lib/db/indexerRuns"
-    );
-    const db = makeDb();
-    try {
-      db.prepare("INSERT INTO sessions VALUES ('a', 19), ('b', 20)").run();
-      // No run row of any kind — and it still fires, which the run-based
-      // version could not.
-      expect(isRebuildInProgress(db)).toBe(true);
-
-      // A CLOSED run does not clear it either; only the rows do.
-      db.prepare(
-        "INSERT INTO indexer_runs (started_at_ms, finished_at_ms, kind, aborted) VALUES (1, 2, 'reconcile', 0)"
-      ).run();
-      clearStaleDerivationMemo();
-      expect(isRebuildInProgress(db)).toBe(true);
-
-      db.prepare("UPDATE sessions SET derived_version = 20").run();
-      clearStaleDerivationMemo();
-      expect(isRebuildInProgress(db)).toBe(false);
-    } finally {
-      db.close();
-    }
-  });
-
-  it("memoizes, so the scan is not paid per request", async () => {
-    // The scan is 24 ms when the answer is "none", which is the common case and
-    // the expensive one. Asserted by CHANGING the rows underneath and observing
-    // the stale answer — a test that only called it twice would pass whether or
-    // not the memo existed.
-    const { isRebuildInProgress, clearStaleDerivationMemo } = await import(
-      "@/lib/db/indexerRuns"
-    );
+  it("reads the database every time, with nothing cached", async () => {
+    // Three attempts at caching this failed, each to a different window, and
+    // the last to a wall (Codex P1 x4, PR #525): a 30-second memo; clearing it
+    // at the reconcile's edges; a live flag set on the first re-derived row.
+    // The flag is the one that settles it — reconciliation runs in
+    // `workers/ingestWorker.mjs`, whose `globalThis` the HTTP server does not
+    // share, so no in-process signal can answer a question about work another
+    // process is doing.
+    //
+    // Asserted by CHANGING the rows and reading again with no reset in
+    // between. Every cached version of this failed exactly that.
+    const { isRebuildInProgress } = await import("@/lib/db/indexerRuns");
     const db = makeDb();
     try {
       db.prepare("INSERT INTO sessions VALUES ('a', 20), ('b', 20)").run();
       expect(isRebuildInProgress(db)).toBe(false);
 
       db.prepare("UPDATE sessions SET derived_version = 19 WHERE session_id = 'b'").run();
-      // Still the memoized answer.
-      expect(isRebuildInProgress(db)).toBe(false);
+      expect(isRebuildInProgress(db)).toBe(true);
 
-      clearStaleDerivationMemo();
+      db.prepare("UPDATE sessions SET derived_version = 20").run();
+      expect(isRebuildInProgress(db)).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("does not depend on any run row", async () => {
+    // The first version asked whether an open `'rebuild'` run existed. In
+    // production the re-derivation happens during the INITIAL reconcile, which
+    // is recorded as `'reconcile'`, so that predicate was false for the entire
+    // real rebuild (Codex P1, PR #525).
+    const { isRebuildInProgress } = await import("@/lib/db/indexerRuns");
+    const db = makeDb();
+    try {
+      db.prepare("INSERT INTO sessions VALUES ('a', 19), ('b', 20)").run();
+      // No run row of any kind, and it still fires.
+      expect(isRebuildInProgress(db)).toBe(true);
+
+      // A CLOSED reconcile does not clear it either; only the rows do.
+      db.prepare(
+        "INSERT INTO indexer_runs (started_at_ms, finished_at_ms, kind, aborted) VALUES (1, 2, 'reconcile', 0)"
+      ).run();
       expect(isRebuildInProgress(db)).toBe(true);
     } finally {
       db.close();
@@ -249,73 +237,17 @@ describe("every consumer of the rebuild window is wired to it (#478)", () => {
     expect(compare).toMatch(/buildNotComparable\(/);
   });
 
-  it("fires the instant a row is re-derived, without waiting for the memo", async () => {
-    // The memo is a 30-second window on a value that changes DURING a long
-    // operation, and clearing it at the pass boundaries was not enough: between
-    // the entry-time clear and the first write, the reconcile awaits pricing,
-    // configuration and home discovery, so a request landing in that gap
-    // re-cached "the rows agree" and held it for the rest of the window while
-    // the rebuild ran (Codex P1 x3, PR #525 — three findings, one cause).
-    const { isRebuildInProgress, markDerivationChanged, clearDerivationChanged, clearStaleDerivationMemo } =
-      await import("@/lib/db/indexerRuns");
-    const db = makeDb();
-    try {
-      // A UNIFORM index, and a memo that has just cached that fact.
-      db.prepare("INSERT INTO sessions VALUES ('a', 20), ('b', 20)").run();
-      expect(isRebuildInProgress(db)).toBe(false);
-
-      // The first row is re-derived. No scan has re-run and the memo still
-      // says "agree" — the live signal is what makes this observable now.
-      markDerivationChanged();
-      expect(isRebuildInProgress(db)).toBe(true);
-
-      clearDerivationChanged();
-      clearStaleDerivationMemo();
-      expect(isRebuildInProgress(db)).toBe(false);
-    } finally {
-      db.close();
-    }
-  });
-
-  it("announces the re-derivation from the ingest gate, and clears at both edges", async () => {
-    // Source-level, like the wiring test: what goes wrong is a MISSING CALL.
+  it("ships the index that makes the per-request read affordable", async () => {
+    // Without `idx_sessions_derived_version` this is a full scan whenever the
+    // rows agree — the common case, ~24 ms on a 6,602-session index. That cost
+    // is what drove three failed attempts to cache the answer. The index is
+    // load-bearing for the design, not an optimisation on top of it, so it is
+    // asserted in both places a database can come from.
     const { readFile } = await import("node:fs/promises");
-    const src = await readFile("src/lib/db/ingest.ts", "utf-8");
-    // Set where the rewrite is DECIDED, not where the row is written — the
-    // mixture begins at the decision.
-    expect(src).toMatch(/existing\.derived_version < DERIVED_VERSION\)\s*\{\s*markDerivationChanged\(\);/);
-    const fn = src.slice(
-      src.indexOf("export async function reconcileAllSessions"),
-      src.indexOf("export async function reconcileAllSessions") + 2200
-    );
-    expect((fn.match(/clearDerivationChanged\(\)/g) ?? []).length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("invalidates the memo at both reconcile edges", async () => {
-    // The memo is a 30-second window on a question the reconcile is about to
-    // change the answer to. A request that cached "the rows agree" moments
-    // before a re-derivation starts kept every later request on the SQL path
-    // for the rest of that window — and startup ordering makes that the NORMAL
-    // case rather than a race, because the initial reconcile is deferred and a
-    // first request routinely lands ahead of it (Codex P1, PR #525).
-    //
-    // Source-level, like the wiring test above and for the same reason: what
-    // goes wrong is a MISSING CALL. Both edges are asserted, because clearing
-    // only on entry would leave the report diverted for 30 s after the rebuild
-    // finished, and clearing only on exit would not fix the reported bug at
-    // all.
-    const { readFile } = await import("node:fs/promises");
-    const src = await readFile("src/lib/db/ingest.ts", "utf-8");
-    const fn = src.slice(
-      src.indexOf("export async function reconcileAllSessions"),
-      src.indexOf("export async function reconcileAllSessions") + 2000
-    );
-    const calls = fn.match(/clearStaleDerivationMemo\(\)/g) ?? [];
-    expect(calls.length).toBeGreaterThanOrEqual(2);
-    // And one of them is in the `finally`, not two copies of the first.
-    expect(fn.lastIndexOf("clearStaleDerivationMemo()")).toBeGreaterThan(
-      fn.indexOf("} finally {")
-    );
+    const schema = await readFile("src/lib/db/schema.sql", "utf-8");
+    expect(schema).toMatch(/idx_sessions_derived_version/);
+    const migrations = await readFile("src/lib/db/migrations.ts", "utf-8");
+    expect(migrations).toMatch(/idx_sessions_derived_version/);
   });
 
   it("leaves getEngagement alone", async () => {
