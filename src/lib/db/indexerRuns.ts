@@ -1,6 +1,7 @@
 import "server-only";
 import type DatabaseT from "better-sqlite3";
 import { resolveIngestMode } from "./ingestMode";
+import { DERIVED_VERSION } from "./derivationVersion";
 
 // Whether the index has finished populating, recorded as a fact in the index
 // itself rather than inferred by whoever happens to be asking.
@@ -193,9 +194,84 @@ export function hasCompletedFullReconcile(db: DatabaseT.Database): boolean {
  * Self-limiting: recording stops as soon as one non-aborted pass exists, so the
  * steady state is still zero rows per sweep.
  */
+/**
+ * Does the index hold rows derived under an older formula? (#478)
+ *
+ * A `DERIVED_VERSION` bump triggers a full re-parse that rewrites sessions ONE
+ * FILE AT A TIME, so for the length of that rebuild the index holds a mix of
+ * old-formula and new-formula rows. Every cross-corpus aggregate that reads a
+ * derived column sums across that mix and returns it as `backend: "db"`.
+ *
+ * This is not the #472 condition. That is a PARTIAL corpus, and it announces
+ * itself — the row count is short. This is a COMPLETE corpus with inconsistent
+ * derivations: the totals look plausible and the count is right, which is why
+ * it needed its own predicate rather than being folded into readiness.
+ *
+ * ## Cost, and where it is paid
+ *
+ * `derived_version` has no index, so concluding "none are stale" requires a
+ * full scan — measured at 24 ms on a 6,602-session index. That is why this is
+ * NOT the per-request predicate: it runs once per sweep, and its answer is
+ * recorded as a run so the per-request check is a rowid lookup.
+ *
+ * Deliberately not `!= DERIVED_VERSION`. A row derived by a NEWER build (a
+ * rolled-back install) is not something this build can rewrite, and treating it
+ * as stale would put the report in a rebuild state that never ends. That is the
+ * same asymmetry `isNewerDerivation` documents on the ingest side.
+ */
+export function hasStaleDerivations(db: DatabaseT.Database, currentVersion: number): boolean {
+  try {
+    const row = db
+      .prepare("SELECT 1 AS ok FROM sessions WHERE derived_version < ? LIMIT 1")
+      .get(currentVersion) as { ok?: number } | undefined;
+    return !!row?.ok;
+  } catch {
+    // Unreadable: do not claim a rebuild. A predicate that cannot read its own
+    // evidence must not be what diverts every aggregate to the slower path.
+    return false;
+  }
+}
+
+/**
+ * Is a re-derivation pass running right now? (#478)
+ *
+ * The per-request half. An OPEN `'rebuild'` run means a pass that found stale
+ * rows has started and not yet finished, which is exactly the window in which a
+ * derived-value aggregate would sum across two formulas.
+ *
+ * Orphans are handled by `closeOrphanedIndexerRuns` at watcher start, for the
+ * same reason it exists for `'reconcile'`: without it, a kill mid-rebuild would
+ * leave this true for the life of the index.
+ */
+export function isRebuildInProgress(db: DatabaseT.Database): boolean {
+  try {
+    const row = db
+      .prepare(
+        `SELECT 1 AS ok FROM indexer_runs
+          WHERE finished_at_ms IS NULL AND kind = 'rebuild'
+          LIMIT 1`
+      )
+      .get() as { ok?: number } | undefined;
+    return !!row?.ok;
+  } catch {
+    return false;
+  }
+}
+
 export function recordOptionForSweep(
   db: DatabaseT.Database
 ): { recordRun?: IndexerRunKind } {
+  // A REBUILD is recorded regardless of readiness (#478). Readiness answers
+  // "has a full pass ever completed", which stays true through a
+  // `DERIVED_VERSION` bump — so the self-limiting check below would skip
+  // recording during exactly the window whose whole point is that the index is
+  // complete but internally inconsistent.
+  //
+  // Checked first, and it costs a full scan of `sessions` on the common
+  // no-stale-rows case. Once per sweep, not once per request, which is what
+  // makes it affordable: `isRebuildInProgress` is the per-request predicate and
+  // it is a rowid lookup.
+  if (hasStaleDerivations(db, DERIVED_VERSION)) return { recordRun: "rebuild" };
   if (hasCompletedFullReconcile(db)) return {};
   // Bounded — by pruning, not by giving up. A sweep records every 30 s while
   // readiness is unestablished, which is ~2,880 rows a day if enumeration keeps

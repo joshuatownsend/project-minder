@@ -14,7 +14,7 @@ import {
   needsReconcileAfterV3,
 } from "./usageFromDb";
 import { loadEngagementReportFromSql } from "./engagementFromDb";
-import { getIndexBuildState } from "@/lib/db/indexerRuns";
+import { getIndexBuildState, isRebuildInProgress } from "@/lib/db/indexerRuns";
 import type { EngagementConfig, EngagementReport } from "@/lib/engagement/types";
 import { loadSessionDetailFromDb } from "./sessionDetailFromDb";
 import { loadSessionsListFromDb } from "./sessionsListFromDb";
@@ -618,9 +618,24 @@ async function checkBuildStateFallback(
   scope: string,
   db: DbHandle
 ): Promise<boolean> {
-  if (!isIndexBuilding(db)) return false;
-  logIntentionalFallthrough(scope, BUILDING_REASON);
-  return true;
+  if (isIndexBuilding(db)) {
+    logIntentionalFallthrough(scope, BUILDING_REASON);
+    return true;
+  }
+  // #478: a COMPLETE corpus with inconsistent derivations. A `DERIVED_VERSION`
+  // bump rewrites sessions one file at a time, so mid-rebuild the index holds
+  // rows costed under two formulas and every aggregate below sums across them
+  // — with a right-looking row count and plausible totals, which is why it
+  // needed a predicate of its own rather than riding on readiness.
+  //
+  // Only these five loaders divert. `getEngagement` reads raw columns only
+  // (`ts`, `role`, `text_preview`, `entrypoint`, `is_sidechain`), all of which
+  // survive a re-derivation, so its lifetime latch stays correct and untouched.
+  if (isRebuildInProgress(db)) {
+    logIntentionalFallthrough(scope, REBUILDING_REASON);
+    return true;
+  }
+  return false;
 }
 
 function isIndexBuilding(db: DbHandle): boolean {
@@ -644,6 +659,15 @@ function isIndexBuilding(db: DbHandle): boolean {
  * diversion when adapter sessions existed. #489 removed that branch, so it
  * either diverts or does not run. (#489.)
  */
+/**
+ * Unlike `BUILDING_REASON`, the fallback here is not merely more COMPLETE than
+ * the SQL answer — it is more CORRECT. File-parse derives costs with the
+ * current formula, so during a rebuild it is the only path that returns one
+ * consistent set of figures (#478).
+ */
+const REBUILDING_REASON =
+  "index re-deriving after a DERIVED_VERSION bump — a SQL answer here would sum rows costed under two different formulas and present the mix as a total";
+
 const BUILDING_REASON =
   "index still building (no full pass recorded yet) — a SQL answer here would be a subset of the corpus presented as the whole of it";
 
