@@ -169,13 +169,19 @@ export function UnavailableHomesBanner() {
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 600 }}>{headline}</div>
-        <div style={{ color: "var(--text-3)", marginTop: 2 }}>
-          Session, usage and cost figures may not account for{" "}
-          {homes.map((h) => describe(h)).join("; ")}. Direct reads omit it
-          entirely; the index still reports whatever it recorded when the home
-          was last reachable.
-          {anyStopped(homes) && " Minder will not start a stopped distro to check."}
-        </div>
+        {/* Only when there ARE unavailable homes. A degraded-only warning
+            rendered this anyway and produced "may not account for ." — and
+            went on to discuss an unreachable home's stale index, which is not
+            what happened (Codex P2 + Copilot, PR #527). */}
+        {homes.length > 0 && (
+          <div style={{ color: "var(--text-3)", marginTop: 2 }}>
+            Session, usage and cost figures may not account for{" "}
+            {homes.map((h) => describe(h)).join("; ")}. Direct reads omit it
+            entirely; the index still reports whatever it recorded when the home
+            was last reachable.
+            {anyStopped(homes) && " Minder will not start a stopped distro to check."}
+          </div>
+        )}
         {degraded.length > 0 && (
           <div style={{ color: "var(--text-3)", marginTop: 4 }}>
             {/* The paths, not just a count. "Something could not be read" is

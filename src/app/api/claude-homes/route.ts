@@ -52,6 +52,11 @@ export async function GET(): Promise<NextResponse> {
       complete: true,
     });
     demo.headers.set("X-Minder-Homes-Unavailable", "0");
+    // The new header too. Demo mode's whole contract here is that the SHAPE is
+    // invariant, so a header-only client gets a determinate answer rather than
+    // an absent one — the reason the count above is set at all (Codex P2,
+    // PR #527).
+    demo.headers.set("X-Minder-Sweep-Degraded", "0");
     return demo;
   }
 

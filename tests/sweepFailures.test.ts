@@ -4,6 +4,7 @@ import os from "os";
 import { promises as fs } from "fs";
 import {
   beginSweepFailureCycle,
+  endSweepFailureCycle,
   recordSweepFailure,
   getSweepFailures,
   clearSweepFailures,
@@ -30,15 +31,46 @@ describe("the collector", () => {
   beforeEach(() => clearSweepFailures());
   afterEach(() => clearSweepFailures());
 
-  it("keeps only the most recent cycle per sweep", () => {
+  it("keeps only the most recent COMPLETED cycle per sweep", () => {
     // A home that failed an hour ago and has since recovered must not still be
-    // reported. Each sweep clears its own entries when it starts.
+    // reported — but the replacement happens when the new cycle FINISHES.
     beginSweepFailureCycle("usage");
     recordSweepFailure({ path: "/a", scope: "projects-dir", sweep: "usage" });
-    expect(getSweepFailures()).toHaveLength(1);
+    endSweepFailureCycle("usage");
+    expect(getSweepFailures().map((f) => f.path)).toEqual(["/a"]);
 
     beginSweepFailureCycle("usage");
+    endSweepFailureCycle("usage");
     expect(getSweepFailures()).toHaveLength(0);
+  });
+
+  it("keeps the previous result visible while the next sweep runs", () => {
+    // A sweep can take a while. Clearing at the START meant a poll landing
+    // mid-way saw an empty list — reporting `complete: true` and dropping the
+    // banner for a fault that was still there, then bringing it back when the
+    // sweep finished (Codex P2, PR #527).
+    beginSweepFailureCycle("usage");
+    recordSweepFailure({ path: "/still-broken", scope: "projects-dir", sweep: "usage" });
+    endSweepFailureCycle("usage");
+
+    beginSweepFailureCycle("usage");
+    // Mid-sweep: the last known answer, not an empty one.
+    expect(getSweepFailures().map((f) => f.path)).toEqual(["/still-broken"]);
+
+    recordSweepFailure({ path: "/still-broken", scope: "projects-dir", sweep: "usage" });
+    endSweepFailureCycle("usage");
+    expect(getSweepFailures().map((f) => f.path)).toEqual(["/still-broken"]);
+  });
+
+  it("publishes what a cycle found even if it is ended early", () => {
+    // The sweeps end their cycle in a `finally`, so a pass that threw still
+    // reports what it observed — and those partial findings are usually the
+    // relevant ones, since a failure severe enough to stop the sweep is exactly
+    // what a reader needs to see.
+    beginSweepFailureCycle("usage");
+    recordSweepFailure({ path: "/died-here", scope: "project-dir", sweep: "usage" });
+    endSweepFailureCycle("usage");
+    expect(getSweepFailures().map((f) => f.path)).toEqual(["/died-here"]);
   });
 
   it("does not let one sweep clear another's", () => {
@@ -47,8 +79,10 @@ describe("the collector", () => {
     // poller would keep wiping a slow one's report.
     beginSweepFailureCycle("sessions");
     recordSweepFailure({ path: "/s", scope: "projects-dir", sweep: "sessions" });
+    endSweepFailureCycle("sessions");
     beginSweepFailureCycle("usage");
     recordSweepFailure({ path: "/u", scope: "project-dir", sweep: "usage" });
+    endSweepFailureCycle("usage");
 
     expect(getSweepFailures().map((f) => f.path).sort()).toEqual(["/s", "/u"]);
   });
@@ -58,6 +92,7 @@ describe("the collector", () => {
     // starting one here would hide it AND let entries accumulate across passes
     // for the life of the process.
     recordSweepFailure({ path: "/orphan", scope: "projects-dir", sweep: "usage" });
+    endSweepFailureCycle("usage");
     expect(getSweepFailures()).toHaveLength(0);
   });
 
@@ -68,6 +103,7 @@ describe("the collector", () => {
     for (let i = 0; i < 200; i++) {
       recordSweepFailure({ path: `/p${i}`, scope: "project-dir", sweep: "usage" });
     }
+    endSweepFailureCycle("usage");
     expect(getSweepFailures().length).toBeLessThanOrEqual(50);
   });
 });
@@ -151,6 +187,33 @@ describe("the usage sweep reports its own failures", () => {
     expect(failures.length).toBeGreaterThan(0);
     expect(failures[0].scope).toBe("projects-dir");
     expect(failures[0].sweep).toBe("usage");
+  });
+
+  it("does NOT report a fresh install with no projects directory yet", async () => {
+    // `~/.claude` exists, `projects/` does not — which is every install before
+    // its first session. Reporting that as degraded would put a permanent
+    // warning on a machine with nothing wrong with it (Codex P2 + Copilot,
+    // PR #527).
+    await fs.mkdir(path.join(tmpHome, ".claude"), { recursive: true });
+
+    const { streamAllSessions } = await import("@/lib/usage/parser");
+    const { getSweepFailures: read } = await import("@/lib/sweepFailures");
+
+    await streamAllSessions(async () => {});
+    expect(read()).toHaveLength(0);
+  });
+
+  it("DOES report a home that is gone entirely", async () => {
+    // The other side of the same ENOENT. Nothing is created under `tmpHome`, so
+    // the home itself is missing — a moved or unmounted home, which is a real
+    // gap rather than an empty one.
+    const { streamAllSessions } = await import("@/lib/usage/parser");
+    const { getSweepFailures: read } = await import("@/lib/sweepFailures");
+
+    await streamAllSessions(async () => {});
+    const failures = read();
+    expect(failures.length).toBeGreaterThan(0);
+    expect(failures[0].scope).toBe("projects-dir");
   });
 
   it("reports nothing when the tree reads cleanly", async () => {

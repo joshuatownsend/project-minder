@@ -30,7 +30,9 @@ import { getReadableClaudeHomes } from "@/lib/claudeHome";
 import { normalizePathKey } from "@/lib/platform";
 import {
   beginSweepFailureCycle,
+  endSweepFailureCycle,
   recordSweepFailure,
+  directoryExists,
 } from "@/lib/sweepFailures";
 
 const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50MB
@@ -759,6 +761,7 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
   // START, so a pass that throws part way through still leaves behind what it
   // observed.
   beginSweepFailureCycle("usage");
+  try {
 
   // Sweep every readable Claude home (primary + config.claudeHomes) — a home
   // inside a stopped WSL distro is excluded for the cycle rather than woken.
@@ -780,16 +783,27 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
       for (const dirName of dirNames) subdirs.push({ home, dirName });
     } catch (err) {
       // Still not fatal — a home that cannot be listed must not take the sweep
-      // down — but no longer SILENT. A fresh install legitimately has no
-      // `projects` directory; a disconnected drive, a moved home and a
-      // permissions change do not, and they used to be indistinguishable from
-      // it (#513).
-      recordSweepFailure({
-        path: path.join(home, "projects"),
-        scope: "projects-dir",
-        code: (err as NodeJS.ErrnoException)?.code,
-        sweep: "usage",
-      });
+      // down — but no longer SILENT (#513).
+      // ENOENT here is AMBIGUOUS, and the benign reading is the common one: a
+      // fresh install has a `~/.claude` but no `projects/` until the first
+      // session is written. Reporting that as degraded would put a permanent
+      // warning on every new install (Codex P2 + Copilot, PR #527).
+      //
+      // So ENOENT counts only when the HOME itself is gone — a moved or
+      // unmounted home, which is a real gap. One extra `stat`, on a path that
+      // has already failed, so it costs nothing in the normal case.
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === "ENOENT" && (await directoryExists(home))) {
+        // Home present, no `projects/` yet: nothing has been recorded, and
+        // nothing is missing.
+      } else {
+        recordSweepFailure({
+          path: path.join(home, "projects"),
+          scope: "projects-dir",
+          code,
+          sweep: "usage",
+        });
+      }
       // No projects dir in this home
     }
   }
@@ -1118,6 +1132,12 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
   if (visitFailed) throw visitError;
 
   cache.retainOnly(liveSet);
+  } finally {
+    // In a `finally`: a pass that threw still publishes what it observed, and
+    // those partial findings are usually the relevant ones — a failure severe
+    // enough to stop the sweep is exactly what a reader needs to see (#513).
+    endSweepFailureCycle("usage");
+  }
 }
 
 /**

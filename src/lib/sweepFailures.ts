@@ -1,3 +1,5 @@
+import { promises as fsPromises } from "fs";
+
 /**
  * Enumeration failures the corpus sweeps hit, kept so they can be reported
  * instead of discarded (#513).
@@ -54,25 +56,52 @@ export interface SweepFailure {
 }
 
 const globalForSweep = globalThis as unknown as {
-  __minderSweepFailures?: Map<SweepName, SweepFailure[]>;
+  /** What the last COMPLETED cycle of each sweep found. Read by the API. */
+  __minderSweepPublished?: Map<SweepName, SweepFailure[]>;
+  /** What the cycle currently running has found so far. Not yet visible. */
+  __minderSweepPending?: Map<SweepName, SweepFailure[]>;
 };
 
-function store(): Map<SweepName, SweepFailure[]> {
-  if (!globalForSweep.__minderSweepFailures) {
-    globalForSweep.__minderSweepFailures = new Map();
+function published(): Map<SweepName, SweepFailure[]> {
+  if (!globalForSweep.__minderSweepPublished) {
+    globalForSweep.__minderSweepPublished = new Map();
   }
-  return globalForSweep.__minderSweepFailures;
+  return globalForSweep.__minderSweepPublished;
+}
+
+function pending(): Map<SweepName, SweepFailure[]> {
+  if (!globalForSweep.__minderSweepPending) {
+    globalForSweep.__minderSweepPending = new Map();
+  }
+  return globalForSweep.__minderSweepPending;
 }
 
 /**
- * Start a fresh cycle for one sweep, discarding what it recorded last time.
+ * Start a fresh cycle for one sweep.
  *
- * Called at the START of a sweep, not the end: a pass that throws half way
- * through should still leave behind what it managed to observe, and clearing
- * on completion would lose exactly the failures that stopped it.
+ * Collects into a PENDING list. The previously published result stays visible
+ * until `endSweepFailureCycle` replaces it, because a sweep can take a while
+ * and a poll landing mid-way would otherwise see an empty list — reporting
+ * `complete: true` and clearing the banner for a fault that is still there,
+ * then bringing it back when the sweep finishes (Codex P2, PR #527).
  */
 export function beginSweepFailureCycle(sweep: SweepName): void {
-  store().set(sweep, []);
+  pending().set(sweep, []);
+}
+
+/**
+ * Publish what this cycle found, replacing the previous result.
+ *
+ * Call from a `finally`. A pass that throws half way through should still
+ * publish what it managed to observe — those partial findings are usually the
+ * most relevant ones, since a failure severe enough to stop the sweep is
+ * exactly what a reader needs to see.
+ */
+export function endSweepFailureCycle(sweep: SweepName): void {
+  const found = pending().get(sweep);
+  if (!found) return; // no cycle was started; leave the last result alone
+  published().set(sweep, found);
+  pending().delete(sweep);
 }
 
 /**
@@ -86,7 +115,7 @@ export function beginSweepFailureCycle(sweep: SweepName): void {
 const MAX_PER_SWEEP = 50;
 
 export function recordSweepFailure(failure: SweepFailure): void {
-  const list = store().get(failure.sweep);
+  const list = pending().get(failure.sweep);
   if (!list) {
     // No cycle started — a sweep that records without `beginSweepFailureCycle`
     // is a wiring bug, and silently starting one here would hide it while
@@ -97,16 +126,17 @@ export function recordSweepFailure(failure: SweepFailure): void {
   list.push(failure);
 }
 
-/** Everything recorded by the most recent cycle of every sweep. */
+/** Everything the most recent COMPLETED cycle of each sweep found. */
 export function getSweepFailures(): SweepFailure[] {
   const out: SweepFailure[] = [];
-  for (const list of store().values()) out.push(...list);
+  for (const list of published().values()) out.push(...list);
   return out;
 }
 
 /** Discard everything. Tests, and a config change that invalidates the tree. */
 export function clearSweepFailures(): void {
-  globalForSweep.__minderSweepFailures = undefined;
+  globalForSweep.__minderSweepPublished = undefined;
+  globalForSweep.__minderSweepPending = undefined;
 }
 
 /**
@@ -134,5 +164,23 @@ export function describeSweepFailure(failure: SweepFailure): string {
       return `${what} — the filesystem reported an I/O error`;
     default:
       return failure.code ? `${what} (${failure.code})` : what;
+  }
+}
+
+/**
+ * Does this path exist and is it a directory?
+ *
+ * Used to disambiguate ENOENT on `<home>/projects`. A fresh install has a
+ * `~/.claude` and no `projects/` until the first session is written, and
+ * reporting that as degraded would put a permanent warning on every new
+ * install. ENOENT counts only when the HOME itself is gone — a moved or
+ * unmounted home, which is a real gap (Codex P2 + Copilot, PR #527).
+ */
+export async function directoryExists(dir: string): Promise<boolean> {
+  try {
+    const st = await fsPromises.stat(dir);
+    return st.isDirectory();
+  } catch {
+    return false;
   }
 }

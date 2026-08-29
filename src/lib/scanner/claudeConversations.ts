@@ -55,7 +55,9 @@ import type { SessionFile } from "../adapters/types";
 import type { MinderConfig } from "../types";
 import {
   beginSweepFailureCycle,
+  endSweepFailureCycle,
   recordSweepFailure,
+  directoryExists,
 } from "@/lib/sweepFailures";
 
 export interface ConversationEntry {
@@ -1790,8 +1792,14 @@ export async function scanClaudeConversationsForProjects(
   // behind what it observed (#513).
   beginSweepFailureCycle("sessions");
   const parts: ClaudeUsageStats[] = [];
-  for (const home of homes) {
-    parts.push(await scanConversationDirs(path.join(home, "projects"), allowedDirs));
+  try {
+    for (const home of homes) {
+      parts.push(await scanConversationDirs(path.join(home, "projects"), allowedDirs));
+    }
+  } finally {
+    // See the usage sweep: published in a `finally` so a scan that threw still
+    // reports what it observed.
+    endSweepFailureCycle("sessions");
   }
   return mergeClaudeUsageStats(parts);
 }
@@ -1840,15 +1848,22 @@ async function scanConversationDirs(
     dirs = await fs.readdir(projectsDir);
   } catch (err) {
     // Not fatal — a home that cannot be listed must not take the scan down —
-    // but no longer SILENT. A fresh install legitimately has no `projects`
-    // directory; a disconnected drive, a moved home and a permissions change do
-    // not, and they were indistinguishable from it (#513).
-    recordSweepFailure({
-      path: projectsDir,
-      scope: "projects-dir",
-      code: (err as NodeJS.ErrnoException)?.code,
-      sweep: "sessions",
-    });
+    // but no longer SILENT (#513).
+    //
+    // ENOENT is ambiguous and the benign reading is the common one: a fresh
+    // install has a home and no `projects/` until the first session is
+    // written. It counts only when the HOME itself is gone (Codex P2 +
+    // Copilot, PR #527).
+    const code = (err as NodeJS.ErrnoException)?.code;
+    const home = path.dirname(projectsDir);
+    if (!(code === "ENOENT" && (await directoryExists(home)))) {
+      recordSweepFailure({
+        path: projectsDir,
+        scope: "projects-dir",
+        code,
+        sweep: "sessions",
+      });
+    }
     return aggregate;
   }
 
