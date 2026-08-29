@@ -249,6 +249,33 @@ describe("every consumer of the rebuild window is wired to it (#478)", () => {
     expect(compare).toMatch(/buildNotComparable\(/);
   });
 
+  it("invalidates the memo at both reconcile edges", async () => {
+    // The memo is a 30-second window on a question the reconcile is about to
+    // change the answer to. A request that cached "the rows agree" moments
+    // before a re-derivation starts kept every later request on the SQL path
+    // for the rest of that window — and startup ordering makes that the NORMAL
+    // case rather than a race, because the initial reconcile is deferred and a
+    // first request routinely lands ahead of it (Codex P1, PR #525).
+    //
+    // Source-level, like the wiring test above and for the same reason: what
+    // goes wrong is a MISSING CALL. Both edges are asserted, because clearing
+    // only on entry would leave the report diverted for 30 s after the rebuild
+    // finished, and clearing only on exit would not fix the reported bug at
+    // all.
+    const { readFile } = await import("node:fs/promises");
+    const src = await readFile("src/lib/db/ingest.ts", "utf-8");
+    const fn = src.slice(
+      src.indexOf("export async function reconcileAllSessions"),
+      src.indexOf("export async function reconcileAllSessions") + 2000
+    );
+    const calls = fn.match(/clearStaleDerivationMemo\(\)/g) ?? [];
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    // And one of them is in the `finally`, not two copies of the first.
+    expect(fn.lastIndexOf("clearStaleDerivationMemo()")).toBeGreaterThan(
+      fn.indexOf("} finally {")
+    );
+  });
+
   it("leaves getEngagement alone", async () => {
     // It reads raw columns only — `ts`, `role`, `text_preview`, `entrypoint`,
     // `is_sidechain` — all of which survive a re-derivation. Diverting it would
