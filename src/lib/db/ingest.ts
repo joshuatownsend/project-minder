@@ -62,6 +62,7 @@ import { discoverAllSessions, getAdapter } from "@/lib/adapters";
 import type { SessionFile } from "@/lib/adapters/types";
 import { readConfig } from "@/lib/config";
 import type { MinderConfig } from "@/lib/types";
+import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptPath";
 
 // ── Optional per-stage profiling ──────────────────────────────────────────
 // Gated on `MINDER_PROFILE_INGEST=1` so production stays at zero overhead.
@@ -621,6 +622,21 @@ async function readJsonlSession(
   options: ReadOptions = {}
 ): Promise<ReadResult | null> {
   const sessionId = path.basename(filePath, ".jsonl");
+  /**
+   * Is this file ITSELF a delegated agent's transcript? (#487)
+   *
+   * `isSidechain` means "this turn is a sidechain OF ITS PARENT". In an
+   * ordinary session that is exactly right and those turns are skipped by the
+   * primary path. In a file at `<project>/<parent>/subagents/<id>.jsonl` every
+   * entry carries the flag — sampled on a real transcript, 50 of 50 — because
+   * the whole file IS the sidechain. Skipping them all left a session with no
+   * primary turns: `turn_count` structurally zero, `text_preview` empty, and a
+   * detail page that opened successfully onto nothing.
+   *
+   * So for these files the flag is not a reason to skip. Their entries are
+   * PRIMARY for this session, which is what they are: its own conversation.
+   */
+  const isDelegatedAgentTranscript = parseSubagentParentSessionId(filePath) !== undefined;
   const canonicalDir = canonicalizeDirName(projectDirName);
   const projectSlug = projectSlugFromDirName(projectDirName);
   const fromOffset = options.fromOffset ?? 0;
@@ -985,6 +1001,13 @@ async function readJsonlSession(
           textChanged = true;
         }
       } else if (b?.type === "tool_use") {
+        // A delegated agent's calls are collected into `sidechain_tool_uses`
+        // instead, and must not ALSO enter the primary collection — they would
+        // be counted twice and would move onto the path #511 exists to move
+        // deliberately (23 `FROM tool_uses` sites read that table with no
+        // sidechain predicate). Skipped here, before the dedupe, so nothing
+        // downstream sees them at all (#487).
+        if (isDelegatedAgentTranscript) continue;
         const id = typeof b.id === "string" ? b.id : null;
         // The 22 measured exact duplicates repeat their `tool_use_id`. This is
         // where the A6 guard's real job survives the union.
@@ -1013,6 +1036,10 @@ async function readJsonlSession(
     }
 
     if (newTools.length > 0) {
+      // Not for a delegated transcript: its calls were already collected into
+      // `sidechain_tool_uses` above, and recording them here as well would both
+      // double-count them and move them onto the primary path #511 exists to
+      // move deliberately.
       const built = buildToolUses(newTools, turn.toolUses.length, open);
       turn.toolUses.push(...built);
       turn.usageTurn.toolCalls.push(...newTools.map(toToolCall));
@@ -1184,7 +1211,20 @@ async function readJsonlSession(
     // tokens/cost must fold into the usage totals. Collect them here and append
     // as rows after the primary pass; then `continue` so the primary logic below
     // is untouched (identical to the pre-A1 skip for every other purpose).
-    if (entry.isSidechain) {
+    // A delegated transcript's TOOL CALLS still go to `sidechain_tool_uses`,
+    // even though its turns are now primary (#487).
+    //
+    // #511 is explicit that moving them is a separate piece of work: 23
+    // `FROM tool_uses` sites across 11 modules read that table with no
+    // `is_sidechain` predicate, so letting these ride the primary path would
+    // shift /usage, /agents, /skills, /costs and the denial analytics as a side
+    // effect of a fix about a blank timeline. That is the silent widening this
+    // repo keeps unwinding, so the turn and the tool halves are kept apart on
+    // purpose.
+    if (entry.isSidechain && entry.type === "assistant" && isDelegatedAgentTranscript) {
+      collectSidechainTools(entry.message?.content);
+    }
+    if (entry.isSidechain && !isDelegatedAgentTranscript) {
       if (entry.type === "assistant") {
         collectSidechainTools(entry.message?.content);
         const model = entry.message?.model;
@@ -1361,8 +1401,23 @@ async function readJsonlSession(
         : undefined;
       if (messageId && openMessage) openMessages.set(messageId, openMessage);
 
-      const toolUses = buildToolUses(toolBlocks, 0, openMessage);
-      toolCallCount += toolUses.length;
+      // A delegated agent's calls go to `sidechain_tool_uses` and must not
+      // ALSO land in `tool_uses` (#487). Its TURNS become primary here — that
+      // is the whole fix — but moving its TOOL rows is #511's job: 23
+      // `FROM tool_uses` sites across 11 modules read that table with no
+      // sidechain predicate, so letting these ride along would shift /usage,
+      // /agents, /skills, /costs and the denial analytics as a side effect of
+      // a fix about a blank timeline.
+      //
+      // `toolBlocks` itself stays populated: `lastAssistantPendingIds` uses it
+      // for truncation detection, which is about what the file CONTAINS and is
+      // true regardless of which table the rows land in.
+      const primaryToolBlocks = isDelegatedAgentTranscript ? [] : toolBlocks;
+      const toolUses = buildToolUses(primaryToolBlocks, 0, openMessage);
+      // Counted from `toolBlocks`, not `primaryToolBlocks`: `tool_call_count`
+      // describes the work the session did, and a delegated agent's calls are
+      // still work it performed.
+      toolCallCount += toolBlocks.length;
 
       const usageTurn: UsageTurn = {
         timestamp,
@@ -1376,7 +1431,7 @@ async function readJsonlSession(
         cacheCreateTokens: tcc,
         cacheCreate1hTokens: tcc1h,
         cacheReadTokens: tcr,
-        toolCalls: toolBlocks.map(toToolCall),
+        toolCalls: primaryToolBlocks.map(toToolCall),
         // Cap to the same 500-char limit the file-parse path applies via
         // `extractText`. Without this, DB-ingest produces a longer
         // projection than file-parse and `selfCorrection.textHasSelfCorrection`

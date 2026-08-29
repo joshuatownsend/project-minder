@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A delegated agent's session opens onto its own conversation instead of a blank timeline** (#487). Clicking through to a subagent's transcript produced a page that loaded successfully and rendered nothing, which reads as "this agent did no work" — the opposite of the truth, and unfalsifiable from the UI.
+
+  The cause is a flag that means something different depending on which file it is in. `isSidechain` marks a turn as *a sidechain of its parent*, and both backends skipped those turns — correct in an ordinary session. But in a file at `<project>/<parent>/subagents/<id>.jsonl` **every** entry carries the flag (sampled on a real transcript: 50 of 50), because the whole file *is* the sidechain. Skipping them all left a session with no primary turns: `turn_count` structurally zero, an empty preview, and nothing to render.
+
+  Both backends now ask `parseSubagentParentSessionId` whether the FILE is a delegated transcript, and where it is, its turns are primary — which is what they are. One predicate, consulted by both, rather than each deciding from the flag alone.
+
+  **The tool calls deliberately did not move with the turns.** They still go to `sidechain_tool_uses`. Relocating them is #511's job: 23 `FROM tool_uses` sites across 11 modules read that table with no sidechain predicate, so letting them ride along would have shifted /usage, /agents, /skills, /costs and the denial analytics as a side effect of a fix about a blank page.
+
+  Three exclusions elsewhere were resting on the old zero without saying so — the sessions list, the "Claude Code Usage" card's totals, and its `modelsUsed` all filtered nested transcripts out *by accident*, via `turn_count > 0` or `is_sidechain = 0`, predicates that removed the whole file only because its turns happened to be structurally invisible. Each now states the exclusion it always meant, using the same path predicate. **Delegated transcripts remain out of the sessions list** — they are not sessions you started, and on a delegation-heavy history they would roughly double it — and stay reachable by link from the parent session, where their context actually is.
+
+  `DERIVED_VERSION` moves 22 → 23, so existing indexes re-derive these rows.
+
 ### Changed
 
 - **The session-parse cache is bounded by memory, not by entry count** (#476). `FileCache` capped itself at 25,000 entries while each slot holds one transcript's whole parsed `UsageTurn[]` — and transcript sizes span orders of magnitude, so the cap said nothing about memory. Measured on the reference corpus: 5,498 files, 2.51 GB of JSONL, with **160 files (2.4%) holding 50% of the bytes** (p50 160 KB, p99 6.7 MB, max 72 MB). Parsed turns retain **≈2.0× the source bytes** in heap, so the whole corpus parsed at once is **≈5.0 GB** — past Node's default ~4 GB old-space limit. With the cap four times larger than the corpus, nothing was evicting at all.
