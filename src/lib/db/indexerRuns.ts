@@ -236,7 +236,20 @@ export function hasMixedDerivations(db: DatabaseT.Database): boolean {
     const rows = db
       .prepare("SELECT DISTINCT derived_version FROM sessions LIMIT 2")
       .all() as Array<{ derived_version: number }>;
-    return rows.length > 1;
+    // MIXED: the rows disagree, so any aggregate over them spans two formulas.
+    if (rows.length > 1) return true;
+    // UNIFORMLY STALE still counts. `derivationVersion.ts` defines those rows
+    // as INVALIDATED — "the session is fully re-parsed even when its file mtime
+    // hasn't changed" — so serving them is serving figures this build has
+    // already declared wrong, consistent though they are with each other
+    // (Codex P2, PR #525).
+    //
+    // Directional, exactly as that file requires: "'Stale' means
+    // `stored < DERIVED_VERSION`, never `stored !== DERIVED_VERSION`." A row
+    // stamped ABOVE this build was written by one that knows more, and this
+    // build has nothing better to offer for it — so a uniformly newer index is
+    // left alone rather than diverted forever.
+    return rows.length === 1 && rows[0].derived_version < DERIVED_VERSION;
   } catch {
     // Unreadable: do not claim a rebuild. A predicate that cannot read its own
     // evidence must not be the thing that diverts every aggregate to the slower
@@ -281,17 +294,61 @@ export function hasMixedDerivations(db: DatabaseT.Database): boolean {
  * and cheaper than the three caches that were tried to avoid adding it.
  */
 export function isRebuildInProgress(db: DatabaseT.Database): boolean {
-  return hasMixedDerivations(db);
+  // Two conditions, and the second one is not redundant.
+  //
+  // `hasMixedDerivations` goes false the instant the last session transaction
+  // commits — but `reconcileAllSessions` refreshes the accumulated
+  // `daily_costs` and `category_costs` tuples AFTER that, so for the length of
+  // that tail every `derived_version` agrees while the rollups the aggregates
+  // read do not yet (Codex P1, PR #525).
+  //
+  // An OPEN `'rebuild'` run covers exactly that tail, and it lives in the
+  // database — which is the property every in-process signal lacked: the
+  // reconcile runs in `workers/ingestWorker.mjs`, whose memory the HTTP server
+  // does not share.
+  return hasMixedDerivations(db) || hasOpenRebuildRun(db);
+}
+
+/**
+ * Is a pass that found stale rows still running?
+ *
+ * Recorded by `recordOptionForSweep` when it sees staleness, and closed in
+ * `reconcileAllSessions`'s `finally` — so it spans the rollup refresh as well
+ * as the session loop.
+ *
+ * NOT a substitute for the row check. A run row says a pass is in flight; it
+ * says nothing about an index left mixed by a crash, a rollback, or a build
+ * that never re-derived at all. The row check answers those and this answers
+ * the tail; neither covers the other.
+ */
+function hasOpenRebuildRun(db: DatabaseT.Database): boolean {
+  try {
+    const row = db
+      .prepare(
+        `SELECT 1 AS ok FROM indexer_runs
+          WHERE finished_at_ms IS NULL AND kind = 'rebuild'
+          LIMIT 1`
+      )
+      .get() as { ok?: number } | undefined;
+    return !!row?.ok;
+  } catch {
+    return false;
+  }
 }
 
 export function recordOptionForSweep(
   db: DatabaseT.Database
 ): { recordRun?: IndexerRunKind } {
-  // NOTE: a `DERIVED_VERSION` rebuild is deliberately NOT recorded as a run
-  // here. It was, briefly, and review showed run bookkeeping is the wrong
-  // carrier for that question — see `isRebuildInProgress`, which asks about
-  // stale ROWS instead. Recording one per sweep also grew `indexer_runs` for as
-  // long as any row stayed stale (Copilot, PR #525).
+  // A pass that will re-derive records itself as a `'rebuild'`, so the gate
+  // stays up through the rollup refresh that follows the last session stamp —
+  // see `isRebuildInProgress`. Regardless of readiness, which stays true across
+  // a `DERIVED_VERSION` bump and would otherwise skip exactly this case.
+  //
+  // Only when one is not already open, so a rebuild spanning many 30 s sweeps
+  // adds one row rather than one per sweep (Copilot, PR #525).
+  if (hasMixedDerivations(db) && !hasOpenRebuildRun(db)) {
+    return { recordRun: "rebuild" };
+  }
   if (hasCompletedFullReconcile(db)) return {};
   // Bounded — by pruning, not by giving up. A sweep records every 30 s while
   // readiness is unestablished, which is ~2,880 rows a day if enumeration keeps
