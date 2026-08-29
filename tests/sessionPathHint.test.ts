@@ -142,3 +142,31 @@ describe("resolveSessionJsonl with an index hint (#486)", () => {
     expect(indexedPath).not.toHaveBeenCalled();
   });
 });
+
+describe("indexedSessionPath honours the backend selection (#486)", () => {
+  it("returns null under MINDER_USE_DB=0 without opening the index", async () => {
+    // `MINDER_USE_DB=0` is an explicit "do not use the index", and `getDb()`
+    // will OPEN OR CREATE the SQLite file regardless — so calling it here both
+    // ignored the selection and could answer from a database left over by an
+    // earlier DB-enabled run. A stale `file_path` from one of those points at a
+    // transcript under a Claude home since removed from config, which the walk
+    // would correctly no longer find (Codex P2, PR #526).
+    //
+    // Asserted through the CONNECTION, not the return value: a null could also
+    // mean "no row", which is what it would have returned anyway.
+    vi.resetModules();
+    const getDb = vi.fn(async () => null);
+    vi.doMock("@/lib/db/connection", () => ({ getDb }));
+
+    const previous = process.env.MINDER_USE_DB;
+    process.env.MINDER_USE_DB = "0";
+    try {
+      const { indexedSessionPath } = await import("@/lib/data/indexedSessionPath");
+      expect(await indexedSessionPath("s1")).toBeNull();
+      expect(getDb).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.MINDER_USE_DB;
+      else process.env.MINDER_USE_DB = previous;
+    }
+  });
+});

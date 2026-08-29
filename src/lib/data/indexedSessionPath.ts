@@ -1,5 +1,6 @@
 import "server-only";
 import { getDb } from "@/lib/db/connection";
+import { dbModeRequested } from "@/lib/data";
 
 /**
  * The transcript path the index recorded for a session (#486).
@@ -30,6 +31,13 @@ import { getDb } from "@/lib/db/connection";
  * that cannot be produced must not turn a working lookup into an error.
  */
 export async function indexedSessionPath(sessionId: string): Promise<string | null> {
+  // `MINDER_USE_DB=0` is an explicit "do not use the index", and `getDb()` will
+  // happily OPEN OR CREATE the SQLite file regardless — so calling it here both
+  // ignored the selection and could answer from a database left over by an
+  // earlier DB-enabled run. A stale `file_path` from one of those points at a
+  // transcript under a Claude home the user has since removed from `config`,
+  // which the walk would correctly no longer find (Codex P2, PR #526).
+  if (!dbModeRequested()) return null;
   try {
     const db = await getDb();
     if (!db) return null;

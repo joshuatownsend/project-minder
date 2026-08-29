@@ -1,8 +1,6 @@
-import path from "path";
-import os from "os";
 import { NextRequest, NextResponse } from "next/server";
 import {
-  loadSessionTurnsBySessionId,
+  loadSessionTurnsWithPath,
   getJsonlMaxMtime,
   SessionTurnsLoadError,
 } from "@/lib/usage/parser";
@@ -15,7 +13,6 @@ import type { HandoffFacts, CompactionFidelity } from "@/lib/usage/sessionHandof
 import { generateHandoffDoc } from "@/lib/usage/sessionHandoffDoc";
 import type { HandoffVerbosity } from "@/lib/usage/sessionHandoffDoc";
 import { getOrCreateRouteCache } from "@/lib/routeCache";
-import { resolveSessionJsonl } from "@/lib/usage/sessionPath";
 import { indexedSessionPath } from "@/lib/data/indexedSessionPath";
 
 const VALID_VERBOSITIES = new Set<HandoffVerbosity>([
@@ -67,9 +64,13 @@ export async function GET(
     return NextResponse.json(cached.data);
   }
 
-  let turns;
+  let loaded;
   try {
-    turns = await loadSessionTurnsBySessionId(sessionId);
+    // WITH the index hint, and keeping the path it resolved. One walk for the
+    // whole request instead of one per consumer of it (#486).
+    loaded = await loadSessionTurnsWithPath(sessionId, {
+      indexedPath: indexedSessionPath,
+    });
   } catch (err) {
     if (err instanceof SessionTurnsLoadError) {
       // eslint-disable-next-line no-console
@@ -81,9 +82,10 @@ export async function GET(
     }
     throw err;
   }
-  if (!turns) {
+  if (!loaded) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
+  const { turns, filePath: locatedPath } = loaded;
 
   const facts = extractHandoffFacts(turns);
 
@@ -94,12 +96,15 @@ export async function GET(
   // extra Claude home was never found either. Both failures are silent — the
   // read misses and fidelity is simply reported as absent, which is
   // indistinguishable from a session that was never compacted.
+  //
+  // REUSED from the loader above, not resolved a second time.
+  // `loadSessionTurnsBySessionId` has already located this transcript, so a
+  // fresh `resolveSessionJsonl` here could not remove the first walk — it would
+  // add a second one whenever the index is off, unavailable, or missing the row
+  // (Codex P2, PR #526).
   let fidelity: CompactionFidelity | null = null;
-  const located = await resolveSessionJsonl(sessionId, {
-    indexedPath: indexedSessionPath,
-  });
-  if (located) {
-    const summary = await readCompactionSummary(located.filePath);
+  if (locatedPath) {
+    const summary = await readCompactionSummary(locatedPath);
     if (summary) {
       fidelity = scoreCompactionFidelity(facts, summary);
     }
