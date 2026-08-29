@@ -108,20 +108,10 @@ type QualityChipTone = "good" | "neutral" | "warn" | "error";
 function QualityChip({
   tone,
   title,
-  srText,
   children,
 }: {
   tone: QualityChipTone;
   title: string;
-  /**
-   * Accessible text, when the visible label carries information `title` does
-   * not. Defaults to `title`, which is right for a chip whose label is a fixed
-   * piece of jargon (`compaction loop`) — but wrong for one whose label is a
-   * measured VALUE. Hiding the children then dropped the number and announced
-   * only its definition: "cache hit ratio, >70% is healthy" with no ratio
-   * (Codex review, #390).
-   */
-  srText?: string;
   children: React.ReactNode;
 }) {
   const tokens =
@@ -149,8 +139,13 @@ function QualityChip({
     // `aria-describedby` — so all three audiences the issue named reach it,
     // and the `.sr-only` duplicate of the same sentence is gone. Two copies of
     // one string is a drift waiting to happen.
+    // `content={title}`, not the old `srText ?? title`: #390 added `srText`
+    // because hiding `children` dropped a value-carrying label's number, and
+    // #391 stopped hiding them — so the prefix made a focused chip announce
+    // "75% cache, 75% cache. Cache hit ratio..." (Codex P2, round 5). The prop
+    // is removed rather than defaulted; its reason for existing is gone.
     <Tooltip
-      content={srText ?? title}
+      content={title}
       className="quality-chip"
     >
       <span
@@ -181,10 +176,9 @@ function CacheHitBadge({ ratio }: { ratio: number }) {
   return (
     <QualityChip
       tone={tone}
+      // No `srText`: the ratio reaches a screen reader as the chip's own
+      // visible label now, so repeating it in the description said it twice.
       title={definition}
-      // The value first, then what it means — the ratio is the fact this chip
-      // exists to report, and it is the one piece `title` never carried.
-      srText={`${pct}% cache. ${definition}`}
     >
       {pct}% cache
     </QualityChip>

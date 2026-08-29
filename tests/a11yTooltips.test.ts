@@ -182,17 +182,34 @@ describe("#380 — load-bearing tooltips are reachable without a mouse", () => {
     }
   });
 
-  it("announces the cache-hit value, not just its definition", async () => {
-    // The percentage lived only in `children`, which the #380 fix marked
-    // aria-hidden — so a screen reader heard "cache hit ratio, >70% is healthy"
+  it("announces the cache-hit value exactly once", async () => {
+    // #390: the percentage lived only in `children`, which the #380 fix marked
+    // aria-hidden — a screen reader heard "cache hit ratio, >70% is healthy"
     // and never the session's actual ratio. The fix that made the chip
-    // accessible removed the one number it existed to report (Codex, #390).
+    // accessible removed the one number it existed to report.
+    //
+    // #391 removed the hiding, so the value is announced as the trigger's own
+    // label. The old assertion — that the accessible text INTERPOLATES the
+    // value — then ratified a defect: it was satisfied precisely by the
+    // duplication that makes a focused chip read "75% cache, 75% cache..."
+    // (Codex P2, PR #519).
+    //
+    // Both halves are asserted, because either alone is satisfied by the
+    // other's failure: dropping the visible label passes the no-duplicate
+    // check, and restoring the prefix passes the value-is-present check.
     const src = await read("SessionsBrowser.tsx");
     const i = src.indexOf("function CacheHitBadge");
     expect(i).toBeGreaterThan(-1);
     const region = src.slice(i, i + 900);
-    // The accessible text must interpolate the value, not restate the label.
-    expect(region).toMatch(/srText=\{`\$\{pct\}% cache\./);
+    // 1. The value is still rendered as the visible, unhidden label.
+    expect(region).toMatch(/>\s*\{pct\}% cache/);
+    // 2. And it is NOT restated in the accessible description. Matching the
+    //    PROP (`srText=`), not the bare word — the region contains a comment
+    //    saying why the prop is gone, and a bare-word check would be failed by
+    //    the explanation rather than by the defect. That is the same way a
+    //    `[data-loading]` mention in a comment silently satisfied a rule in
+    //    the #445 guard.
+    expect(region).not.toMatch(/srText=/);
   });
 
   it("uses .sr-only rather than aria-label on generic spans", async () => {
