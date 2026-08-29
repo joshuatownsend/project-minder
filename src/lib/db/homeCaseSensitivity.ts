@@ -39,12 +39,19 @@ import { normalizePathKey } from "@/lib/platform";
  * a flipped case. If the flipped name resolves to the same inode, the volume
  * is case-insensitive.
  *
- * Comparing INODES, not merely "did the stat succeed": on a case-sensitive
- * volume that happens to contain both `Foo` and `foo`, the flipped name
- * resolves fine and would read as case-insensitive. Two different directory
- * entries have different inodes; one entry reached two ways has one.
- * (Windows has no meaningful `ino`, but Windows never reaches this code — the
- * `X--` encoding is folded on its own shape.)
+ * The verdict rests on the DIRECTORY LISTING, not on inodes. `readdir` already
+ * gave the real entries; if a flipped spelling is not among them and `stat`
+ * resolves it anyway, the filesystem resolved it case-insensitively. That is
+ * the whole inference, and it holds on every platform.
+ *
+ * An earlier version compared `Stats.ino` instead, to handle a case-sensitive
+ * volume holding both `Foo` and `foo` — but `ino` is 0 on some filesystems
+ * (Windows among them), which made the comparison report "case-sensitive" for
+ * every volume that does not populate it, including case-INsensitive ones
+ * (Copilot, PR #523). The both-spellings-exist case is already excluded by the
+ * listing check above, so the inode comparison was carrying a case that could
+ * not reach it while silently mis-answering ones that could. `ino` is now used
+ * only to CORROBORATE, and only when both sides report a non-zero value.
  *
  * ## Unknown is a real answer
  *
@@ -111,24 +118,38 @@ export async function probeCaseSensitivity(dir: string): Promise<CaseSensitivity
     // both exist regardless of the volume's behaviour.
     if (present.has(flipped)) continue;
 
+    let alias: Awaited<ReturnType<typeof fs.stat>>;
     try {
-      const [original, alias] = await Promise.all([
-        fs.stat(path.join(dir, name)),
-        fs.stat(path.join(dir, flipped)),
-      ]);
-      // Same entry reached two ways → the volume ignores case.
-      return !(original.ino === alias.ino && original.ino !== 0);
-    } catch {
-      // ENOENT on the flipped name is the case-SENSITIVE answer, and it is the
-      // common one on Linux. Any other error (EACCES, a vanished entry) is
-      // indistinguishable here, so try the next entry rather than concluding.
-      const err = await fs
-        .stat(path.join(dir, name))
-        .then(() => "flipped-missing" as const)
-        .catch(() => "original-missing" as const);
-      if (err === "flipped-missing") return true;
+      alias = await fs.stat(path.join(dir, flipped));
+    } catch (e) {
+      // ENOENT on the flipped name IS the case-sensitive answer, and it is the
+      // common one on Linux.
+      //
+      // Anything else — EACCES, EIO on a network-mounted home, an entry that
+      // vanished between the readdir and the stat — says nothing about case,
+      // so it moves to the next entry. Reading every failure as ENOENT is what
+      // the first version did, and it would classify a flaky network home as
+      // case-sensitive on a transient error (Codex P2, PR #523).
+      if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return true;
       continue;
     }
+
+    // The flipped spelling is not in the listing, yet it resolves. The
+    // filesystem ignored case.
+    let original: Awaited<ReturnType<typeof fs.stat>> | null = null;
+    try {
+      original = await fs.stat(path.join(dir, name));
+    } catch {
+      // The entry went away underneath us; this attempt proves nothing.
+      continue;
+    }
+    // Corroborate with inodes WHEN THEY EXIST. Where both are non-zero and
+    // disagree, two distinct entries are involved and the listing check missed
+    // it — refuse to answer from this entry rather than answer wrongly.
+    if (original.ino !== 0 && alias.ino !== 0 && original.ino !== alias.ino) {
+      continue;
+    }
+    return false;
   }
 
   return null;

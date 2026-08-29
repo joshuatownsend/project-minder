@@ -870,3 +870,27 @@ CREATE TABLE project_grade_snapshots (
   created_at_ms  INTEGER NOT NULL,
   PRIMARY KEY (project_slug, snapshot_date)
 ) WITHOUT ROWID;
+-- ─── home_properties ──────────────────────────────────────────────────────
+-- Per-Claude-home facts about the FILESYSTEM the home lives on, recorded at
+-- ingest because they are not derivable from anything the index stores.
+--
+-- `case_sensitive` decides whether two spellings of one POSIX project
+-- directory are the same project (#416). A macOS volume is case-insensitive by
+-- default, so `-Users-me-Dev-app` and `-users-me-dev-app` are one directory —
+-- while on Linux `/home/me/Dev` and `/home/me/dev` are two. The database holds
+-- an encoded path string and nothing about the volume that produced it, and
+-- that volume may be on another machine or since deleted, so the question
+-- cannot be answered at query time.
+--
+-- NULLABLE on purpose: NULL means "not determined" — an empty home, an
+-- unreadable one, a volume that has gone away — and reads as "do not fold",
+-- which is the pre-#416 behaviour. Over-merging silently sums two real
+-- projects into one number; under-merging shows one project as two visible
+-- rows. Only the second is recoverable by looking at it.
+--
+-- Mirrors migration v28.
+CREATE TABLE home_properties (
+  home_key       TEXT PRIMARY KEY,
+  case_sensitive INTEGER,
+  probed_at      TEXT NOT NULL
+);
