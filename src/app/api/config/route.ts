@@ -15,7 +15,7 @@ import { efficiencyGradeCache } from "@/lib/efficiencyGradeCache";
 import { invalidateClaudeUsageCache } from "@/lib/server/queries/stats";
 import { invalidateSessionCategoryCounts } from "@/lib/memory/seedCategoryCounts";
 import { validateNotificationRules } from "@/lib/notifications/rules/validate";
-import { homeDedupeKey } from "@/lib/claudeHome";
+import { homeDedupeKey, getClaudeHomes } from "@/lib/claudeHome";
 import {
   isShortcutActionId,
   isValidCombo,
@@ -112,21 +112,30 @@ export async function PATCH(request: NextRequest) {
     // Settings save posts every field, so treating any `claudeHomes` in the
     // body as a change would clear the record on every unrelated save.
     //
-    // And compared as a SET of CANONICAL keys — the same `homeDedupeKey` that
-    // decides which homes actually get enumerated.
+    // Compared as the set of homes that would ACTUALLY BE SWEPT — by running
+    // `getClaudeHomes`, the function that decides them, over both configs.
     //
-    // Two narrowings ago this compared index-wise, so merely reordering two
-    // homes cleared the record; order decides which home wins a duplicate
-    // session id, not which directories are swept. Comparing raw strings as a
-    // set fixed that and left the other half: a trailing separator, or the
-    // `wsl$` / `wsl.localhost` spelling of one UNC path, differs as a string
-    // while collapsing to a single tree in `getClaudeHomes`. Either edit would
-    // have erased a live unreadable-directory diagnostic without changing
-    // anything that actually gets swept. (Copilot, then Codex, PR #527.)
-    const keys = (list: string[]) =>
-      new Set(list.map((h) => h.trim()).filter(Boolean).map(homeDedupeKey));
-    const before = keys((await readConfig()).claudeHomes ?? []);
-    const after = keys(homes);
+    // Three narrower attempts each missed a different way for the config to
+    // change while the swept set does not, and all three were the same mistake:
+    // approximating a predicate that already exists.
+    //
+    //   1. Index-wise comparison — a mere reorder cleared the record. Order
+    //      decides which home wins a duplicate session id, not what is swept.
+    //   2. Raw strings as a set — a trailing separator, or the `wsl$` vs
+    //      `wsl.localhost` spelling of one UNC path, differs as a string while
+    //      collapsing to one tree.
+    //   3. `homeDedupeKey` over `config.claudeHomes` alone — that list omits
+    //      the implicit primary `~/.claude`, so adding an entry equal to it
+    //      changed the set while `getClaudeHomes` deduplicated it away.
+    //
+    // Asking `getClaudeHomes` ends the class rather than the third instance:
+    // whatever it decides IS the swept set, including any rule added to it
+    // later. (Copilot, then Codex x2, PR #527.)
+    const currentConfig = await readConfig();
+    const effective = (c: MinderConfig) =>
+      new Set(getClaudeHomes(c).map(homeDedupeKey));
+    const before = effective(currentConfig);
+    const after = effective({ ...currentConfig, claudeHomes: homes });
     claudeHomePathsChanged =
       before.size !== after.size || [...after].some((k) => !before.has(k));
     patches.push((c) => { c.claudeHomes = homes; });

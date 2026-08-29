@@ -176,14 +176,14 @@ describe("the record is cleared by corpus changes only", () => {
     // present. A Settings save posts every field, so `Array.isArray(body.claudeHomes)`
     // alone would clear the record on every unrelated save — the same defect
     // one level down.
-    // As a SET of CANONICAL keys. Order decides which home wins a duplicate
-    // session id, not which directories get enumerated, so an index-wise
-    // comparison cleared a live diagnostic on a mere reorder — and comparing
-    // raw strings left the other half, where a trailing separator or the
-    // `wsl$` / `wsl.localhost` spelling of one UNC path differs as a string
-    // while collapsing to one tree. (Copilot, then Codex, PR #527.)
+    // Compared as the set of homes that would ACTUALLY BE SWEPT, by running
+    // `getClaudeHomes` over both configs. Three narrower attempts each missed a
+    // different way for the config to change while the swept set does not — a
+    // reorder, an equivalent spelling, an entry redundant with the implicit
+    // primary — and all three were the same mistake: approximating a predicate
+    // that already exists. (Copilot, then Codex x2, PR #527.)
     expect(route).toMatch(/claudeHomePathsChanged\s*=\s*\n?\s*before\.size !== after\.size/);
-    expect(route).toMatch(/\.map\(homeDedupeKey\)/);
+    expect(route).toMatch(/new Set\(getClaudeHomes\(c\)\.map\(homeDedupeKey\)\)/);
   });
 });
 
@@ -719,5 +719,35 @@ describe("round 11 — equivalent spellings are not a corpus change", () => {
     expect(homeDedupeKey("\\\\wsl$\\Ubuntu\\home\\me\\.claude")).not.toBe(
       homeDedupeKey("\\\\wsl$\\Debian\\home\\me\\.claude")
     );
+  });
+});
+
+describe("round 12 — an entry redundant with the primary home is not a change", () => {
+  it("treats the effective swept set as the thing that matters", async () => {
+    // `config.claudeHomes` omits the implicit primary `~/.claude`, so adding an
+    // entry equal to it changed that list while `getClaudeHomes` deduplicated
+    // it straight back out — clearing a live unreadable-directory diagnostic
+    // over a config edit that swept exactly the same directories.
+    // (Codex P2, PR #527.)
+    //
+    // Asserted on `getClaudeHomes`, which is what the route now asks. The route
+    // itself is a Next module this suite cannot execute; the structural guard
+    // above pins that it asks.
+    const { getClaudeHomes, homeDedupeKey, getPrimaryClaudeHome } = await import(
+      "@/lib/claudeHome"
+    );
+    const base = { claudeHomes: [] } as unknown as Parameters<typeof getClaudeHomes>[0];
+    const keys = (extra: string[]) =>
+      new Set(getClaudeHomes({ ...base, claudeHomes: extra }).map(homeDedupeKey));
+
+    // Naming the primary explicitly changes the config and not the corpus.
+    expect(keys([getPrimaryClaudeHome()])).toEqual(keys([]));
+    // ...including spelled with a trailing separator, which is the previous
+    // round's equivalence arriving through this one.
+    expect(keys([`${getPrimaryClaudeHome()}\\`])).toEqual(keys([]));
+
+    // The counterpart: a genuinely new home IS a change, or the comparison
+    // would never fire and the record would never clear.
+    expect(keys(["D:\\elsewhere\\.claude"])).not.toEqual(keys([]));
   });
 });
