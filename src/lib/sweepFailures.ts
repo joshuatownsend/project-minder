@@ -1,3 +1,4 @@
+import path from "path";
 import { promises as fsPromises } from "fs";
 
 /**
@@ -46,7 +47,17 @@ import { promises as fsPromises } from "fs";
 
 /** Which enumeration failed. The banner says different things for each. */
 export type SweepFailureScope =
-  /** `<home>/projects` could not be listed — the whole home is missing. */
+  /**
+   * `<home>/projects` could not be listed.
+   *
+   * NOT "the whole home is missing", which is only one of the causes and the
+   * least likely to be the one a reader is looking at: permissions on the
+   * directory, a `projects` path that is a plain file, a link pointing at a
+   * drive that is not connected, or an I/O error all land here too. Naming one
+   * cause in the type sends someone troubleshooting the wrong thing —
+   * `describeSweepFailure` exists precisely because the errno is what
+   * distinguishes them. (Copilot, PR #527.)
+   */
   | "projects-dir"
   /** One encoded project directory inside it could not be listed. */
   | "project-dir";
@@ -469,6 +480,67 @@ export function getSweepFailureTotal(): number {
     beyondTracking += Math.max(0, r.total - r.seen.size);
   }
   return keys.size + beyondTracking;
+}
+
+
+/**
+ * Forget the diagnostics for homes that have LEFT the swept set.
+ *
+ * `clearSweepFailures` wipes everything, and for a config change that is too
+ * blunt: with two homes configured and one still unreadable, adding or removing
+ * an unrelated third erased the surviving home's live failure as well. The
+ * endpoint then reported `complete: true` until a full file sweep happened to
+ * run again — which on the normal DB-backed path may be never — even though
+ * nothing was ever observed recovering. (Codex P2, PR #527.)
+ *
+ * The generation still bumps, because a sweep in flight was enumerating the OLD
+ * home set and must not publish into the new one. What changes is that the
+ * PUBLISHED results are pruned rather than dropped: an entry survives unless
+ * its path lies under a home that is gone.
+ *
+ * Prefix-matched on `<home>/projects`, which is the shape both scopes share —
+ * `projects-dir` failures ARE that path and `project-dir` failures sit beneath
+ * it. Compared case-insensitively because Windows paths are, and this is the
+ * platform the corpus usually lives on.
+ */
+export function forgetSweepFailuresUnder(removedHomes: string[]): void {
+  // Bumped first, and unconditionally: even with nothing to prune, a sweep
+  // opened under the old configuration must not publish into the new one.
+  globalForSweep.__minderSweepGeneration = generation() + 1;
+  globalForSweep.__minderSweepPending = undefined;
+  globalForSweep.__minderSweepDepth = undefined;
+
+  const prefixes = removedHomes
+    .map((h) => h.trim())
+    .filter(Boolean)
+    .map((h) => `${h.replace(/[\\/]+$/, "")}${path.sep}projects`.toLowerCase());
+  if (prefixes.length === 0) return;
+
+  const under = (p: string): boolean => {
+    const lower = p.toLowerCase();
+    return prefixes.some((pre) => lower === pre || lower.startsWith(pre + path.sep));
+  };
+
+  for (const [name, result] of published()) {
+    const kept = result.items.filter((f) => !under(f.path));
+    const seen = new Map(result.seen);
+    let removed = 0;
+    for (const [key, at] of result.seen) {
+      const idx = key.indexOf("|");
+      if (idx >= 0 && under(key.slice(idx + 1))) {
+        seen.delete(key);
+        removed++;
+      }
+      void at;
+    }
+    if (removed === 0 && kept.length === result.items.length) continue;
+    published().set(name, {
+      ...result,
+      items: kept,
+      seen,
+      total: Math.max(kept.length, result.total - removed),
+    });
+  }
 }
 
 /**

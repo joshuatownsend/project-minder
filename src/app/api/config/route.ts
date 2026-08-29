@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readConfig, mutateConfig } from "@/lib/config";
 import { invalidateCache } from "@/lib/cache";
-import { clearSweepFailures } from "@/lib/sweepFailures";
+import { forgetSweepFailuresUnder } from "@/lib/sweepFailures";
 import { invalidateClaudeConfigRouteCache } from "@/app/api/claude-config/route";
 import { disposeAllRouteCaches } from "@/lib/routeCache";
 import { setProjectStatus } from "@/lib/server/mutations/projectStatus";
@@ -82,6 +82,8 @@ export async function PATCH(request: NextRequest) {
    * can make a recorded path stop being swept. (Codex P2, PR #527.)
    */
   let claudeHomePathsChanged = false;
+  /** The homes that left the effective set, for the targeted diagnostic reset. */
+  let removedClaudeHomes: string[] = [];
   const patches: Patch[] = [];
 
   // S5 — widening devRoots is a sensitive write (it gates validateProjectPath /
@@ -132,12 +134,21 @@ export async function PATCH(request: NextRequest) {
     // whatever it decides IS the swept set, including any rule added to it
     // later. (Copilot, then Codex x2, PR #527.)
     const currentConfig = await readConfig();
-    const effective = (c: MinderConfig) =>
-      new Set(getClaudeHomes(c).map(homeDedupeKey));
+    const effective = (c: MinderConfig) => {
+      const out = new Map<string, string>();
+      for (const h of getClaudeHomes(c)) out.set(homeDedupeKey(h), h);
+      return out;
+    };
     const before = effective(currentConfig);
     const after = effective({ ...currentConfig, claudeHomes: homes });
     claudeHomePathsChanged =
-      before.size !== after.size || [...after].some((k) => !before.has(k));
+      before.size !== after.size || [...after.keys()].some((k) => !before.has(k));
+    // WHICH homes left, not merely that the set moved. Wiping every diagnostic
+    // on any change erased a still-valid failure for a home that is still
+    // configured and still unreadable — see `forgetSweepFailuresUnder`.
+    removedClaudeHomes = [...before]
+      .filter(([k]) => !after.has(k))
+      .map(([, home]) => home);
     patches.push((c) => { c.claudeHomes = homes; });
     corpusShapeChanged = true;
   }
@@ -550,7 +561,17 @@ export async function PATCH(request: NextRequest) {
   // which directories get enumerated, so clearing on them erased a live
   // diagnostic about a directory that is still unreadable.
   // (Codex P2, PR #527, rounds 4 and 9.)
-  if (claudeHomePathsChanged) clearSweepFailures();
+  // Targeted, not wholesale. `clearSweepFailures` drops EVERY diagnostic, and
+  // for a config change that is too blunt: with two homes configured and one
+  // still unreadable, adding or removing an unrelated third erased the
+  // surviving home's live failure too, and the endpoint then reported
+  // `complete: true` until a full file sweep happened to run again — which on
+  // the normal DB-backed path may be never. (Codex P2, PR #527.)
+  //
+  // Called whenever the path set moved, including when nothing was REMOVED: the
+  // generation bump inside it is what stops a sweep opened under the old
+  // configuration from publishing into the new one.
+  if (claudeHomePathsChanged) forgetSweepFailuresUnder(removedClaudeHomes);
   // Grades and the portfolio usage slot depend on the file-parse sweep; drop
   // both so the next request recomputes over the new corpus instead of serving
   // the old data for the rest of their TTLs (5 min / 10 min).

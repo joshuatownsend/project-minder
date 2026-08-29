@@ -170,7 +170,9 @@ describe("the record is cleared by corpus changes only", () => {
     // changes which directories get enumerated, so clearing on them erased a
     // live diagnostic about a directory that is still unreadable.
     // (Codex P2, PR #527, round 9.)
-    expect(route).toMatch(/if \(claudeHomePathsChanged\) clearSweepFailures\(\);/);
+    expect(route).toMatch(
+      /if \(claudeHomePathsChanged\) forgetSweepFailuresUnder\(removedClaudeHomes\);/
+    );
 
     // And the narrower flag is set from a COMPARISON, not from the key being
     // present. A Settings save posts every field, so `Array.isArray(body.claudeHomes)`
@@ -183,7 +185,11 @@ describe("the record is cleared by corpus changes only", () => {
     // primary — and all three were the same mistake: approximating a predicate
     // that already exists. (Copilot, then Codex x2, PR #527.)
     expect(route).toMatch(/claudeHomePathsChanged\s*=\s*\n?\s*before\.size !== after\.size/);
-    expect(route).toMatch(/new Set\(getClaudeHomes\(c\)\.map\(homeDedupeKey\)\)/);
+    // Asserts the two authorities are consulted, not the container they are
+    // collected into — that became a Map when the reset needed to know WHICH
+    // homes left, and pinning the literal would have broken on a change that
+    // preserved the property.
+    expect(route).toMatch(/for \(const h of getClaudeHomes\(c\)\) out\.set\(homeDedupeKey\(h\), h\)/);
   });
 });
 
@@ -893,6 +899,76 @@ describe("a dangling subagents link is not an absent one", () => {
     const { getSweepFailures } = await import("@/lib/sweepFailures");
 
     await streamAllSessions(async () => {});
+    expect(getSweepFailures()).toHaveLength(0);
+  });
+});
+
+describe("a config change forgets only the homes that left", () => {
+  it("keeps a still-configured home's live failure", async () => {
+    // With two homes configured and one still unreadable, adding or removing an
+    // unrelated third wiped the surviving home's failure too — and the endpoint
+    // then reported `complete: true` until a full file sweep happened to run
+    // again, which on the normal DB-backed path may be never.
+    // (Codex P2, PR #527.)
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      getSweepFailures,
+      getSweepFailureTotal,
+      forgetSweepFailuresUnder,
+    } = await import("@/lib/sweepFailures");
+
+    const staying = path.join(tmpHome, "home-a", ".claude");
+    const leaving = path.join(tmpHome, "home-b", ".claude");
+
+    const t = beginSweepFailureCycle("usage");
+    recordSweepFailure(
+      { path: path.join(staying, "projects"), scope: "projects-dir", sweep: "usage" },
+      t
+    );
+    recordSweepFailure(
+      { path: path.join(leaving, "projects"), scope: "projects-dir", sweep: "usage" },
+      t
+    );
+    // A per-project failure BENEATH the departing home goes with it.
+    recordSweepFailure(
+      { path: path.join(leaving, "projects", "-p"), scope: "project-dir", sweep: "usage" },
+      t
+    );
+    endSweepFailureCycle("usage", t);
+    expect(getSweepFailureTotal()).toBe(3);
+
+    forgetSweepFailuresUnder([leaving]);
+
+    // The departing home and everything under it are gone; the home that is
+    // still configured and still unreadable is still reported.
+    expect(getSweepFailures().map((f) => f.path)).toEqual([
+      path.join(staying, "projects"),
+    ]);
+    // And the count came down with the detail, rather than leaving the banner
+    // claiming three locations while naming one.
+    expect(getSweepFailureTotal()).toBe(1);
+  });
+
+  it("still invalidates an in-flight sweep even when nothing was removed", async () => {
+    // Adding a home removes nothing, but a sweep already running was
+    // enumerating the OLD set and must not publish into the new one — so the
+    // generation bump happens regardless of whether there is anything to prune.
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      getSweepFailures,
+      forgetSweepFailuresUnder,
+    } = await import("@/lib/sweepFailures");
+
+    const stale = beginSweepFailureCycle("usage");
+    forgetSweepFailuresUnder([]);
+
+    recordSweepFailure({ path: "/x/projects", scope: "projects-dir", sweep: "usage" }, stale);
+    endSweepFailureCycle("usage", stale);
+
     expect(getSweepFailures()).toHaveLength(0);
   });
 });
