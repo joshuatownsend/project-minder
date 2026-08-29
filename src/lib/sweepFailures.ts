@@ -26,10 +26,18 @@ import { promises as fsPromises } from "fs";
  *
  * ## Scope, and why it is per sweep
  *
- * Each sweep clears its own entries when it starts, so the list always
+ * Each sweep replaces its own entries when it FINISHES, so the list always
  * describes the most recent completed pass rather than accumulating a history
  * of transient faults. A home that failed an hour ago and has since recovered
  * must not still be reported as degraded.
+ *
+ * On finishing, not on starting, and the distinction is load-bearing: a cycle
+ * collects into a pending list while the previous published result stays
+ * readable, so a poll landing mid-sweep sees the last complete answer rather
+ * than an empty one that reads as "all clear" and then flickers back. An
+ * earlier version of this paragraph said "clears its own entries when it
+ * starts", which describes exactly the behaviour the tests now guard against.
+ * (Copilot, PR #527.)
  *
  * On `globalThis` for the usual reason: the sweeps run on their own schedules
  * across HMR module reloads, and a fresh module instance holding an empty list
@@ -218,13 +226,13 @@ export function beginSweepFailureCycle(sweep: SweepName): number {
  * most relevant ones, since a failure severe enough to stop the sweep is
  * exactly what a reader needs to see.
  */
-export function endSweepFailureCycle(sweep: SweepName, token?: number): void {
+export function endSweepFailureCycle(sweep: SweepName, token: number): void {
   // A caller whose generation has been superseded touches NOTHING — not the
   // depth counter, not the pending result. It was invalidated by a config
   // change mid-sweep, and whatever is in flight now belongs to the replacement
   // sweep that started afterwards. Decrementing the depth here is how the old
   // caller used to publish the new cycle's half-finished result as final.
-  if (token !== undefined && token !== generation()) return;
+  if (token !== generation()) return;
   const d = depth().get(sweep) ?? 0;
   if (d === 0) return; // no cycle was started; leave the last result alone
   const next = d - 1;
@@ -328,9 +336,9 @@ function retireVerified(sweep: SweepName, verified: Map<string, number>): void {
 export function recordSweepSuccess(
   sweep: SweepName,
   projectsDir: string,
-  token?: number
+  token: number
 ): void {
-  if (token !== undefined && token !== generation()) return;
+  if (token !== generation()) return;
   pending().get(sweep)?.verified.set(projectsDir, observedAt());
 }
 
@@ -361,14 +369,14 @@ export function sweepFailureKey(failure: SweepFailure): string {
   return `${failure.scope}|${failure.path}`;
 }
 
-export function recordSweepFailure(failure: SweepFailure, token?: number): void {
+export function recordSweepFailure(failure: SweepFailure, token: number): void {
   // A caller invalidated by a mid-sweep `clearSweepFailures()` must not write
   // into the replacement cycle either. Guarding only `end` was half a fix: the
   // stale sweep goes on running and goes on finding failures, and those landed
   // in the new cycle's pending result by sweep NAME — so paths from the old
   // configuration were published by the replacement, which is the very thing
   // the generation check was added to stop. (Codex P2, PR #527.)
-  if (token !== undefined && token !== generation()) return;
+  if (token !== generation()) return;
   const result = pending().get(failure.sweep);
   if (!result) {
     // No cycle started — a sweep that records without `beginSweepFailureCycle`

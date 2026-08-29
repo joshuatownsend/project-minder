@@ -261,11 +261,11 @@ describe("round 5 — the collector tells the truth about what failed", () => {
     const same = { path: "/home/me/.claude/projects", scope: "projects-dir" as const };
 
     const t1 = beginSweepFailureCycle("usage");
-    recordSweepFailure({ ...same, sweep: "usage" });
+    recordSweepFailure({ ...same, sweep: "usage" }, t1);
     endSweepFailureCycle("usage", t1);
 
     const t2 = beginSweepFailureCycle("sessions");
-    recordSweepFailure({ ...same, sweep: "sessions" });
+    recordSweepFailure({ ...same, sweep: "sessions" }, t2);
     endSweepFailureCycle("sessions", t2);
 
     expect(getSweepFailures()).toHaveLength(1);
@@ -282,9 +282,9 @@ describe("round 5 — the collector tells the truth about what failed", () => {
     } = await import("@/lib/sweepFailures");
 
     const t = beginSweepFailureCycle("usage");
-    recordSweepFailure({ path: "/a", scope: "project-dir", sweep: "usage" });
-    recordSweepFailure({ path: "/a", scope: "project-dir", sweep: "usage" });
-    recordSweepFailure({ path: "/b", scope: "project-dir", sweep: "usage" });
+    recordSweepFailure({ path: "/a", scope: "project-dir", sweep: "usage" }, t);
+    recordSweepFailure({ path: "/a", scope: "project-dir", sweep: "usage" }, t);
+    recordSweepFailure({ path: "/b", scope: "project-dir", sweep: "usage" }, t);
     endSweepFailureCycle("usage", t);
 
     // Two locations, three attempts.
@@ -308,14 +308,14 @@ describe("round 5 — the collector tells the truth about what failed", () => {
 
     // The sweep that is about to be invalidated.
     const stale = beginSweepFailureCycle("usage");
-    recordSweepFailure({ path: "/removed-home", scope: "projects-dir", sweep: "usage" });
+    recordSweepFailure({ path: "/removed-home", scope: "projects-dir", sweep: "usage" }, stale);
 
     // The user removes the unreachable home.
     clear();
 
     // A replacement sweep starts and is still running.
     const fresh = beginSweepFailureCycle("usage");
-    recordSweepFailure({ path: "/still-broken", scope: "projects-dir", sweep: "usage" });
+    recordSweepFailure({ path: "/still-broken", scope: "projects-dir", sweep: "usage" }, fresh);
 
     // The OLD caller finishes. It must change nothing.
     endSweepFailureCycle("usage", stale);
@@ -847,5 +847,52 @@ describe("an ENOENT message names both of its causes", () => {
     expect(msg).toContain("home may be gone");
     expect(msg).toContain("not connected");
     expect(msg).not.toContain("no longer exists");
+  });
+});
+
+describe("a dangling subagents link is not an absent one", () => {
+  it.skipIf(!symlinkAvailable)("reports it instead of suppressing it", async () => {
+    // The home-level ENOENT already asked `pathEntryExists`; the NESTED
+    // `subagents/` check did not, so a `subagents` entry pointing at a
+    // disconnected drive was suppressed as "no subagents directory here" and
+    // the sweep published a complete result over transcripts it never read.
+    // (Codex P2, PR #527.)
+    const projectDir = path.join(tmpHome, ".claude", "projects", "-home-me-dev-app");
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(path.join(projectDir, "s1.jsonl"), "{}\n");
+    // Under a SESSION directory, which is where the reader looks:
+    // `<project>/<session-id>/subagents`. My first fixture put it directly
+    // under the project dir, so the loop never reached it and the test failed
+    // on its own arrangement rather than on the code.
+    const sessionDir = path.join(projectDir, "cafe1234");
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.symlink(
+      path.join(tmpHome, "disconnected-drive", "subagents"),
+      path.join(sessionDir, "subagents"),
+      "dir"
+    );
+
+    const { streamAllSessions } = await import("@/lib/usage/parser");
+    const { getSweepFailures } = await import("@/lib/sweepFailures");
+
+    await streamAllSessions(async () => {});
+
+    const failures = getSweepFailures().filter((f) => f.path.includes("subagents"));
+    expect(failures.length).toBeGreaterThan(0);
+  });
+
+  it("still says nothing about a project with no subagents directory", async () => {
+    // The common case by far, and the reason the fix is `lstat` rather than
+    // "report every nested ENOENT": most projects have never spawned an agent,
+    // and warning on each would bury the real faults.
+    const projectDir = path.join(tmpHome, ".claude", "projects", "-home-me-dev-app");
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(path.join(projectDir, "s1.jsonl"), "{}\n");
+
+    const { streamAllSessions } = await import("@/lib/usage/parser");
+    const { getSweepFailures } = await import("@/lib/sweepFailures");
+
+    await streamAllSessions(async () => {});
+    expect(getSweepFailures()).toHaveLength(0);
   });
 });

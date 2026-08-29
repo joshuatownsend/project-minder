@@ -759,9 +759,17 @@ type SessionVisitor = (sessionId: string, turns: UsageTurn[]) => void | Promise<
 async function sweepSessions(visit: SessionVisitor): Promise<void> {
   const cache = getFileCache();
   // #513: the failures below used to be caught and discarded, so the corpus
-  // shrank silently and `complete: true` was still reported. Cleared at the
-  // START, so a pass that throws part way through still leaves behind what it
-  // observed.
+  // shrank silently and `complete: true` was still reported.
+  //
+  // The cycle collects into a PENDING list and publishes in the `finally` —
+  // it does not clear anything at the start. That is the whole point of the
+  // double buffer: the previous result stays readable while this sweep runs,
+  // so a poll landing mid-sweep sees the last complete answer instead of an
+  // empty one that reads as "all clear". Publishing from a `finally` is what
+  // makes a pass that throws part way through still report what it observed.
+  // (An earlier version of this comment said "cleared at the START", which
+  // described the flickering behaviour this PR exists to remove — Copilot,
+  // PR #527.)
   // Sweep every readable Claude home (primary + config.claudeHomes) — a home
   // inside a stopped WSL distro is excluded for the cycle rather than woken.
   // Each subdir keeps its own home so file paths resolve into the right tree.
@@ -972,8 +980,19 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
               // transcripts, and their tokens and cost, drop out of every
               // aggregate exactly as a missing project directory's would
               // (Codex P2, PR #527).
+              // ENOENT is ambiguous here exactly as it is at the home level,
+              // and for the same reason: no `subagents/` directory is the
+              // common case and reads as absence, but a `subagents` ENTRY that
+              // is a symlink to a disconnected drive fails `readdir` with the
+              // same code while the transcripts it points at are genuinely
+              // missing from the sweep. Suppressing every ENOENT published a
+              // complete result over them. The other two sites in this file
+              // already ask `pathEntryExists`; this one did not.
+              // (Codex P2, PR #527.)
               const code = (err as NodeJS.ErrnoException)?.code;
-              if (code !== "ENOENT") {
+              const benignlyAbsent =
+                code === "ENOENT" && !(await pathEntryExists(subagentsDir));
+              if (!benignlyAbsent) {
                 recordSweepFailure(
                   {
                     path: subagentsDir,

@@ -96,6 +96,12 @@ export async function GET(): Promise<NextResponse> {
      */
     degraded,
     /**
+     * How many enumerations failed in total. `degraded` is capped, so on a
+     * broad fault this is larger — and that is the case where understating it
+     * would matter most.
+     */
+    degradedTotal,
+    /**
      * True when every configured home answered AND nothing failed to enumerate.
      *
      * `unavailable.length === 0` alone was the UI's one-bit question and it was
@@ -103,12 +109,6 @@ export async function GET(): Promise<NextResponse> {
      * short by a project directory nobody could list reported `complete: true`
      * (#513).
      */
-    /**
-     * How many enumerations failed in total. `degraded` is capped, so on a
-     * broad fault this is larger — and that is the case where understating it
-     * would matter most.
-     */
-    degradedTotal,
     complete: unavailable.length === 0 && degradedTotal === 0,
   });
   // Same convention as `X-Minder-Backend`: the fact rides a header too, so a

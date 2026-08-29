@@ -35,13 +35,13 @@ describe("the collector", () => {
   it("keeps only the most recent COMPLETED cycle per sweep", () => {
     // A home that failed an hour ago and has since recovered must not still be
     // reported — but the replacement happens when the new cycle FINISHES.
-    beginSweepFailureCycle("usage");
-    recordSweepFailure({ path: "/a", scope: "projects-dir", sweep: "usage" });
-    endSweepFailureCycle("usage");
+    const tok1 = beginSweepFailureCycle("usage");
+    recordSweepFailure({ path: "/a", scope: "projects-dir", sweep: "usage" }, tok1);
+    endSweepFailureCycle("usage", tok1);
     expect(getSweepFailures().map((f) => f.path)).toEqual(["/a"]);
 
-    beginSweepFailureCycle("usage");
-    endSweepFailureCycle("usage");
+    const tok2 = beginSweepFailureCycle("usage");
+    endSweepFailureCycle("usage", tok2);
     expect(getSweepFailures()).toHaveLength(0);
   });
 
@@ -50,16 +50,16 @@ describe("the collector", () => {
     // mid-way saw an empty list — reporting `complete: true` and dropping the
     // banner for a fault that was still there, then bringing it back when the
     // sweep finished (Codex P2, PR #527).
-    beginSweepFailureCycle("usage");
-    recordSweepFailure({ path: "/still-broken", scope: "projects-dir", sweep: "usage" });
-    endSweepFailureCycle("usage");
+    const tok3 = beginSweepFailureCycle("usage");
+    recordSweepFailure({ path: "/still-broken", scope: "projects-dir", sweep: "usage" }, tok3);
+    endSweepFailureCycle("usage", tok3);
 
-    beginSweepFailureCycle("usage");
+    const tok4 = beginSweepFailureCycle("usage");
     // Mid-sweep: the last known answer, not an empty one.
     expect(getSweepFailures().map((f) => f.path)).toEqual(["/still-broken"]);
 
-    recordSweepFailure({ path: "/still-broken", scope: "projects-dir", sweep: "usage" });
-    endSweepFailureCycle("usage");
+    recordSweepFailure({ path: "/still-broken", scope: "projects-dir", sweep: "usage" }, tok4);
+    endSweepFailureCycle("usage", tok4);
     expect(getSweepFailures().map((f) => f.path)).toEqual(["/still-broken"]);
   });
 
@@ -68,9 +68,9 @@ describe("the collector", () => {
     // reports what it observed — and those partial findings are usually the
     // relevant ones, since a failure severe enough to stop the sweep is exactly
     // what a reader needs to see.
-    beginSweepFailureCycle("usage");
-    recordSweepFailure({ path: "/died-here", scope: "project-dir", sweep: "usage" });
-    endSweepFailureCycle("usage");
+    const tok5 = beginSweepFailureCycle("usage");
+    recordSweepFailure({ path: "/died-here", scope: "project-dir", sweep: "usage" }, tok5);
+    endSweepFailureCycle("usage", tok5);
     expect(getSweepFailures().map((f) => f.path)).toEqual(["/died-here"]);
   });
 
@@ -78,12 +78,12 @@ describe("the collector", () => {
     // Two readers walk the same tree on different schedules. The usage sweep
     // starting must not erase what the sessions scan just found, or a fast
     // poller would keep wiping a slow one's report.
-    beginSweepFailureCycle("sessions");
-    recordSweepFailure({ path: "/s", scope: "projects-dir", sweep: "sessions" });
-    endSweepFailureCycle("sessions");
-    beginSweepFailureCycle("usage");
-    recordSweepFailure({ path: "/u", scope: "project-dir", sweep: "usage" });
-    endSweepFailureCycle("usage");
+    const tok6 = beginSweepFailureCycle("sessions");
+    recordSweepFailure({ path: "/s", scope: "projects-dir", sweep: "sessions" }, tok6);
+    endSweepFailureCycle("sessions", tok6);
+    const tok7 = beginSweepFailureCycle("usage");
+    recordSweepFailure({ path: "/u", scope: "project-dir", sweep: "usage" }, tok7);
+    endSweepFailureCycle("usage", tok7);
 
     expect(getSweepFailures().map((f) => f.path).sort()).toEqual(["/s", "/u"]);
   });
@@ -92,8 +92,14 @@ describe("the collector", () => {
     // A sweep that records without opening a cycle is a wiring bug. Silently
     // starting one here would hide it AND let entries accumulate across passes
     // for the life of the process.
-    recordSweepFailure({ path: "/orphan", scope: "projects-dir", sweep: "usage" });
-    endSweepFailureCycle("usage");
+    // A valid token from an unrelated cycle: the generation is global, so this
+    // is current. What is missing is a `usage` cycle, which is the thing under
+    // test — using a stale token instead would exercise the generation guard.
+    const other = beginSweepFailureCycle("sessions");
+    endSweepFailureCycle("sessions", other);
+
+    recordSweepFailure({ path: "/orphan", scope: "projects-dir", sweep: "usage" }, other);
+    endSweepFailureCycle("usage", other);
     expect(getSweepFailures()).toHaveLength(0);
   });
 
@@ -103,11 +109,11 @@ describe("the collector", () => {
     // is capped. Dropping the extras from the COUNT too made the header and the
     // banner claim exactly 50 locations failed when hundreds had, understating
     // a broad fault at the moment it matters most (Codex P2, PR #527).
-    beginSweepFailureCycle("usage");
+    const tok8 = beginSweepFailureCycle("usage");
     for (let i = 0; i < 200; i++) {
-      recordSweepFailure({ path: `/p${i}`, scope: "project-dir", sweep: "usage" });
+      recordSweepFailure({ path: `/p${i}`, scope: "project-dir", sweep: "usage" }, tok8);
     }
-    endSweepFailureCycle("usage");
+    endSweepFailureCycle("usage", tok8);
 
     expect(getSweepFailures().length).toBeLessThanOrEqual(50);
     expect(getSweepFailureTotal()).toBe(200);
@@ -119,16 +125,16 @@ describe("the collector", () => {
     // Without depth-counting the second `begin` reset the first's partial list,
     // and the first `end` published a half-finished result as though it were
     // whole (Codex P2, PR #527).
-    beginSweepFailureCycle("sessions");
-    recordSweepFailure({ path: "/first", scope: "project-dir", sweep: "sessions" });
+    const tok9 = beginSweepFailureCycle("sessions");
+    recordSweepFailure({ path: "/first", scope: "project-dir", sweep: "sessions" }, tok9);
 
     beginSweepFailureCycle("sessions"); // overlapping caller
-    recordSweepFailure({ path: "/second", scope: "project-dir", sweep: "sessions" });
+    recordSweepFailure({ path: "/second", scope: "project-dir", sweep: "sessions" }, tok9);
 
-    endSweepFailureCycle("sessions"); // inner finishes: nothing published yet
+    endSweepFailureCycle("sessions", tok9); // inner finishes: nothing published yet
     expect(getSweepFailures()).toHaveLength(0);
 
-    endSweepFailureCycle("sessions"); // outer finishes: the WHOLE result
+    endSweepFailureCycle("sessions", tok9); // outer finishes: the WHOLE result
     expect(getSweepFailures().map((f) => f.path).sort()).toEqual(["/first", "/second"]);
   });
 });
@@ -273,11 +279,11 @@ describe("clearing on a configuration change", () => {
   // than only that the call exists somewhere nearby.
 
   it("discards both the published and the in-flight record", () => {
-    beginSweepFailureCycle("usage");
-    recordSweepFailure({ path: "/a", scope: "projects-dir", sweep: "usage" });
-    endSweepFailureCycle("usage");
-    beginSweepFailureCycle("usage");
-    recordSweepFailure({ path: "/b", scope: "projects-dir", sweep: "usage" });
+    const tok10 = beginSweepFailureCycle("usage");
+    recordSweepFailure({ path: "/a", scope: "projects-dir", sweep: "usage" }, tok10);
+    endSweepFailureCycle("usage", tok10);
+    const tok11 = beginSweepFailureCycle("usage");
+    recordSweepFailure({ path: "/b", scope: "projects-dir", sweep: "usage" }, tok11);
 
     clearSweepFailures();
 
@@ -285,9 +291,9 @@ describe("clearing on a configuration change", () => {
     expect(getSweepFailureTotal()).toBe(0);
     // And the depth counter went with them, so the next cycle starts clean
     // rather than thinking it is nested inside the abandoned one.
-    beginSweepFailureCycle("usage");
-    recordSweepFailure({ path: "/c", scope: "projects-dir", sweep: "usage" });
-    endSweepFailureCycle("usage");
+    const tok12 = beginSweepFailureCycle("usage");
+    recordSweepFailure({ path: "/c", scope: "projects-dir", sweep: "usage" }, tok12);
+    endSweepFailureCycle("usage", tok12);
     expect(getSweepFailures().map((f) => f.path)).toEqual(["/c"]);
   });
 });
