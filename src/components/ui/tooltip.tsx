@@ -89,11 +89,52 @@ export function Tooltip({
    * no `mouseenter` is owed until the pointer leaves and returns, which is
    * precisely the gesture that should bring the tooltip back.
    */
+  /**
+   * How long the hover hold survives the pointer leaving the trigger.
+   *
+   * Placement leaves an 8px gap, and the tooltip is PORTALED, so moving toward
+   * it fires `mouseleave` on the trigger while the pointer is still in the gap.
+   * With the hold released immediately the tooltip hides and flips to
+   * `pointerEvents: "none"` before the pointer can arrive — so its own
+   * `onMouseEnter` never fires and its scrollbar is unreachable by ordinary
+   * slow movement (Codex P2, PR #519).
+   *
+   * A delay rather than a wider hit area or a zero gap: the gap exists so the
+   * tooltip does not sit under the pointer that summoned it, and 120ms is long
+   * enough to cross 8px while still reading as immediate when the pointer is
+   * genuinely leaving.
+   */
+  const HOVER_EXIT_MS = 120;
+  const exitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cancelHoverExit = useCallback(() => {
+    if (exitTimer.current !== null) {
+      clearTimeout(exitTimer.current);
+      exitTimer.current = null;
+    }
+  }, []);
+
+  const enterHover = useCallback(() => {
+    cancelHoverExit();
+    setHovered(true);
+  }, [cancelHoverExit]);
+
+  const beginHoverExit = useCallback(() => {
+    cancelHoverExit();
+    exitTimer.current = setTimeout(() => setHovered(false), HOVER_EXIT_MS);
+  }, [cancelHoverExit]);
+
   const dismiss = useCallback(() => {
+    cancelHoverExit();
     setHovered(false);
     setFocused(false);
     setPinned(false);
-  }, []);
+  }, [cancelHoverExit]);
+
+  // A pending exit must not outlive the component, or it fires setState on an
+  // unmounted tree — and worse, keeps a stale closure alive for as long as the
+  // timer runs.
+  useEffect(() => cancelHoverExit, [cancelHoverExit]);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const triggerRef = useRef<HTMLSpanElement | null>(null);
   const tipRef = useRef<HTMLSpanElement | null>(null);
@@ -152,8 +193,8 @@ export function Tooltip({
     // scroll or read does not dismiss it. Without this the portal makes the
     // trigger fire `mouseleave` the moment the pointer crosses onto the tip,
     // and a scrollable tooltip could never actually be scrolled.
-    onMouseEnter={() => setHovered(true)}
-    onMouseLeave={() => setHovered(false)}
+    onMouseEnter={enterHover}
+    onMouseLeave={beginHoverExit}
     id={id}
     role="tooltip"
     // Always rendered. `aria-describedby` reaches it whether or not it is
@@ -206,8 +247,8 @@ export function Tooltip({
       tabIndex={0}
       aria-describedby={id}
       style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      onMouseEnter={enterHover}
+      onMouseLeave={beginHoverExit}
       onFocus={() => setFocused(true)}
       onKeyDown={(e) => {
         // The trigger is focusable, so it needs the activation keys a
@@ -216,9 +257,42 @@ export function Tooltip({
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           setPinned(true);
-        } else if (e.key === "Escape") {
-          dismiss();
+          return;
         }
+        if (e.key === "Escape") {
+          dismiss();
+          return;
+        }
+        // SCROLL THE TOOLTIP, without moving focus into it.
+        //
+        // On a zoomed or short viewport the tooltip hits its height bound and
+        // scrolls — which a mouse can reach and a keyboard could not: arrow and
+        // PageDown scrolled the PAGE, and the clipped remainder of the
+        // explanation was unreachable for exactly the audience this component
+        // exists for (Codex P2, PR #519).
+        //
+        // Scrolling from the trigger rather than making the tip focusable. A
+        // focusable portaled tip means focus leaving the trigger, which fires
+        // `blur` and releases the focus hold before the tip's own focus
+        // arrives — a race that closes the tooltip around the keystroke meant
+        // to read it. Keeping focus put has no such gap.
+        const tipEl = tipRef.current;
+        if (!open || !tipEl) return;
+        // Only when it ACTUALLY overflows. Otherwise a focused chip would
+        // swallow the page's own scroll keys, which is a regression for every
+        // tooltip that fits — the common case.
+        if (tipEl.scrollHeight <= tipEl.clientHeight) return;
+        const step =
+          e.key === "ArrowDown" ? 40
+          : e.key === "ArrowUp" ? -40
+          : e.key === "PageDown" ? tipEl.clientHeight - 16
+          : e.key === "PageUp" ? -(tipEl.clientHeight - 16)
+          : e.key === "Home" ? -tipEl.scrollHeight
+          : e.key === "End" ? tipEl.scrollHeight
+          : 0;
+        if (step === 0) return;
+        e.preventDefault();
+        tipEl.scrollTop += step;
       }}
       // Blur clears the PIN as well as the focus-hold. Enter/Space pins on top
       // of the focus that is already holding the tooltip open, so releasing

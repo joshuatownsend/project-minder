@@ -155,4 +155,25 @@ describe("the component pairs clamping with a bound", () => {
     // A scrollable box behind `pointerEvents: "none"` is not scrollable.
     expect(src).toMatch(/pointerEvents:\s*open \? "auto" : "none"/);
   });
+
+  it("makes the overflow reachable by pointer AND by keyboard", async () => {
+    // Being scrollable is not the same as being scrollABLE BY SOMEONE. Two
+    // separate ways to reach it, and each was missing on its own review round
+    // (Codex P2 x2, PR #519):
+    //
+    //  - the pointer has to cross an 8px gap to a PORTALED element, so the
+    //    hover hold must survive the trip;
+    //  - a keyboard user cannot enter the tip at all, so the trigger has to
+    //    scroll it in place.
+    const src = await readFile("src/components/ui/tooltip.tsx", "utf-8");
+    // The hover bridge: a delayed exit, cancelled on re-entry.
+    expect(src).toMatch(/HOVER_EXIT_MS/);
+    expect(src).toMatch(/onMouseLeave=\{beginHoverExit\}/);
+    // And the tip itself counts as hover, or crossing the gap arrives nowhere.
+    expect(src.match(/onMouseEnter=\{enterHover\}/g)?.length).toBe(2);
+    // The keyboard path, scrolling the tip without moving focus into it.
+    expect(src).toMatch(/tipEl\.scrollTop \+= step/);
+    // Guarded on real overflow, so a focused chip never swallows page scroll.
+    expect(src).toMatch(/scrollHeight <= tipEl\.clientHeight/);
+  });
 });
