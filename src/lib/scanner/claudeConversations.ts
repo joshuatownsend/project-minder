@@ -57,6 +57,7 @@ import {
   beginSweepFailureCycle,
   endSweepFailureCycle,
   recordSweepFailure,
+  recordSweepSuccess,
   directoryExists,
   pathEntryExists,
   type SweepName,
@@ -881,6 +882,11 @@ export async function scanAllSessions(): Promise<SessionSummary[]> {
       let dirs: string[];
       try {
         dirs = await fs.readdir(projectsDir);
+        // The success side of the same `readdir` whose failure is reported
+        // below, so the two can never disagree about what happened. A later
+        // clean pass is what retires an older sweep's complaint about this
+        // exact path — see `retireVerified` (#513).
+        recordSweepSuccess("sessions", projectsDir, sweepToken);
       } catch (err) {
         // Recorded, not merely skipped (#513). This reader is reached from
         // `data/index.ts` on the file backend AND on the first-reconcile

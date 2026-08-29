@@ -32,6 +32,7 @@ import {
   beginSweepFailureCycle,
   endSweepFailureCycle,
   recordSweepFailure,
+  recordSweepSuccess,
   directoryExists,
   pathEntryExists,
 } from "@/lib/sweepFailures";
@@ -773,6 +774,11 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
   for (const home of homes) {
     try {
       const entries = await fs.readdir(path.join(home, "projects"), { withFileTypes: true });
+      // The success side of the same `readdir` whose failure is reported below,
+      // so the two can never disagree about what happened. A later clean pass
+      // is what retires an older sweep's complaint about this exact path — see
+      // `retireVerified` (#513).
+      recordSweepSuccess("usage", path.join(home, "projects"), sweepToken);
       const dirNames: string[] = [];
       for (const e of entries) {
         if (e.isDirectory()) dirNames.push(e.name);

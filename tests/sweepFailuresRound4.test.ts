@@ -426,3 +426,130 @@ describe("round 6 — the invalidation guard reaches the writes too", () => {
     expect(body).not.toMatch(/beginSweepFailureCycle/);
   });
 });
+
+describe("round 8 — a fixed directory stops being reported", () => {
+  it("retires another sweep's failure once a later sweep reads the path", async () => {
+    // The `sessions` sweep runs during the first-reconcile / file fallback and
+    // then normal DB-backed requests never call it again — so a directory it
+    // found unreadable stayed named in the banner after the drive came back,
+    // until a config change or a process restart. Meanwhile the `usage` sweep,
+    // which walks the SAME tree, had been listing it cleanly all along.
+    // (Codex P2, PR #527.)
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      recordSweepSuccess,
+      getSweepFailures,
+      getSweepFailureTotal,
+    } = await import("@/lib/sweepFailures");
+
+    const home = "/home/me/.claude/projects";
+
+    // The sweep that will never run again finds it broken.
+    const t1 = beginSweepFailureCycle("sessions");
+    recordSweepFailure({ path: home, scope: "projects-dir", sweep: "sessions" }, t1);
+    endSweepFailureCycle("sessions", t1);
+    expect(getSweepFailures()).toHaveLength(1);
+
+    // The user reconnects the drive. A later usage sweep reads it fine.
+    const t2 = beginSweepFailureCycle("usage");
+    recordSweepSuccess("usage", home, t2);
+    endSweepFailureCycle("usage", t2);
+
+    // The stale warning is gone, and the COUNT went with it — a total that
+    // outlived the detail would leave the banner saying "1 location could not
+    // be read" while naming none.
+    expect(getSweepFailures()).toHaveLength(0);
+    expect(getSweepFailureTotal()).toBe(0);
+  });
+
+  it("retires only the path that was verified", async () => {
+    // Evidence, not a timer: reading one home says nothing about another.
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      recordSweepSuccess,
+      getSweepFailures,
+    } = await import("@/lib/sweepFailures");
+
+    const t1 = beginSweepFailureCycle("sessions");
+    recordSweepFailure({ path: "/home-a/projects", scope: "projects-dir", sweep: "sessions" }, t1);
+    recordSweepFailure({ path: "/home-b/projects", scope: "projects-dir", sweep: "sessions" }, t1);
+    endSweepFailureCycle("sessions", t1);
+
+    const t2 = beginSweepFailureCycle("usage");
+    recordSweepSuccess("usage", "/home-a/projects", t2);
+    endSweepFailureCycle("usage", t2);
+
+    expect(getSweepFailures().map((f) => f.path)).toEqual(["/home-b/projects"]);
+  });
+
+  it("does not retire a per-project failure on a home-level success", async () => {
+    // Listing a home says nothing about whether one directory INSIDE it could
+    // be read, so a `project-dir` entry must survive. Over-reporting is the safe
+    // direction; silently dropping a real gap is the failure #513 exists to end.
+    //
+    // What actually makes this hold is the PATH, not the scope check beside it:
+    // a verified path is always `<home>/projects` and a per-project failure is
+    // always something below it, so the two can never be equal. Mutation-testing
+    // showed exactly that — removing the scope condition changed nothing here.
+    // The condition stays as a narrowing in case those path shapes ever
+    // converge, and this test is honest that it pins the outcome rather than
+    // that condition.
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      recordSweepSuccess,
+      getSweepFailures,
+    } = await import("@/lib/sweepFailures");
+
+    const t1 = beginSweepFailureCycle("sessions");
+    recordSweepFailure(
+      { path: "/home-a/projects/one-project", scope: "project-dir", sweep: "sessions" },
+      t1
+    );
+    endSweepFailureCycle("sessions", t1);
+
+    const t2 = beginSweepFailureCycle("usage");
+    recordSweepSuccess("usage", "/home-a/projects", t2);
+    endSweepFailureCycle("usage", t2);
+
+    expect(getSweepFailures()).toHaveLength(1);
+  });
+
+  it("does not let an invalidated sweep retire anything", async () => {
+    // `recordSweepSuccess` takes the same token as the failure path, or a sweep
+    // superseded by a config change could clear the replacement's findings —
+    // the same stale-write class, arriving from the other direction.
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      recordSweepSuccess,
+      getSweepFailures,
+      clearSweepFailures: clear,
+    } = await import("@/lib/sweepFailures");
+
+    const stale = beginSweepFailureCycle("usage");
+    clear();
+
+    const t = beginSweepFailureCycle("sessions");
+    recordSweepFailure({ path: "/home-a/projects", scope: "projects-dir", sweep: "sessions" }, t);
+    endSweepFailureCycle("sessions", t);
+
+    // A REPLACEMENT usage cycle, and this is what makes the test discriminate.
+    // Without it `pending()` holds no `usage` entry at all, so the stale
+    // caller's success goes nowhere whether or not the token is checked — my
+    // first version of this test passed against the unguarded code for exactly
+    // that reason. With the replacement in flight, an unchecked success would
+    // be adopted by it and retire the failure below on its own publish.
+    const fresh = beginSweepFailureCycle("usage");
+    recordSweepSuccess("usage", "/home-a/projects", stale);
+    endSweepFailureCycle("usage", fresh);
+
+    expect(getSweepFailures()).toHaveLength(1);
+  });
+});

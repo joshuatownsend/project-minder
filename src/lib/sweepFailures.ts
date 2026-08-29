@@ -83,6 +83,26 @@ interface CycleResult {
    */
   seen: Set<string>;
   /**
+   * Claude homes whose `projects` directory this cycle listed SUCCESSFULLY.
+   *
+   * A published failure otherwise never retires. The `sessions` sweep runs
+   * during the first-reconcile / file fallback and then normal DB-backed
+   * requests never call it again — so a directory it found unreadable stays
+   * named in the banner after the drive is reconnected, until a config change
+   * or a process restart. Meanwhile the `usage` sweep, which walks the SAME
+   * tree, has been listing that directory cleanly all along. (Codex P2, PR
+   * #527.)
+   *
+   * Recorded for `projects-dir` only, deliberately. There is one per Claude
+   * home, so the set is tiny and bounded — where the per-project directories
+   * number in the thousands and tracking every success would turn a diagnostic
+   * back into the memory leak the detail cap exists to prevent. It is also the
+   * scope that actually goes stale: a home-level failure is the disconnected
+   * drive, and that is the one a user fixes and then expects to stop hearing
+   * about.
+   */
+  verified: Set<string>;
+  /**
    * The generation this cycle was opened under. A `clearSweepFailures()` — a
    * corpus-configuration change — bumps the generation, so a sweep still
    * running from before the change can be told apart from the replacement that
@@ -157,7 +177,14 @@ export function beginSweepFailureCycle(sweep: SweepName): number {
   depth().set(sweep, d);
   // Only the OUTERMOST cycle resets. An overlapping caller joins the one in
   // flight rather than restarting it.
-  if (d === 1) pending().set(sweep, { items: [], total: 0, seen: new Set(), gen });
+  if (d === 1)
+    pending().set(sweep, {
+      items: [],
+      total: 0,
+      seen: new Set(),
+      verified: new Set(),
+      gen,
+    });
   return gen;
 }
 
@@ -193,6 +220,56 @@ export function endSweepFailureCycle(sweep: SweepName, token?: number): void {
   }
   published().set(sweep, found);
   pending().delete(sweep);
+  retireVerified(sweep, found.verified);
+}
+
+/**
+ * Drop other sweeps' `projects-dir` failures for paths this cycle just read.
+ *
+ * Evidence, not a timer. Both full-corpus sweeps walk the same tree, so one of
+ * them listing a home's `projects` directory is proof that the other's older
+ * complaint about that exact path no longer holds — which is the only honest
+ * way to clear a warning whose owning sweep may never run again.
+ *
+ * The cycle's OWN result is left alone: it was just published and already says
+ * what this pass found. Only `projects-dir` entries retire, matching what
+ * `verified` records; a `project-dir` failure is never verified by anything and
+ * stays until its own sweep re-runs, which over-reports rather than hides a
+ * gap. (Codex P2, PR #527.)
+ */
+function retireVerified(sweep: SweepName, verified: Set<string>): void {
+  if (verified.size === 0) return;
+  for (const [name, result] of published()) {
+    if (name === sweep) continue;
+    const kept = result.items.filter(
+      (f) => !(f.scope === "projects-dir" && verified.has(f.path))
+    );
+    if (kept.length === result.items.length) continue;
+    published().set(name, {
+      ...result,
+      items: kept,
+      // The total follows the detail down, or the banner would keep counting a
+      // location it no longer names. Floored at the detail length so a cycle
+      // that had entries past the cap cannot end up claiming fewer failures
+      // than it is still listing.
+      total: Math.max(kept.length, result.total - (result.items.length - kept.length)),
+    });
+  }
+}
+
+/**
+ * Record that a home's `projects` directory was listed successfully.
+ *
+ * Called by the sweeps on the success side of the same `readdir` whose failure
+ * they report, so the two can never disagree about what happened.
+ */
+export function recordSweepSuccess(
+  sweep: SweepName,
+  projectsDir: string,
+  token?: number
+): void {
+  if (token !== undefined && token !== generation()) return;
+  pending().get(sweep)?.verified.add(projectsDir);
 }
 
 /**
