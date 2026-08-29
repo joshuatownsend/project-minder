@@ -214,24 +214,40 @@ Continuation linking requires the SQLite index. Under `MINDER_USE_DB=0` the slug
 
 Note: a session created seconds before you visit `/sessions/<slug>` may 404 until the indexer's next sweep picks it up. Use the UUID URL (`/sessions/<sessionId>`) as a fallback during that window — UUIDs always resolve via direct file-parse even when un-indexed.
 
-### Subagent transcripts in the list
+### Subagent transcripts
 
 Newer Claude Code versions write each spawned subagent's transcript to its own
-file, under `<project>/<session>/subagents/`. Minder indexes those as sessions
-in their own right, so they appear in this list alongside ordinary ones. Their
+file, under `<project>/<session>/subagents/`. Minder indexes those, and their
 ids start with `agent-` rather than being plain hex.
 
-**These were listed but could not be opened until recently.** Every
-session-detail path checked the id against a hex-only pattern, which the
-`agent-` prefix fails, so clicking one returned "session not available" — on a
-reference history that was 1,268 of 6,656 sessions, about one in five. Switching
-the index off (`MINDER_USE_DB=0`) did not help, because the file-parse path
-applied the same check. They now open normally.
+**They are deliberately not in this list.** They are not sessions you started,
+and on a delegation-heavy history they would roughly double it — on a reference
+history, 1,268 of 6,656 sessions were delegated transcripts, about one in five.
+You reach them from the parent session's **Subagents** tab, which is where their
+context is anyway.
 
-One caveat while this settles: the file-parse backend does not yet walk the
-nested `subagents/` directories when building the list, so with the index
-switched off these sessions are missing from the list rather than unopenable.
-The SQLite index (the default) lists them.
+**Opening one shows its own conversation.** Two things had to be fixed for that,
+and the second was the subtle one:
+
+- Every session-detail path checked the id against a hex-only pattern, which the
+  `agent-` prefix fails, so clicking one returned "session not available".
+  Switching the index off (`MINDER_USE_DB=0`) did not help — the file-parse path
+  applied the same check.
+- Then they opened *successfully onto nothing*. Claude Code marks a turn
+  `isSidechain` when it is a sidechain **of its parent**, and every view skipped
+  those. In a delegated transcript *every* entry carries that flag, because the
+  whole file is the sidechain — so the page rendered an empty timeline, which
+  reads as "this agent did no work".
+
+The flag is still respected everywhere else, including in the cost breakdown
+that reports delegated spend separately, and in the engagement hours, which
+count only work a person actually did. It is the transcript view alone that
+stops treating it as a reason to hide a turn — because there, those turns are
+not a digression from someone else's conversation, they *are* the conversation.
+
+One caveat: the file-parse backend does not walk the nested `subagents/`
+directories when building the list, so with the index switched off these
+sessions are neither listed nor linked. Opening one by URL still works.
 
 
 ## Session Detail
