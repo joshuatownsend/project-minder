@@ -350,7 +350,11 @@ function queryBySource(db: DatabaseT.Database, f: FilterParams): SourceBreakdown
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY s.source
-       ORDER BY cost DESC`
+       -- Tie-break by name (#522). Unlike the file backend there is no
+       -- insertion order to fall back on: SQLite's sort is not stable, so a tie
+       -- is resolved by whatever the plan happens to emit, and that changes
+       -- with an index or a row count.
+       ORDER BY cost DESC, s.source ASC`
     )
     .all(f) as SourceRow[];
 
@@ -381,7 +385,7 @@ function queryByModel(db: DatabaseT.Database, f: FilterParams): ModelCost[] {
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY t.model
-       ORDER BY cost DESC`
+       ORDER BY cost DESC, t.model ASC`
     )
     .all(f) as ModelCost[];
 }
@@ -421,7 +425,7 @@ function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdo
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY s.project_slug, s.project_dir_name, s.home_key
-       ORDER BY cost DESC`
+       ORDER BY cost DESC, s.project_slug ASC, s.project_dir_name ASC`
     )
     .all(f) as Array<ProjectBreakdown & { homeKey: string | null }>;
 
@@ -489,7 +493,7 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
            AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
          GROUP BY t.category
-         ORDER BY cost DESC`
+         ORDER BY cost DESC, t.category ASC`
       )
       .all(f) as Array<{
         category: string; turns: number; tokens: number; cost: number;
@@ -523,7 +527,7 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
        WHERE (@startDay IS NULL OR day >= @startDay)
          AND (@project IS NULL OR project_slug = @project)
        GROUP BY category
-       ORDER BY cost DESC`
+       ORDER BY cost DESC, category ASC`
     )
     .all(f) as Array<{ category: string; turns: number; tokens: number; cost: number }>;
 
@@ -939,7 +943,9 @@ function queryTopTools(db: DatabaseT.Database, f: FilterParams): [string, number
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY tu.tool_name
-       ORDER BY count DESC
+       -- This one is LIMITed, so a tie at the boundary decided membership: a
+       -- tool appeared in one run's report and not the next (#522).
+       ORDER BY count DESC, tu.tool_name ASC
        LIMIT 15`
     )
     .all(f) as Array<{ name: string; count: number }>;
@@ -1180,7 +1186,7 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY s.project_slug
-       ORDER BY cost DESC`
+       ORDER BY cost DESC, s.project_slug ASC`
     )
     .all(f) as Array<{ projectSlug: string; projectDirName: string; cost: number; turns: number }>;
   if (headers.length === 0) return [];
@@ -1211,7 +1217,7 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
              AND s.home_key = ?
              AND s.project_slug IN (${placeholders})
            GROUP BY s.project_slug, t.category
-           ORDER BY cost DESC`
+           ORDER BY cost DESC, s.project_slug ASC, t.category ASC`
         )
         .all(f.periodStart, f.periodStart, f.home, ...slugs)
     : db
@@ -1222,7 +1228,7 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
            WHERE (? IS NULL OR cc.day >= ?)
              AND cc.project_slug IN (${placeholders})
            GROUP BY cc.project_slug, cc.category
-           ORDER BY cost DESC`
+           ORDER BY cost DESC, cc.project_slug ASC, cc.category ASC`
         )
         .all(f.startDay, f.startDay, ...slugs)) as Array<{
     projectSlug: string;

@@ -760,9 +760,15 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
   for (const home of homes) {
     try {
       const entries = await fs.readdir(path.join(home, "projects"), { withFileTypes: true });
+      const dirNames: string[] = [];
       for (const e of entries) {
-        if (e.isDirectory()) subdirs.push({ home, dirName: e.name });
+        if (e.isDirectory()) dirNames.push(e.name);
       }
+      // Sorted, because `readdir` gives no order guarantee and this list is now
+      // the PRIORITY for duplicate session ids (#522). Homes keep their
+      // configured order, so the primary home wins over a later-configured one.
+      dirNames.sort();
+      for (const dirName of dirNames) subdirs.push({ home, dirName });
     } catch {
       // No projects dir in this home
     }
@@ -843,11 +849,23 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
   // the adapters — and the file backend reported an empty corpus for exactly the
   // users this change exists to serve. (Codex P1, PR #490.)
   //
-  // Process subdirectories in batches of 5 to avoid overwhelming the FS.
+  // ── Phase 1: ENUMERATE ────────────────────────────────────────────────
+  //
+  // Every candidate file is listed before ANY of them is parsed, so which copy
+  // of a duplicated session id wins is decided by position in a sorted list
+  // rather than by which parse happened to finish first (#522).
+  //
+  // The old shape enumerated and parsed in the same per-directory callback and
+  // claimed ids at emission time — so two homes holding the same session UUID
+  // resolved to whichever won a race, and two sweeps of an unchanged tree could
+  // disagree. Listing first also means the losing copy is never parsed at all.
+  //
+  // Cost: one array of ~6.6k paths. Not the corpus.
+  const perDir: string[][] = new Array(subdirs.length);
   for (let i = 0; i < subdirs.length; i += 5) {
     const batch = subdirs.slice(i, i + 5);
     await Promise.all(
-      batch.map(async ({ home, dirName }) => {
+      batch.map(async ({ home, dirName }, k) => {
         const dirPath = path.join(home, "projects", dirName);
         const filePaths: string[] = [];
         try {
@@ -876,88 +894,122 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
           // Attributed to the PROJECT dir name, not "subagents", matching the
           // reconciler. Session id is the file's own basename, so a subagent
           // transcript is its own session on both backends.
+          const sessionDirs: string[] = [];
           for (const e of entries) {
-            if (!e.isDirectory()) continue;
-            const subagentsDir = path.join(dirPath, e.name, "subagents");
+            if (e.isDirectory()) sessionDirs.push(e.name);
+          }
+          sessionDirs.sort();
+          for (const name of sessionDirs) {
+            const subagentsDir = path.join(dirPath, name, "subagents");
             try {
-              for (const f of await fs.readdir(subagentsDir)) {
-                if (f.endsWith(".jsonl")) filePaths.push(path.join(subagentsDir, f));
-              }
+              const nested = (await fs.readdir(subagentsDir)).filter((f) => f.endsWith(".jsonl"));
+              nested.sort();
+              for (const f of nested) filePaths.push(path.join(subagentsDir, f));
             } catch {
               /* no subagents dir for this session — the common case */
             }
           }
         } catch {
+          perDir[i + k] = [];
           return;
         }
-
-        for (const filePath of filePaths) {
-          liveSet.add(filePath);
-
-          // FileCache stat's the file, returns the cached parse if mtime+size
-          // are unchanged, otherwise calls the factory. Skip oversized files
-          // before parsing — they're typically session-in-progress logs that
-          // we'll re-evaluate on the next sweep when they may have been rolled.
-          //
-          // A file can disappear in the gap between the FileCache's outer stat
-          // and our second stat (log rotation, session pruning), so one bad
-          // file must not kill the sweep — that has been the behaviour since
-          // pre-P1 and it is kept. What changed is WHERE it is caught.
-          //
-          // The catch used to be inside the factory, which converted a read
-          // failure into `[]` and CACHED it under the file's mtime+size. This
-          // is the biggest corpus in the app, and it carried the same defect
-          // #495 found twice on the adapter path: restoring permissions
-          // touches ctime, so an EACCES'd transcript stayed missing from every
-          // usage aggregate until its contents changed or the process
-          // restarted. `parseSessionTurns` swallowed the error on its own
-          // account too, hence `strict` — the option existed and nothing used
-          // it. (#498.)
-          //
-          // `getOrCompute` stores nothing when its factory rejects, so the
-          // retry is automatic and containment stays per-file.
-          let turns: UsageTurn[] | undefined;
-          try {
-            turns = await cache.getOrCompute(filePath, async (fp) => {
-              // Oversized returns `[]` rather than rejecting: the file WAS
-              // stat'd and is deliberately not parsed, which is a verdict about
-              // it and stays true until the size changes. Cacheable.
-              const stat = await fs.stat(fp);
-              if (stat.size > MAX_SESSION_FILE_SIZE) return [];
-              // Parse WITH sidechains so the cached map carries subagent turns
-              // (tagged `isSidechain`). `parseAllSessions()` strips them by
-              // default for existing consumers; the usage aggregator opts in
-              // via `{ includeSidechains: true }` to fold subagent cost into
-              // the totals (A1).
-              return await parseSessionTurns(fp, dirName, {
-                includeSidechains: true,
-                homeKey: normalizePathKey(home),
-                strict: true,
-              });
-            });
-          } catch {
-            // `continue`, NOT `return`. This catch sits inside the per-file
-            // loop of a per-DIRECTORY callback, so returning would abandon
-            // every remaining transcript in the project — turning "one
-            // unreadable file is skipped" into "one unreadable file drops most
-            // of a project's usage totals", which is worse than the defect
-            // being fixed and contradicts the containment promised two comments
-            // up. The adapter merge below reads `return` because its catch is
-            // in a per-FILE `batch.map` callback; the shapes differ and the
-            // keyword has to follow the shape. (Codex P2 + Copilot, PR #499.)
-            continue;
-          }
-
-          if (turns && turns.length > 0) {
-            const sessionId = path.basename(filePath, ".jsonl");
-            // First copy wins, in the core, for every shape. See `SessionVisitor`.
-            if (emitted.has(sessionId)) continue;
-            emitted.add(sessionId);
-            await emit(sessionId, turns);
-          }
-        }
+        // Sorted within the directory for the same reason the directories are:
+        // this list is the duplicate-resolution priority.
+        filePaths.sort();
+        perDir[i + k] = filePaths;
       })
     );
+  }
+
+  // ── Phase 2: CLAIM ────────────────────────────────────────────────────
+  //
+  // First in (home order, directory name, file name) wins. `liveSet` records
+  // every file OBSERVED, losers included: a loser may still hold a cache slot
+  // from a sweep it won, and dropping it from the live set would evict that
+  // slot and take its mtime out of the ETag signal.
+  const claimed: { filePath: string; home: string; dirName: string; sessionId: string }[] = [];
+  for (let idx = 0; idx < subdirs.length; idx++) {
+    const { home, dirName } = subdirs[idx];
+    for (const filePath of perDir[idx] ?? []) {
+      liveSet.add(filePath);
+      const sessionId = path.basename(filePath, ".jsonl");
+      if (emitted.has(sessionId)) continue;
+      emitted.add(sessionId);
+      claimed.push({ filePath, home, dirName, sessionId });
+    }
+  }
+
+  // ── Phase 3: PARSE and EMIT ───────────────────────────────────────────
+  //
+  // Batched over FILES now rather than directories. The unit of concurrency
+  // changed with the restructure; five at a time is the same budget.
+  //
+  // Parsed concurrently, EMITTED IN CLAIM ORDER. Emitting as each parse
+  // resolved left order dependent on turn count — a 1-turn session overtook a
+  // 20-turn one in the same batch, so an unchanged tree still produced
+  // `[s1, s2, s4, s3]` on one run and `[s1, s2, s3, s4]` on another. Collecting
+  // a batch and then emitting it in order costs the same residency the visitor
+  // queue already allows (five sessions), and buys the order the whole issue is
+  // about (#522).
+  for (let i = 0; i < claimed.length; i += 5) {
+    const batch = claimed.slice(i, i + 5);
+    const parsed = await Promise.all(
+      batch.map(async ({ filePath, home, dirName, sessionId }) => {
+        // FileCache stat's the file, returns the cached parse if mtime+size
+        // are unchanged, otherwise calls the factory. Skip oversized files
+        // before parsing — they're typically session-in-progress logs that
+        // we'll re-evaluate on the next sweep when they may have been rolled.
+        //
+        // A file can disappear in the gap between the FileCache's outer stat
+        // and our second stat (log rotation, session pruning), so one bad
+        // file must not kill the sweep.
+        //
+        // The catch used to be inside the factory, which converted a read
+        // failure into `[]` and CACHED it under the file's mtime+size. This
+        // is the biggest corpus in the app, and it carried the same defect
+        // #495 found twice on the adapter path: restoring permissions
+        // touches ctime, so an EACCES'd transcript stayed missing from every
+        // usage aggregate until its contents changed or the process
+        // restarted. `parseSessionTurns` swallowed the error on its own
+        // account too, hence `strict` — the option existed and nothing used
+        // it. (#498.)
+        //
+        // `getOrCompute` stores nothing when its factory rejects, so the
+        // retry is automatic and containment stays per-file.
+        //
+        // `return`, not `continue`: this is now a per-FILE callback, so
+        // returning abandons one file rather than a project's remaining
+        // transcripts. The keyword follows the shape, which is the rule
+        // Codex and Copilot established on PR #499 when the shapes differed.
+        let turns: UsageTurn[] | undefined;
+        try {
+          turns = await cache.getOrCompute(filePath, async (fp) => {
+            // Oversized returns `[]` rather than rejecting: the file WAS
+            // stat'd and is deliberately not parsed, which is a verdict about
+            // it and stays true until the size changes. Cacheable.
+            const stat = await fs.stat(fp);
+            if (stat.size > MAX_SESSION_FILE_SIZE) return [];
+            // Parse WITH sidechains so the cached map carries subagent turns
+            // (tagged `isSidechain`). `parseAllSessions()` strips them by
+            // default for existing consumers; the usage aggregator opts in
+            // via `{ includeSidechains: true }` to fold subagent cost into
+            // the totals (A1).
+            return await parseSessionTurns(fp, dirName, {
+              includeSidechains: true,
+              homeKey: normalizePathKey(home),
+              strict: true,
+            });
+          });
+        } catch {
+          return null;
+        }
+
+        return turns && turns.length > 0 ? { sessionId, turns } : null;
+      })
+    );
+    for (const entry of parsed) {
+      if (entry) await emit(entry.sessionId, entry.turns);
+    }
   }
 
   // ── Non-Claude adapter sessions (#475) ────────────────────────────────

@@ -371,6 +371,34 @@ export async function augmentPortfolioYield(
  * therefore the same tie-breaking in the cost-descending sorts below — as one
  * flat array did.
  */
+/**
+ * Descending by a numeric measure, then ASCENDING by a name (#522).
+ *
+ * Every ranking below sorted on one key and stopped, so entries with an equal
+ * measure fell back to map INSERTION order — which comes from the corpus sweep,
+ * which parses in concurrent batches and records on completion. Two runs over
+ * an unchanged tree could therefore order tied rows differently.
+ *
+ * Cosmetic for most of them: rows already equal by the sort key swap places.
+ * NOT cosmetic for `topTools`, which slices the top 15 — a tie straddling that
+ * boundary meant a tool appeared in one run's report and not the next. And it
+ * made any byte-comparison of two reports unreliable, including the kind used
+ * to verify that a refactor changed no number.
+ *
+ * The tie-break is the entry's own name, which is stable, already unique within
+ * each ranking, and needs nothing recorded anywhere.
+ */
+function byMeasureThenName<T>(
+  measure: (x: T) => number,
+  name: (x: T) => string
+): (a: T, b: T) => number {
+  return (a, b) => {
+    const d = measure(b) - measure(a);
+    if (d !== 0) return d;
+    return name(a).localeCompare(name(b));
+  };
+}
+
 export function createUsageAccumulator(period: Period) {
   // Single-pass aggregation across all dimensions
   const modelMap = new Map<string, ModelCost>();
@@ -811,7 +839,7 @@ export function createUsageAccumulator(period: Period) {
 
   // Build projectDetails from accumulators
   const projectDetails: ProjectDetail[] = [...projectDetailAccum.values()]
-    .sort((a, b) => b.cost - a.cost)
+    .sort(byMeasureThenName((d) => d.cost, (d) => `${d.projectSlug}\u0000${d.projectDirName}`))
     .map((d) => ({
       projectSlug: d.projectSlug,
       projectDirName: d.projectDirName,
@@ -819,9 +847,10 @@ export function createUsageAccumulator(period: Period) {
       turns: d.turns,
       categoryBreakdown: [...d.categoryMap.entries()]
         .map(([category, stats]) => ({ category, ...stats }))
-        .sort((a, b) => b.cost - a.cost),
+        .sort(byMeasureThenName((c) => c.cost, (c) => c.category)),
+      // Sliced, so a tie at the boundary decided membership and not just order.
       topTools: [...d.toolMap.entries()]
-        .sort((a, b) => b[1] - a[1])
+        .sort(byMeasureThenName((t) => t[1], (t) => t[0]))
         .slice(0, 5),
       mcpServers: [...d.mcpMap.keys()],
       mcpCalls: [...d.mcpMap.values()].reduce((s, n) => s + n, 0),
@@ -830,7 +859,7 @@ export function createUsageAccumulator(period: Period) {
   // By-source breakdown (computed from enriched loop data — cost already resolved)
   const adapterDisplayNames = getAdapterDisplayNameMap();
   const bySource: SourceBreakdown[] = [...sourceAccum.entries()]
-    .sort((a, b) => b[1].cost - a[1].cost)
+    .sort(byMeasureThenName((e) => e[1].cost, (e) => e[0]))
     .map(([source, s]) => ({
       source,
       displayName: adapterDisplayNames.get(source) ?? source,
@@ -853,9 +882,13 @@ export function createUsageAccumulator(period: Period) {
       rate: totalVerified > 0 ? totalOneShot / totalVerified : 0,
     },
     daily: [...dailyMap.values()].sort((a, b) => a.date.localeCompare(b.date)),
-    byModel: [...modelMap.values()].sort((a, b) => b.cost - a.cost),
-    byProject: [...projectMap.values()].sort((a, b) => b.cost - a.cost),
-    byCategory: [...categoryMap.values()].sort((a, b) => b.cost - a.cost),
+    byModel: [...modelMap.values()].sort(byMeasureThenName((m) => m.cost, (m) => m.model)),
+    byProject: [...projectMap.values()].sort(
+      byMeasureThenName((p) => p.cost, (p) => `${p.projectSlug}\u0000${p.projectDirName}`)
+    ),
+    byCategory: [...categoryMap.values()].sort(
+      byMeasureThenName((c) => c.cost, (c) => c.category)
+    ),
     byEffort: [...effortMap.values()].sort((a, b) => compareEffort(a.effort, b.effort)),
     byEntrypoint: [...entrypointAccum.entries()]
       .map(([entrypoint, v]) => ({
@@ -885,7 +918,7 @@ export function createUsageAccumulator(period: Period) {
             ...(verifiedTasks > 0 ? { oneShotRate: oneShotTasks / verifiedTasks } : {}),
           };
         })
-        .sort((a, b) => b.cost - a.cost);
+        .sort(byMeasureThenName((x) => x.cost, (x) => x.skill));
     })(),
     byMcpCost: (() => {
       const useExplicit = mcpExplicit.size > 0;
@@ -900,14 +933,18 @@ export function createUsageAccumulator(period: Period) {
               ? {
                   tools: [...tools.entries()]
                     .map(([tool, t]) => ({ tool, turns: t.turns, cost: t.cost }))
-                    .sort((x, y) => y.cost - x.cost),
+                    .sort(byMeasureThenName((t) => t.cost, (t) => t.tool)),
                 }
               : {}),
           };
         })
-        .sort((a, b) => b.cost - a.cost);
+        .sort(byMeasureThenName((x) => x.cost, (x) => x.key));
     })(),
-    topTools: [...toolCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15),
+    // Sliced, so a tie at the boundary decided MEMBERSHIP: a tool appeared in
+    // one run's report and not the next. The most consequential of these.
+    topTools: [...toolCounts.entries()]
+      .sort(byMeasureThenName((t) => t[1], (t) => t[0]))
+      .slice(0, 15),
     toolTransitions: toolTransitionData.transitions,
     toolSelfLoops: toolTransitionData.selfLoops,
     shellStats: groupByBinary(bashCommands),

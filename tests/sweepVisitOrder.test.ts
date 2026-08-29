@@ -106,24 +106,45 @@ describe("sweepSessions visitor ordering (#515)", () => {
     expect(new Set(order).size).toBe(order.length);
   });
 
-  it("emits every session exactly once — but NOT in a stable order", async () => {
-    // Measured, and it corrects a claim I made in this PR's own commit message.
+  it("emits the same sessions in the same order on a second sweep", async () => {
+    // #522. This is the property the whole change exists for, and it was FALSE
+    // before: both shapes recorded completion order, so two sweeps of an
+    // unchanged tree could visit `[s1, s3, s2, s4]` and then `[s3, s1, s4, s2]`
+    // — observed directly, which is how the issue was written.
     //
-    // I wrote that feeding sessions in map order reproduces the map path's
-    // insertion order "exactly". That is true WITHIN one sweep — which is what
-    // the serialization above restores — and false ACROSS sweeps: both shapes
-    // record completion order, so two runs over an unchanged tree can visit
-    // `[s1, s3, s2, s4]` and then `[s3, s1, s4, s2]`. Directly observed here.
-    //
-    // The map form has always behaved this way; `result.set` fires on
-    // completion too. So the report arrays that fall back to insertion order
-    // for ties — `byModel`, `byProject`, `byCategory`, `topTools` — have never
-    // been stable run-to-run, and this PR neither introduces that nor fixes it.
-    // Filed as #522 rather than folded in here: making those sorts total is a
-    // change to reported output and deserves its own verification.
-    //
-    // What this test pins is the part that IS a guarantee: every session is
-    // emitted, exactly once.
+    // Enumerating every candidate before parsing any of them makes the order a
+    // property of the TREE rather than of I/O timing.
+    await writeSession("-home-me-dev-a", "s1", 12);
+    await writeSession("-home-me-dev-a", "s2", 3);
+    await writeSession("-home-me-dev-b", "s3", 20);
+    await writeSession("-home-me-dev-b", "s4", 1);
+
+    const { streamAllSessions } = await import("@/lib/usage/parser");
+
+    const runOnce = async () => {
+      const seen: string[] = [];
+      await streamAllSessions(async (sessionId, turns) => {
+        seen.push(sessionId);
+        // Yield per turn, so the uneven turn counts above would reorder an
+        // order that depended on completion.
+        for (let i = 0; i < turns.length; i++) await Promise.resolve();
+      });
+      return seen;
+    };
+
+    const first = await runOnce();
+    const second = await runOnce();
+    expect(first.length).toBe(4);
+    expect(second).toEqual(first);
+    // And the order is the tree's: directory `-home-me-dev-a` before
+    // `-home-me-dev-b`, file names sorted within each.
+    expect(first).toEqual(["s1", "s2", "s3", "s4"]);
+  });
+
+  it("emits every session exactly once", async () => {
+    // Every session reaches the visitor, and none reaches it twice. Held
+    // before #522 and still held after; kept separate from the ORDER property
+    // above so a regression in either is legible on its own.
     await writeSession("-home-me-dev-a", "s1", 12);
     await writeSession("-home-me-dev-a", "s2", 3);
     await writeSession("-home-me-dev-b", "s3", 20);
@@ -197,21 +218,17 @@ describe("sweepSessions visitor ordering (#515)", () => {
     // that matters: a fold cannot see the same session's tokens added twice.
     expect(streamed.filter((s) => s.id === "dupe")).toHaveLength(1);
 
-    // WHICH copy wins is NOT asserted, and the first version of this test
-    // asserted it and was wrong. It passed alone and failed in the full suite,
-    // because the winner is decided by which parse finishes first: both homes'
-    // project directories go into the same `Promise.all` batch, so two sweeps
-    // of the same tree can pick different copies.
+    // WHICH copy wins is now DETERMINED, and asserted (#522). It used not to
+    // be: the winner was whichever parse finished first, so two sweeps of an
+    // unchanged tree could pick different copies — a test that asserted the
+    // copy passed alone and failed in the full suite.
     //
-    // That race predates this change — the map form resolved it by last-wins
-    // among the same racing writers — and removing it means restructuring the
-    // sweep into enumerate-then-dedupe-then-parse, which is a larger change
-    // than this one should carry. Recorded in #522 with the other sweep-order
-    // nondeterminism rather than left as folklore.
-    //
-    // So: assert that each shape chose A REAL copy, not a particular one.
+    // The sweep enumerates every candidate before parsing any of them, so the
+    // winner is first in (home order, directory name, file name). The primary
+    // home is enumerated before configured extra homes, so its 5-turn copy
+    // wins over the second home's 40-turn one.
     const streamedTurns = streamed.find((s) => s.id === "dupe")?.turns;
-    expect([5, 40]).toContain(streamedTurns);
-    expect([5, 40]).toContain(mapped.get("dupe")?.length);
+    expect(streamedTurns).toBe(5);
+    expect(mapped.get("dupe")?.length).toBe(5);
   });
 });
