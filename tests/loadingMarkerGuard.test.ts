@@ -489,4 +489,43 @@ const EMPTINESS_TRACKED: Record<string, string> = {
     const code = fs.readFileSync("src/components/ui/skeleton.tsx", "utf-8");
     expect(code).toMatch(/LOADING_ATTR|data-loading/);
   });
+
+  it("every pending flag is RAISED somewhere, not only initialised", () => {
+    // The other half of #518, and it took four review findings to state
+    // (Codex P2 + Copilot x3, PR #521). `useState(true)` covers the FIRST
+    // request and no other — these views reload on a filter change, a prop
+    // change, a new project slug, a resolved feature flag — so a re-run showed
+    // the previous answer with no marker, and a previous FAILURE alongside a
+    // later success.
+    //
+    //   A request owns its own state from the moment it starts.
+    //
+    // Checked structurally: a file that declares a pending flag must also SET
+    // it true somewhere other than the declaration. That does not prove the
+    // reset sits at the top of the right function — no source-level rule can —
+    // but it does catch the shape every one of those four findings had, which
+    // was a flag initialised once and never raised again.
+    const violations: string[] = [];
+    for (const file of files) {
+      const code = fs.readFileSync(file, "utf-8");
+      const decls = [...code.matchAll(/const \[(\w*[Pp]ending)\s*,\s*(set\w+)\]\s*=\s*useState(?:<[^>]*>)?\(\s*(\w+)\s*\)/g)];
+      for (const [, flag, setter, initial] of decls) {
+        // Only flags that START as pending. One initialised false is raised by
+        // its request by construction, or it would never show a marker at all.
+        if (initial !== "true") continue;
+        // A `Set`/`Map`-valued "pending" is a different thing entirely — the
+        // set of in-flight row ids in `MemoryTriage`, for instance.
+        const raised = new RegExp(`${setter}\\(\\s*true\\s*\\)`, "g");
+        const count = (code.match(raised) ?? []).length;
+        if (count === 0) {
+          violations.push(
+            `${file} — \`${flag}\` starts true and is never set true again, so ` +
+              "only the first request ever shows a marker. Raise it where the " +
+              "request starts."
+          );
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
 });

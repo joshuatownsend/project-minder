@@ -76,6 +76,14 @@ export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
 
   useEffect(() => {
     let cancelled = false;
+    // The manifest can change under this modal, and the derived state has to
+    // follow the CURRENT request rather than the previous one — otherwise the
+    // marker, the list and `hasTarget` describe a manifest that is no longer
+    // selected while the new fetch is in flight (Copilot, PR #521).
+    setPending(true);
+    setLoadError(null);
+    setProjects(null);
+    setExistingSlug("");
     async function loadProjects() {
       const res = await fetch("/api/projects");
       const data = (await res.json()) as { projects: ProjectData[] };

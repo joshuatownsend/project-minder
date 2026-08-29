@@ -36,6 +36,10 @@ export function WorkflowsBrowser() {
 
   useEffect(() => {
     let cancelled = false;
+    // Raised where the request starts, not only at declaration (#518). A
+    // no-op on the first run; the invariant then holds without this site
+    // having to argue that its effect happens to run once.
+    setPending(true);
     fetch("/api/workflows")
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((body) => {

@@ -106,6 +106,11 @@ export function useQuotaState(
       setPending(false);
       return; // opt-out / config not yet resolved: do no quota work
     }
+    // True at the START of the active branch, not only at declaration. `active`
+    // flips false→true when a gating flag or config resolves, and `pollMs` can
+    // change — in both cases the first real request was in flight while callers
+    // read `pending: false` and rendered "no quota" (Copilot, PR #521).
+    setPending(true);
     let cancelled = false;
     const load = () => {
       loadQuotaClient()

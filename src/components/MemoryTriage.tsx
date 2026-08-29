@@ -51,6 +51,13 @@ export function MemoryTriage() {
   const [confirming, setConfirming] = useState<string | null>(null);
 
   const reload = useCallback(async (signal?: AbortSignal) => {
+      // A REQUEST OWNS ITS OWN STATE FROM THE START. Setting `pending` true only
+      // at declaration covers the first request and no other: these reload on a
+      // filter change, a prop change, or after a mutation, and a re-run left the
+      // previous answer on screen with no marker — and a previous FAILURE
+      // showing after a later success (Codex P2 + Copilot x3, PR #521).
+    setLoadPending(true);
+    setError(null);
     try {
       const r = await fetch("/api/memory/triage", { signal });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);

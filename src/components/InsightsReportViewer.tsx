@@ -20,7 +20,17 @@ export function InsightsReportViewer() {
   const [data, setData] = useState<ReportData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Empty dependency list, so this runs exactly once and there is no re-run to
+  // reset — unlike the reloads elsewhere in this change. Stated rather than
+  // left to inference: if a dependency is ever added here, `pending` and
+  // `error` have to be reset at the top like the others.
   useEffect(() => {
+    // Raised where the request starts, not only at declaration (#518). A
+    // no-op on the first run — which is the point: the invariant holds
+    // without each site having to argue that ITS effect happens to run once.
+    // Two of the six that needed this did re-run, and telling them apart by
+    // reading dependency arrays is exactly the audit that keeps going wrong.
+    setPending(true);
     fetch("/api/insights-report")
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);

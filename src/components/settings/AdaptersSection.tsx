@@ -45,6 +45,12 @@ export function AdaptersSection({
   const [pending, setPending] = useState(true);
 
   useEffect(() => {
+    // Raised where the request starts, not only at declaration (#518). A
+    // no-op on the first run — which is the point: the invariant holds
+    // without each site having to argue that ITS effect happens to run once.
+    // Two of the six that needed this did re-run, and telling them apart by
+    // reading dependency arrays is exactly the audit that keeps going wrong.
+    setPending(true);
     fetch("/api/adapters")
       .then((r) => r.json())
       .then((data: AdapterEntry[]) => setAdapters(data))

@@ -160,6 +160,11 @@ export default function HomePage() {
 
   useEffect(() => {
     const ctrl = new AbortController();
+    // Raised where the request starts, not only at declaration (#518). A no-op
+    // on the first run; the invariant then holds without this site having to
+    // argue that its effect happens to run once.
+    setProjectsPending(true);
+    setProjectsFailed(false);
     fetch("/api/projects", { signal: ctrl.signal })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {

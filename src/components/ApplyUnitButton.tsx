@@ -119,6 +119,12 @@ function ApplyPopover({ unit, source, excludeTargetSlugs, onClose }: ApplyPopove
 
   useEffect(() => {
     let cancelled = false;
+    // Reset before the retry. Several callers build `excludeTargetSlugs` inline,
+    // so this effect re-runs on every render of theirs — and without this a
+    // failure latched: a later SUCCESSFUL load left the old error on screen
+    // beside the freshly loaded list (Codex P2, PR #521).
+    setPending(true);
+    setLoadError(null);
     fetch("/api/projects")
       .then((r) => r.json())
       .then((data: { projects: ProjectData[] }) => {

@@ -64,6 +64,10 @@ export function MarkAsTemplateModal({ project, onClose }: Props) {
 
   useEffect(() => {
     let cancelled = false;
+    // Raised where the request starts, not only at declaration (#518). This
+    // effect DOES re-run, so without it a reload showed the previous
+    // answer with no marker.
+    setInventoryPending(true);
     async function loadUnits() {
       try {
         // Fetch the project's units in parallel. We use the existing

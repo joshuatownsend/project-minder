@@ -53,6 +53,13 @@ export function MemorySeedTray() {
   }
 
   async function reload(anchor: string, signal?: AbortSignal) {
+      // A REQUEST OWNS ITS OWN STATE FROM THE START. Setting `pending` true only
+      // at declaration covers the first request and no other: these reload on a
+      // filter change, a prop change, or after a mutation, and a re-run left the
+      // previous answer on screen with no marker — and a previous FAILURE
+      // showing after a later success (Codex P2 + Copilot x3, PR #521).
+    setPending(true);
+    setError(null);
     try {
       const url = anchor ? `/api/memory/seed?anchor=${encodeURIComponent(anchor)}` : "/api/memory/seed";
       const r = await fetch(url, { signal });

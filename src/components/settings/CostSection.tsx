@@ -67,6 +67,12 @@ export function CostSection({
   const { quota, pending: quotaPending } = useQuotaState();
 
   useEffect(() => {
+    // Raised where the request starts, not only at declaration (#518). A
+    // no-op on the first run — which is the point: the invariant holds
+    // without each site having to argue that ITS effect happens to run once.
+    // Two of the six that needed this did re-run, and telling them apart by
+    // reading dependency arrays is exactly the audit that keeps going wrong.
+    setFxPending(true);
     fetch("/api/integrations/fx")
       .then((r) => r.json())
       .then((d) => setFx(d as FxData))
