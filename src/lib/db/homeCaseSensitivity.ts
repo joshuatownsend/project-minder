@@ -130,8 +130,19 @@ export async function probeCaseSensitivity(dir: string): Promise<CaseSensitivity
       // so it moves to the next entry. Reading every failure as ENOENT is what
       // the first version did, and it would classify a flaky network home as
       // case-sensitive on a transient error (Codex P2, PR #523).
-      if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return true;
-      continue;
+      if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") continue;
+      // ENOENT on the flipped name is the case-sensitive answer ONLY if the
+      // original is still there. An entry deleted or renamed between the
+      // `readdir` and this `stat` makes both spellings ENOENT — and reading
+      // that as a verdict would record a case-INSENSITIVE home as sensitive
+      // and leave its project variants split, which is the defect this file
+      // exists to remove (Codex P2, PR #523).
+      try {
+        await fs.stat(path.join(dir, name));
+      } catch {
+        continue; // the entry vanished; it proves nothing
+      }
+      return true;
     }
 
     // The flipped spelling is not in the listing, yet it resolves. The
