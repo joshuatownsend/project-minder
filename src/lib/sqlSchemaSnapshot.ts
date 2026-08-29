@@ -151,6 +151,11 @@ export const SQL_SCHEMA: TableSchema[] = [
     ],
   },
   {
+    // v28 (#416)
+    table: "home_properties",
+    columns: ["home_key", "case_sensitive", "probed_at"],
+  },
+  {
     table: "session_prs",
     columns: [
       "session_id", "pr_url", "pr_number", "repo",

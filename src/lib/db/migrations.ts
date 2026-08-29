@@ -929,6 +929,37 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    version: 28,
+    name: "home_properties: per-home filesystem case-sensitivity (#416)",
+    up: (db) => {
+      // A macOS volume is case-insensitive by default, so one project can be
+      // recorded as both `-Users-me-Dev-app` and `-users-me-dev-app`. Both
+      // produce a single slug through `toSlug`, but `queryByProject` keeps the
+      // encoded dir name in its grouping identity and folds it only for
+      // Windows-shaped (`X--`) encodings — so those two rows stay apart and the
+      // project's cost splits across them. Same defect #236 fixed for Windows.
+      //
+      // The fix needs a fact the query layer does not have and CANNOT get: the
+      // database stores an encoded path string, not the case-sensitivity of the
+      // volume that produced it, and that volume may be on another machine or
+      // since deleted. So it is recorded at ingest, where the filesystem is
+      // actually reachable, and read back here.
+      //
+      // `case_sensitive` is nullable ON PURPOSE. NULL means "not determined" —
+      // an empty home, an unreadable one, a volume that has gone away — and
+      // reads as "do not fold", which is the current behaviour. Over-merging
+      // silently sums two real projects into one number; under-merging shows
+      // one project as two rows. Only the second is recoverable by looking.
+      db.prepare(
+        `CREATE TABLE IF NOT EXISTS home_properties (
+           home_key       TEXT PRIMARY KEY,
+           case_sensitive INTEGER,
+           probed_at      TEXT NOT NULL
+         )`
+      ).run();
+    },
+  },
 ];
 
 /**

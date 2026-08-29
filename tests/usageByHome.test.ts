@@ -312,6 +312,112 @@ describe.skipIf(!driverAvailable)("#236 — one row per project, not per dir-nam
     mods.conn.closeDb();
   });
 
+  it("folds POSIX case variants only when the home is recorded case-insensitive", async () => {
+    // #416. A macOS volume is case-insensitive by default, so one project can
+    // be recorded as both `-Users-me-Dev-app` and `-users-me-dev-app`. Verified
+    // against the real `toSlug`: both produce one slug. The Windows fold does
+    // not reach them — they have no `X--` prefix — so the project's cost split
+    // across two rows.
+    //
+    // The rule needs a fact the query layer cannot obtain, so it is RECORDED at
+    // ingest and read back here. Both directions are asserted, because folding
+    // unconditionally is the worse bug: on Linux `/home/me/Dev` and
+    // `/home/me/dev` really are two projects.
+    const mods = await reloadModules();
+    const init = await mods.mig.initDb();
+    expect(init.available).toBe(true);
+    const db = (await mods.conn.getDb())!;
+
+    const insensitiveHome = normalizePathKey(path.join(tmpHome, "mac", ".claude"));
+    const sensitiveHome = normalizePathKey(path.join(tmpHome, "linux", ".claude"));
+
+    db.prepare(
+      "INSERT INTO home_properties (home_key, case_sensitive, probed_at) VALUES (?, ?, ?)"
+    ).run(insensitiveHome, 0, "2026-03-01T00:00:00Z");
+    db.prepare(
+      "INSERT INTO home_properties (home_key, case_sensitive, probed_at) VALUES (?, ?, ?)"
+    ).run(sensitiveHome, 1, "2026-03-01T00:00:00Z");
+
+    const insertSession = db.prepare(
+      `INSERT INTO sessions
+         (session_id, project_slug, project_dir_name, file_path, file_mtime_ms,
+          file_size, home_key, start_ts, end_ts, assistant_turn_count,
+          indexed_at_ms)
+       VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?, 1, 0)`
+    );
+    const insertTurn = db.prepare(
+      `INSERT INTO turns
+         (session_id, turn_index, ts, role, model, input_tokens, output_tokens, cost_usd)
+       VALUES (?, 0, ?, 'assistant', 'claude-opus-4-7', ?, 0, ?)`
+    );
+
+    const slug = "users-me-dev-app";
+    for (const [id, dirName, home, tokens, cost] of [
+      ["mac-upper", "-Users-me-Dev-app", insensitiveHome, 100, 1],
+      ["mac-lower", "-users-me-dev-app", insensitiveHome, 300, 3],
+      ["linux-upper", "-Users-me-Dev-app", sensitiveHome, 700, 7],
+      ["linux-lower", "-users-me-dev-app", sensitiveHome, 900, 9],
+    ] as const) {
+      insertSession.run(id, slug, dirName, `/tmp/${id}.jsonl`, home,
+        "2025-01-01T10:00:00Z", "2025-01-01T10:05:00Z");
+      insertTurn.run(id, "2025-01-01T10:00:00Z", tokens, cost);
+    }
+
+    const report = mods.fromDb.loadUsageReportFromSql(db, "all", slug);
+    const byHome = new Map(report.byProject.map((r) => [r.tokens, r]));
+
+    // The case-INSENSITIVE home: one row carrying both spellings' spend.
+    expect([...byHome.keys()]).toContain(400);
+    // The case-SENSITIVE home: still two rows, because they are two directories.
+    expect([...byHome.keys()]).toContain(700);
+    expect([...byHome.keys()]).toContain(900);
+    // Three rows total, not two and not four.
+    expect(report.byProject).toHaveLength(3);
+    // And no spend was lost or double-counted on the way.
+    expect(report.byProject.reduce((s, r) => s + r.tokens, 0)).toBe(2000);
+
+    mods.conn.closeDb();
+  });
+
+  it("does not fold POSIX variants when no verdict was recorded", async () => {
+    // Unknown is not "insensitive". A home that was never probed — an older
+    // index, an unreadable volume, one that has gone away — must keep today's
+    // behaviour, because over-merging silently sums two real projects into one
+    // number while under-merging shows one project as two visible rows. Only
+    // the second is recoverable by looking at it.
+    const mods = await reloadModules();
+    const init = await mods.mig.initDb();
+    expect(init.available).toBe(true);
+    const db = (await mods.conn.getDb())!;
+
+    const unprobed = normalizePathKey(path.join(tmpHome, "unknown", ".claude"));
+    const insertSession = db.prepare(
+      `INSERT INTO sessions
+         (session_id, project_slug, project_dir_name, file_path, file_mtime_ms,
+          file_size, home_key, start_ts, end_ts, assistant_turn_count,
+          indexed_at_ms)
+       VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?, 1, 0)`
+    );
+    const insertTurn = db.prepare(
+      `INSERT INTO turns
+         (session_id, turn_index, ts, role, model, input_tokens, output_tokens, cost_usd)
+       VALUES (?, 0, ?, 'assistant', 'claude-opus-4-7', ?, 0, ?)`
+    );
+
+    const slug = "users-me-dev-app";
+    insertSession.run("a", slug, "-Users-me-Dev-app", "/tmp/a.jsonl", unprobed,
+      "2025-01-01T10:00:00Z", "2025-01-01T10:05:00Z");
+    insertTurn.run("a", "2025-01-01T10:00:00Z", 100, 1);
+    insertSession.run("b", slug, "-users-me-dev-app", "/tmp/b.jsonl", unprobed,
+      "2025-01-01T10:00:00Z", "2025-01-01T10:05:00Z");
+    insertTurn.run("b", "2025-01-01T10:00:00Z", 300, 3);
+
+    const report = mods.fromDb.loadUsageReportFromSql(db, "all", slug);
+    expect(report.byProject).toHaveLength(2);
+
+    mods.conn.closeDb();
+  });
+
   it("keeps two DRIVES apart even though they slugify identically", async () => {
     // The other side of the same identity question, and the reason the fold
     // is drive-letter-case-only rather than dropping project_dir_name from
