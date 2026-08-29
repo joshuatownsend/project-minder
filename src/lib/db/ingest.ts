@@ -13,6 +13,7 @@ import {
 import { canonicalizeDirName, mostFrequent } from "@/lib/usage/parser";
 import { getClaudeHomes, getReadableClaudeHomes } from "@/lib/claudeHome";
 import { normalizePathKey, sessionFileHomeKey } from "@/lib/platform";
+import { recordHomeCaseSensitivity } from "./homeCaseSensitivity";
 import { chunkText } from "./textChunks";
 import type { ConversationEntry } from "@/lib/scanner/claudeConversations";
 import { projectSlugFromDirName } from "@/lib/sessions/projectIdentity";
@@ -3880,6 +3881,16 @@ async function runReconcileAllSessions(
     const readableHomes = await getReadableClaudeHomes(config);
     const readableSet = new Set(readableHomes);
     projectsDirs = readableHomes.map((h) => path.join(h, "projects"));
+    // Record each home's filesystem case-sensitivity while we are here and the
+    // volume is demonstrably reachable (#416). It is the fact `queryByProject`
+    // needs and cannot obtain: the DB stores an encoded path string, not the
+    // behaviour of the volume that produced it, and that volume may be on
+    // another machine or since deleted. Once per RECONCILE and per home — the
+    // answer is a property of the volume, not of a project directory.
+    //
+    // Awaited rather than fired off: a probe that is still running when the
+    // reconcile finishes would write into a DB the caller may have closed.
+    await recordHomeCaseSensitivity(db, readableHomes);
     unavailableDirs = allHomes
       .filter((h) => !readableSet.has(h))
       .map((h) => path.join(h, "projects"));

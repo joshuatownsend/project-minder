@@ -38,6 +38,7 @@ import { computeStreaks } from "@/lib/usage/streaks";
 import { computeContributionCalendar } from "@/lib/usage/contributionCalendar";
 import { computeToolTransitions } from "@/lib/usage/toolTransitions";
 import type { ToolTransitionsTurn } from "@/lib/usage/toolTransitions";
+import { readHomeCaseSensitivity } from "@/lib/db/homeCaseSensitivity";
 
 // SQL-aggregate read path for /api/usage. Builds a `UsageReport`
 // directly from `SELECT SUM(...) GROUP BY ...` queries against the
@@ -130,8 +131,29 @@ export function needsReconcileAfterV3(db: DatabaseT.Database): boolean {
  * construction instead of by coincidence of character set. The `[A-Za-z]--`
  * shape is the one `canonicalizeDirName` tests for (`usage/parser.ts:72`).
  */
-function foldDirNameForIdentity(dirName: string): string {
-  return /^[A-Za-z]--/.test(dirName) ? dirName.toLowerCase() : dirName;
+function foldDirNameForIdentity(
+  dirName: string,
+  /**
+   * The recorded verdict for the home this row came from, or undefined when
+   * none was recorded (#416).
+   *
+   * `undefined` deliberately does NOT fold. Over-merging silently sums two real
+   * projects into one number with no signal that it happened; under-merging
+   * shows one project as two rows, which a reader can see and a later probe can
+   * fix. Only the second is recoverable, so uncertainty resolves to it.
+   */
+  homeIsCaseInsensitive?: boolean
+): string {
+  // Windows-shaped encodings fold on their own shape, with no probe involved:
+  // an `X--` prefix IS the statement that this came from a Windows drive, and
+  // those are case-insensitive. This is #236's rule and it does not depend on
+  // anything recorded later.
+  if (/^[A-Za-z]--/.test(dirName)) return dirName.toLowerCase();
+  // POSIX encodings fold only against a recorded verdict. A macOS volume is
+  // case-insensitive by default, so `-Users-me-Dev-app` and `-users-me-dev-app`
+  // are one directory — while on Linux `/home/me/Dev` and `/home/me/dev` really
+  // are two, and folding them would merge two projects' spend.
+  return homeIsCaseInsensitive ? dirName.toLowerCase() : dirName;
 }
 
 interface FilterParams {
@@ -407,11 +429,16 @@ function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdo
   // per distinct spelling; this collapses them on the folded identity and
   // sums the measures, so a project recorded three ways reports its whole
   // spend once rather than a third of it three times (#236).
+  // One read for the whole query, not one per row: the verdicts are a small
+  // per-home table and re-reading it per row would put a statement in the merge
+  // loop for a value that cannot change during it.
+  const caseSensitiveByHome = readHomeCaseSensitivity(db);
   const merged = new Map<string, ProjectBreakdown & { homeKey: string | null }>();
   for (const row of rows) {
+    const sensitive = row.homeKey === null ? undefined : caseSensitiveByHome.get(row.homeKey);
     const key = [
       row.projectSlug,
-      foldDirNameForIdentity(row.projectDirName),
+      foldDirNameForIdentity(row.projectDirName, sensitive === undefined ? undefined : !sensitive),
       row.homeKey ?? "",
     ].join("\u0000");
     const prev = merged.get(key);
