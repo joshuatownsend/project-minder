@@ -103,7 +103,13 @@ export function resolveUsageHomeKey(
  *  home pin (if present on both) disagrees. Missing keys — older cache
  *  entries, single-session loads, local candidates — fall back to
  *  dirname-only matching. */
-function turnMatchesCandidate(
+/**
+ * Exported for the streaming yield pass (#515), which applies this predicate
+ * to one session at a time instead of walking a resident session map per
+ * project. Same test, same head-turn keying — sharing it is what keeps the two
+ * shapes from drifting.
+ */
+export function turnMatchesCandidate(
   turn: UsageTurn,
   c: DirNameCandidate
 ): boolean {

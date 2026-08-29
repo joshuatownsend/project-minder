@@ -101,6 +101,24 @@ describe("generateUsageReport — home filter (file backend)", () => {
     vi.doMock("@/lib/usage/parser", async (importOriginal) => ({
       ...(await importOriginal<typeof import("@/lib/usage/parser")>()),
       parseAllSessions: vi.fn(async () => sessionMap),
+      // BOTH shapes of the sweep, from one fixture. `generateUsageReport`
+      // streams as of #515 while `augmentPortfolioYield` and the analytics
+      // routes still take the map — mocking only one of them leaves the other
+      // sweeping the real filesystem, which is how this test started reporting
+      // zero tokens for a home whose filter was working perfectly.
+      streamAllSessions: vi.fn(
+        async (
+          visit: (id: string, turns: UsageTurn[]) => void | Promise<void>,
+          options: { includeSidechains?: boolean } = {}
+        ) => {
+          for (const [id, turns] of sessionMap) {
+            const projected = options.includeSidechains
+              ? turns
+              : turns.filter((t) => !t.isSidechain);
+            if (projected.length > 0) await visit(id, projected);
+          }
+        }
+      ),
     }));
     const { generateUsageReport } = await import("@/lib/usage/aggregator");
 
