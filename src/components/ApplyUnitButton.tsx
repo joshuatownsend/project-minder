@@ -125,6 +125,13 @@ function ApplyPopover({ unit, source, excludeTargetSlugs, onClose }: ApplyPopove
     // beside the freshly loaded list (Codex P2, PR #521).
     setPending(true);
     setLoadError(null);
+    // The TARGET is part of this request's state too. Leaving it behind meant a
+    // refresh that returned zero eligible projects showed "no other projects
+    // available" while Preview and Apply stayed enabled — gated on `targetSlug`,
+    // which still held the previous, now-excluded project. The buttons looked
+    // right and would have applied to a project the list had just hidden
+    // (Codex P2, PR #521).
+    setTargetSlug("");
     fetch("/api/projects")
       .then((r) => r.json())
       .then((data: { projects: ProjectData[] }) => {
