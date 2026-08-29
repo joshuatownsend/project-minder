@@ -761,7 +761,7 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
   // shrank silently and `complete: true` was still reported. Cleared at the
   // START, so a pass that throws part way through still leaves behind what it
   // observed.
-  beginSweepFailureCycle("usage");
+  const sweepToken = beginSweepFailureCycle("usage");
   try {
 
   // Sweep every readable Claude home (primary + config.claudeHomes) — a home
@@ -1162,7 +1162,7 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
     // In a `finally`: a pass that threw still publishes what it observed, and
     // those partial findings are usually the relevant ones — a failure severe
     // enough to stop the sweep is exactly what a reader needs to see (#513).
-    endSweepFailureCycle("usage");
+    endSweepFailureCycle("usage", sweepToken);
   }
 }
 

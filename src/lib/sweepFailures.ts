@@ -66,6 +66,22 @@ export interface SweepFailure {
 interface CycleResult {
   items: SweepFailure[];
   total: number;
+  /**
+   * Distinct `scope|path` keys seen in this cycle, so `total` counts LOCATIONS
+   * rather than enumeration attempts. Bounded (see `MAX_TRACKED_KEYS`) — past
+   * that the cycle stops deduping and says so by leaving keys out of the set.
+   */
+  seen: Set<string>;
+  /**
+   * The generation this cycle was opened under. A `clearSweepFailures()` — a
+   * corpus-configuration change — bumps the generation, so a sweep still
+   * running from before the change can be told apart from the replacement that
+   * started after it. Without this the old caller's `end` decremented the NEW
+   * cycle's depth to zero and published its half-finished result as final,
+   * exposing paths from the old configuration and dropping everything the
+   * replacement found afterwards. (Codex P2, PR #527.)
+   */
+  gen: number;
 }
 
 const globalForSweep = globalThis as unknown as {
@@ -87,6 +103,8 @@ const globalForSweep = globalThis as unknown as {
    * about.
    */
   __minderSweepDepth?: Map<SweepName, number>;
+  /** Bumped by `clearSweepFailures`; see `CycleResult.gen`. */
+  __minderSweepGeneration?: number;
 };
 
 function published(): Map<SweepName, CycleResult> {
@@ -101,6 +119,10 @@ function pending(): Map<SweepName, CycleResult> {
     globalForSweep.__minderSweepPending = new Map();
   }
   return globalForSweep.__minderSweepPending;
+}
+
+function generation(): number {
+  return globalForSweep.__minderSweepGeneration ?? 0;
 }
 
 function depth(): Map<SweepName, number> {
@@ -119,12 +141,14 @@ function depth(): Map<SweepName, number> {
  * `complete: true` and clearing the banner for a fault that is still there,
  * then bringing it back when the sweep finishes (Codex P2, PR #527).
  */
-export function beginSweepFailureCycle(sweep: SweepName): void {
+export function beginSweepFailureCycle(sweep: SweepName): number {
+  const gen = generation();
   const d = (depth().get(sweep) ?? 0) + 1;
   depth().set(sweep, d);
   // Only the OUTERMOST cycle resets. An overlapping caller joins the one in
   // flight rather than restarting it.
-  if (d === 1) pending().set(sweep, { items: [], total: 0 });
+  if (d === 1) pending().set(sweep, { items: [], total: 0, seen: new Set(), gen });
+  return gen;
 }
 
 /**
@@ -135,7 +159,13 @@ export function beginSweepFailureCycle(sweep: SweepName): void {
  * most relevant ones, since a failure severe enough to stop the sweep is
  * exactly what a reader needs to see.
  */
-export function endSweepFailureCycle(sweep: SweepName): void {
+export function endSweepFailureCycle(sweep: SweepName, token?: number): void {
+  // A caller whose generation has been superseded touches NOTHING — not the
+  // depth counter, not the pending result. It was invalidated by a config
+  // change mid-sweep, and whatever is in flight now belongs to the replacement
+  // sweep that started afterwards. Decrementing the depth here is how the old
+  // caller used to publish the new cycle's half-finished result as final.
+  if (token !== undefined && token !== generation()) return;
   const d = depth().get(sweep) ?? 0;
   if (d === 0) return; // no cycle was started; leave the last result alone
   const next = d - 1;
@@ -145,6 +175,12 @@ export function endSweepFailureCycle(sweep: SweepName): void {
   if (next > 0) return;
   const found = pending().get(sweep);
   if (!found) return;
+  // Belt and braces for a caller that passed no token: a pending cycle opened
+  // before the last clear is not this generation's answer either.
+  if (found.gen !== generation()) {
+    pending().delete(sweep);
+    return;
+  }
   published().set(sweep, found);
   pending().delete(sweep);
 }
@@ -159,6 +195,22 @@ export function endSweepFailureCycle(sweep: SweepName): void {
  */
 const MAX_PER_SWEEP = 50;
 
+/**
+ * How many distinct keys one cycle will remember for deduplication.
+ *
+ * Higher than the detail cap on purpose — a `Set` of path strings is far
+ * cheaper than the retained failure objects, and the count is the figure a
+ * broad fault most distorts. Past this the cycle stops deduping rather than
+ * growing without bound, which can only make the total too HIGH, never too
+ * low: a diagnostic that overstates a fault is safer than one that hides it.
+ */
+const MAX_TRACKED_KEYS = 2000;
+
+/** One location, however many sweeps trip over it. */
+export function sweepFailureKey(failure: SweepFailure): string {
+  return `${failure.scope}|${failure.path}`;
+}
+
 export function recordSweepFailure(failure: SweepFailure): void {
   const result = pending().get(failure.sweep);
   if (!result) {
@@ -167,6 +219,14 @@ export function recordSweepFailure(failure: SweepFailure): void {
     // letting entries accumulate across passes forever.
     return;
   }
+  // One LOCATION, not one attempt. Within a cycle a directory can be tripped
+  // over more than once; across sweeps it is expected, since the usage and
+  // sessions sweeps walk the same Claude tree. Counting attempts told the user
+  // "2 locations could not be read" about a single broken directory, and
+  // rendered its path twice. (Codex P2, PR #527.)
+  const key = sweepFailureKey(failure);
+  if (result.seen.has(key)) return;
+  if (result.seen.size < MAX_TRACKED_KEYS) result.seen.add(key);
   // Counted ALWAYS, kept only up to the cap. The cap bounds memory and what a
   // banner can render; it must not bound what the count reports.
   result.total++;
@@ -174,10 +234,25 @@ export function recordSweepFailure(failure: SweepFailure): void {
   result.items.push(failure);
 }
 
-/** The capped detail from the most recent COMPLETED cycle of each sweep. */
+/**
+ * The capped detail from the most recent COMPLETED cycle of each sweep,
+ * deduplicated by location.
+ *
+ * Per-cycle deduplication cannot do this: the usage and sessions sweeps hold
+ * separate cycles and walk the same tree, so one unreadable directory is
+ * genuinely found twice. Merging happens here, where both are visible.
+ */
 export function getSweepFailures(): SweepFailure[] {
   const out: SweepFailure[] = [];
-  for (const r of published().values()) out.push(...r.items);
+  const seen = new Set<string>();
+  for (const r of published().values()) {
+    for (const f of r.items) {
+      const key = sweepFailureKey(f);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(f);
+    }
+  }
   return out;
 }
 
@@ -189,9 +264,17 @@ export function getSweepFailures(): SweepFailure[] {
  * the count would understate it precisely when it matters.
  */
 export function getSweepFailureTotal(): number {
-  let total = 0;
-  for (const r of published().values()) total += r.total;
-  return total;
+  // Deduplicated across sweeps for everything still in the detail arrays, then
+  // plus whatever each cycle counted past its detail cap.
+  //
+  // That residual cannot be deduplicated — the paths behind it were never
+  // retained — so on a fault broad enough to blow the cap in two sweeps at
+  // once the total can still overstate. Documented rather than hidden, and in
+  // that direction on purpose: this figure exists to tell a user their corpus
+  // is incomplete, and the failure that matters is understating it.
+  let residual = 0;
+  for (const r of published().values()) residual += Math.max(0, r.total - r.items.length);
+  return getSweepFailures().length + residual;
 }
 
 /**
@@ -207,6 +290,11 @@ export function clearSweepFailures(): void {
   globalForSweep.__minderSweepPublished = undefined;
   globalForSweep.__minderSweepPending = undefined;
   globalForSweep.__minderSweepDepth = undefined;
+  // Bumped LAST, and this is the half that makes the reset safe rather than
+  // merely thorough: a sweep already running was opened under the old
+  // generation, so from here its `end` is a no-op instead of publishing stale
+  // paths over whatever the replacement sweep has found. See `CycleResult.gen`.
+  globalForSweep.__minderSweepGeneration = generation() + 1;
 }
 
 /**
@@ -263,8 +351,18 @@ export async function pathEntryExists(target: string): Promise<boolean> {
   try {
     await fsPromises.lstat(target);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    // ONLY `ENOENT` means absent. Returning false for every error made a
+    // permissions or I/O failure read as "there is nothing here", which is the
+    // opposite of what it means and would have skipped reporting a genuinely
+    // unreadable `projects` entry — the exact case this function was added to
+    // catch, and a direct contradiction of the sentence above it.
+    // (Copilot, PR #527.)
+    //
+    // Anything else — EACCES, EIO, ELOOP, ENOTDIR on a parent — means the path
+    // is THERE and could not be interrogated, so the caller must treat it as
+    // present and report the failure.
+    return (err as NodeJS.ErrnoException)?.code !== "ENOENT";
   }
 }
 

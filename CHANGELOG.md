@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
   The collector is **double-buffered**: the previous cycle's result stays readable while the next sweep runs, so a poll landing mid-sweep sees the last complete answer instead of an empty one that reads as "all clear". Overlapping cycles of the same sweep share one result rather than truncating each other, detail is capped at 50 entries while `degradedTotal` stays uncapped, and the record is cleared only by a config change that can actually move the swept set — `claudeHomes`, `pathMappings`, `enabledAdapters` — not by every write, which would erase a live fault on a keyboard-shortcut change.
 
+  It counts **locations, not enumeration attempts**. The usage and sessions sweeps walk the same Claude tree, so one unreadable directory is genuinely found twice; summing the cycles reported "2 locations could not be read" about a single directory and printed its path twice. A sweep that a config change invalidates mid-flight now also finishes as a no-op instead of publishing its half-finished result over the replacement sweep that started after it.
+
   **A fresh install is not degraded.** A home with no `projects/` yet is every machine before its first session, so that case stays silent — but only when the directory is genuinely absent. A `projects` **symlink onto a disconnected drive** fails `readdir` with the same `ENOENT` while the home sits right there, so the check asks `lstat` about the path itself; the one genuinely broken case used to be reported as healthy.
 
 ### Changed

@@ -196,3 +196,120 @@ describe("the banner counts what failed, not what it kept", () => {
     expect(src).not.toMatch(/\$\{degraded\.length\} locations/);
   });
 });
+
+/**
+ * Round 5 — three more ways the record misdescribed the corpus.
+ *
+ * Behavioural, not source-level: all three are in the collector, which this
+ * suite can execute directly.
+ */
+describe("round 5 — the collector tells the truth about what failed", () => {
+  it("treats an unreadable path as PRESENT, not absent", async () => {
+    // `pathEntryExists` returned false for ANY lstat error, so a permissions or
+    // I/O failure read as "there is nothing here" — the opposite of what it
+    // means, and a direct contradiction of the comment above it. It would have
+    // skipped reporting a genuinely unreadable `projects` entry, which is the
+    // one case the function was added to catch. (Copilot, PR #527.)
+    //
+    // The errno is INJECTED rather than provoked. Windows collapses every
+    // lstat failure to ENOENT — measured here on all three of the obvious
+    // candidates (a path under a file, an over-long path, a missing path) —
+    // so a filesystem-provoked EACCES/ENOTDIR would exercise the distinction
+    // on CI's Linux job and silently not exercise it anywhere else. A test
+    // that runs everywhere and discriminates nowhere is the failure mode this
+    // suite keeps finding in its own assertions.
+    const { pathEntryExists } = await import("@/lib/sweepFailures");
+    const { promises: realFs } = await import("fs");
+
+    const denied = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    const spy = vi.spyOn(realFs, "lstat").mockRejectedValueOnce(denied);
+    expect(await pathEntryExists(path.join(tmpHome, "guarded"))).toBe(true);
+    spy.mockRestore();
+
+    // And a genuine absence still reads as absent, or every fresh install would
+    // warn. Not injected — this one the filesystem produces the same way on
+    // every platform.
+    expect(await pathEntryExists(path.join(tmpHome, "nothing-here"))).toBe(false);
+  });
+
+  it("counts one broken directory once, however many sweeps trip over it", async () => {
+    // The usage and sessions sweeps walk the same Claude tree, so a single
+    // unreadable directory is genuinely found by both. Summing the cycles told
+    // the user "2 locations could not be read" about one location, and rendered
+    // its path twice. (Codex P2, PR #527.)
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      getSweepFailures,
+      getSweepFailureTotal,
+    } = await import("@/lib/sweepFailures");
+
+    const same = { path: "/home/me/.claude/projects", scope: "projects-dir" as const };
+
+    const t1 = beginSweepFailureCycle("usage");
+    recordSweepFailure({ ...same, sweep: "usage" });
+    endSweepFailureCycle("usage", t1);
+
+    const t2 = beginSweepFailureCycle("sessions");
+    recordSweepFailure({ ...same, sweep: "sessions" });
+    endSweepFailureCycle("sessions", t2);
+
+    expect(getSweepFailures()).toHaveLength(1);
+    expect(getSweepFailureTotal()).toBe(1);
+  });
+
+  it("counts a directory once even when one sweep trips over it twice", async () => {
+    // The within-cycle half of the same rule.
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      getSweepFailureTotal,
+    } = await import("@/lib/sweepFailures");
+
+    const t = beginSweepFailureCycle("usage");
+    recordSweepFailure({ path: "/a", scope: "project-dir", sweep: "usage" });
+    recordSweepFailure({ path: "/a", scope: "project-dir", sweep: "usage" });
+    recordSweepFailure({ path: "/b", scope: "project-dir", sweep: "usage" });
+    endSweepFailureCycle("usage", t);
+
+    // Two locations, three attempts.
+    expect(getSweepFailureTotal()).toBe(2);
+  });
+
+  it("does not let a sweep invalidated mid-flight publish over its replacement", async () => {
+    // A corpus-configuration change clears the collector while a sweep is
+    // running. If a replacement sweep of the same name starts before the old
+    // one finishes, the old caller's `end` used to decrement the NEW cycle's
+    // depth to zero and publish its half-finished result as final — exposing
+    // paths from the old configuration and dropping everything the replacement
+    // found afterwards. (Codex P2, PR #527.)
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      getSweepFailures,
+      clearSweepFailures: clear,
+    } = await import("@/lib/sweepFailures");
+
+    // The sweep that is about to be invalidated.
+    const stale = beginSweepFailureCycle("usage");
+    recordSweepFailure({ path: "/removed-home", scope: "projects-dir", sweep: "usage" });
+
+    // The user removes the unreachable home.
+    clear();
+
+    // A replacement sweep starts and is still running.
+    const fresh = beginSweepFailureCycle("usage");
+    recordSweepFailure({ path: "/still-broken", scope: "projects-dir", sweep: "usage" });
+
+    // The OLD caller finishes. It must change nothing.
+    endSweepFailureCycle("usage", stale);
+    expect(getSweepFailures()).toHaveLength(0);
+
+    // And the replacement still publishes its own, complete result.
+    endSweepFailureCycle("usage", fresh);
+    expect(getSweepFailures().map((f) => f.path)).toEqual(["/still-broken"]);
+  });
+});

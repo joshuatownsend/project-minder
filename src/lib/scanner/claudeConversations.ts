@@ -873,7 +873,7 @@ export async function scanAllSessions(): Promise<SessionSummary[]> {
   // Opened here rather than around the whole function: everything above is
   // config reading, and a cycle spanning it would republish an empty result for
   // a caller that bailed before touching the filesystem.
-  beginSweepFailureCycle("sessions");
+  const sweepToken = beginSweepFailureCycle("sessions");
   try {
     for (const home of homes) {
       const projectsDir = path.join(home, "projects");
@@ -930,7 +930,7 @@ export async function scanAllSessions(): Promise<SessionSummary[]> {
   } finally {
     // `finally`, as at the other two cycle sites: a sweep that threw part way
     // through still reports what it managed to observe.
-    endSweepFailureCycle("sessions");
+    endSweepFailureCycle("sessions", sweepToken);
   }
 
   return sessions;
@@ -1834,7 +1834,7 @@ export async function scanClaudeConversationsForProjects(
 
   // Cleared at the START, so a scan that throws part way through still leaves
   // behind what it observed (#513).
-  beginSweepFailureCycle("sessions");
+  const sweepToken = beginSweepFailureCycle("sessions");
   const parts: ClaudeUsageStats[] = [];
   try {
     for (const home of homes) {
@@ -1843,7 +1843,7 @@ export async function scanClaudeConversationsForProjects(
   } finally {
     // See the usage sweep: published in a `finally` so a scan that threw still
     // reports what it observed.
-    endSweepFailureCycle("sessions");
+    endSweepFailureCycle("sessions", sweepToken);
   }
   return mergeClaudeUsageStats(parts);
 }
