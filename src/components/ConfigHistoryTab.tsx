@@ -17,6 +17,12 @@ export interface HistoryEntry {
 
 export function ConfigHistoryTab({ projectSlug, projectPath }: { projectSlug: string; projectPath: string }) {
   const { showToast } = useToast();
+  // #518: a flag that is definitively CLEARED, not an emptiness test.
+  // `entries === null` reads as "still loading" AND as "the request failed" — a
+  // failed fetch leaves the state exactly as empty as a pending one, so the
+  // marker never cleared and every `[data-loading]` consumer read the page
+  // as busy indefinitely. Settled in a `finally`, so failure settles it too.
+  const [pending, setPending] = useState(true);
   const [entries, setEntries] = useState<HistoryEntry[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [restoring, setRestoring] = useState<string | null>(null);
@@ -30,6 +36,8 @@ export function ConfigHistoryTab({ projectSlug, projectPath }: { projectSlug: st
       setLoadError(null);
     } catch (e: unknown) {
       setLoadError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPending(false);
     }
   }
 
@@ -73,11 +81,15 @@ export function ConfigHistoryTab({ projectSlug, projectPath }: { projectSlug: st
     );
   }
 
-  if (entries === null) {
+  if (pending) {
     return <div data-loading="true" style={{ padding: "16px", color: "var(--text-muted)", fontSize: "0.78rem" }}>Loading…</div>;
   }
 
-  if (entries.length === 0) {
+  // `entries === null` after settling means the request finished without
+  // producing a list — folded in with the genuinely-empty case, since the two
+  // read identically to a user. What it must NOT do is claim the page is still
+  // loading, which is what it did before #518.
+  if (entries === null || entries.length === 0) {
     return (
       <div style={{ padding: "16px", color: "var(--text-muted)", fontSize: "0.78rem" }}>
         No config history for this project yet. Each apply from the Templates / Config browser will record a snapshot.

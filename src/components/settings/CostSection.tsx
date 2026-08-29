@@ -7,7 +7,7 @@ import { TIER_LABELS, getEffectiveDailyCapUsd } from "@/lib/agentView/tierCaps";
 import { S } from "./styles";
 import { SUPPORTED_CURRENCIES, CURRENCY_NAMES } from "@/lib/currencies";
 import { invalidateCurrencyCache } from "@/hooks/useCurrency";
-import { useQuota } from "@/hooks/useQuota";
+import { useQuotaState } from "@/hooks/useQuota";
 import { DEFAULT_SCHEDULE_MODE } from "@/lib/quotaProjection";
 import { QuotaBurndownChart } from "@/components/QuotaBurndownChart";
 
@@ -64,7 +64,7 @@ export function CostSection({
   // request state explicitly instead.
   const [fxPending, setFxPending] = useState(true);
 
-  const quota = useQuota();
+  const { quota, pending: quotaPending } = useQuotaState();
 
   useEffect(() => {
     fetch("/api/integrations/fx")
@@ -531,16 +531,20 @@ export function CostSection({
           {scheduleSaving && <span style={S.muted}>Saving…</span>}
         </div>
 
-        {quota === null ? (
+        {/* #518: the request's own flag, not `quota === null` — which is also
+            what a failed fetch and a gated-off hook leave behind. */}
+        {quotaPending ? (
           <div data-loading="true" style={S.muted}>Loading quota…</div>
-        ) : !quota.configured ? (
+        ) : !quota || !quota.configured ? (
           <div style={{
             padding: "10px 12px", borderRadius: "var(--radius)",
             background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)",
             fontSize: "0.74rem", color: "var(--text-muted)", lineHeight: 1.6,
           }}>
             <strong style={{ color: "var(--text-secondary)" }}>Not available:</strong>{" "}
-            {quota.reason}
+            {/* Settled with no quota at all — a failed request or a gated-off
+                hook. Both used to be indistinguishable from pending (#518). */}
+            {quota ? quota.reason : "Quota unavailable."}
           </div>
         ) : (
           <QuotaBurndownChart data={quota} scheduleMode={scheduleMode} />

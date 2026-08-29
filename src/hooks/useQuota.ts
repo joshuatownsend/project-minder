@@ -74,13 +74,43 @@ async function loadQuotaClient(): Promise<QuotaResult> {
  * a gated caller passes the flag in instead of skipping the call.
  */
 export function useQuota(pollMs?: number, active: boolean = true): QuotaResult | null {
+  return useQuotaState(pollMs, active).quota;
+}
+
+/**
+ * The same read, with the request's own state instead of an inference from it
+ * (#518).
+ *
+ * `quota === null` was the only signal callers had, and it means THREE things:
+ * the request is out, the request failed, and the hook is gated off. Both
+ * Settings sections drove a `data-loading` marker from it, so a quota fetch
+ * that failed — or a caller that passed `active: false` — pinned the page as
+ * busy for every `[data-loading]` consumer, indefinitely.
+ *
+ * `pending` distinguishes them: it starts true only when the hook will actually
+ * fetch, and is cleared when the load settles. `loadQuotaClient` never rejects
+ * — it returns a `configured: false` sentinel instead — so "settled" here means
+ * resolved, and a failure arrives as data rather than as a throw.
+ */
+export function useQuotaState(
+  pollMs?: number,
+  active: boolean = true
+): { quota: QuotaResult | null; pending: boolean } {
   const [quota, setQuota] = useState<QuotaResult | null>(null);
+  // Gated off means nothing is coming, which is SETTLED, not pending. Reading
+  // `active: false` as "still loading" is the same conflation one level up.
+  const [pending, setPending] = useState(active);
 
   useEffect(() => {
-    if (!active) return; // opt-out / config not yet resolved: do no quota work
+    if (!active) {
+      setPending(false);
+      return; // opt-out / config not yet resolved: do no quota work
+    }
     let cancelled = false;
     const load = () => {
-      loadQuotaClient().then((q) => { if (!cancelled) setQuota(q); });
+      loadQuotaClient()
+        .then((q) => { if (!cancelled) setQuota(q); })
+        .finally(() => { if (!cancelled) setPending(false); });
     };
     load();
 
@@ -96,5 +126,5 @@ export function useQuota(pollMs?: number, active: boolean = true): QuotaResult |
     };
   }, [pollMs, active]);
 
-  return quota;
+  return { quota, pending };
 }

@@ -39,6 +39,12 @@ const KEEP_OPTIONS = [
 ];
 
 export function MemoryTriage() {
+  // #518: a flag that is definitively CLEARED, not an emptiness test.
+  // `!data` reads as "still loading" AND as "the request failed" — a
+  // failed fetch leaves the state exactly as empty as a pending one, so the
+  // marker never cleared and every `[data-loading]` consumer read the page
+  // as busy indefinitely. Settled in a `finally`, so failure settles it too.
+  const [loadPending, setLoadPending] = useState(true);
   const [data, setData] = useState<TriageResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set());
@@ -54,6 +60,12 @@ export function MemoryTriage() {
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") return;
       setError(e instanceof Error ? e.message : "Failed to load triage");
+    } finally {
+      // NOT on abort: the request that superseded this one owns the flag,
+      // and clearing it here would flash a settled-but-empty view between
+      // the two. Strict Mode aborts the first fetch of every effect pair in
+      // development, so this is the common path rather than an edge case.
+      if (!signal?.aborted) setLoadPending(false);
     }
   }, []);
 
@@ -112,8 +124,11 @@ export function MemoryTriage() {
       </p>
     );
   }
-  if (!data) {
+  if (loadPending) {
     return <p data-loading="true" style={{ padding: "40px 0", color: "var(--text-muted)" }}>Loading</p>;
+  }
+  if (!data) {
+    return <p style={{ padding: "40px 0", color: "var(--text-muted)" }}>Nothing to triage.</p>;
   }
 
   const { report, archived, trashed } = data;

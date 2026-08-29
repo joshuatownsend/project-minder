@@ -36,6 +36,12 @@ const POLICIES_BY_KIND: Record<UnitKind, ConflictPolicy[]> = {
 };
 
 export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
+  // #518: a flag that is definitively CLEARED, not an emptiness test.
+  // `!projects` reads as "still loading" AND as "the request failed" — a
+  // failed fetch leaves the state exactly as empty as a pending one, so the
+  // marker never cleared and every `[data-loading]` consumer read the page
+  // as busy indefinitely. Settled in a `finally`, so failure settles it too.
+  const [pending, setPending] = useState(true);
   const [projects, setProjects] = useState<ProjectData[] | null>(null);
   const [targetMode, setTargetMode] = useState<"existing" | "new">("existing");
   const [existingSlug, setExistingSlug] = useState("");
@@ -77,7 +83,15 @@ export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
       setProjects(filtered);
       if (filtered[0]) setExistingSlug(filtered[0].slug);
     }
-    loadProjects();
+    // `.catch` as well as `.finally`, because `loadProjects` had NO rejection
+     // handler at all: a failed `/api/projects` produced an unhandled rejection
+     // AND left the chip reading "loading projects…" for the life of the modal.
+    loadProjects()
+      .catch(() => undefined)
+      .finally(() => {
+        // Not when superseded — the re-run owns the flag.
+        if (!cancelled) setPending(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -199,9 +213,9 @@ export function ApplyTemplateModal({ slug, manifest, onClose }: Props) {
           </div>
 
           {targetMode === "existing" ? (
-            !projects ? (
+            pending ? (
               <span data-loading="true" style={mutedText}>loading projects…</span>
-            ) : projects.length === 0 ? (
+            ) : !projects || projects.length === 0 ? (
               <span style={mutedText}>no eligible target projects</span>
             ) : (
               <select

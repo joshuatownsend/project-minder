@@ -11,6 +11,12 @@ interface ReportData {
 }
 
 export function InsightsReportViewer() {
+  // #518: a flag that is definitively CLEARED, not an emptiness test.
+  // `!data` reads as "still loading" AND as "the request failed" — a
+  // failed fetch leaves the state exactly as empty as a pending one, so the
+  // marker never cleared and every `[data-loading]` consumer read the page
+  // as busy indefinitely. Settled in a `finally`, so failure settles it too.
+  const [pending, setPending] = useState(true);
   const [data, setData] = useState<ReportData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,7 +27,8 @@ export function InsightsReportViewer() {
         return r.json();
       })
       .then((d: ReportData) => setData(d))
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setPending(false));
   }, []);
 
   if (error) {
@@ -32,10 +39,21 @@ export function InsightsReportViewer() {
     );
   }
 
-  if (!data) {
+  if (pending) {
     return (
       <div data-loading="true" style={{ padding: "24px", color: "var(--text-muted)", fontSize: "0.82rem" }}>
         Loading…
+      </div>
+    );
+  }
+
+  // Settled with nothing: the request finished but produced no report — a
+  // DISTINCT state from both "still loading" and "failed", and the one that
+  // collapsing them all into `!data` used to hide (#518).
+  if (!data) {
+    return (
+      <div style={{ padding: "24px", color: "var(--text-muted)", fontSize: "0.82rem" }}>
+        No report available.
       </div>
     );
   }

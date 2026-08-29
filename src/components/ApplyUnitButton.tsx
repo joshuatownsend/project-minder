@@ -100,6 +100,12 @@ interface ApplyPopoverProps {
 }
 
 function ApplyPopover({ unit, source, excludeTargetSlugs, onClose }: ApplyPopoverProps) {
+  // #518: a flag that is definitively CLEARED, not an emptiness test.
+  // `!projects` reads as "still loading" AND as "the request failed" — a
+  // failed fetch leaves the state exactly as empty as a pending one, so the
+  // marker never cleared and every `[data-loading]` consumer read the page
+  // as busy indefinitely. Settled in a `finally`, so failure settles it too.
+  const [pending, setPending] = useState(true);
   const [projects, setProjects] = useState<ProjectData[] | null>(null);
   const [targetSlug, setTargetSlug] = useState<string>("");
   const policies = policiesFor(unit.kind);
@@ -119,7 +125,10 @@ function ApplyPopover({ unit, source, excludeTargetSlugs, onClose }: ApplyPopove
         setProjects(filtered);
         if (filtered[0]) setTargetSlug(filtered[0].slug);
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setPending(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -201,9 +210,9 @@ function ApplyPopover({ unit, source, excludeTargetSlugs, onClose }: ApplyPopove
           <span style={{ fontSize: "0.62rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
             target project
           </span>
-          {!projects ? (
+          {pending ? (
             <span data-loading="true" style={{ color: "var(--text-muted)" }}>loading…</span>
-          ) : projects.length === 0 ? (
+          ) : !projects || projects.length === 0 ? (
             <span style={{ color: "var(--text-muted)" }}>no other projects available</span>
           ) : (
             <select
