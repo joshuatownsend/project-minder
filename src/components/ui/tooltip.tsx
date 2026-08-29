@@ -68,7 +68,17 @@ export function Tooltip({
   className?: string;
 }) {
   const id = useId();
-  const [open, setOpen] = useState(false);
+  // THREE independent inputs, not one boolean. A single `open` let one
+  // modality cancel another: in a hybrid keyboard/mouse session, tabbing to a
+  // trigger opened it and then moving a pointer that happened to be resting
+  // over the chip closed it again — and `onBlur` hid a tooltip the pointer was
+  // still hovering. Each input owns its own flag and the tooltip is open while
+  // ANY of them holds. (Codex P2, PR #519.)
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  /** Set by a tap or Enter/Space; dismissed by Escape or an outside pointer. */
+  const [pinned, setPinned] = useState(false);
+  const open = hovered || focused || pinned;
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const triggerRef = useRef<HTMLSpanElement | null>(null);
   const tipRef = useRef<HTMLSpanElement | null>(null);
@@ -97,14 +107,19 @@ export function Tooltip({
     // Escape closes, and so does a click anywhere else — the two dismissals a
     // tap-opened tooltip needs, since there is no "leave" on touch.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      // Escape releases the pin AND the focus-hold: a keyboard user pressing it
+      // expects the tooltip gone, not to have to move focus as well.
+      if (e.key === "Escape") {
+        setPinned(false);
+        setFocused(false);
+      }
     };
     const onDown = (e: PointerEvent) => {
       // `pointerdown`, so a PointerEvent — and `e.target` can be null or a
       // non-Node (a shadow root retarget), which `contains` would throw on.
       const target = e.target;
       if (!(target instanceof Node)) return;
-      if (!triggerRef.current?.contains(target)) setOpen(false);
+      if (!triggerRef.current?.contains(target)) setPinned(false);
     };
     // Reposition rather than close: a tooltip that vanishes when the page
     // scrolls under a stationary pointer reads as a glitch.
@@ -162,21 +177,22 @@ export function Tooltip({
       tabIndex={0}
       aria-describedby={id}
       style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-      onFocus={() => setOpen(true)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
       onKeyDown={(e) => {
         // The trigger is focusable, so it needs the activation keys a
         // focusable thing is expected to answer — and Escape here as well as
         // on `window`, so a keyboard user can dismiss without moving focus.
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          setOpen(true);
+          setPinned(true);
         } else if (e.key === "Escape") {
-          setOpen(false);
+          setPinned(false);
+          setFocused(false);
         }
       }}
-      onBlur={() => setOpen(false)}
+      onBlur={() => setFocused(false)}
       onClick={(e) => {
         // **Stop the event.** Every migrated chip lives inside a `<Link>` —
         // `QualityChip` and `EffortMixChip` inside `SessionRow`'s, the compact
@@ -189,9 +205,9 @@ export function Tooltip({
         // OPEN, never toggle. A tap fires focus and mouse-compatibility events
         // before its click on many browsers, so `open` is already true by the
         // time this runs and a toggle would close it again — a tap that ends
-        // with the tooltip hidden. Dismissal is Escape, an outside tap, blur
-        // or mouse-leave, all of which work on touch. (Codex P2.)
-        setOpen(true);
+        // with the tooltip hidden. Dismissal is Escape or an outside tap, both
+        // of which work on touch. (Codex P2.)
+        setPinned(true);
       }}
     >
       {children}
