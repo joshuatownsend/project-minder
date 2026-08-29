@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readConfig, mutateConfig } from "@/lib/config";
 import { invalidateCache } from "@/lib/cache";
+import { clearSweepFailures } from "@/lib/sweepFailures";
 import { invalidateClaudeConfigRouteCache } from "@/app/api/claude-config/route";
 import { disposeAllRouteCaches } from "@/lib/routeCache";
 import { setProjectStatus } from "@/lib/server/mutations/projectStatus";
@@ -28,6 +29,12 @@ const VALID_SCHEDULE_MODES = SCHEDULE_MODES.map((m) => m.value);
 
 function invalidateAll() {
   invalidateCache();
+  // #513: the sweep-failure record describes the PREVIOUS configuration. If a
+  // user removes an unreachable extra home, nothing else clears it — the next
+  // sweep simply would not re-record it, but until that sweep finishes the
+  // homes endpoint keeps naming a path they have already dealt with, which
+  // reads as "the fix did not work" (Codex P2, PR #527).
+  clearSweepFailures();
   invalidateClaudeConfigRouteCache();
   // Every route cache, not just the two named above — this is the
   // "feature-flag-flip hook" `disposeAllRouteCaches` was written for.

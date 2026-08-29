@@ -939,8 +939,21 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
               const nested = (await fs.readdir(subagentsDir)).filter((f) => f.endsWith(".jsonl"));
               nested.sort();
               for (const f of nested) filePaths.push(path.join(subagentsDir, f));
-            } catch {
-              /* no subagents dir for this session — the common case */
+            } catch (err) {
+              // Absent is the COMMON case and not a failure — most sessions
+              // delegate nothing. Unreadable is a different thing: those
+              // transcripts, and their tokens and cost, drop out of every
+              // aggregate exactly as a missing project directory's would
+              // (Codex P2, PR #527).
+              const code = (err as NodeJS.ErrnoException)?.code;
+              if (code !== "ENOENT") {
+                recordSweepFailure({
+                  path: subagentsDir,
+                  scope: "project-dir",
+                  code,
+                  sweep: "usage",
+                });
+              }
             }
           }
         } catch (err) {

@@ -7,6 +7,7 @@ import {
   endSweepFailureCycle,
   recordSweepFailure,
   getSweepFailures,
+  getSweepFailureTotal,
   clearSweepFailures,
   describeSweepFailure,
 } from "@/lib/sweepFailures";
@@ -96,15 +97,39 @@ describe("the collector", () => {
     expect(getSweepFailures()).toHaveLength(0);
   });
 
-  it("bounds what one sweep can record", () => {
-    // A tree with thousands of unreadable directories would otherwise turn a
-    // diagnostic into a memory leak, and no banner renders a thousand rows.
+  it("caps the DETAIL but not the count", () => {
+    // A tree with thousands of unreadable directories would turn a diagnostic
+    // into a memory leak, and no banner renders a thousand rows — so the detail
+    // is capped. Dropping the extras from the COUNT too made the header and the
+    // banner claim exactly 50 locations failed when hundreds had, understating
+    // a broad fault at the moment it matters most (Codex P2, PR #527).
     beginSweepFailureCycle("usage");
     for (let i = 0; i < 200; i++) {
       recordSweepFailure({ path: `/p${i}`, scope: "project-dir", sweep: "usage" });
     }
     endSweepFailureCycle("usage");
+
     expect(getSweepFailures().length).toBeLessThanOrEqual(50);
+    expect(getSweepFailureTotal()).toBe(200);
+  });
+
+  it("lets two overlapping cycles of one sweep share a result", () => {
+    // `getStatsInputs` has no in-flight slot, so two file-backend stats
+    // requests can run `scanClaudeConversationsForProjects` concurrently.
+    // Without depth-counting the second `begin` reset the first's partial list,
+    // and the first `end` published a half-finished result as though it were
+    // whole (Codex P2, PR #527).
+    beginSweepFailureCycle("sessions");
+    recordSweepFailure({ path: "/first", scope: "project-dir", sweep: "sessions" });
+
+    beginSweepFailureCycle("sessions"); // overlapping caller
+    recordSweepFailure({ path: "/second", scope: "project-dir", sweep: "sessions" });
+
+    endSweepFailureCycle("sessions"); // inner finishes: nothing published yet
+    expect(getSweepFailures()).toHaveLength(0);
+
+    endSweepFailureCycle("sessions"); // outer finishes: the WHOLE result
+    expect(getSweepFailures().map((f) => f.path).sort()).toEqual(["/first", "/second"]);
   });
 });
 
@@ -228,5 +253,47 @@ describe("the usage sweep reports its own failures", () => {
 
     await streamAllSessions(async () => {});
     expect(read()).toHaveLength(0);
+  });
+});
+
+describe("clearing on a configuration change", () => {
+  beforeEach(() => clearSweepFailures());
+  afterEach(() => clearSweepFailures());
+
+  it("is wired into the config route's invalidation", async () => {
+    // Removing an unreachable extra home must stop it being reported. Nothing
+    // else clears the record — the next sweep would simply not re-record it,
+    // but until that sweep finishes the homes endpoint keeps naming a path the
+    // user has already dealt with, which reads as "the fix did not work"
+    // (Codex P2, PR #527).
+    //
+    // Source-level, because the failure mode is a MISSING CALL and the
+    // behaviour itself is already covered by `clearSweepFailures`'s own test.
+    const { readFile } = await import("node:fs/promises");
+    const route = await readFile("src/app/api/config/route.ts", "utf-8");
+    const fn = route.slice(
+      route.indexOf("function invalidateAll()"),
+      route.indexOf("function invalidateAll()") + 2500
+    );
+    expect(fn).toMatch(/clearSweepFailures\(\)/);
+  });
+
+  it("discards both the published and the in-flight record", () => {
+    beginSweepFailureCycle("usage");
+    recordSweepFailure({ path: "/a", scope: "projects-dir", sweep: "usage" });
+    endSweepFailureCycle("usage");
+    beginSweepFailureCycle("usage");
+    recordSweepFailure({ path: "/b", scope: "projects-dir", sweep: "usage" });
+
+    clearSweepFailures();
+
+    expect(getSweepFailures()).toHaveLength(0);
+    expect(getSweepFailureTotal()).toBe(0);
+    // And the depth counter went with them, so the next cycle starts clean
+    // rather than thinking it is nested inside the abandoned one.
+    beginSweepFailureCycle("usage");
+    recordSweepFailure({ path: "/c", scope: "projects-dir", sweep: "usage" });
+    endSweepFailureCycle("usage");
+    expect(getSweepFailures().map((f) => f.path)).toEqual(["/c"]);
   });
 });

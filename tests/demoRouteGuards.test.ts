@@ -72,6 +72,7 @@ describe("route-level demo guards (no loader seam behind them)", () => {
       readable: [],
       unavailable: [],
       degraded: [],
+      degradedTotal: 0,
       complete: true,
     });
     // Part of the contract, and the help page promises it on EVERY response

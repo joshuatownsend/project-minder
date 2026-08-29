@@ -5,6 +5,7 @@ import { partitionClaudeHomes } from "@/lib/claudeHome";
 import { demoMode } from "@/lib/demo/demoMode";
 import {
   getSweepFailures,
+  getSweepFailureTotal,
   describeSweepFailure,
 } from "@/lib/sweepFailures";
 
@@ -49,6 +50,7 @@ export async function GET(): Promise<NextResponse> {
       readable: [],
       unavailable: [],
       degraded: [],
+      degradedTotal: 0,
       complete: true,
     });
     demo.headers.set("X-Minder-Homes-Unavailable", "0");
@@ -74,6 +76,9 @@ export async function GET(): Promise<NextResponse> {
   // These are what was ACTUALLY read, so they cannot disagree with the corpus
   // the way an independent probe would — which is what PR #510 spent five
   // rounds establishing before the probe was withdrawn.
+  // The TRUE count, which can exceed the detail list: the cap bounds what a
+  // banner can render, not what is reported (Codex P2, PR #527).
+  const degradedTotal = getSweepFailureTotal();
   const degraded = getSweepFailures().map((f) => ({
     path: f.path,
     scope: f.scope,
@@ -98,7 +103,13 @@ export async function GET(): Promise<NextResponse> {
      * short by a project directory nobody could list reported `complete: true`
      * (#513).
      */
-    complete: unavailable.length === 0 && degraded.length === 0,
+    /**
+     * How many enumerations failed in total. `degraded` is capped, so on a
+     * broad fault this is larger — and that is the case where understating it
+     * would matter most.
+     */
+    degradedTotal,
+    complete: unavailable.length === 0 && degradedTotal === 0,
   });
   // Same convention as `X-Minder-Backend`: the fact rides a header too, so a
   // client that only cares whether coverage is whole does not have to parse
@@ -112,6 +123,6 @@ export async function GET(): Promise<NextResponse> {
   // neither a home nor deliberate. Merging them would make a client that
   // watches the existing header start reporting "homes unavailable" for a
   // permissions problem two levels down.
-  response.headers.set("X-Minder-Sweep-Degraded", String(degraded.length));
+  response.headers.set("X-Minder-Sweep-Degraded", String(degradedTotal));
   return response;
 }

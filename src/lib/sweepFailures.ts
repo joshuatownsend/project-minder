@@ -55,25 +55,59 @@ export interface SweepFailure {
   sweep: SweepName;
 }
 
+/**
+ * What one cycle found: the capped detail, and how many there really were.
+ *
+ * `total` is separate because the cap discards detail, not evidence. Beyond it,
+ * dropping the extras silently made the header and the banner claim exactly 50
+ * locations failed when hundreds had — which understates a broad fault at
+ * precisely the moment it is most worth knowing about (Codex P2, PR #527).
+ */
+interface CycleResult {
+  items: SweepFailure[];
+  total: number;
+}
+
 const globalForSweep = globalThis as unknown as {
   /** What the last COMPLETED cycle of each sweep found. Read by the API. */
-  __minderSweepPublished?: Map<SweepName, SweepFailure[]>;
+  __minderSweepPublished?: Map<SweepName, CycleResult>;
   /** What the cycle currently running has found so far. Not yet visible. */
-  __minderSweepPending?: Map<SweepName, SweepFailure[]>;
+  __minderSweepPending?: Map<SweepName, CycleResult>;
+  /**
+   * How many cycles are open per sweep.
+   *
+   * Two overlapping callers of the same sweep are possible — `getStatsInputs`
+   * has no in-flight slot, so two file-backend stats requests can run
+   * `scanClaudeConversationsForProjects` concurrently. Without this the second
+   * `begin` reset the first's partial list and the first `end` published a
+   * half-finished result as though it were whole (Codex P2, PR #527).
+   *
+   * Depth-counted rather than token-based: the outermost cycle owns the
+   * publish, which is the behaviour both callers want and neither has to know
+   * about.
+   */
+  __minderSweepDepth?: Map<SweepName, number>;
 };
 
-function published(): Map<SweepName, SweepFailure[]> {
+function published(): Map<SweepName, CycleResult> {
   if (!globalForSweep.__minderSweepPublished) {
     globalForSweep.__minderSweepPublished = new Map();
   }
   return globalForSweep.__minderSweepPublished;
 }
 
-function pending(): Map<SweepName, SweepFailure[]> {
+function pending(): Map<SweepName, CycleResult> {
   if (!globalForSweep.__minderSweepPending) {
     globalForSweep.__minderSweepPending = new Map();
   }
   return globalForSweep.__minderSweepPending;
+}
+
+function depth(): Map<SweepName, number> {
+  if (!globalForSweep.__minderSweepDepth) {
+    globalForSweep.__minderSweepDepth = new Map();
+  }
+  return globalForSweep.__minderSweepDepth;
 }
 
 /**
@@ -86,7 +120,11 @@ function pending(): Map<SweepName, SweepFailure[]> {
  * then bringing it back when the sweep finishes (Codex P2, PR #527).
  */
 export function beginSweepFailureCycle(sweep: SweepName): void {
-  pending().set(sweep, []);
+  const d = (depth().get(sweep) ?? 0) + 1;
+  depth().set(sweep, d);
+  // Only the OUTERMOST cycle resets. An overlapping caller joins the one in
+  // flight rather than restarting it.
+  if (d === 1) pending().set(sweep, { items: [], total: 0 });
 }
 
 /**
@@ -98,8 +136,15 @@ export function beginSweepFailureCycle(sweep: SweepName): void {
  * exactly what a reader needs to see.
  */
 export function endSweepFailureCycle(sweep: SweepName): void {
+  const d = depth().get(sweep) ?? 0;
+  if (d === 0) return; // no cycle was started; leave the last result alone
+  const next = d - 1;
+  depth().set(sweep, next);
+  // The innermost caller finishing does not publish — the sweep is still
+  // running for whoever opened it first.
+  if (next > 0) return;
   const found = pending().get(sweep);
-  if (!found) return; // no cycle was started; leave the last result alone
+  if (!found) return;
   published().set(sweep, found);
   pending().delete(sweep);
 }
@@ -115,28 +160,53 @@ export function endSweepFailureCycle(sweep: SweepName): void {
 const MAX_PER_SWEEP = 50;
 
 export function recordSweepFailure(failure: SweepFailure): void {
-  const list = pending().get(failure.sweep);
-  if (!list) {
+  const result = pending().get(failure.sweep);
+  if (!result) {
     // No cycle started — a sweep that records without `beginSweepFailureCycle`
     // is a wiring bug, and silently starting one here would hide it while
     // letting entries accumulate across passes forever.
     return;
   }
-  if (list.length >= MAX_PER_SWEEP) return;
-  list.push(failure);
+  // Counted ALWAYS, kept only up to the cap. The cap bounds memory and what a
+  // banner can render; it must not bound what the count reports.
+  result.total++;
+  if (result.items.length >= MAX_PER_SWEEP) return;
+  result.items.push(failure);
 }
 
-/** Everything the most recent COMPLETED cycle of each sweep found. */
+/** The capped detail from the most recent COMPLETED cycle of each sweep. */
 export function getSweepFailures(): SweepFailure[] {
   const out: SweepFailure[] = [];
-  for (const list of published().values()) out.push(...list);
+  for (const r of published().values()) out.push(...r.items);
   return out;
 }
 
-/** Discard everything. Tests, and a config change that invalidates the tree. */
+/**
+ * How many failures there actually were, including any past the detail cap.
+ *
+ * Separate from `getSweepFailures().length` on purpose: a broad fault is
+ * exactly the case where the two differ, and reporting the capped length as
+ * the count would understate it precisely when it matters.
+ */
+export function getSweepFailureTotal(): number {
+  let total = 0;
+  for (const r of published().values()) total += r.total;
+  return total;
+}
+
+/**
+ * Discard everything.
+ *
+ * Tests, and — importantly — a CONFIG CHANGE. Removing an unreadable extra
+ * home should stop it being reported, and nothing else clears the record: the
+ * next sweep would simply not re-record it, but until that sweep finishes the
+ * homes endpoint keeps naming a path the user has already dealt with
+ * (Codex P2, PR #527).
+ */
 export function clearSweepFailures(): void {
   globalForSweep.__minderSweepPublished = undefined;
   globalForSweep.__minderSweepPending = undefined;
+  globalForSweep.__minderSweepDepth = undefined;
 }
 
 /**
