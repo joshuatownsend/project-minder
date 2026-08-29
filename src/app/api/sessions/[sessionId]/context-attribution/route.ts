@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import { resolveSessionJsonl } from "@/lib/usage/sessionPath";
 import { isValidSessionId } from "@/lib/sessionId";
+import { indexedSessionPath } from "@/lib/data/indexedSessionPath";
 import {
   attributeContext,
   type AttributionEntry,
@@ -59,7 +60,7 @@ export async function GET(
 
   let resolved;
   try {
-    resolved = await resolveSessionJsonl(sessionId);
+    resolved = await resolveSessionJsonl(sessionId, { indexedPath: indexedSessionPath });
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error(`[/api/sessions/${sessionId}/context-attribution] resolve`, err);

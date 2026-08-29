@@ -24,7 +24,10 @@ import {
   type OpenAssistantMessage,
 } from "./assistantContinuation";
 import { extractCacheCreate1hTokens } from "./cacheTtl";
-import { resolveSessionJsonl } from "./sessionPath";
+import {
+  resolveSessionJsonl,
+  type ResolveSessionOptions,
+} from "./sessionPath";
 import { readConfig } from "@/lib/config";
 import { getReadableClaudeHomes } from "@/lib/claudeHome";
 import { normalizePathKey } from "@/lib/platform";
@@ -1461,8 +1464,24 @@ export class SessionTurnsLoadError extends Error {
  * corrupt mid-stream line doesn't poison subsequent calls.
  */
 export async function loadSessionTurnsBySessionId(
-  sessionId: string
+  sessionId: string,
+  options: ResolveSessionOptions = {}
 ): Promise<UsageTurn[] | null> {
+  return (await loadSessionTurnsWithPath(sessionId, options))?.turns ?? null;
+}
+
+/**
+ * The same load, reporting WHERE it read from (#486).
+ *
+ * A caller that also needs the transcript path — the handoff route wants it for
+ * the compaction summary — used to resolve a SECOND time to get it. That could
+ * never remove the first walk; it only added another whenever the index is off,
+ * unavailable, or missing the row (Codex P2, PR #526).
+ */
+export async function loadSessionTurnsWithPath(
+  sessionId: string,
+  options: ResolveSessionOptions = {}
+): Promise<{ turns: UsageTurn[]; filePath: string } | null> {
   if (!isValidSessionId(sessionId)) return null;
 
   // resolveSessionJsonl walks every readable Claude home. ENOENT is folded to
@@ -1472,7 +1491,7 @@ export async function loadSessionTurnsBySessionId(
   // masquerading as "Session not found" (reviewer-flagged shape).
   let found: { filePath: string; projectDirName: string } | null;
   try {
-    found = await resolveSessionJsonl(sessionId);
+    found = await resolveSessionJsonl(sessionId, options);
   } catch (err) {
     throw new SessionTurnsLoadError(
       `Failed to list Claude projects dirs: ${err instanceof Error ? err.message : String(err)}`,
@@ -1508,7 +1527,10 @@ export async function loadSessionTurnsBySessionId(
   // infrequent, so skipping the cache costs a re-parse on tab-revisit
   // but never produces a misleading healthy verdict on a broken file.
   try {
-    return await parseSessionTurns(candidate, dir, { strict: true });
+    return {
+      turns: await parseSessionTurns(candidate, dir, { strict: true }),
+      filePath: candidate,
+    };
   } catch (err) {
     throw new SessionTurnsLoadError(
       `Failed to parse session JSONL: ${err instanceof Error ? err.message : String(err)}`,

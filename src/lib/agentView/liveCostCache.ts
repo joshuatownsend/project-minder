@@ -34,7 +34,14 @@ function getCache(): Map<string, { mtime: number; result: SessionMetrics }> {
 export async function getLiveSessionMetrics(
   sessionId: string,
 ): Promise<SessionMetrics | null> {
-  const resolved = await resolveSessionJsonl(sessionId);
+  // DYNAMIC, and it has to be. `indexedSessionPath` reaches `db/connection`,
+  // which freezes the `~/.minder` path constant at module-evaluation time — so
+  // a STATIC import here would put it on the graph of every test that imports
+  // this module, before any of them can install an isolated home.
+  // `tests/dbIsolationGuard` enforces that, and caught this import when it was
+  // static. Same reason `data/index.ts` lazy-loads its own DB modules.
+  const { indexedSessionPath } = await import("@/lib/data/indexedSessionPath");
+  const resolved = await resolveSessionJsonl(sessionId, { indexedPath: indexedSessionPath });
   if (!resolved) return null;
   const { filePath, projectDirName } = resolved;
 

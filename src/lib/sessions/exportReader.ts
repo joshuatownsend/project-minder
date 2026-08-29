@@ -6,6 +6,7 @@ import { resolveSessionJsonl } from "@/lib/usage/sessionPath";
 import { getAdapter } from "@/lib/adapters";
 import type { SessionDetail } from "@/lib/types";
 import type { ExportBlock, ExportMessage, ExportMeta } from "./markdownExport";
+import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptPath";
 
 /**
  * Impure half of the session exporter: sources the message bodies.
@@ -407,7 +408,7 @@ export async function loadExportSource(
 
     let subUnread = 0;
     if (options.sidechains) {
-      const sub = await readSubagentMessages(located.filePath, sessionId);
+      const sub = await readSubagentMessages(located.filePath);
       subUnread = sub.unread;
       if (sub.messages.length > 0) {
         // Appended rather than interleaved: subagent files carry their own
@@ -448,7 +449,14 @@ async function locateTranscript(
 ): Promise<{ filePath: string } | null> {
   if (!source || source === "claude") {
     try {
-      return await resolveSessionJsonl(sessionId);
+      // DYNAMIC, and it has to be. `indexedSessionPath` reaches `db/connection`,
+      // which freezes the `~/.minder` path constant at module-evaluation time —
+      // so a STATIC import here would put it on the graph of every test that
+      // imports this module, before any of them can install an isolated home.
+      // `tests/dbIsolationGuard` enforces that, and caught this import when it
+      // was static. Same reason `data/index.ts` lazy-loads its own DB modules.
+      const { indexedSessionPath } = await import("@/lib/data/indexedSessionPath");
+      return await resolveSessionJsonl(sessionId, { indexedPath: indexedSessionPath });
     } catch {
       return null;
     }
@@ -486,12 +494,45 @@ async function locateTranscript(
  */
 async function readSubagentMessages(
   parentFilePath: string,
-  sessionId: string,
 ): Promise<{ messages: ExportMessage[]; unread: number }> {
-  const dir = path.join(path.dirname(parentFilePath), sessionId, "subagents");
+  // TWO layouts, and the second one is flat.
+  //
+  // A top-level session's delegates live at `<project>/<id>/subagents/*.jsonl`.
+  // A subagent that itself delegates does NOT nest under its own id — it writes
+  // into the same `subagents/` directory as its spawner. That is measured, not
+  // assumed: `subagentTranscriptPath.ts` records 1,260 transcripts on the
+  // reference corpus all resolving by that rule, and notes that flatness is
+  // exactly the property that makes `depth` unrecoverable.
+  //
+  // So for a nested transcript the directory to read is its OWN, and the file
+  // itself has to be excluded from it. Deriving `<…>/agent-x/subagents` — which
+  // is what both my previous attempts did, first from the id and then from the
+  // project root — names a directory that does not exist under this layout, so
+  // exporting an `agent-*` session with sidechains enabled found nothing and
+  // said so silently (Codex P2 x2, PR #526).
+  //
+  // A consequence worth stating: because the layout is flat, an agent's own
+  // delegates are indistinguishable from its SIBLINGS. This reads the whole
+  // directory, which is what the data supports — the alternative is reading
+  // nothing, and the tree structure simply is not recorded.
+  const nested = parseSubagentParentSessionId(parentFilePath) !== undefined;
+  const dir = nested
+    ? path.dirname(parentFilePath)
+    : path.join(
+        path.dirname(parentFilePath),
+        path.basename(parentFilePath, ".jsonl"),
+        "subagents"
+      );
+  const selfName = path.basename(parentFilePath);
   let entries: string[];
   try {
-    entries = (await fs.readdir(dir)).filter((f) => f.toLowerCase().endsWith(".jsonl")).sort();
+    entries = (await fs.readdir(dir))
+      .filter((f) => f.toLowerCase().endsWith(".jsonl"))
+      // Not the transcript we are exporting. In the nested case its own file is
+      // in this directory, and including it would repeat the whole conversation
+      // inside its own sidechain section.
+      .filter((f) => f !== selfName)
+      .sort();
   } catch {
     return { messages: [], unread: 0 };
   }

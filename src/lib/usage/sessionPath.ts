@@ -20,6 +20,7 @@ import { getReadableClaudeHomes } from "@/lib/claudeHome";
 // `agent-<hex>` at once. `parser.ts` re-exports from here, so external callers
 // (the `/api/sessions/[sessionId]/*` routes) keep their import path.
 import { isValidSessionId, isSubagentSessionId } from "@/lib/sessionId";
+import { normalizePathKey } from "@/lib/platform";
 export { isValidSessionId };
 
 /** Walk `<home>/projects/<dir>/<sessionId>.jsonl` across every readable
@@ -32,12 +33,102 @@ export { isValidSessionId };
  *  listing failures throw — a local EACCES/EIO is a real misconfiguration).
  *  Extra homes are best-effort: an unreachable UNC home (distro just
  *  stopped, network hiccup) must not turn a local session lookup into a 500. */
+export interface ResolveSessionOptions {
+  /**
+   * An exact path for this session, from something that already knows one.
+   *
+   * The index stores `sessions.file_path`, so when the SQL backend is available
+   * the answer is a single lookup and the walks below are pure waste (#486).
+   * They stay as the fallback: the file backend has no index, and a session
+   * written since the last reconcile is not in one.
+   *
+   * Passed IN rather than looked up here, because `src/lib/usage/` deliberately
+   * has no DB dependency. Inverting that to give this function a DB fast path
+   * was the other option the issue set out, and it would make the module that
+   * the file backend is built on import the database.
+   */
+  indexedPath?: (sessionId: string) => Promise<string | null>;
+}
+
+/**
+ * Turn an absolute transcript path into the project directory ingest attributes
+ * it to — the segment immediately after `projects/`.
+ *
+ * Handles both layouts, which is the point: `<projects>/<dir>/<id>.jsonl` and
+ * the nested `<projects>/<dir>/<parent>/subagents/<id>.jsonl` both yield
+ * `<dir>`. Deriving it from the PATH is what stops a caller re-deriving it from
+ * the id and assuming the flat shape (#486).
+ */
+/**
+ * Is this path inside one of the homes we are allowed to touch?
+ *
+ * Compared on NORMALIZED keys, not raw strings: the same home reaches us as
+ * `\\wsl$\\Ubuntu\\…` from one source and `\\wsl.localhost\\Ubuntu\\…` from
+ * another, and on Windows the casing differs between the config entry and what
+ * the index recorded. `normalizePathKey` is what every other home comparison in
+ * this codebase uses, so this agrees with them by construction.
+ */
+function isUnderReadableHome(filePath: string, homes: readonly string[]): boolean {
+  const key = normalizePathKey(filePath);
+  return homes.some((home) => {
+    const prefix = normalizePathKey(home);
+    return key === prefix || key.startsWith(prefix.endsWith("/") ? prefix : prefix + "/");
+  });
+}
+
+export function projectDirNameFromPath(filePath: string): string | null {
+  const parts = path.resolve(filePath).split(/[\\/]/);
+  const i = parts.lastIndexOf("projects");
+  if (i < 0 || i + 1 >= parts.length) return null;
+  const dir = parts[i + 1];
+  return dir && dir.endsWith(".jsonl") ? null : (dir ?? null);
+}
+
 export async function resolveSessionJsonl(
   sessionId: string,
+  options: ResolveSessionOptions = {},
 ): Promise<{ filePath: string; projectDirName: string } | null> {
   if (!isValidSessionId(sessionId)) return null;
+
+  // Homes FIRST, even on the hinted path. `getReadableClaudeHomes` is what
+  // enforces the never-wake invariant (#307/#308): a home inside a stopped WSL
+  // distro is excluded WITHOUT being touched, because touching a `\\wsl$` UNC
+  // path auto-starts the VM.
+  //
+  // The index retains rows for sessions in such a home, so an unconditional
+  // `fs.access` on a hinted path would reach straight past that exclusion and
+  // start the distro — from peek, handoff, attribution, export or live metrics,
+  // none of which the user would connect to WSL starting (Codex P1, PR #526).
   const config = await readConfig();
   const homes = await getReadableClaudeHomes(config);
+
+  // The index next, when a caller supplied one. Exact, one lookup, and it
+  // carries the real layout — so nothing downstream has to guess whether the
+  // transcript is flat or nested.
+  if (options.indexedPath) {
+    let hinted: string | null = null;
+    try {
+      hinted = await options.indexedPath(sessionId);
+    } catch {
+      // A failing index must not break a lookup the filesystem can still
+      // answer. Fall through to the walks.
+      hinted = null;
+    }
+    if (hinted && isUnderReadableHome(hinted, homes)) {
+      const dir = projectDirNameFromPath(hinted);
+      if (dir) {
+        try {
+          // Verified, not trusted. The index can lag a deletion, and returning
+          // a path that is not there converts "session removed" into an
+          // unreadable-file error further down.
+          await fs.access(hinted);
+          return { filePath: hinted, projectDirName: dir };
+        } catch {
+          // Indexed but gone. The walks below decide whether it moved.
+        }
+      }
+    }
+  }
 
   const scanned: { projectsDir: string; dirs: string[] }[] = [];
   for (const [i, home] of homes.entries()) {
