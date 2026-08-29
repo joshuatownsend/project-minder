@@ -241,6 +241,47 @@ describe.skipIf(!driverAvailable)("delegated transcripts keep their provenance",
     expect(primary.n).toBe(0);
   });
 
+  it("keeps the agent's tool order across continuation lines", async () => {
+    // `sequence_in_turn` cannot come from `buildToolUses` for these rows: it
+    // derives that from `turn.toolUses.length`, which never grows for a
+    // delegated transcript because the calls go to `sidechain_tool_uses`. Every
+    // continuation line of the same message therefore restarted at 0, two calls
+    // in one turn shared a sequence, and the detail loader orders by exactly
+    // that column — so the agent's actions could render in some order other
+    // than the transcript's. (Codex P2, PR #528.)
+    const { conn, mig, ingest } = await reload();
+    expect((await mig.initDb()).error).toBeNull();
+    const db = (await conn.getDb())!;
+
+    const { projectsDir } = await write(path.join("C--dev-myapp", "beef05.jsonl"), [
+      assistantLine("2026-08-01T10:00:00Z", "m1", [{ type: "text", text: "ok" }], false),
+    ]);
+
+    // ONE message id across three lines — the continuation shape. The names are
+    // distinguishable so the assertion is about ORDER, not merely uniqueness.
+    await write(path.join("C--dev-myapp", "beef05", "subagents", "seq.jsonl"), [
+      userLine("2026-08-01T10:05:00Z", "sweep", true),
+      assistantLine("2026-08-01T10:06:00Z", "s0", [toolBlock("s_1", "Glob")], true),
+      assistantLine("2026-08-01T10:06:00Z", "s0", [toolBlock("s_2", "Grep")], true),
+      assistantLine("2026-08-01T10:06:00Z", "s0", [toolBlock("s_3", "Read")], true),
+    ]);
+
+    expect((await ingest.reconcileAllSessions(db, { projectsDir })).errors).toBe(0);
+
+    const rows = db
+      .prepare(
+        `SELECT tool_name, turn_index, sequence_in_turn FROM sidechain_tool_uses
+          WHERE session_id = 'seq' ORDER BY turn_index, sequence_in_turn`
+      )
+      .all() as Array<{ tool_name: string; turn_index: number; sequence_in_turn: number }>;
+
+    expect(rows).toHaveLength(3);
+    // Distinct sequences within the turn...
+    expect(new Set(rows.map((r) => `${r.turn_index}:${r.sequence_in_turn}`)).size).toBe(3);
+    // ...and the transcript's order, which is what the reader will render.
+    expect(rows.map((r) => r.tool_name)).toEqual(["Glob", "Grep", "Read"]);
+  });
+
   it("does not let a delegated prompt reclassify the agent's spend", async () => {
     // The prose is STORED (the timeline needs it) but must not become
     // `userIntentText` on the following assistant turn, which is what

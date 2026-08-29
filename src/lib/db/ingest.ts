@@ -1166,6 +1166,19 @@ async function readJsonlSession(
     string,
     { turnIndex: number; ts: string | null; tool: ParsedToolUse }
   >();
+  /**
+   * How many delegated calls this turn has already recorded.
+   *
+   * The sequence CANNOT be taken from `ParsedToolUse.sequenceInTurn` here.
+   * `buildToolUses` derives that from `turn.toolUses.length`, which for a
+   * delegated transcript never grows — those calls go to
+   * `sidechain_tool_uses`, so the array it counts stays empty and every
+   * continuation line of the same message starts again at 0. Two calls in one
+   * turn then shared a `sequence_in_turn`, and `loadSessionDetailFromDb` orders
+   * by exactly that column, so SQLite was free to render the agent's actions in
+   * some other order than the transcript's. (Codex P2, PR #528.)
+   */
+  const delegatedSeqByTurn = new Map<number, number>();
   function collectDelegatedTools(
     tools: ParsedToolUse[],
     turnIndex: number,
@@ -1174,7 +1187,16 @@ async function readJsonlSession(
     for (const tool of tools) {
       if (!tool.toolUseId) continue;
       if (delegatedToolUses.has(tool.toolUseId)) continue;
-      delegatedToolUses.set(tool.toolUseId, { turnIndex, ts, tool });
+      const seq = delegatedSeqByTurn.get(turnIndex) ?? 0;
+      delegatedSeqByTurn.set(turnIndex, seq + 1);
+      // Counted here rather than trusted from the block, so the order is the
+      // order calls were SEEN in the transcript — which is the order they
+      // happened — regardless of how the producer split its lines.
+      delegatedToolUses.set(tool.toolUseId, {
+        turnIndex,
+        ts,
+        tool: { ...tool, sequenceInTurn: seq },
+      });
     }
   }
   function collectSidechainTools(content: unknown): void {
