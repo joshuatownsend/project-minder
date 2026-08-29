@@ -39,6 +39,7 @@ import { computeContributionCalendar } from "@/lib/usage/contributionCalendar";
 import { computeToolTransitions } from "@/lib/usage/toolTransitions";
 import type { ToolTransitionsTurn } from "@/lib/usage/toolTransitions";
 import { readHomeCaseSensitivity } from "@/lib/db/homeCaseSensitivity";
+import { compareCodePoints } from "@/lib/usage/compareNames";
 
 // SQL-aggregate read path for /api/usage. Builds a `UsageReport`
 // directly from `SELECT SUM(...) GROUP BY ...` queries against the
@@ -481,7 +482,11 @@ function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdo
   // NULL homeKey → omitted, matching the file backend (homeKey is absent on
   // rows whose turns carry no home stamp) so the two backends serialize alike.
   return [...merged.values()]
-    .sort(byCostThenName((r) => `${r.projectSlug}\u0000${r.projectDirName}`))
+    .sort(
+      byCostThenName(
+        (r) => `${r.projectSlug}\u0000${r.projectDirName}\u0000${r.homeKey ?? ""}`
+      )
+    )
     .map(({ homeKey, ...rest }) => (homeKey === null ? rest : { ...rest, homeKey }));
 }
 

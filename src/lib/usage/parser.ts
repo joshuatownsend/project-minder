@@ -1033,7 +1033,18 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
       })
     );
     for (const entry of parsed) {
-      if (entry) await emit(entry.sessionId, entry.turns);
+      if (!entry) continue;
+      // Recorded HERE, at emission. The candidate restructure moved dedupe out
+      // of this loop and stopped populating `emitted` along with it — so
+      // `mergeAdapterSessions` could no longer see a collision with a Claude
+      // session, and an adapter reusing a Claude session id had its turns ADDED
+      // to the streaming totals while the map form silently replaced the Claude
+      // entry (Codex P2, PR #524).
+      //
+      // At emission rather than at claim time, so a session whose every copy
+      // failed to parse leaves its id free for an adapter that can supply one.
+      emitted.add(entry.sessionId);
+      await emit(entry.sessionId, entry.turns);
     }
   }
 

@@ -137,4 +137,33 @@ describe("#522 — tied rankings are ordered by name, not by arrival", () => {
     // before "caf\u00e9" because U+0065 < U+00E9 at the fourth character.
     expect(a.byModel.map((m) => m.model)).toEqual([decomposed, composed]);
   });
+
+  it("separates two homes holding the same project path at equal cost", async () => {
+    // The accumulator's identity includes `homeKey` — two configured homes with
+    // identical path layouts stay separate rows (#311) — but the tie-break did
+    // not, so two such rows at equal cost had identical names, the comparator
+    // returned 0, and exactly the supported multi-home case fell back to
+    // arrival order (Codex P2, PR #524).
+    const mk = (homeKey: string, i: number) =>
+      turn({
+        sessionId: `s${i}`,
+        projectSlug: "app",
+        projectDirName: "-home-me-dev-app",
+        homeKey,
+        inputTokens: 100,
+      } as Partial<UsageTurn>);
+
+    const forward = [mk("/home/me/.claude-b", 0), mk("/home/me/.claude-a", 1)];
+    const backward = [...forward].reverse();
+
+    const a = await aggregateUsage(forward, "all", emptyActivity());
+    const b = await aggregateUsage(backward, "all", emptyActivity());
+
+    // Two rows, same slug and dirname — the multi-home case, not a merge bug.
+    expect(a.byProject).toHaveLength(2);
+    const homes = (r: typeof a) => r.byProject.map((p) => p.homeKey);
+    // Same order from either arrival order, and it is the name order.
+    expect(homes(b)).toEqual(homes(a));
+    expect(homes(a)).toEqual(["/home/me/.claude-a", "/home/me/.claude-b"]);
+  });
 });

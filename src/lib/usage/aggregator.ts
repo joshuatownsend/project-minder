@@ -11,6 +11,7 @@ import { mcpServerKey, isAttributed } from "./attribution";
 import { parseMcpTool } from "./mcpParser";
 import { SKILL_DISPATCH_TOOL } from "./toolNames";
 import { getPeriodStart } from "./periods";
+import { compareCodePoints } from "./compareNames";
 import { detectSelfCorrectionPerModel } from "./selfCorrection";
 import {
   bucketByHourDay,
@@ -395,19 +396,11 @@ function byMeasureThenName<T>(
   return (a, b) => {
     const d = measure(b) - measure(a);
     if (d !== 0) return d;
-    // BINARY comparison, not `localeCompare`, for two reasons that point the
-    // same way (Codex P2, PR #524):
-    //
-    //  - `localeCompare` is not TOTAL. Distinct labels can compare equal under
-    //    locale collation — composed `é` against decomposed `é` is the
-    //    common case — and the comparator would then fall back to arrival
-    //    order, which is the defect this function exists to remove.
-    //  - It also disagrees with the SQL backend, whose `ORDER BY ... ASC` is
-    //    SQLite's default BINARY collation. Two backends ordering the same
-    //    ties differently is its own bug.
-    const an = name(a);
-    const bn = name(b);
-    return an < bn ? -1 : an > bn ? 1 : 0;
+    // `compareCodePoints`, not `localeCompare` and not `<` — see that
+    // function for why each is wrong here. In short: `localeCompare` is not
+    // TOTAL, and `<` compares UTF-16 code units where SQLite compares UTF-8
+    // bytes — which disagree above the BMP (Codex P2 x2, PR #524).
+    return compareCodePoints(name(a), name(b));
   };
 }
 
@@ -895,8 +888,16 @@ export function createUsageAccumulator(period: Period) {
     },
     daily: [...dailyMap.values()].sort((a, b) => a.date.localeCompare(b.date)),
     byModel: [...modelMap.values()].sort(byMeasureThenName((m) => m.cost, (m) => m.model)),
+    // HOME KEY in the identity, because the accumulator's is: two configured
+    // homes with the same encoded project path stay separate rows (#311), and
+    // without it two such rows at equal cost have identical names, so the
+    // comparator returns 0 and exactly the supported multi-home case is left
+    // ordered by arrival (Codex P2, PR #524).
     byProject: [...projectMap.values()].sort(
-      byMeasureThenName((p) => p.cost, (p) => `${p.projectSlug}\u0000${p.projectDirName}`)
+      byMeasureThenName(
+        (p) => p.cost,
+        (p) => `${p.projectSlug}\u0000${p.projectDirName}\u0000${p.homeKey ?? ""}`
+      )
     ),
     byCategory: [...categoryMap.values()].sort(
       byMeasureThenName((c) => c.cost, (c) => c.category)
