@@ -170,7 +170,14 @@ export function Tooltip({
       // non-Node (a shadow root retarget), which `contains` would throw on.
       const target = e.target;
       if (!(target instanceof Node)) return;
-      if (!triggerRef.current?.contains(target)) setPinned(false);
+      // The TOOLTIP counts as inside, not just the trigger. It is portaled into
+      // `document.body`, so a touch drag started on its scrollbar fails a
+      // trigger-only containment test and clears the pin — dismissing the
+      // tooltip on the very gesture meant to scroll it, and on touch there is
+      // no hover hold left to keep it open (Codex P2, PR #519).
+      const insideTrigger = triggerRef.current?.contains(target) ?? false;
+      const insideTip = tipRef.current?.contains(target) ?? false;
+      if (!insideTrigger && !insideTip) setPinned(false);
     };
     // Reposition rather than close: a tooltip that vanishes when the page
     // scrolls under a stationary pointer reads as a glitch.

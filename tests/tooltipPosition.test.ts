@@ -175,5 +175,9 @@ describe("the component pairs clamping with a bound", () => {
     expect(src).toMatch(/tipEl\.scrollTop \+= step/);
     // Guarded on real overflow, so a focused chip never swallows page scroll.
     expect(src).toMatch(/scrollHeight <= tipEl\.clientHeight/);
+    // And a touch drag ON the tooltip is not an "outside" pointer. The tip is
+    // portaled, so a trigger-only containment test dismissed it on the very
+    // gesture meant to scroll it — and touch has no hover hold to fall back on.
+    expect(src).toMatch(/tipRef\.current\?\.contains\(target\)/);
   });
 });
