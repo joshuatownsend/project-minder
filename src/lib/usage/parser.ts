@@ -921,21 +921,38 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
     );
   }
 
-  // ── Phase 2: CLAIM ────────────────────────────────────────────────────
+  // ── Phase 2: RANK THE CANDIDATES ──────────────────────────────────────
   //
-  // First in (home order, directory name, file name) wins. `liveSet` records
-  // every file OBSERVED, losers included: a loser may still hold a cache slot
-  // from a sweep it won, and dropping it from the live set would evict that
-  // slot and take its mtime out of the ETag signal.
-  const claimed: { filePath: string; home: string; dirName: string; sessionId: string }[] = [];
+  // Each session id gets its candidate files in PREFERENCE order — first in
+  // (home order, directory name, file name). Not a single winner: the first
+  // copy is only preferred, not guaranteed usable.
+  //
+  // Claiming a winner here and discarding the rest was the first version, and
+  // it turned a transient problem in the preferred copy into a permanently
+  // missing session — unreadable, deleted after enumeration, over the size
+  // limit, or parsing to no turns all left the id claimed and the readable
+  // second-home copy dropped without ever being opened. The pre-restructure
+  // code deduped AFTER parsing and so fell through naturally (Codex P2 +
+  // Copilot, PR #524).
+  //
+  // `liveSet` records every file OBSERVED, alternates included: one may still
+  // hold a cache slot from a sweep it won, and dropping it from the live set
+  // would evict that slot and take its mtime out of the ETag signal.
+  type Candidate = { filePath: string; home: string; dirName: string };
+  const candidates = new Map<string, Candidate[]>();
+  const idOrder: string[] = [];
   for (let idx = 0; idx < subdirs.length; idx++) {
     const { home, dirName } = subdirs[idx];
     for (const filePath of perDir[idx] ?? []) {
       liveSet.add(filePath);
       const sessionId = path.basename(filePath, ".jsonl");
-      if (emitted.has(sessionId)) continue;
-      emitted.add(sessionId);
-      claimed.push({ filePath, home, dirName, sessionId });
+      const list = candidates.get(sessionId);
+      if (list) {
+        list.push({ filePath, home, dirName });
+      } else {
+        candidates.set(sessionId, [{ filePath, home, dirName }]);
+        idOrder.push(sessionId);
+      }
     }
   }
 
@@ -951,10 +968,10 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
   // a batch and then emitting it in order costs the same residency the visitor
   // queue already allows (five sessions), and buys the order the whole issue is
   // about (#522).
-  for (let i = 0; i < claimed.length; i += 5) {
-    const batch = claimed.slice(i, i + 5);
+  for (let i = 0; i < idOrder.length; i += 5) {
+    const batch = idOrder.slice(i, i + 5);
     const parsed = await Promise.all(
-      batch.map(async ({ filePath, home, dirName, sessionId }) => {
+      batch.map(async (sessionId) => {
         // FileCache stat's the file, returns the cached parse if mtime+size
         // are unchanged, otherwise calls the factory. Skip oversized files
         // before parsing — they're typically session-in-progress logs that
@@ -981,6 +998,10 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
         // returning abandons one file rather than a project's remaining
         // transcripts. The keyword follows the shape, which is the rule
         // Codex and Copilot established on PR #499 when the shapes differed.
+        // Each candidate in turn, until one yields turns. Ordinary sessions
+        // have exactly one, so this is a single iteration in every case but
+        // the duplicate one.
+        for (const { filePath, home, dirName } of candidates.get(sessionId) ?? []) {
         let turns: UsageTurn[] | undefined;
         try {
           turns = await cache.getOrCompute(filePath, async (fp) => {
@@ -1001,10 +1022,14 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
             });
           });
         } catch {
-          return null;
+          // This copy is unreadable; the next one may not be.
+          continue;
         }
 
-        return turns && turns.length > 0 ? { sessionId, turns } : null;
+        if (turns && turns.length > 0) return { sessionId, turns };
+        // Parsed to nothing — oversized, or empty. Try the next copy.
+        }
+        return null;
       })
     );
     for (const entry of parsed) {

@@ -131,6 +131,23 @@ export function needsReconcileAfterV3(db: DatabaseT.Database): boolean {
  * construction instead of by coincidence of character set. The `[A-Za-z]--`
  * shape is the one `canonicalizeDirName` tests for (`usage/parser.ts:72`).
  */
+/**
+ * Descending by cost, then ascending by name — BINARY, matching SQLite's
+ * default collation so the two backends order the same ties identically
+ * (#522, Codex P2 on PR #524).
+ *
+ * These sorts run in JS rather than SQL because they follow a MERGE step that
+ * changes the ordering the query established, so the tie-break has to be
+ * restated here rather than relying on the `ORDER BY`.
+ */
+function byCostThenName<T>(name: (x: T) => string): (a: T, b: T) => number {
+  return (a, b) => {
+    const d = (b as { cost: number }).cost - (a as { cost: number }).cost;
+    if (d !== 0) return d;
+    return compareCodePoints(name(a), name(b));
+  };
+}
+
 function foldDirNameForIdentity(
   dirName: string,
   /**
@@ -464,7 +481,7 @@ function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdo
   // NULL homeKey → omitted, matching the file backend (homeKey is absent on
   // rows whose turns carry no home stamp) so the two backends serialize alike.
   return [...merged.values()]
-    .sort((a, b) => b.cost - a.cost)
+    .sort(byCostThenName((r) => `${r.projectSlug}\u0000${r.projectDirName}`))
     .map(({ homeKey, ...rest }) => (homeKey === null ? rest : { ...rest, homeKey }));
 }
 
@@ -783,7 +800,7 @@ function queryBySkillCost(db: DatabaseT.Database, f: FilterParams): SkillCost[] 
       // `EffortBreakdown.oneShotRate`.
       ...(r.verifiedTasks > 0 ? { oneShotRate: r.oneShotTasks / r.verifiedTasks } : {}),
     }))
-    .sort((a, b) => b.cost - a.cost);
+    .sort(byCostThenName((r) => r.skill));
 }
 
 /**
@@ -892,11 +909,11 @@ function queryByMcpCost(db: DatabaseT.Database, f: FilterParams): McpServerCost[
   for (const row of merged.values()) {
     const tools = toolsByServer.get(row.key);
     if (tools && tools.size > 0) {
-      row.tools = [...tools.values()].sort((a, b) => b.cost - a.cost);
+      row.tools = [...tools.values()].sort(byCostThenName((t) => t.tool));
     }
   }
 
-  return [...merged.values()].sort((a, b) => b.cost - a.cost);
+  return [...merged.values()].sort(byCostThenName((r) => r.key));
 }
 
 function queryDaily(db: DatabaseT.Database, f: FilterParams): DailyBucket[] {
@@ -1253,7 +1270,9 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
          AND (? IS NULL OR s.home_key = ?)
          AND s.project_slug IN (${placeholders})
        GROUP BY s.project_slug, tu.tool_name
-       ORDER BY s.project_slug, count DESC`
+       -- Five rows per project are taken from this, so a tie at the cutoff
+       -- decided MEMBERSHIP and not just order (#522).
+       ORDER BY s.project_slug, count DESC, tu.tool_name ASC`
     )
     .all(f.periodStart, f.periodStart, f.home, f.home, ...slugs) as Array<{
     projectSlug: string;

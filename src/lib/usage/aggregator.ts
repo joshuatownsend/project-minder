@@ -395,7 +395,19 @@ function byMeasureThenName<T>(
   return (a, b) => {
     const d = measure(b) - measure(a);
     if (d !== 0) return d;
-    return name(a).localeCompare(name(b));
+    // BINARY comparison, not `localeCompare`, for two reasons that point the
+    // same way (Codex P2, PR #524):
+    //
+    //  - `localeCompare` is not TOTAL. Distinct labels can compare equal under
+    //    locale collation — composed `é` against decomposed `é` is the
+    //    common case — and the comparator would then fall back to arrival
+    //    order, which is the defect this function exists to remove.
+    //  - It also disagrees with the SQL backend, whose `ORDER BY ... ASC` is
+    //    SQLite's default BINARY collation. Two backends ordering the same
+    //    ties differently is its own bug.
+    const an = name(a);
+    const bn = name(b);
+    return an < bn ? -1 : an > bn ? 1 : 0;
   };
 }
 

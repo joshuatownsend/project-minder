@@ -141,6 +141,45 @@ describe("sweepSessions visitor ordering (#515)", () => {
     expect(first).toEqual(["s1", "s2", "s3", "s4"]);
   });
 
+  it("falls through to the next copy when the preferred one is unusable", async () => {
+    // Ranking candidates before parsing made duplicate resolution
+    // deterministic — and, in its first form, permanently lossy: claiming the
+    // preferred copy and discarding the rest meant an unreadable, deleted,
+    // oversized or empty preferred file dropped the session entirely, without
+    // the readable second-home copy ever being opened. The pre-restructure code
+    // deduped AFTER parsing and fell through naturally (Codex P2 + Copilot,
+    // PR #524).
+    //
+    // The preferred copy here is EMPTY, which is the case a size check or a
+    // truncated write produces, and the one a reader cannot distinguish from
+    // "this session has nothing to say".
+    const dir = path.join(tmpHome, ".claude", "projects", "-home-me-dev-a");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "dupe.jsonl"), "");
+
+    const other = path.join(tmpHome, "second-home", "projects", "-home-me-dev-b");
+    await fs.mkdir(other, { recursive: true });
+    await fs.writeFile(
+      path.join(other, "dupe.jsonl"),
+      Array.from({ length: 7 }, () => JSON.stringify(assistant("2026-03-02T10:00:00.000Z", 10))).join("\n") + "\n"
+    );
+
+    vi.doMock("@/lib/config", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("@/lib/config")>()),
+      readConfig: async () => ({ claudeHomes: [path.join(tmpHome, "second-home")] }),
+    }));
+
+    const { streamAllSessions } = await import("@/lib/usage/parser");
+    const seen: { id: string; turns: number }[] = [];
+    await streamAllSessions(async (sessionId, turns) => {
+      seen.push({ id: sessionId, turns: turns.length });
+    });
+
+    // The session is NOT missing, and it carries the usable copy's turns.
+    expect(seen.filter((x) => x.id === "dupe")).toHaveLength(1);
+    expect(seen.find((x) => x.id === "dupe")?.turns).toBe(7);
+  });
+
   it("emits every session exactly once", async () => {
     // Every session reaches the visitor, and none reaches it twice. Held
     // before #522 and still held after; kept separate from the ORDER property

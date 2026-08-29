@@ -107,4 +107,34 @@ describe("#522 — tied rankings are ordered by name, not by arrival", () => {
     expect(b.byModel.map((m) => m.model)).toEqual(a.byModel.map((m) => m.model));
     expect(a.byModel.map((m) => m.model)).toEqual(["a-model", "b-model", "c-model"]);
   });
+
+  it("orders names that locale collation calls equal", async () => {
+    // `localeCompare` is not TOTAL: composed `é` (U+00E9) and decomposed
+    // `e` + U+0301 are distinct strings that collate equal, so a comparator
+    // built on it falls back to arrival order for exactly the pair it was
+    // supposed to separate (Codex P2, PR #524).
+    //
+    // A binary comparison separates them, and it also matches the SQL
+    // backend's `ORDER BY ... ASC`, which is SQLite's default BINARY
+    // collation. Two backends ordering the same ties differently would be its
+    // own bug.
+    const composed = "caf\u00e9-model";
+    const decomposed = "cafe\u0301-model";
+    expect(composed).not.toBe(decomposed);
+    expect(composed.localeCompare(decomposed)).toBe(0);
+
+    const forward = [composed, decomposed].map((model, i) =>
+      turn({ model, sessionId: `s${i}`, inputTokens: 100 })
+    );
+    const backward = [...forward].reverse();
+
+    const a = await aggregateUsage(forward, "all", emptyActivity());
+    const b = await aggregateUsage(backward, "all", emptyActivity());
+
+    // Same order regardless of arrival — which `localeCompare` could not give.
+    expect(b.byModel.map((m) => m.model)).toEqual(a.byModel.map((m) => m.model));
+    // And it is the BINARY order, so the SQL backend agrees: "cafe\u0301" sorts
+    // before "caf\u00e9" because U+0065 < U+00E9 at the fourth character.
+    expect(a.byModel.map((m) => m.model)).toEqual([decomposed, composed]);
+  });
 });
