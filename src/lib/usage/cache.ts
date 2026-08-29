@@ -145,6 +145,36 @@ export class FileCache<T> {
    * Returns `undefined` if the file can't be stat'd (deleted, permission, etc.)
    * — the caller decides whether absence is fatal.
    */
+  /**
+   * Record a file in the CORPUS without parsing or retaining it.
+   *
+   * The corpus fingerprint — `corpusSize` and `maxMtimeMs()` — is what route
+   * ETags and the category histogram are keyed on, and it is built from `meta`,
+   * which only `getOrCompute` used to write. So a file the sweep SAW but chose
+   * not to parse was invisible to it.
+   *
+   * That became reachable with #522's duplicate handling: when one session id
+   * has two copies, only the preferred one is parsed. Delete that copy and the
+   * alternate takes over — but the fingerprint could be identical either side
+   * of the swap, because the count stays at one and a single file's removal
+   * rarely moves a maximum taken over thousands. `getSessionCategoryCounts()`
+   * then serves its indefinitely-cached histogram for a corpus that changed
+   * (Codex P2, PR #524).
+   *
+   * One `stat`, no read, no slot, no bytes against the budget. Called only for
+   * duplicate alternates, which are pathological to begin with.
+   */
+  async observe(filePath: string): Promise<void> {
+    try {
+      const stat = await fs.stat(filePath);
+      this.meta.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size });
+    } catch {
+      // Gone between enumeration and here. Drop it from the corpus for the same
+      // reason `getOrCompute` does: a deletion has to move the fingerprint.
+      this.meta.delete(filePath);
+    }
+  }
+
   async getOrCompute(
     filePath: string,
     factory: (filePath: string) => Promise<T>

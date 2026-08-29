@@ -270,4 +270,41 @@ describe("sweepSessions visitor ordering (#515)", () => {
     expect(streamedTurns).toBe(5);
     expect(mapped.get("dupe")?.length).toBe(5);
   });
+
+  it("counts a duplicate's unparsed alternates in the corpus fingerprint", async () => {
+    // Only the PREFERRED copy is parsed, which is the point — but the corpus
+    // fingerprint (`getJsonlFileCount`, `getJsonlMaxMtime`) is built from what
+    // reached the cache, so the skipped copies were invisible to it.
+    //
+    // The consequence is a stale answer, not a wrong count: delete the
+    // preferred copy and the alternate takes over, while the count stays at one
+    // and a single file's removal rarely moves a maximum taken over thousands.
+    // `getSessionCategoryCounts()` then serves its indefinitely-cached
+    // histogram for a corpus that changed (Codex P2, PR #524).
+    await writeSession("-home-me-dev-a", "dupe", 5);
+    const other = path.join(tmpHome, "second-home", "projects", "-home-me-dev-b");
+    await fs.mkdir(other, { recursive: true });
+    await fs.writeFile(
+      path.join(other, "dupe.jsonl"),
+      Array.from({ length: 9 }, () => JSON.stringify(assistant("2026-03-02T10:00:00.000Z", 10))).join("\\n") + "\\n"
+    );
+
+    vi.doMock("@/lib/config", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("@/lib/config")>()),
+      readConfig: async () => ({ claudeHomes: [path.join(tmpHome, "second-home")] }),
+    }));
+
+    const { streamAllSessions, getJsonlFileCount } = await import("@/lib/usage/parser");
+
+    const seen: string[] = [];
+    await streamAllSessions(async (sessionId) => {
+      seen.push(sessionId);
+    });
+
+    // One session emitted — the deduplication still works.
+    expect(seen.filter((x) => x === "dupe")).toHaveLength(1);
+    // TWO files in the corpus. Without `observe` this is one, and the swap
+    // between copies is then invisible to every ETag built on it.
+    expect(getJsonlFileCount()).toBe(2);
+  });
 });

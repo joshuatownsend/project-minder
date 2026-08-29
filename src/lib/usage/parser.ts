@@ -1001,7 +1001,9 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
         // Each candidate in turn, until one yields turns. Ordinary sessions
         // have exactly one, so this is a single iteration in every case but
         // the duplicate one.
-        for (const { filePath, home, dirName } of candidates.get(sessionId) ?? []) {
+        const forId = candidates.get(sessionId) ?? [];
+        for (let ci = 0; ci < forId.length; ci++) {
+        const { filePath, home, dirName } = forId[ci];
         let turns: UsageTurn[] | undefined;
         try {
           turns = await cache.getOrCompute(filePath, async (fp) => {
@@ -1026,7 +1028,15 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
           continue;
         }
 
-        if (turns && turns.length > 0) return { sessionId, turns };
+        if (turns && turns.length > 0) {
+          // The copies we are about to SKIP are still part of the corpus, and
+          // the fingerprint has to know about them or a swap between copies can
+          // be invisible to it. One `stat` each, and only in the duplicate case.
+          for (let rest = ci + 1; rest < forId.length; rest++) {
+            await cache.observe(forId[rest].filePath);
+          }
+          return { sessionId, turns };
+        }
         // Parsed to nothing — oversized, or empty. Try the next copy.
         }
         return null;
