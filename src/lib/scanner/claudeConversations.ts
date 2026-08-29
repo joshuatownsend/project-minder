@@ -898,12 +898,15 @@ export async function scanAllSessions(): Promise<SessionSummary[]> {
           (await directoryExists(home)) &&
           !(await pathEntryExists(projectsDir));
         if (!benign) {
-          recordSweepFailure({
-            path: projectsDir,
-            scope: "projects-dir",
-            code,
-            sweep: "sessions",
-          });
+          recordSweepFailure(
+            {
+              path: projectsDir,
+              scope: "projects-dir",
+              code,
+              sweep: "sessions",
+            },
+            sweepToken
+          );
         }
         continue;
       }
@@ -1843,23 +1846,24 @@ export async function scanClaudeConversationsForProjects(
   const homes = await getReadableClaudeHomes(config);
   const allowedDirs = new Set(projectPaths.map((p) => encodePath(p)));
 
-  // Cleared at the START, so a scan that throws part way through still leaves
-  // behind what it observed (#513).
-  const sweepToken = beginSweepFailureCycle("sessions-scoped");
+  // This reader opens NO failure cycle, deliberately (#513).
+  //
+  // It enumerates a corpus the CALLER chose — `scanConversationDirs` skips every
+  // directory outside `allowedDirs` — so it cannot speak to whether the corpus
+  // as a whole was readable, which is the only question `/api/claude-homes`
+  // asks. Two attempts to make it speak anyway both failed in the same way:
+  // sharing the `sessions` name let a clean scoped scan erase the full scan's
+  // finding, and giving it its own name only moved the collision, since every
+  // distinct `allowedDirs` set still shared that one key — project B's clean
+  // scan erasing project A's failure. Keying per corpus would have to keep a
+  // result per allow-set forever, which never clears and grows without bound.
+  //
+  // Nothing is lost: the `usage` and `sessions` sweeps both walk the whole tree
+  // and both report, so an unreadable directory here is already named by them.
+  // (Codex P2 x2, PR #527.)
   const parts: ClaudeUsageStats[] = [];
-  try {
-    for (const home of homes) {
-      parts.push(
-        await scanConversationDirs(path.join(home, "projects"), allowedDirs, {
-          sweep: "sessions-scoped",
-          token: sweepToken,
-        })
-      );
-    }
-  } finally {
-    // See the usage sweep: published in a `finally` so a scan that threw still
-    // reports what it observed.
-    endSweepFailureCycle("sessions-scoped", sweepToken);
+  for (const home of homes) {
+    parts.push(await scanConversationDirs(path.join(home, "projects"), allowedDirs));
   }
   return mergeClaudeUsageStats(parts);
 }

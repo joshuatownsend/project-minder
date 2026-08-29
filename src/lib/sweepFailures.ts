@@ -47,14 +47,14 @@ export type SweepFailureScope =
 /**
  * Sweeps publish independently, so a name is a CORPUS, not a caller.
  *
- * `sessions-scoped` exists because the project-scoped Claude-usage scan skips
- * every directory outside its allow-set: sharing the `sessions` name let a
- * clean scoped scan replace a project-directory failure that the full
- * session-list scan had found, so `/api/claude-homes` said `complete: true`
- * while the session list was still short by that directory.
- * (Codex P2, PR #527.)
+ * Both of these walk the WHOLE Claude tree, which is what makes them able to
+ * answer "was the corpus readable". A reader that enumerates a caller-chosen
+ * subset cannot, and must not open a cycle at all — see the note in
+ * `scanClaudeConversationsForProjects`, where two attempts to give the scoped
+ * Claude-usage scan a voice here both ended with one scan erasing another's
+ * finding. (Codex P2 x2, PR #527.)
  */
-export type SweepName = "usage" | "sessions" | "sessions-scoped";
+export type SweepName = "usage" | "sessions";
 
 export interface SweepFailure {
   /** The directory that could not be enumerated. */

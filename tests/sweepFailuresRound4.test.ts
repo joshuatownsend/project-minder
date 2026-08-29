@@ -349,58 +349,80 @@ describe("round 6 — the invalidation guard reaches the writes too", () => {
     expect(getSweepFailureTotal()).toBe(1);
   });
 
-  it("does not let the project-scoped scan overwrite the full scan's result", async () => {
-    // `scanConversationDirs` skips every directory outside its allow-set, so
-    // the project-scoped Claude-usage scan enumerates strictly LESS than the
-    // full session-list scan. While both published under `sessions`, a clean
-    // scoped scan replaced a project-directory failure the full scan had found
-    // and `/api/claude-homes` reported `complete: true` over a session list
-    // that was still short by that directory. (Codex P2, PR #527.)
-    //
-    // Asserted at the collector, where the sharing was: the two sweeps publish
-    // independently and `getSweepFailures` merges them.
-    const {
-      beginSweepFailureCycle,
-      endSweepFailureCycle,
-      recordSweepFailure,
-      getSweepFailures,
-    } = await import("@/lib/sweepFailures");
+  /**
+   * The next two are STRUCTURAL, and that is the point rather than a shortcut.
+   *
+   * Both defects are a MISSING CALL — a token not passed, a cycle not opened —
+   * and both recurred after a behavioural fix that covered the instance and not
+   * the class. I wrote the behavioural versions first and mutation-testing
+   * showed neither discriminated: the scoped scan trips over the same
+   * `projects` path as the full scan, so a fixture cannot make one fail while
+   * the other succeeds without an unreadable PROJECT directory, which no
+   * portable filesystem operation produces (Windows skips a non-directory
+   * before the `readdir` that would report it). A rule over the source catches
+   * every site including the ones a fixture cannot reach.
+   */
+  it("passes the cycle token at EVERY record site", async () => {
+    // Three separate rounds of review found a `recordSweepFailure` without its
+    // token — each time a different site, each time reintroducing the stale
+    // write the guard exists to stop. The rule is what closes it: a new call
+    // site added later fails this without anyone having to remember.
+    // (Codex P2 + Copilot, PR #527.)
+    const { readFile } = await import("node:fs/promises");
+    const files = [
+      "src/lib/usage/parser.ts",
+      "src/lib/scanner/claudeConversations.ts",
+    ];
 
-    const full = beginSweepFailureCycle("sessions");
-    recordSweepFailure(
-      { path: "/unreadable-project", scope: "project-dir", sweep: "sessions" },
-      full
-    );
-    endSweepFailureCycle("sessions", full);
+    const offenders: string[] = [];
+    for (const f of files) {
+      const text = await readFile(f, "utf-8");
+      // Each call, from `recordSweepFailure(` to the `);` that closes it. The
+      // arguments span several lines, so this walks braces rather than matching
+      // a single line.
+      let i = text.indexOf("recordSweepFailure(");
+      while (i !== -1) {
+        let depth = 0;
+        let j = i + "recordSweepFailure".length;
+        let end = -1;
+        for (; j < text.length; j++) {
+          if (text[j] === "(") depth++;
+          else if (text[j] === ")") {
+            depth--;
+            if (depth === 0) {
+              end = j;
+              break;
+            }
+          }
+        }
+        const call = text.slice(i, end + 1);
+        // A tokened call closes with `, <token>)` after the failure object.
+        if (!/\}\s*,\s*[A-Za-z_.]+\s*\)$/.test(call)) {
+          offenders.push(`${f}: ${call.slice(0, 60).replace(/\s+/g, " ")}…`);
+        }
+        i = text.indexOf("recordSweepFailure(", end);
+      }
+    }
 
-    // The scoped scan runs afterwards and finds nothing, because the broken
-    // directory is not in its allow-set.
-    const scoped = beginSweepFailureCycle("sessions-scoped");
-    endSweepFailureCycle("sessions-scoped", scoped);
-
-    expect(getSweepFailures().map((f) => f.path)).toEqual(["/unreadable-project"]);
+    expect(offenders).toEqual([]);
   });
 
-  it("still merges the two session sweeps when they find the same thing", async () => {
-    // The other half: separate names must not undo the location dedup, or the
-    // split would trade one wrong count for another.
-    const {
-      beginSweepFailureCycle,
-      endSweepFailureCycle,
-      recordSweepFailure,
-      getSweepFailureTotal,
-    } = await import("@/lib/sweepFailures");
+  it("gives the project-scoped reader no failure cycle at all", async () => {
+    // It enumerates a corpus the CALLER chose — `scanConversationDirs` skips
+    // every directory outside `allowedDirs` — so it cannot answer "was the
+    // corpus readable", which is the only question `/api/claude-homes` asks.
+    // Two attempts to let it answer anyway both ended with one scan erasing
+    // another's finding: first by sharing the `sessions` name, then by sharing
+    // a `sessions-scoped` one across every distinct allow-set.
+    // (Codex P2 x2, PR #527.)
+    const { readFile } = await import("node:fs/promises");
+    const text = await readFile("src/lib/scanner/claudeConversations.ts", "utf-8");
 
-    const same = { path: "/both-see-this", scope: "projects-dir" as const };
-
-    const full = beginSweepFailureCycle("sessions");
-    recordSweepFailure({ ...same, sweep: "sessions" }, full);
-    endSweepFailureCycle("sessions", full);
-
-    const scoped = beginSweepFailureCycle("sessions-scoped");
-    recordSweepFailure({ ...same, sweep: "sessions-scoped" }, scoped);
-    endSweepFailureCycle("sessions-scoped", scoped);
-
-    expect(getSweepFailureTotal()).toBe(1);
+    const start = text.indexOf("export async function scanClaudeConversationsForProjects");
+    expect(start).toBeGreaterThan(-1);
+    // Bounded by the next top-level declaration, not a fixed character count —
+    // a fixed window stops covering the function as the file grows.
+    const body = text.slice(start, text.indexOf("\n}", start));
+    expect(body).not.toMatch(/beginSweepFailureCycle/);
   });
 });

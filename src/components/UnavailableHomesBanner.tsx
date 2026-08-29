@@ -20,6 +20,7 @@
 
 import { useEffect, useState } from "react";
 import { AlertTriangle } from "lucide-react";
+import type { SweepName, SweepFailureScope } from "@/lib/sweepFailures";
 
 interface UnavailableHome {
   path: string;
@@ -38,8 +39,12 @@ interface UnavailableHome {
  */
 interface DegradedPath {
   path: string;
-  scope: "projects-dir" | "project-dir";
-  sweep: "usage" | "sessions";
+  // Imported rather than restated. A hand-copied `"usage" | "sessions"` drifted
+  // the moment a third sweep name was added on the server, and a client
+  // contract that silently disagrees with the API is how type-driven logic
+  // starts excluding a valid value without anyone noticing. (Copilot, PR #527.)
+  scope: SweepFailureScope;
+  sweep: SweepName;
   reason: string;
 }
 

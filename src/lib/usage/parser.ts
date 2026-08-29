@@ -960,12 +960,15 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
               // (Codex P2, PR #527).
               const code = (err as NodeJS.ErrnoException)?.code;
               if (code !== "ENOENT") {
-                recordSweepFailure({
-                  path: subagentsDir,
-                  scope: "project-dir",
-                  code,
-                  sweep: "usage",
-                });
+                recordSweepFailure(
+                  {
+                    path: subagentsDir,
+                    scope: "project-dir",
+                    code,
+                    sweep: "usage",
+                  },
+                  sweepToken
+                );
               }
             }
           }
@@ -974,12 +977,15 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
           // project's whole history from every usage aggregate. Reported at
           // this granularity rather than as "the home is gone", because those
           // are different problems with different fixes (#513).
-          recordSweepFailure({
-            path: dirPath,
-            scope: "project-dir",
-            code: (err as NodeJS.ErrnoException)?.code,
-            sweep: "usage",
-          });
+          recordSweepFailure(
+            {
+              path: dirPath,
+              scope: "project-dir",
+              code: (err as NodeJS.ErrnoException)?.code,
+              sweep: "usage",
+            },
+            sweepToken
+          );
           perDir[i + k] = [];
           return;
         }
