@@ -23,7 +23,7 @@ export function getPrimaryClaudeHome(): string {
  * same history.jsonl twice and double-count every session. Non-WSL paths
  * fall back to the plain normalized key.
  */
-function homeDedupeKey(p: string): string {
+export function homeDedupeKey(p: string): string {
   // Trim trailing separators first: `...\.claude` and `...\.claude\` are the
   // same tree, and normalizePathKey preserves the trailing slash.
   const trimmed = p.trim().replace(/[\\/]+$/, "");

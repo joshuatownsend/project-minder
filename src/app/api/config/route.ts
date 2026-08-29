@@ -15,6 +15,7 @@ import { efficiencyGradeCache } from "@/lib/efficiencyGradeCache";
 import { invalidateClaudeUsageCache } from "@/lib/server/queries/stats";
 import { invalidateSessionCategoryCounts } from "@/lib/memory/seedCategoryCounts";
 import { validateNotificationRules } from "@/lib/notifications/rules/validate";
+import { homeDedupeKey } from "@/lib/claudeHome";
 import {
   isShortcutActionId,
   isValidCombo,
@@ -111,15 +112,23 @@ export async function PATCH(request: NextRequest) {
     // Settings save posts every field, so treating any `claudeHomes` in the
     // body as a change would clear the record on every unrelated save.
     //
-    // And compared as a SET, which is what the name says and what actually
-    // governs. Order decides which home wins a duplicate session id, not which
-    // directories get enumerated — so an index-wise comparison cleared a live
-    // diagnostic when the user merely dragged one home above another, hiding a
-    // still-unreadable path until the next sweep. (Copilot, PR #527.)
-    const before = new Set((await readConfig()).claudeHomes ?? []);
-    const after = new Set(homes);
+    // And compared as a SET of CANONICAL keys — the same `homeDedupeKey` that
+    // decides which homes actually get enumerated.
+    //
+    // Two narrowings ago this compared index-wise, so merely reordering two
+    // homes cleared the record; order decides which home wins a duplicate
+    // session id, not which directories are swept. Comparing raw strings as a
+    // set fixed that and left the other half: a trailing separator, or the
+    // `wsl$` / `wsl.localhost` spelling of one UNC path, differs as a string
+    // while collapsing to a single tree in `getClaudeHomes`. Either edit would
+    // have erased a live unreadable-directory diagnostic without changing
+    // anything that actually gets swept. (Copilot, then Codex, PR #527.)
+    const keys = (list: string[]) =>
+      new Set(list.map((h) => h.trim()).filter(Boolean).map(homeDedupeKey));
+    const before = keys((await readConfig()).claudeHomes ?? []);
+    const after = keys(homes);
     claudeHomePathsChanged =
-      before.size !== after.size || [...after].some((h) => !before.has(h));
+      before.size !== after.size || [...after].some((k) => !before.has(k));
     patches.push((c) => { c.claudeHomes = homes; });
     corpusShapeChanged = true;
   }

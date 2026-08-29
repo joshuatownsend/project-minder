@@ -176,11 +176,14 @@ describe("the record is cleared by corpus changes only", () => {
     // present. A Settings save posts every field, so `Array.isArray(body.claudeHomes)`
     // alone would clear the record on every unrelated save — the same defect
     // one level down.
-    // As a SET, which is what the name says and what actually governs: order
-    // decides which home wins a duplicate session id, not which directories get
-    // enumerated. An index-wise comparison cleared a live diagnostic when the
-    // user merely reordered two homes. (Copilot, PR #527.)
+    // As a SET of CANONICAL keys. Order decides which home wins a duplicate
+    // session id, not which directories get enumerated, so an index-wise
+    // comparison cleared a live diagnostic on a mere reorder — and comparing
+    // raw strings left the other half, where a trailing separator or the
+    // `wsl$` / `wsl.localhost` spelling of one UNC path differs as a string
+    // while collapsing to one tree. (Copilot, then Codex, PR #527.)
     expect(route).toMatch(/claudeHomePathsChanged\s*=\s*\n?\s*before\.size !== after\.size/);
+    expect(route).toMatch(/\.map\(homeDedupeKey\)/);
   });
 });
 
@@ -682,5 +685,39 @@ describe("round 10 — an older success cannot retire a newer failure", () => {
     endSweepFailureCycle("usage", later);
 
     expect(getSweepFailures()).toHaveLength(0);
+  });
+});
+
+describe("round 11 — equivalent spellings are not a corpus change", () => {
+  it("gives one tree one key however it is spelled", async () => {
+    // The route decides whether to clear the failure record by comparing Claude
+    // home path sets. Comparing the raw strings meant a trailing separator, or
+    // the `wsl$` / `wsl.localhost` spelling of one UNC path, read as a
+    // different corpus — erasing a live unreadable-directory diagnostic without
+    // anything that gets swept having changed. (Codex P2, PR #527.)
+    //
+    // Asserted on the predicate itself rather than through the route: this is
+    // where the equivalence lives, and `getClaudeHomes` already relies on it to
+    // avoid parsing one history twice.
+    const { homeDedupeKey } = await import("@/lib/claudeHome");
+
+    // A trailing separator is the same tree.
+    expect(homeDedupeKey("C:\\Users\\me\\.claude\\")).toBe(
+      homeDedupeKey("C:\\Users\\me\\.claude")
+    );
+
+    // And WSL's two UNC hosts are aliases for one filesystem.
+    expect(homeDedupeKey("\\\\wsl$\\Ubuntu\\home\\me\\.claude")).toBe(
+      homeDedupeKey("\\\\wsl.localhost\\Ubuntu\\home\\me\\.claude")
+    );
+
+    // The counterpart, or the check would pass by collapsing everything: two
+    // genuinely different homes must keep different keys.
+    expect(homeDedupeKey("C:\\Users\\me\\.claude")).not.toBe(
+      homeDedupeKey("D:\\other\\.claude")
+    );
+    expect(homeDedupeKey("\\\\wsl$\\Ubuntu\\home\\me\\.claude")).not.toBe(
+      homeDedupeKey("\\\\wsl$\\Debian\\home\\me\\.claude")
+    );
   });
 });
