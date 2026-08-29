@@ -182,6 +182,52 @@ describe.skipIf(!driverAvailable)("delegated transcripts keep their provenance",
     expect(summary.input_tokens).toBe(0);
   });
 
+  it("does not let a delegated prompt reclassify the agent's spend", async () => {
+    // The prose is STORED (the timeline needs it) but must not become
+    // `userIntentText` on the following assistant turn, which is what
+    // `classifyTurn` reads. A generated delegation prompt carrying an intent
+    // word — "debug this error", "plan the architecture" — would otherwise move
+    // that agent's cost into Debugging or Planning, and `queryByCategory`
+    // deliberately includes sidechain cost, so the usage-by-category report
+    // would shift as a side effect of a timeline fix. The file backend never
+    // propagates sidechain prompts as intent, so the two would also disagree.
+    // (Codex P2, PR #528.)
+    const { conn, mig, ingest } = await reload();
+    expect((await mig.initDb()).error).toBeNull();
+    const db = (await conn.getDb())!;
+
+    const { projectsDir } = await write(path.join("C--dev-myapp", "beef03.jsonl"), [
+      assistantLine("2026-08-01T10:00:00Z", "m1", [{ type: "text", text: "ok" }], false),
+    ]);
+
+    // Two transcripts differing ONLY in the prompt's wording — one neutral, one
+    // loaded with an intent keyword. If the prompt reaches the classifier they
+    // land in different categories; if it does not, they agree.
+    await write(path.join("C--dev-myapp", "beef03", "subagents", "neutral.jsonl"), [
+      userLine("2026-08-01T10:05:00Z", "proceed", true),
+      assistantLine("2026-08-01T10:06:00Z", "n0", [{ type: "text", text: "did it" }], true),
+    ]);
+    await write(path.join("C--dev-myapp", "beef03", "subagents", "loaded.jsonl"), [
+      userLine("2026-08-01T10:05:00Z", "debug this error and fix the failing test", true),
+      assistantLine("2026-08-01T10:06:00Z", "l0", [{ type: "text", text: "did it" }], true),
+    ]);
+
+    expect((await ingest.reconcileAllSessions(db, { projectsDir })).errors).toBe(0);
+
+    const rows = db
+      .prepare(
+        `SELECT session_id, category FROM turns
+          WHERE session_id IN ('neutral','loaded') AND role = 'assistant'
+          ORDER BY session_id`
+      )
+      .all() as Array<{ session_id: string; category: string | null }>;
+
+    expect(rows).toHaveLength(2);
+    // Equal to each other — the wording of a machine-written prompt must not be
+    // what decides where an agent's spend is booked.
+    expect(rows[0].category).toBe(rows[1].category);
+  });
+
   it("counts a delegated agent's tool calls the same however the lines split", async () => {
     // `tool_call_count` must describe what the file did, not how its producer
     // chose to chunk it. Two transcripts with the SAME two calls — one message

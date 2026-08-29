@@ -1624,7 +1624,19 @@ async function readJsonlSession(
       prevUserTimestamp = timestamp;
       // A3: capture the human prompt text (handles both string and array
       // shapes via `userText` above) for propagation onto following assistant turns.
-      if (userText) prevUserText = userText;
+      //
+      // NOT for a delegated transcript. This text becomes `userIntentText` on
+      // the following assistant turn and is what `classifyTurn` reads, so a
+      // generated delegation prompt carrying an intent word — "debug this
+      // error", "plan the architecture" — would reclassify that agent's spend
+      // out of the category the sidechain collector gave it and into Debugging
+      // or Planning. `queryByCategory` deliberately includes sidechain cost, so
+      // the DB-backed usage-by-category report would move as a side effect of a
+      // fix about a blank timeline, and the file backend — which never
+      // propagates sidechain prompts as intent — would disagree with it.
+      // The prose is still STORED, which is all the timeline needs.
+      // (Codex P2, PR #528.)
+      if (userText && !isDelegatedAgentTranscript) prevUserText = userText;
     }
   }
 
