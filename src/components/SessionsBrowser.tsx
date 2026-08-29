@@ -442,7 +442,12 @@ function SessionRow({
             </span>
           )}
           {session.isWorktree && session.gitBranch && (
-            <QualityChip tone="neutral" title={`Worktree session — branch: ${session.gitBranch}`}>
+            // The branch is NOT interpolated into the description: it is
+            // already the visible label, so embedding it made a focused chip
+            // announce "feature/foo, Worktree session — branch: feature/foo"
+            // (Codex P2, PR #519 — the third chip with this defect). The
+            // description says only what the label cannot: what the label IS.
+            <QualityChip tone="neutral" title="Worktree session — the label is the git branch it runs on.">
               {session.gitBranch}
             </QualityChip>
           )}

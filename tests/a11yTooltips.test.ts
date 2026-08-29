@@ -231,6 +231,28 @@ describe("#380 — load-bearing tooltips are reachable without a mouse", () => {
     expect(effort).toMatch(/\{entries\.map\(\(\[level, n\]\) =>/);
   });
 
+  it("keeps QualityChip descriptions free of interpolated values", async () => {
+    // STRUCTURAL, because naming instances did not converge: the cache ratio,
+    // the effort mix and the worktree branch were the same defect found in
+    // three consecutive review rounds (Codex P2 x3, PR #519). Each fix closed
+    // one call site and left the rule unstated, so the next one was written the
+    // same way.
+    //
+    // The rule: a `QualityChip` explains a fixed piece of jargon, so its
+    // `title` is a constant. An interpolated `title` is, by construction, the
+    // VALUE the visible label already carries — which `aria-describedby` then
+    // makes a screen reader say twice. A chip that genuinely needs dynamic
+    // context that the label does not carry is a different component (see
+    // `EffortMixChip`, which computes its sentence and states no counts).
+    const src = await read("SessionsBrowser.tsx");
+    const titles = [...src.matchAll(/<QualityChip[^>]*?\stitle=\{([^}]*)\}/g)].map(
+      (m) => m[1]
+    );
+    for (const t of titles) {
+      expect(t, `QualityChip title interpolates a value: ${t}`).not.toContain("${");
+    }
+  });
+
   it("uses .sr-only rather than aria-label on generic spans", async () => {
     // ARIA does not reliably name a generic element and some screen readers
     // drop it, which is why the issue prescribes `.sr-only` for spans. The
