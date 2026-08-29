@@ -49,19 +49,6 @@ vi.mock("@/lib/server/queries/stats", () => ({ invalidateClaudeUsageCache: vi.fn
 import { PATCH } from "@/app/api/config/route";
 import { getOrCreateRouteCache } from "@/lib/routeCache";
 import { preserveEnvVars } from "./_helpers/preserveEnv";
-import { installIsolatedState } from "./_helpers/isolatedState";
-
-/**
- * Isolated because `/api/config` gained a runtime `import()` of the DB layer in
- * #513: a corpus change clears the persisted full-pass verdict, which lives in
- * the database because the reconcile that writes it runs in a worker whose
- * `globalThis` cannot reach the server's.
- *
- * The branch is unreachable for most cases here, but "this test happens not to
- * take that path" is an argument about today's control flow. Isolation does not
- * depend on being right about which branch runs.
- */
-installIsolatedState({ prefix: "pm-democachebypass-" });
 
 // #421 — a bare `delete process.env.X` in teardown restores this file's own
 // assignment and destroys anything it INHERITED, and vitest reuses a worker

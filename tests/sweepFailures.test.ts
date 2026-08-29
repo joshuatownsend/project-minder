@@ -160,10 +160,10 @@ describe("describeSweepFailure", () => {
       sweep: "usage",
     });
     expect(home).not.toBe(project);
-    // "Claude PROJECTS directory", not "Claude home". The path on a
+    // "Claude PROJECTS directory", not "Claude home": the path on a
     // `projects-dir` failure is `<home>/projects`, so naming the home sent a
-    // reader to check something that is right there and readable, and the
-    // warning then read as spurious. (Copilot, PR #527.)
+    // reader to check something right there and readable, and the warning then
+    // read as spurious. (Copilot, PR #527.)
     expect(home).toContain("Claude projects directory");
     expect(project).toContain("one project directory");
   });

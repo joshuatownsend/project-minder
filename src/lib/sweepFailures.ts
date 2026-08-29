@@ -494,24 +494,22 @@ export function describeSweepFailure(failure: SweepFailure): string {
   // "this Claude home" was wrong, and misleadingly so: the path on a
   // `projects-dir` failure is `<home>/projects`, not the home. A reader told
   // their home could not be listed goes and checks the home — which is right
-  // there and readable — and concludes the warning is spurious. The broken
-  // `projects` symlink case, which this PR added detection for, is exactly
-  // where that misdirection costs the most. (Copilot, PR #527.)
+  // there and readable — and concludes the warning is spurious. (Copilot, #527.)
   const what =
     failure.scope === "projects-dir"
       ? "this Claude projects directory could not be listed"
       : "one project directory could not be listed";
   switch (failure.code) {
     case "ENOENT":
-      // Two situations reach here, and the message has to fit both or it
-      // sends the reader down the wrong path.
+      // Two situations reach here and the message has to fit both, or it sends
+      // the reader down the wrong path.
       //
-      // A recorded ENOENT is never "a fresh install with no `projects/` yet" —
+      // A RECORDED ENOENT is never "a fresh install with no `projects/` yet" —
       // that case is deliberately silent. It is either the HOME being gone
       // (moved, unmounted, a WSL distro that vanished) or the `projects` entry
-      // being there but unresolvable (a link to a disconnected drive). My first
-      // wording named only the second, which is as misleading as the "Claude
-      // home" wording it replaced. (Copilot, PR #527.)
+      // being there but unresolvable (a link to a disconnected drive). "It no
+      // longer exists" described only the first, and a first attempt at fixing
+      // that described only the second. (Copilot, PR #527, twice.)
       return `${what} — it could not be found (the home may be gone, or a link may point at a drive that is not connected)`;
     case "EACCES":
     case "EPERM":
