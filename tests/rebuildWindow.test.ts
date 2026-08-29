@@ -56,42 +56,71 @@ beforeEach(async () => {
   clearStaleDerivationMemo();
 });
 
-describe.skipIf(!driverAvailable)("hasStaleDerivations (#478)", () => {
-  it("is false when every row is at the current version", async () => {
-    const { hasStaleDerivations } = await import("@/lib/db/indexerRuns");
-    const { DERIVED_VERSION: V } = await import("@/lib/db/derivationVersion");
+describe.skipIf(!driverAvailable)("hasMixedDerivations (#478)", () => {
+  /**
+   * The question is COEXISTENCE, and every case is expressed without reference
+   * to the current `DERIVED_VERSION` — because the predicate no longer needs
+   * one. That also settles the hardcoding Copilot flagged (PR #525): there is
+   * nothing left to hardcode.
+   */
+  it("is false when every row agrees", async () => {
+    const { hasMixedDerivations } = await import("@/lib/db/indexerRuns");
     const db = makeDb();
     try {
-      db.prepare("INSERT INTO sessions VALUES ('a', ?), ('b', ?)").run(V, V);
-      expect(hasStaleDerivations(db, V)).toBe(false);
+      db.prepare("INSERT INTO sessions VALUES ('a', 20), ('b', 20)").run();
+      expect(hasMixedDerivations(db)).toBe(false);
     } finally {
       db.close();
     }
   });
 
-  it("is true when any row lags", async () => {
-    const { hasStaleDerivations } = await import("@/lib/db/indexerRuns");
-    const { DERIVED_VERSION: V } = await import("@/lib/db/derivationVersion");
+  it("is false for an EMPTY index", async () => {
+    // Nothing to disagree. A fresh install must not read as mid-rebuild.
+    const { hasMixedDerivations } = await import("@/lib/db/indexerRuns");
     const db = makeDb();
     try {
-      db.prepare("INSERT INTO sessions VALUES ('a', ?), ('b', ?)").run(V, V - 1);
-      expect(hasStaleDerivations(db, V)).toBe(true);
+      expect(hasMixedDerivations(db)).toBe(false);
     } finally {
       db.close();
     }
   });
 
-  it("ignores rows derived by a NEWER build", async () => {
-    // A rolled-back install leaves rows this build cannot rewrite. Treating
-    // them as stale would put the report in a rebuild state that never ends —
-    // the same asymmetry `isNewerDerivation` documents on the ingest side,
-    // which is why this is `<` and not `!=`.
-    const { hasStaleDerivations } = await import("@/lib/db/indexerRuns");
-    const { DERIVED_VERSION: V } = await import("@/lib/db/derivationVersion");
+  it("is true mid-rebuild, with old and new side by side", async () => {
+    const { hasMixedDerivations } = await import("@/lib/db/indexerRuns");
     const db = makeDb();
     try {
-      db.prepare("INSERT INTO sessions VALUES ('a', ?)").run(V + 1);
-      expect(hasStaleDerivations(db, V)).toBe(false);
+      db.prepare("INSERT INTO sessions VALUES ('a', 20), ('b', 19)").run();
+      expect(hasMixedDerivations(db)).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("is true after a ROLLBACK left newer rows beside current ones", async () => {
+    // The case `< DERIVED_VERSION` missed. A newer build re-derived part of the
+    // corpus, then the app rolled back; `isNewerDerivation` deliberately stops
+    // the older watcher rewriting the newer half, so the mixture is PERMANENT
+    // and the aggregates would have served it forever (Codex P2, PR #525).
+    const { hasMixedDerivations } = await import("@/lib/db/indexerRuns");
+    const db = makeDb();
+    try {
+      db.prepare("INSERT INTO sessions VALUES ('a', 20), ('b', 21)").run();
+      expect(hasMixedDerivations(db)).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("is false when the WHOLE corpus is newer", async () => {
+    // A clean rollback after a complete re-derivation. Every row agrees, so the
+    // figures are internally consistent — merely produced by a build we do not
+    // have. Diverting here is the endless rebuild state the original `<` was
+    // reaching for, and it is the one case that reasoning got right.
+    const { hasMixedDerivations } = await import("@/lib/db/indexerRuns");
+    const db = makeDb();
+    try {
+      db.prepare("INSERT INTO sessions VALUES ('a', 21), ('b', 21)").run();
+      expect(hasMixedDerivations(db)).toBe(false);
     } finally {
       db.close();
     }
@@ -103,11 +132,10 @@ describe.skipIf(!driverAvailable)("hasStaleDerivations (#478)", () => {
     // `hasCompletedFullReconcile` states.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const Database = require("better-sqlite3");
-    const { hasStaleDerivations } = await import("@/lib/db/indexerRuns");
-    const { DERIVED_VERSION: V } = await import("@/lib/db/derivationVersion");
+    const { hasMixedDerivations } = await import("@/lib/db/indexerRuns");
     const db = new Database(":memory:");
     try {
-      expect(hasStaleDerivations(db, V)).toBe(false);
+      expect(hasMixedDerivations(db)).toBe(false);
     } finally {
       db.close();
     }
@@ -124,10 +152,9 @@ describe.skipIf(!driverAvailable)("isRebuildInProgress (#478)", () => {
     const { isRebuildInProgress, clearStaleDerivationMemo } = await import(
       "@/lib/db/indexerRuns"
     );
-    const { DERIVED_VERSION: V } = await import("@/lib/db/derivationVersion");
     const db = makeDb();
     try {
-      db.prepare("INSERT INTO sessions VALUES ('a', ?)").run(V - 1);
+      db.prepare("INSERT INTO sessions VALUES ('a', 19), ('b', 20)").run();
       // No run row of any kind — and it still fires, which the run-based
       // version could not.
       expect(isRebuildInProgress(db)).toBe(true);
@@ -139,7 +166,7 @@ describe.skipIf(!driverAvailable)("isRebuildInProgress (#478)", () => {
       clearStaleDerivationMemo();
       expect(isRebuildInProgress(db)).toBe(true);
 
-      db.prepare("UPDATE sessions SET derived_version = ?").run(V);
+      db.prepare("UPDATE sessions SET derived_version = 20").run();
       clearStaleDerivationMemo();
       expect(isRebuildInProgress(db)).toBe(false);
     } finally {
@@ -155,13 +182,12 @@ describe.skipIf(!driverAvailable)("isRebuildInProgress (#478)", () => {
     const { isRebuildInProgress, clearStaleDerivationMemo } = await import(
       "@/lib/db/indexerRuns"
     );
-    const { DERIVED_VERSION: V } = await import("@/lib/db/derivationVersion");
     const db = makeDb();
     try {
-      db.prepare("INSERT INTO sessions VALUES ('a', ?)").run(V);
+      db.prepare("INSERT INTO sessions VALUES ('a', 20), ('b', 20)").run();
       expect(isRebuildInProgress(db)).toBe(false);
 
-      db.prepare("UPDATE sessions SET derived_version = ?").run(V - 1);
+      db.prepare("UPDATE sessions SET derived_version = 19 WHERE session_id = 'b'").run();
       // Still the memoized answer.
       expect(isRebuildInProgress(db)).toBe(false);
 
@@ -179,13 +205,12 @@ describe.skipIf(!driverAvailable)("recordOptionForSweep (#478)", () => {
     // long as any row stayed stale, and the run told the predicate nothing it
     // could not read from the rows directly (Copilot, PR #525).
     const { recordOptionForSweep } = await import("@/lib/db/indexerRuns");
-    const { DERIVED_VERSION: V } = await import("@/lib/db/derivationVersion");
     const db = makeDb();
     try {
       db.prepare(
         "INSERT INTO indexer_runs (started_at_ms, finished_at_ms, kind, aborted) VALUES (1, 2, 'reconcile', 0)"
       ).run();
-      db.prepare("INSERT INTO sessions VALUES ('a', ?)").run(V - 1);
+      db.prepare("INSERT INTO sessions VALUES ('a', 19), ('b', 20)").run();
       expect(recordOptionForSweep(db)).toEqual({});
     } finally {
       db.close();

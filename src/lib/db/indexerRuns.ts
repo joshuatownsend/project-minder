@@ -195,39 +195,52 @@ export function hasCompletedFullReconcile(db: DatabaseT.Database): boolean {
  * steady state is still zero rows per sweep.
  */
 /**
- * Does the index hold rows derived under an older formula? (#478)
+ * Do the index's rows disagree about which formula derived them? (#478)
  *
- * A `DERIVED_VERSION` bump triggers a full re-parse that rewrites sessions ONE
- * FILE AT A TIME, so for the length of that rebuild the index holds a mix of
- * old-formula and new-formula rows. Every cross-corpus aggregate that reads a
- * derived column sums across that mix and returns it as `backend: "db"`.
+ * ## The question is COEXISTENCE, not staleness
  *
- * This is not the #472 condition. That is a PARTIAL corpus, and it announces
- * itself — the row count is short. This is a COMPLETE corpus with inconsistent
- * derivations: the totals look plausible and the count is right, which is why
- * it needed its own predicate rather than being folded into readiness.
+ * The first version asked "is any row older than this build" — `<
+ * DERIVED_VERSION` — reasoning that rows from a NEWER build are ones this build
+ * cannot rewrite, so calling them stale would mean a rebuild state that never
+ * ends.
  *
- * ## Cost, and where it is paid
+ * That holds only when the newer rows are the WHOLE corpus. A newer build that
+ * re-derived part of it before the app rolled back leaves current and newer
+ * versions side by side, `isNewerDerivation` deliberately stops the older
+ * watcher rewriting the newer half, and the five aggregates then serve a
+ * mixture of formulas permanently (Codex P2, PR #525).
  *
- * `derived_version` has no index, so concluding "none are stale" requires a
- * full scan — measured at 24 ms on a 6,602-session index. That is why this is
- * NOT the per-request predicate: it runs once per sweep, and its answer is
- * recorded as a run so the per-request check is a rowid lookup.
+ * Asking whether more than one version is PRESENT covers every case, and needs
+ * no comparison against the current build at all:
  *
- * Deliberately not `!= DERIVED_VERSION`. A row derived by a NEWER build (a
- * rolled-back install) is not something this build can rewrite, and treating it
- * as stale would put the report in a rebuild state that never ends. That is the
- * same asymmetry `isNewerDerivation` documents on the ingest side.
+ *   uniformly current   one value   consistent — serve it
+ *   uniformly older     one value   consistent, merely derived under the old
+ *                                   formula; the rebuild will move it
+ *   mid-rebuild         two values  MIXED — divert
+ *   rollback remnant    two values  MIXED, and permanently so — divert
+ *   uniformly newer     one value   consistent; nothing this build can or
+ *                                   should do, and no endless rebuild state
+ *
+ * It also retires the `<`-versus-`!=` question that produced the bug, and with
+ * it the need for tests to know what `DERIVED_VERSION` currently is.
+ *
+ * ## Cost
+ *
+ * SQLite stops as soon as it has two distinct values, so the MIXED case — the
+ * one where the answer matters — is cheap. The uniform case is a scan, ~24 ms
+ * on a 6,602-session index, which is why the caller memoizes rather than asking
+ * per request.
  */
-export function hasStaleDerivations(db: DatabaseT.Database, currentVersion: number): boolean {
+export function hasMixedDerivations(db: DatabaseT.Database): boolean {
   try {
-    const row = db
-      .prepare("SELECT 1 AS ok FROM sessions WHERE derived_version < ? LIMIT 1")
-      .get(currentVersion) as { ok?: number } | undefined;
-    return !!row?.ok;
+    const rows = db
+      .prepare("SELECT DISTINCT derived_version FROM sessions LIMIT 2")
+      .all() as Array<{ derived_version: number }>;
+    return rows.length > 1;
   } catch {
     // Unreadable: do not claim a rebuild. A predicate that cannot read its own
-    // evidence must not be what diverts every aggregate to the slower path.
+    // evidence must not be the thing that diverts every aggregate to the slower
+    // path — the same fail-open rule `hasCompletedFullReconcile` states.
     return false;
   }
 }
@@ -281,7 +294,7 @@ export function isRebuildInProgress(db: DatabaseT.Database): boolean {
   const now = Date.now();
   const memo = globalForRuns.__minderStaleDerivationMemo;
   if (memo && now - memo.at < STALE_MEMO_TTL_MS) return memo.value;
-  const value = hasStaleDerivations(db, DERIVED_VERSION);
+  const value = hasMixedDerivations(db);
   globalForRuns.__minderStaleDerivationMemo = { at: now, value };
   return value;
 }
