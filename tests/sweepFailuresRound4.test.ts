@@ -176,7 +176,11 @@ describe("the record is cleared by corpus changes only", () => {
     // present. A Settings save posts every field, so `Array.isArray(body.claudeHomes)`
     // alone would clear the record on every unrelated save — the same defect
     // one level down.
-    expect(route).toMatch(/claudeHomePathsChanged\s*=\s*\n?\s*before\.length !== homes\.length/);
+    // As a SET, which is what the name says and what actually governs: order
+    // decides which home wins a duplicate session id, not which directories get
+    // enumerated. An index-wise comparison cleared a live diagnostic when the
+    // user merely reordered two homes. (Copilot, PR #527.)
+    expect(route).toMatch(/claudeHomePathsChanged\s*=\s*\n?\s*before\.size !== after\.size/);
   });
 });
 
@@ -618,5 +622,65 @@ describe("round 9 — three more ways the record was cleared or kept wrongly", (
     expect(homesAt).toBeGreaterThan(-1);
     expect(cycleAt).toBeGreaterThan(-1);
     expect(cycleAt).toBeGreaterThan(homesAt);
+  });
+});
+
+describe("round 10 — an older success cannot retire a newer failure", () => {
+  it("keeps a failure observed AFTER the success that would retire it", async () => {
+    // The sweeps overlap, and a cycle publishes when it FINISHES rather than
+    // when it looked. So `sessions` can list a directory, stay busy, and in
+    // between `usage` can fail on that same path and publish — and the older
+    // cycle's publish then dropped the newer failure, reporting
+    // `complete: true` over an enumeration that had just failed.
+    // (Codex P2, PR #527.)
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      recordSweepSuccess,
+      getSweepFailures,
+    } = await import("@/lib/sweepFailures");
+
+    const home = "/home/me/.claude/projects";
+
+    // The long-running sessions sweep reads it fine, and keeps going.
+    const slow = beginSweepFailureCycle("sessions");
+    recordSweepSuccess("sessions", home, slow);
+
+    // Meanwhile the drive drops out. A usage sweep starts, fails, publishes.
+    const quick = beginSweepFailureCycle("usage");
+    recordSweepFailure({ path: home, scope: "projects-dir", sweep: "usage" }, quick);
+    endSweepFailureCycle("usage", quick);
+    expect(getSweepFailures()).toHaveLength(1);
+
+    // Only NOW does the older sweep finish. Its success is stale.
+    endSweepFailureCycle("sessions", slow);
+
+    expect(getSweepFailures().map((f) => f.path)).toEqual([home]);
+  });
+
+  it("still retires when the success genuinely came later", async () => {
+    // The other half, and the reason this is an ordering fix rather than a ban:
+    // a success that really does postdate the failure must still clear it, or
+    // round 8's whole point is undone.
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      recordSweepSuccess,
+      getSweepFailures,
+    } = await import("@/lib/sweepFailures");
+
+    const home = "/home/me/.claude/projects";
+
+    const first = beginSweepFailureCycle("sessions");
+    recordSweepFailure({ path: home, scope: "projects-dir", sweep: "sessions" }, first);
+    endSweepFailureCycle("sessions", first);
+
+    const later = beginSweepFailureCycle("usage");
+    recordSweepSuccess("usage", home, later);
+    endSweepFailureCycle("usage", later);
+
+    expect(getSweepFailures()).toHaveLength(0);
   });
 });

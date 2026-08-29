@@ -81,7 +81,7 @@ interface CycleResult {
    * rather than enumeration attempts. Bounded (see `MAX_TRACKED_KEYS`) — past
    * that the cycle stops deduping and says so by leaving keys out of the set.
    */
-  seen: Set<string>;
+  seen: Map<string, number>;
   /**
    * Claude homes whose `projects` directory this cycle listed SUCCESSFULLY.
    *
@@ -101,7 +101,7 @@ interface CycleResult {
    * drive, and that is the one a user fixes and then expects to stop hearing
    * about.
    */
-  verified: Set<string>;
+  verified: Map<string, number>;
   /**
    * The generation this cycle was opened under. A `clearSweepFailures()` — a
    * corpus-configuration change — bumps the generation, so a sweep still
@@ -135,6 +135,8 @@ const globalForSweep = globalThis as unknown as {
   __minderSweepDepth?: Map<SweepName, number>;
   /** Bumped by `clearSweepFailures`; see `CycleResult.gen`. */
   __minderSweepGeneration?: number;
+  /** Strictly increasing observation counter; see `observedAt`. */
+  __minderSweepClock?: number;
 };
 
 function published(): Map<SweepName, CycleResult> {
@@ -149,6 +151,26 @@ function pending(): Map<SweepName, CycleResult> {
     globalForSweep.__minderSweepPending = new Map();
   }
   return globalForSweep.__minderSweepPending;
+}
+
+/**
+ * A strictly increasing stamp for "when was this observed".
+ *
+ * A counter rather than `Date.now()`, and not for precision — for TIES.
+ * Retirement asks whether a success came after a failure, and two events in the
+ * same millisecond are indistinguishable by wall clock: `>` then refuses to
+ * retire a genuine recovery, and `>=` retires a genuine new failure. Both are
+ * wrong, and which one bites depends on how fast the machine is. A counter has
+ * no ties, so the question always has a real answer.
+ *
+ * Never reset — not by `clearSweepFailures`, deliberately. A published result
+ * outlives a clear, so restarting the count could make a new observation
+ * compare as older than one already recorded.
+ */
+function observedAt(): number {
+  const next = (globalForSweep.__minderSweepClock ?? 0) + 1;
+  globalForSweep.__minderSweepClock = next;
+  return next;
 }
 
 function generation(): number {
@@ -181,8 +203,8 @@ export function beginSweepFailureCycle(sweep: SweepName): number {
     pending().set(sweep, {
       items: [],
       total: 0,
-      seen: new Set(),
-      verified: new Set(),
+      seen: new Map(),
+      verified: new Map(),
       gen,
     });
   return gen;
@@ -237,12 +259,36 @@ export function endSweepFailureCycle(sweep: SweepName, token?: number): void {
  * stays until its own sweep re-runs, which over-reports rather than hides a
  * gap. (Codex P2, PR #527.)
  */
-function retireVerified(sweep: SweepName, verified: Set<string>): void {
+function retireVerified(sweep: SweepName, verified: Map<string, number>): void {
   if (verified.size === 0) return;
+
+  /**
+   * Was this path read successfully AFTER the failure was observed?
+   *
+   * The two sweeps overlap, and a cycle publishes when it finishes rather than
+   * when it looked. So `sessions` can list a directory at 10:00, stay busy
+   * until 10:05, and in between `usage` can fail on that same path at 10:02 and
+   * publish. An unconditional retirement then dropped the NEWER failure on the
+   * older cycle's publish, and `/api/claude-homes` reported `complete: true`
+   * over an enumeration that had just failed. (Codex P2, PR #527.)
+   *
+   * A `seen` entry beyond the tracking cap has no time and is treated as NOT
+   * superseded — the same direction every other bound in this file fails in:
+   * over-report rather than hide a gap.
+   */
+  const supersedes = (path: string, observedAt: number | undefined): boolean => {
+    const okAt = verified.get(path);
+    return okAt !== undefined && observedAt !== undefined && okAt > observedAt;
+  };
+
   for (const [name, result] of published()) {
     if (name === sweep) continue;
     const kept = result.items.filter(
-      (f) => !(f.scope === "projects-dir" && verified.has(f.path))
+      (f) =>
+        !(
+          f.scope === "projects-dir" &&
+          supersedes(f.path, result.seen.get(sweepFailureKey(f)))
+        )
     );
 
     // Counted from `seen`, not from `items`, and that difference is the whole
@@ -251,11 +297,11 @@ function retireVerified(sweep: SweepName, verified: Set<string>): void {
     // `total` positive for the capped ones — with more than 50 homes down and
     // then recovered, `/api/claude-homes` stayed degraded indefinitely while
     // naming nothing. (Codex P2, PR #527.)
-    const seen = new Set(result.seen);
+    const seen = new Map(result.seen);
     let retired = 0;
-    for (const key of result.seen) {
+    for (const [key, observedAt] of result.seen) {
       const path = key.startsWith("projects-dir|") ? key.slice("projects-dir|".length) : null;
-      if (path !== null && verified.has(path)) {
+      if (path !== null && supersedes(path, observedAt)) {
         seen.delete(key);
         retired++;
       }
@@ -285,7 +331,7 @@ export function recordSweepSuccess(
   token?: number
 ): void {
   if (token !== undefined && token !== generation()) return;
-  pending().get(sweep)?.verified.add(projectsDir);
+  pending().get(sweep)?.verified.set(projectsDir, observedAt());
 }
 
 /**
@@ -336,7 +382,11 @@ export function recordSweepFailure(failure: SweepFailure, token?: number): void 
   // rendered its path twice. (Codex P2, PR #527.)
   const key = sweepFailureKey(failure);
   if (result.seen.has(key)) return;
-  if (result.seen.size < MAX_TRACKED_KEYS) result.seen.add(key);
+  // Stamped with WHEN it was observed. The sweeps overlap — `sessions` can list
+  // a directory successfully and stay busy while `usage` then fails on that
+  // same path — so retirement has to compare observations rather than assume
+  // the publishing cycle saw the world last. (Codex P2, PR #527.)
+  if (result.seen.size < MAX_TRACKED_KEYS) result.seen.set(key, observedAt());
   // Counted ALWAYS, kept only up to the cap. The cap bounds memory and what a
   // banner can render; it must not bound what the count reports.
   result.total++;

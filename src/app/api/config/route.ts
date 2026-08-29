@@ -110,9 +110,16 @@ export async function PATCH(request: NextRequest) {
     // Compared against what is on disk, not merely "the key was present": a
     // Settings save posts every field, so treating any `claudeHomes` in the
     // body as a change would clear the record on every unrelated save.
-    const before = (await readConfig()).claudeHomes ?? [];
+    //
+    // And compared as a SET, which is what the name says and what actually
+    // governs. Order decides which home wins a duplicate session id, not which
+    // directories get enumerated — so an index-wise comparison cleared a live
+    // diagnostic when the user merely dragged one home above another, hiding a
+    // still-unreadable path until the next sweep. (Copilot, PR #527.)
+    const before = new Set((await readConfig()).claudeHomes ?? []);
+    const after = new Set(homes);
     claudeHomePathsChanged =
-      before.length !== homes.length || before.some((h, i) => h !== homes[i]);
+      before.size !== after.size || [...after].some((h) => !before.has(h));
     patches.push((c) => { c.claudeHomes = homes; });
     corpusShapeChanged = true;
   }
