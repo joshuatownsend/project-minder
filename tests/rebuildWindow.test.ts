@@ -192,3 +192,49 @@ describe.skipIf(!driverAvailable)("recordOptionForSweep (#478)", () => {
     }
   });
 });
+
+describe("every consumer of the rebuild window is wired to it (#478)", () => {
+  /**
+   * Source-level, because the alternative is standing up a DB backend with a
+   * half-re-derived corpus per consumer, and the thing that actually goes wrong
+   * is a MISSING CALL — which is exactly what a source check catches.
+   *
+   * `getUsageCompare` was the one that got missed (Codex P1, PR #525). It does
+   * not go through `checkBuildStateFallback` at all: it DEGRADES to a
+   * not-comparable result instead of falling back, so it carries its own copy
+   * of every unavailability and a new one has to be added by hand.
+   */
+  it("gates both the shared fallback and the compare route", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const src = await readFile("src/lib/data/index.ts", "utf-8");
+
+    // The shared gate the five derived-value loaders run through.
+    const fallback = src.slice(
+      src.indexOf("async function checkBuildStateFallback"),
+      src.indexOf("function isIndexBuilding")
+    );
+    expect(fallback).toMatch(/isRebuildInProgress\(db\)/);
+
+    // And `getUsageCompare`, which does not.
+    const compare = src.slice(src.indexOf("export async function getUsageCompare"));
+    expect(compare).toMatch(/isRebuildInProgress\(db\)/);
+    // Degrades, never diverts — there is no file-parse compare path, and two
+    // differently-derived windows make an arbitrary delta rather than a
+    // subset-shaped one.
+    expect(compare).toMatch(/buildNotComparable\(/);
+  });
+
+  it("leaves getEngagement alone", async () => {
+    // It reads raw columns only — `ts`, `role`, `text_preview`, `entrypoint`,
+    // `is_sidechain` — all of which survive a re-derivation. Diverting it would
+    // take a report offline for a condition it is provably immune to, and its
+    // own comment already said as much.
+    const { readFile } = await import("node:fs/promises");
+    const src = await readFile("src/lib/data/index.ts", "utf-8");
+    const engagement = src.slice(
+      src.indexOf("export async function getEngagement"),
+      src.indexOf("export async function getEngagement") + 3000
+    );
+    expect(engagement).not.toMatch(/isRebuildInProgress/);
+  });
+});

@@ -868,6 +868,30 @@ export async function getUsageCompare(
       meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) },
     };
   }
+
+  // #478, and it needs its own check because this route does NOT go through
+  // `checkBuildStateFallback` — it degrades instead of falling back, so it
+  // carries its own copy of every unavailability (Codex P1, PR #525).
+  //
+  // The harm here is worse than for the five loaders, not merely equal.
+  // `queryPeriodSummary` sums derived cost, token and one-shot fields over BOTH
+  // windows, and a re-derivation does not land evenly across them: the sweep
+  // rewrites file by file, so one period can be largely re-costed while the
+  // other is largely not. The DELTA is then an artefact of how far the rebuild
+  // has got, and it reads as a real week-over-week swing.
+  if (isRebuildInProgress(db)) {
+    warnOnce(
+      `getUsageCompare:${REBUILDING_REASON}`,
+      `[data] getUsageCompare: comparison suppressed (${REBUILDING_REASON}).`
+    );
+    return {
+      comparison: buildNotComparable(
+        period,
+        "Period comparison is unavailable while the index finishes re-deriving costs."
+      ),
+      meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) },
+    };
+  }
   const comparison = await callDbLoader("getUsageCompare", () =>
     compareUsageFromSql(db, period, project, source, home)
   );
