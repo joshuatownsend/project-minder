@@ -1,3 +1,6 @@
+import path from "node:path";
+import { rootLevelGitignoredEntries } from "./gitignored-roots.mjs";
+
 // Shared forbidden-entry rules for the standalone payload (issue #284).
 //
 // Two consumers, deliberately kept in lockstep by importing this module:
@@ -116,6 +119,76 @@ export const FORBIDDEN_ROOT_RELATIVE = new Set([
 //
 // Paths are compared lower-cased, so these must be written lower-cased —
 // `tasksDb` is spelled `tasksdb` here on purpose, not by mistake.
+// Everything gitignored at the REPO root, derived rather than restated (#417).
+//
+// The payload mirrors the repo root — that is the whole of #284 — so a
+// root-level name that is developer state in the checkout is developer state in
+// the payload. Deriving it is what stops this list drifting one review round at
+// a time; the static sets above stay because they also cover names at ANY depth
+// (`.claude`, `.git`) and patterns git cannot express as a root entry (`*.pem`).
+//
+// Root-anchored ONLY. Nothing here reaches the tracer, because these globs
+// cannot be anchored and a derived name like `.cache` or `screenshots` would
+// then match inside `node_modules`. See gitignored-roots.mjs for the measured
+// cost of getting that wrong.
+//
+// `null` from the derivation means git could not answer (a source-tarball
+// build). That degrades to exactly the pre-#417 behaviour — the static rules
+// still apply — rather than silently widening what may ship. Callers that want
+// to say so in a log line can read `DERIVATION_AVAILABLE`.
+const derivedRootIgnored = rootLevelGitignoredEntries();
+export const DERIVATION_AVAILABLE = derivedRootIgnored !== null;
+
+// Both the raw name and its separator-normalized form.
+//
+// `isForbiddenRootRelative` converts the payload path's `\` to `/` before
+// looking it up, because on Windows that is what `path.relative` produces. On
+// POSIX a filename may legally CONTAIN a backslash, and `git ls-files -z`
+// returns such a name verbatim — so a derived `ignored\name` would be compared
+// against a normalized `ignored/name` and never match, and the artifact ships
+// (Codex, PR #540). Storing both forms closes that without weakening the
+// Windows path handling everything else depends on.
+/**
+ * The lookup keys one derived name contributes.
+ *
+ * Windows folds; POSIX does not, and both directions were learned the hard
+ * way on PR #540.
+ *
+ * On Windows a payload path arrives from `path.relative` with `\`
+ * separators and the filesystem is case-insensitive, so a derived name must be
+ * indexed lower-cased and separator-normalized to be findable. Neither fold can
+ * lose information there: no filename may contain `\`, and two entries
+ * differing only by case cannot coexist.
+ *
+ * On POSIX both folds are destructive:
+ *
+ *   - case: `Foo` (tracked, needed) and `foo` (ignored) are DIFFERENT entries.
+ *     Lower-casing the derived `foo` makes it match the payload's `Foo` and
+ *     prunes tracked content out of a perfectly valid repository.
+ *   - separators: a backslash is a legal filename character, so mapping it to
+ *     `/` turns a ROOT-anchored rule into one matching a NESTED path —
+ *     `node_modules\next` would prune the real dependency directory.
+ *
+ * So POSIX keeps the name verbatim, and `isForbiddenRootRelative` compares the
+ * raw candidate there. An earlier revision returned the raw key but still
+ * normalized the candidate before looking it up, which left the key
+ * unreachable — the rule existed and could never fire.
+ *
+ * Exported because it is the part of the derivation testable on every platform.
+ */
+const SEPARATOR_IS_BACKSLASH = path.sep === "\\";
+
+export function derivedNameForms(name) {
+  if (!SEPARATOR_IS_BACKSLASH) return [name];
+  const lower = name.toLowerCase();
+  const normalized = lower.replace(/\\/g, "/");
+  return normalized === lower ? [lower] : [lower, normalized];
+}
+
+export const DERIVED_ROOT_IGNORED = new Set(
+  (derivedRootIgnored ?? []).flatMap(derivedNameForms)
+);
+
 const PAYLOAD_SRC_PREFIX = "src/";
 export const PAYLOAD_SRC_KEEP = new Set([
   "src/lib/db/schema.sql",
@@ -139,6 +212,9 @@ export const FORBIDDEN_SUMMARY = [
   // success line claiming to have checked a smaller set than it did — the
   // exact false reassurance this comment block was written to prevent.
   "src/** (except the two schema.sql files)",
+  DERIVATION_AVAILABLE
+    ? `${DERIVED_ROOT_IGNORED.size} gitignored root entries (derived)`
+    : "gitignored root entries (DERIVATION UNAVAILABLE — git could not be queried)",
 ].join(", ");
 
 // `relPath` is a payload-root-relative path in either separator style.
@@ -146,6 +222,11 @@ export function isForbiddenRootRelative(relPath) {
   if (!relPath) return false;
   const rel = relPath.replace(/\\/g, "/").toLowerCase();
   if (FORBIDDEN_ROOT_RELATIVE.has(rel)) return true;
+  // The derived set is matched with the SAME convention it was built with:
+  // folded on Windows, verbatim on POSIX. Normalizing the candidate on POSIX
+  // would make every raw derived key unreachable, and lower-casing it would
+  // let an ignored `foo` prune a tracked `Foo` (Codex, PR #540).
+  if (DERIVED_ROOT_IGNORED.has(SEPARATOR_IS_BACKSLASH ? rel : relPath)) return true;
   if (rel !== "src" && !rel.startsWith(PAYLOAD_SRC_PREFIX)) return false;
   // Keep the carved-out files, and keep every directory on the way down to
   // them — pruning `src/` or `src/lib/` wholesale would take the schemas with

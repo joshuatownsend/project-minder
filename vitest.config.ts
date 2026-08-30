@@ -40,7 +40,22 @@ export default defineConfig({
     // directory. Raised as a review question on PR #419; the answer is to stop
     // depending on a default.
     sequence: { hooks: "stack" },
-    testTimeout: 30000,
+    // A starvation guard, NOT a claim that any test here is slow (#536).
+    //
+    // `tests/api/githubActivityRoute.test.ts` failed a full run at the 30s
+    // limit, then passed three times in isolation at 20ms, 28ms and 17ms — for
+    // the whole file. It had burned 37 SECONDS of wall clock doing 20ms of
+    // work, on a machine simultaneously running a `next build`, a
+    // `package-standalone` and a booted packaged server. The worker simply
+    // never got scheduled.
+    //
+    // Lowering `maxWorkers` below the 8 already set would slow every run to fix
+    // a case that only appears under heavy external load. Raising the ceiling
+    // costs nothing except a slower failure on a genuine hang — which still
+    // fails, since a hang is unbounded and this is not. The failure this
+    // prevents is a red pre-commit hook on an unrelated change, which teaches
+    // people to re-run until green.
+    testTimeout: 60000,
     execArgv: ["--max-old-space-size=4096"],
     // Cap fork concurrency to avoid Windows VirtualAlloc failures when running
     // 200+ test files in parallel child processes.

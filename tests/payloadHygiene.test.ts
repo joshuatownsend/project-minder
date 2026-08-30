@@ -1,9 +1,13 @@
 import { describe, it, expect } from "vitest";
+import path from "node:path";
 import {
   FORBIDDEN_ROOT_RELATIVE,
   isForbiddenName,
   isForbiddenRootRelative,
   FORBIDDEN_SUMMARY,
+  DERIVED_ROOT_IGNORED,
+  DERIVATION_AVAILABLE,
+  derivedNameForms,
 } from "../scripts/payload-hygiene-rules.mjs";
 
 // These rules decide what can ship inside an installer, so the tests are
@@ -127,6 +131,107 @@ describe("isForbiddenRootRelative", () => {
     expect(isForbiddenName(".cache")).toBe(false);
     expect(isForbiddenRootRelative("node_modules/some-pkg/.cache")).toBe(false);
     expect(isForbiddenRootRelative(".cache/claude-stats.json")).toBe(false);
+  });
+
+  // #417: the list is derived from git rather than restated by hand.
+  //
+  // Asserted WITHOUT naming any particular file. An earlier version of this
+  // test expected `screenshots` and `uiux-review` to be derived, which held on
+  // the author's machine and failed in CI, where a clean clone has no such
+  // untracked files (Codex, PR #540). What is testable here is the wiring;
+  // what git reports about a tree is tested in `gitignoredRoots.test.ts`
+  // against a repository that suite builds and owns.
+  it("forbids whatever the derivation reports", () => {
+    for (const entry of DERIVED_ROOT_IGNORED) {
+      expect(isForbiddenRootRelative(entry)).toBe(true);
+    }
+  });
+
+  it("folds derived names on Windows and keeps them verbatim on POSIX", () => {
+    // Both directions were learned the hard way (Codex, PR #540).
+    //
+    // Windows: payload paths arrive from `path.relative` with `\`
+    // separators and the filesystem is case-insensitive, so a derived name has
+    // to be folded to be findable. Neither fold can lose anything there — no
+    // filename may contain a backslash, and two names differing only by case
+    // cannot coexist.
+    //
+    // POSIX: both folds destroy information.
+    //   case — `Foo` (tracked, needed) and `foo` (ignored) are DIFFERENT
+    //          entries; lower-casing the derived `foo` prunes the tracked `Foo`.
+    //   separators — a backslash is a legal filename character, so mapping it
+    //          to `/` turns a ROOT rule into one matching a NESTED path.
+    if (path.sep === "\\") {
+      expect(derivedNameForms("odd\\name.txt")).toEqual([
+        "odd\\name.txt",
+        "odd/name.txt",
+      ]);
+      expect(derivedNameForms("SCREENSHOTS")).toEqual(["screenshots"]);
+    } else {
+      // Verbatim: no separator mapping...
+      expect(derivedNameForms("odd\\name.txt")).toEqual(["odd\\name.txt"]);
+      expect(derivedNameForms("node_modules\\next")).not.toContain(
+        "node_modules/next"
+      );
+      // ...and no case folding, which would let an ignored `foo` prune a
+      // tracked `Foo` and break a payload built from a valid repository.
+      expect(derivedNameForms("Foo")).toEqual(["Foo"]);
+      expect(derivedNameForms("Foo")).not.toContain("foo");
+    }
+
+    // True on every platform: an ordinary name yields exactly one key.
+    expect(derivedNameForms("screenshots")).toEqual(["screenshots"]);
+  });
+
+  it("never lets a derived name prune a required payload entry", () => {
+    // The derivation maps REPO-root names onto PAYLOAD-root paths, and the
+    // payload root holds server.js, package.json and node_modules. A checkout
+    // that ignored one of those — a global ignore rule plus a scratch file was
+    // the case raised — would otherwise prune the artifact's own entry point.
+    for (const required of ["server.js", "package.json", "node_modules", ".next"]) {
+      expect(isForbiddenRootRelative(required)).toBe(false);
+    }
+  });
+
+  it("never derives away a build input", () => {
+    // The catastrophic direction. node_modules, .next and dist are all
+    // gitignored; a naive derivation prunes every dependency out of the payload
+    // and ships something that cannot boot (#417 names this explicitly).
+    //
+    // Holds in both worlds: with git, the keep-list filters them out; without
+    // it, the derived set is empty. Neither may make them forbidden.
+    for (const keep of ["node_modules", ".next", "dist"]) {
+      expect(DERIVED_ROOT_IGNORED.has(keep)).toBe(false);
+      expect(isForbiddenRootRelative(keep)).toBe(false);
+    }
+  });
+
+  it("degrades to the static rules when git cannot answer", () => {
+    // `DERIVATION_AVAILABLE` is intentionally allowed to be false — a
+    // source-tarball build, or a runner without git (Copilot, PR #540). The
+    // static rules must still hold either way, so this asserts the fallback
+    // rather than the presence of git.
+    expect(typeof DERIVATION_AVAILABLE).toBe("boolean");
+    if (!DERIVATION_AVAILABLE) {
+      expect(DERIVED_ROOT_IGNORED.size).toBe(0);
+    }
+    expect(isForbiddenName(".git")).toBe(true);
+    expect(isForbiddenRootRelative(".cache")).toBe(true);
+  });
+
+  it("keeps derived entries root-anchored, never a substring rule", () => {
+    // Why nothing derived is allowed near the tracer. Its globs are picomatch
+    // substring matches, so a derived `.cache` also matches
+    // `node_modules/@huggingface/transformers/.cache/` — measured dropping the
+    // embedding model, weights included. Root-anchoring makes the collision
+    // impossible rather than merely unlikely.
+    //
+    // These hold whether or not the names are derived on this checkout: a
+    // NESTED path must never be forbidden, which is the property under test.
+    expect(isForbiddenRootRelative("node_modules/some-pkg/screenshots")).toBe(false);
+    expect(isForbiddenRootRelative("node_modules/some-pkg/.cache")).toBe(false);
+    expect(isForbiddenRootRelative("docs/screenshots")).toBe(false);
+    expect(isForbiddenName("screenshots")).toBe(false);
   });
 
   it("names every rule in the summary the hygiene gate logs", () => {
