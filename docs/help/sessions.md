@@ -245,6 +245,25 @@ count only work a person actually did. It is the transcript view alone that
 stops treating it as a reason to hide a turn — because there, those turns are
 not a digression from someone else's conversation, they *are* the conversation.
 
+**Its Tools and Files panels are populated too**, on both backends, and each
+shows what it shows everywhere else in the app:
+
+- **Timeline** — every call in the order the agent made it; *show args* expands
+  the arguments it was called with.
+- **Tools** — a count per tool, ranked by frequency rather than by time.
+- **Files** — the files touched, each with the operation and the tool that did
+  it.
+
+The two backends get there differently, which matters only if you are reading
+the code. Without the index (`MINDER_USE_DB=0`) all three are derived straight
+from the transcript. With the index, a delegated agent's tool calls are stored
+apart from an ordinary session's — deliberately, because roughly two dozen
+queries behind /usage, /agents, /skills and /costs read the primary table with
+no filter, and moving those rows would have shifted every one of those numbers
+as a side effect. The separate store gained the ordering and arguments the
+timeline needs instead, so all three panels fill in without changing a single
+figure elsewhere.
+
 One caveat: the file-parse backend does not walk the nested `subagents/`
 directories when building the list, so with the index switched off these
 sessions are neither listed nor linked. Opening one by URL still works.

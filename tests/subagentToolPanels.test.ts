@@ -1,0 +1,339 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import path from "path";
+import os from "os";
+import { promises as fs } from "fs";
+import { installIsolatedState } from "./_helpers/isolatedState";
+
+/**
+ * #511 — a delegated agent's TOOLS and FILE OPERATIONS panels.
+ *
+ * #487 gave a nested subagent transcript a real timeline; its tool and file
+ * panels stayed empty, because both read `tool_uses WHERE session_id = ?` and a
+ * subagent's calls are not there — #395 deliberately put them in
+ * `sidechain_tool_uses`.
+ *
+ * #511 listed three ways out and this is the first: widen that table to carry
+ * what a timeline needs and have the detail loader read it for a session whose
+ * path parses as a subagent transcript. Schema v30 added `turn_index`,
+ * `sequence_in_turn`, `ts`, `agent_name`, `skill_name`, `arguments_json`,
+ * `file_path` and `file_op`; `sessionDetailFromDb` reads them for exactly those
+ * sessions. **No existing query changed**, which is the whole reason that
+ * option was taken over moving the rows into `tool_uses` — that would have
+ * shifted 23 `FROM tool_uses` sites across 11 modules as a side effect.
+ *
+ * ## Why this test asserts what it does
+ *
+ * #511 is explicit about the bar, because the same trap had already been
+ * sprung once: "#484's test asserted non-null and thereby ratified #487; the
+ * same shape of assertion would ratify this." So a non-empty check is exactly
+ * what must NOT be relied on here. This asserts the calls appear
+ *
+ *   - in TRANSCRIPT ORDER,
+ *   - with their ARGUMENTS,
+ *   - in all three surfaces the issue names (timeline, tools panel, files),
+ *
+ * and separately that `tool_uses` is still untouched, since the containment is
+ * the reason the fix was acceptable at all.
+ *
+ * ## Fixture shape
+ *
+ * Session ids are `agent-<hex>`, which is what Claude Code writes. A friendlier
+ * `agent-x` passes just as well today and would stop covering the
+ * shape-sensitive id handling the moment that tightens — and #487's own history
+ * has this trap in it: an early fixture used `parent-1` as the parent directory
+ * and `parseSubagentParentSessionId` correctly refused it, so the test failed on
+ * its arrangement rather than on the code. (Copilot, PR #530.)
+ */
+
+let driverAvailable: boolean;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("better-sqlite3");
+  driverAvailable = true;
+} catch {
+  driverAvailable = false;
+}
+
+const state = installIsolatedState({
+  prefix: "pm-subagent-tools-",
+  env: { MINDER_USE_DB: "1" },
+});
+let tmpHome: string;
+
+const USAGE = {
+  input_tokens: 100,
+  output_tokens: 50,
+  cache_creation_input_tokens: 0,
+  cache_read_input_tokens: 0,
+};
+
+beforeEach(() => {
+  tmpHome = state.tmpHome();
+});
+
+describe.skipIf(!driverAvailable)("#511 delegated tool and file panels", () => {
+  it("lists the agent's calls in order, with arguments, in every panel", async () => {
+    await state.reload();
+    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    const conn = await import("@/lib/db/connection");
+    const mig = await import("@/lib/db/migrations");
+    const ingest = await import("@/lib/db/ingest");
+    expect((await mig.initDb()).error).toBeNull();
+    const db = (await conn.getDb())!;
+
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+    const root = path.join(projectsDir, "C--dev-myapp", "cafe99.jsonl");
+    await fs.mkdir(path.dirname(root), { recursive: true });
+    await fs.writeFile(
+      root,
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-08-01T10:00:00Z",
+        isSidechain: false,
+        message: {
+          id: "m1",
+          model: "claude-sonnet-4-5",
+          content: [{ type: "text", text: "ok" }],
+          usage: USAGE,
+        },
+      }) + "\n"
+    );
+
+    // Four calls across THREE lines but only TWO message ids, so the ordering
+    // assertion exercises both keys:
+    //
+    //   - `turn_index` separates the two messages;
+    //   - `sequence_in_turn` orders the three calls INSIDE the first, which
+    //     arrive as one multi-block line plus a continuation line.
+    //
+    // The first version of this fixture gave every call its own message id, so
+    // every call got its own `turn_index` and the assertion held even if
+    // `sequence_in_turn` were dropped entirely — a guard that could not fail
+    // for the reason it existed, and #528 round 6 fixed a real
+    // `sequence_in_turn` collision that it would have missed. (Codex P2, #530.)
+    //
+    // Deliberately not alphabetical, and `Read` appears twice with different
+    // paths, so neither sorting by name nor per-name aggregation can stand in
+    // for order.
+    const line = (ts: string, id: string, blocks: unknown[]) =>
+      JSON.stringify({
+        type: "assistant",
+        timestamp: ts,
+        isSidechain: true,
+        message: { id, model: "claude-sonnet-4-5", content: blocks, usage: USAGE },
+      });
+    const agent = path.join(
+      projectsDir,
+      "C--dev-myapp",
+      "cafe99",
+      "subagents",
+      "agent-3f2a1b9c.jsonl"
+    );
+    await fs.mkdir(path.dirname(agent), { recursive: true });
+    await fs.writeFile(
+      agent,
+      [
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-08-01T10:05:00Z",
+          isSidechain: true,
+          message: { content: [{ type: "text", text: "sweep it" }] },
+        }),
+        // One message, two blocks — ordered only by `sequence_in_turn`.
+        line("2026-08-01T10:06:00Z", "s0", [
+          { type: "tool_use", id: "t1", name: "Glob", input: { pattern: "**/*.ts" } },
+          { type: "tool_use", id: "t2", name: "Read", input: { file_path: "/repo/a.ts" } },
+        ]),
+        // A CONTINUATION of that same message, which is how Claude Code splits
+        // a long turn — still the same `turn_index`, sequence 2.
+        line("2026-08-01T10:06:00Z", "s0", [
+          { type: "tool_use", id: "t3", name: "Edit", input: { file_path: "/repo/b.ts" } },
+        ]),
+        // A new message, so a new turn.
+        line("2026-08-01T10:09:00Z", "s1", [
+          { type: "tool_use", id: "t4", name: "Read", input: { file_path: "/repo/c.ts" } },
+        ]),
+      ].join("\n") + "\n"
+    );
+
+    expect((await ingest.reconcileAllSessions(db, { projectsDir })).errors).toBe(0);
+
+    const { loadSessionDetailFromDb } = await import("@/lib/data/sessionDetailFromDb");
+    const detail = await loadSessionDetailFromDb(db, "agent-3f2a1b9c");
+    expect(detail).not.toBeNull();
+
+    // ── Timeline: order AND arguments ──────────────────────────────────────
+    const toolEvents = detail!.timeline.filter((e) => e.type === "tool_use");
+    expect(toolEvents.map((e) => e.toolName)).toEqual(["Glob", "Read", "Edit", "Read"]);
+    // The arguments, which are what distinguish the two `Read`s and are the
+    // half `sidechain_tool_uses` could not carry before schema v30.
+    expect(toolEvents.map((e) => e.toolInput)).toEqual([
+      { pattern: "**/*.ts" },
+      { file_path: "/repo/a.ts" },
+      { file_path: "/repo/b.ts" },
+      { file_path: "/repo/c.ts" },
+    ]);
+
+    // ── Tools panel ────────────────────────────────────────────────────────
+    expect(detail!.toolUsage).toEqual({ Glob: 1, Read: 2, Edit: 1 });
+
+    // ── Files panel: paths, operations and order ───────────────────────────
+    expect(
+      detail!.fileOperations.map((f) => `${f.operation}:${f.path}`)
+    ).toEqual(["read:/repo/a.ts", "edit:/repo/b.ts", "read:/repo/c.ts"]);
+
+    // ── The containment that made this approach acceptable ─────────────────
+    // Nothing reached `tool_uses`, so none of the 23 `FROM tool_uses` sites
+    // across 11 modules moved. That is the property #511 weighed option 1
+    // against option 2 on, so it is asserted rather than assumed.
+    const primary = db
+      .prepare("SELECT COUNT(*) AS n FROM tool_uses WHERE session_id = 'agent-3f2a1b9c'")
+      .get() as { n: number };
+    expect(primary.n).toBe(0);
+    // ...and they are all in the sidechain table, with ordering.
+    const sidechain = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM sidechain_tool_uses
+          WHERE session_id = 'agent-3f2a1b9c' AND turn_index IS NOT NULL`
+      )
+      .get() as { n: number };
+    expect(sidechain.n).toBe(4);
+  });
+
+  it("leaves an ordinary session's panels reading from tool_uses", async () => {
+    // The counterpart. The detail loader now chooses its table by path, so a
+    // regression that pointed EVERY session at `sidechain_tool_uses` would
+    // satisfy the test above and empty every ordinary session's panels.
+    await state.reload();
+    vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+    const conn = await import("@/lib/db/connection");
+    const mig = await import("@/lib/db/migrations");
+    const ingest = await import("@/lib/db/ingest");
+    expect((await mig.initDb()).error).toBeNull();
+    const db = (await conn.getDb())!;
+
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+    const plain = path.join(projectsDir, "C--dev-myapp", "beef77.jsonl");
+    await fs.mkdir(path.dirname(plain), { recursive: true });
+    await fs.writeFile(
+      plain,
+      [
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-08-01T10:00:00Z",
+          isSidechain: false,
+          message: { content: [{ type: "text", text: "do it" }] },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          timestamp: "2026-08-01T10:01:00Z",
+          isSidechain: false,
+          message: {
+            id: "p1",
+            model: "claude-sonnet-4-5",
+            content: [
+              { type: "tool_use", id: "p_1", name: "Read", input: { file_path: "/repo/z.ts" } },
+            ],
+            usage: USAGE,
+          },
+        }),
+      ].join("\n") + "\n"
+    );
+
+    expect((await ingest.reconcileAllSessions(db, { projectsDir })).errors).toBe(0);
+
+    const { loadSessionDetailFromDb } = await import("@/lib/data/sessionDetailFromDb");
+    const detail = await loadSessionDetailFromDb(db, "beef77");
+    expect(detail).not.toBeNull();
+    expect(detail!.toolUsage).toEqual({ Read: 1 });
+    expect(detail!.fileOperations.map((f) => f.path)).toEqual(["/repo/z.ts"]);
+  });
+});
+
+describe("#511 the file-parse backend fills the same panels", () => {
+  // No `installIsolatedState` here: this path never opens the index. It reads
+  // the transcript directly, which is exactly the property under test.
+  let fbHome: string;
+
+  beforeEach(async () => {
+    fbHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-subagent-tools-fb-"));
+    vi.spyOn(os, "homedir").mockReturnValue(fbHome);
+    vi.resetModules();
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+    try {
+      await fs.rm(fbHome, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  it("lists the agent's calls in order, with arguments", async () => {
+    // The two backends reach this differently — the DB one reads a separate
+    // store, this one parses the JSONL — so "the panels work" has to be
+    // asserted of BOTH or the claim is only half true. A review of the help
+    // text caught me describing the DB mechanism as though it were the whole
+    // story, and measuring it is what turned a hedge into a fact.
+    const dir = path.join(
+      fbHome,
+      ".claude",
+      "projects",
+      "-home-me-dev-app",
+      "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+      "subagents"
+    );
+    await fs.mkdir(dir, { recursive: true });
+    const line = (ts: string, id: string, blocks: unknown[]) =>
+      JSON.stringify({
+        type: "assistant",
+        timestamp: ts,
+        isSidechain: true,
+        message: {
+          id,
+          model: "claude-opus-5",
+          content: blocks,
+          usage: { input_tokens: 10, output_tokens: 5 },
+        },
+      });
+    await fs.writeFile(
+      path.join(dir, "agent-7d4e0a52.jsonl"),
+      [
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-03-01T10:00:00.000Z",
+          isSidechain: true,
+          message: { role: "user", content: [{ type: "text", text: "sweep it" }] },
+        }),
+        // Two calls in ONE message, then a third in another — the same shape
+        // as the DB test, so both backends are held to the same bar.
+        line("2026-03-01T10:00:05.000Z", "s0", [
+          { type: "tool_use", id: "t1", name: "Glob", input: { pattern: "**/*.ts" } },
+          { type: "tool_use", id: "t2", name: "Read", input: { file_path: "/repo/a.ts" } },
+        ]),
+        line("2026-03-01T10:00:07.000Z", "s1", [
+          { type: "tool_use", id: "t3", name: "Edit", input: { file_path: "/repo/b.ts" } },
+        ]),
+      ].join("\n") + "\n"
+    );
+
+    const { scanSessionDetail } = await import("@/lib/scanner/claudeConversations");
+    const detail = await scanSessionDetail("agent-7d4e0a52");
+    expect(detail).not.toBeNull();
+
+    const toolEvents = detail!.timeline.filter((e) => e.type === "tool_use");
+    expect(toolEvents.map((e) => e.toolName)).toEqual(["Glob", "Read", "Edit"]);
+    expect(toolEvents.map((e) => e.toolInput)).toEqual([
+      { pattern: "**/*.ts" },
+      { file_path: "/repo/a.ts" },
+      { file_path: "/repo/b.ts" },
+    ]);
+    expect(detail!.toolUsage).toEqual({ Glob: 1, Read: 1, Edit: 1 });
+    expect(detail!.fileOperations.map((f) => `${f.operation}:${f.path}`)).toEqual([
+      "read:/repo/a.ts",
+      "edit:/repo/b.ts",
+    ]);
+  });
+});
