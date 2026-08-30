@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A delegated agent's session opens onto its own conversation instead of a blank timeline** (#487). Clicking through to a subagent's transcript produced a page that loaded successfully and rendered nothing, which reads as "this agent did no work" — the opposite of the truth, and unfalsifiable from the UI.
+
+  The cause is a flag that means something different depending on which file it is in. `isSidechain` marks a turn as *a sidechain of its parent*, and both backends skipped those turns — correct in an ordinary session. But in a file at `<project>/<parent>/subagents/<id>.jsonl` **every** entry carries the flag (sampled on a real transcript: 50 of 50), because the whole file *is* the sidechain. Such a file reached only the sidechain collector, which records one assistant row per turn for cost and carries no user turns and no prose — so the rows existed and there was simply nothing renderable in them.
+
+  Those files now go through the writer that produces real turns, and **the rows keep `is_sidechain = 1`**. Exactly one reader changes: the session-detail timeline stops filtering on the flag when the file is a delegated transcript, because there those turns are not a digression from someone else's conversation — they *are* the conversation. Both backends decide it from the path, through `parseSubagentParentSessionId`.
+
+  Keeping the flag is the point. Every aggregate built on it is untouched: the `is_sidechain = 1` subagent-spend breakout still sees delegated cost, and one-shot rates, activity streaks and the billed engagement report still see only work a human actually did — the last of which would otherwise have read a generated delegation prompt ("review this module") as a person at a keyboard and put the hours on an invoice.
+
+  Delegated transcripts remain out of the sessions list. They are not sessions you started, and on a delegation-heavy history they would roughly double it; they stay reachable by link from the parent session, where their context is.
+
+  **The agent's tool events render too**, not just its prose. The timeline and the Files tab are both built from tool rows, and a delegated agent's calls live in a separate table that only ever needed a name and an id — enough for the "how much work happened below this session" roll-up it was built for, and not enough to place a call in a timeline. Schema v30 adds the ordering, timing and arguments. Without them a tool-heavy delegated session showed prose and no actions, and a tool-only turn disappeared entirely, while the file-parse backend showed both.
+
+  `DERIVED_VERSION` moves 22 → 23, so existing indexes re-derive these rows.
+
 - **A directory Minder could not read no longer passes as one with nothing in it** (#513). Every sweep over `~/.claude/projects` swallowed its `readdir` failures — a permissions problem, a moved home, a `projects` path that is a file — and carried on. The affected project's sessions, tokens and cost then read as **zero rather than missing**, which is indistinguishable from a quiet week, and `/api/claude-homes` answered `complete: true` over a corpus it had visibly failed to enumerate.
 
   Failures are now collected per sweep and surfaced: `/api/claude-homes` gains `degraded` (the paths and reasons) and `degradedTotal`, and the existing banner names the directories rather than only the homes Minder deliberately skipped. `complete` now means what it says.

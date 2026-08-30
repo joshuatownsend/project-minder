@@ -990,6 +990,59 @@ const MIGRATIONS: Migration[] = [
       ).run();
     },
   },
+  {
+    version: 30,
+    name: "give sidechain_tool_uses enough to render a delegated timeline (#487)",
+    up: (db) => {
+      // The table was built to answer "how much tool work happened BELOW this
+      // session" — a roll-up question, which needs only a name and an id. #487
+      // gave it a second reader with a different question: a delegated agent's
+      // own transcript now opens onto its own timeline, and a timeline needs
+      // ORDER and ARGUMENTS. Without them a tool-heavy delegated session
+      // rendered its prose and none of its actions, and a tool-only assistant
+      // turn vanished entirely — while the file-parse backend, which reads the
+      // JSONL directly, showed them. A backend divergence, not just a gap.
+      // (Codex P1, PR #528.)
+      //
+      // Added here rather than by moving the rows into `tool_uses`: 23
+      // `FROM tool_uses` sites across 11 modules read that table with no
+      // sidechain predicate, so moving them shifts /usage, /agents, /skills,
+      // /costs and the denial analytics at once. That move is #511's, made
+      // deliberately and with its own review; this is the narrow half that
+      // lets the page render.
+      //
+      // Every column is NULLABLE and there is no backfill. The rows that need
+      // them are rewritten by the DERIVED_VERSION 22 -> 23 bump this change
+      // already carries, and a row still carrying NULLs is a pre-#487 row whose
+      // session has not been re-derived yet — which the reader treats as "no
+      // ordering available" rather than "turn 0".
+      // Asked, not attempted-and-caught. SQLite's ALTER TABLE has no
+      // IF NOT EXISTS, and a blanket try/catch around it buys idempotence by
+      // swallowing EVERY error — a read-only file, a full disk, corruption —
+      // leaving the schema half-migrated with nothing reported. Reading
+      // `PRAGMA table_info` first keeps the idempotence and lets a real failure
+      // throw, which is the pattern the earlier migrations in this file use.
+      // (Copilot, PR #528.)
+      const existing = new Set(
+        (
+          db.prepare("PRAGMA table_info(sidechain_tool_uses)").all() as Array<{ name: string }>
+        ).map((c) => c.name)
+      );
+      for (const [name, decl] of [
+        ["turn_index", "INTEGER"],
+        ["sequence_in_turn", "INTEGER"],
+        ["ts", "TEXT"],
+        ["agent_name", "TEXT"],
+        ["skill_name", "TEXT"],
+        ["arguments_json", "TEXT"],
+        ["file_path", "TEXT"],
+        ["file_op", "TEXT"],
+      ] as const) {
+        if (existing.has(name)) continue;
+        db.prepare(`ALTER TABLE sidechain_tool_uses ADD COLUMN ${name} ${decl}`).run();
+      }
+    },
+  },
 ];
 
 /**

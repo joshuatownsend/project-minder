@@ -1,4 +1,4 @@
-// Last verified: schema version 27 (src/lib/db/schema.sql + migrations v1-v27)
+// Last verified: schema version 30 (src/lib/db/schema.sql + migrations v1-v30)
 // Re-verify with `tests/sqlSchemaSnapshot.test.ts` after any migration.
 //
 // Column ORDER here is not meaningful — the live check compares both
@@ -69,8 +69,15 @@ export const SQL_SCHEMA: TableSchema[] = [
   },
   {
     // v25 (#395): subagent tool calls, which `tool_uses` has never carried.
+    // v30 (#487) added the columns below the first three: a delegated agent's
+    // own detail page renders from these rows, and a timeline needs order,
+    // time and arguments where a roll-up needed only a name and an id.
     table: "sidechain_tool_uses",
-    columns: ["session_id", "tool_use_id", "tool_name"],
+    columns: [
+      "session_id", "tool_use_id", "tool_name",
+      "turn_index", "sequence_in_turn", "ts",
+      "agent_name", "skill_name", "arguments_json", "file_path", "file_op",
+    ],
   },
   {
     table: "session_hook_runs",

@@ -53,6 +53,7 @@ import { isWorktreeEncodedDir } from "./worktreeCheck";
 import { FileCache } from "../usage/cache";
 import type { SessionFile } from "../adapters/types";
 import type { MinderConfig } from "../types";
+import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptPath";
 import { homeDedupeKey, getPrimaryClaudeHome } from "@/lib/claudeHome";
 import {
   beginSweepFailureCycle,
@@ -1332,6 +1333,8 @@ export async function scanSessionDetail(
   if (!summary) return null;
 
   // Now do the detailed parse for timeline, file ops, subagents
+  // Once, from the path, with the same predicate the ingest path uses (#487).
+  const isDelegated = parseSubagentParentSessionId(filePath) !== undefined;
   const timeline: TimelineEvent[] = [];
   const fileOperations: FileOperation[] = [];
   const subagentMap = new Map<string, SubagentInfo>();
@@ -1368,7 +1371,16 @@ export async function scanSessionDetail(
           continue;
         }
 
-        if (entry.type === "user" && !entry.isMeta && !entry.isSidechain) {
+        // `isSidechain` means "this turn is a sidechain OF ITS PARENT", which is
+        // exactly right for an ordinary session and exactly wrong when the FILE
+        // is a delegated agent's own transcript — there every entry carries the
+        // flag, so skipping them all rendered a session that opened
+        // successfully onto an empty timeline (#487).
+        //
+        // Computed once above, from the path, using the same predicate the
+        // ingest path uses. Both backends therefore make the same distinction
+        // from the same evidence rather than each deciding for itself.
+        if (entry.type === "user" && !entry.isMeta && (isDelegated || !entry.isSidechain)) {
           const text = entry.message?.content
             ? extractTextContent(entry.message.content)
             : Array.isArray(entry.content)
@@ -1392,7 +1404,12 @@ export async function scanSessionDetail(
         // `subagent_completed` + `api_request` events via the enrichment
         // step in `enrichSubagentsFromOtel`. Kept here for any session JSONL
         // that still includes the old schema — does no harm when empty.
-        if (entry.type === "assistant" && entry.message && entry.isSidechain) {
+        // `!isDelegated` too. This branch harvests sidechain assistants for the
+        // PARENT's subagent stats and then `continue`s — which for a delegated
+        // agent's own transcript swallowed every assistant turn before the
+        // primary branch below could see it, leaving a timeline of user turns
+        // only (#487).
+        if (entry.type === "assistant" && entry.message && entry.isSidechain && !isDelegated) {
           const msg = entry.message;
           const parentId = (entry as any).parentToolUseID;
           if (parentId && subagentMap.has(parentId)) {
@@ -1413,7 +1430,23 @@ export async function scanSessionDetail(
           continue;
         }
 
-        if (entry.type === "assistant" && entry.message && !entry.isSidechain) {
+        // `isMeta` is excluded for a DELEGATED transcript, and only there.
+        //
+        // The DB path drops every meta entry (`ingest.ts`, "if (entry.isMeta ||
+        // !entry.timestamp) continue"). This branch never had that check, which
+        // was unobservable while `!entry.isSidechain` already excluded a
+        // delegated transcript's entries wholesale — widening the gate to admit
+        // them exposed it, and the two backends then rendered different
+        // timelines for the same file. (Codex P2, PR #528.)
+        //
+        // Scoped to the delegated case rather than added to the branch as a
+        // whole: an ordinary session's meta assistant entries render today, and
+        // changing that is not this fix's business.
+        if (
+          entry.type === "assistant" &&
+          entry.message &&
+          (isDelegated ? !entry.isMeta : !entry.isSidechain)
+        ) {
           const msg = entry.message;
           lastAssistantTimelineIdx = -1;
 

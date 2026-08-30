@@ -62,6 +62,7 @@ import { discoverAllSessions, getAdapter } from "@/lib/adapters";
 import type { SessionFile } from "@/lib/adapters/types";
 import { readConfig } from "@/lib/config";
 import type { MinderConfig } from "@/lib/types";
+import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptPath";
 
 // ── Optional per-stage profiling ──────────────────────────────────────────
 // Gated on `MINDER_PROFILE_INGEST=1` so production stays at zero overhead.
@@ -538,6 +539,15 @@ interface ParsedSession {
    * 1,260 subagent transcripts.
    */
   sidechainToolUses: Map<string, string>;
+  /**
+   * Timeline-grade detail for the same calls, present only for a delegated
+   * transcript (#487). Optional: an ordinary session's sidechain turns have no
+   * turn rows to order against and carry the lean form alone.
+   */
+  delegatedToolUses?: Map<
+    string,
+    { turnIndex: number; ts: string | null; tool: ParsedToolUse }
+  >;
   turns: ParsedTurn[];
   // (day, project, model) tuples to recompute in daily_costs after this
   // session is replaced.
@@ -621,6 +631,36 @@ async function readJsonlSession(
   options: ReadOptions = {}
 ): Promise<ReadResult | null> {
   const sessionId = path.basename(filePath, ".jsonl");
+  /**
+   * Is this file ITSELF a delegated agent's transcript? (#487)
+   *
+   * `isSidechain` means "this turn is a sidechain OF ITS PARENT". In an
+   * ordinary session that is exactly right and those turns are skipped by the
+   * primary path. In a file at `<project>/<parent>/subagents/<id>.jsonl` every
+   * entry carries the flag — sampled on a real transcript, 50 of 50 — because
+   * the whole file IS the sidechain.
+   *
+   * Before this, such a file reached only the sidechain COLLECTOR, which
+   * records one assistant row per turn for cost and carries no user turns and
+   * no text previews. The rows existed; there was simply nothing renderable in
+   * them, so the detail page opened successfully onto an empty timeline.
+   *
+   * These files therefore go through the PRIMARY writer, which produces real
+   * turns with prose — but the rows it writes for them keep `is_sidechain = 1`.
+   * That is the whole design, and the second attempt at it: writing them as
+   * primary made the timeline work and silently moved every aggregate keyed on
+   * the flag. `querySubagentTotals` defines `subagentCost`/`subagentTokens` as
+   * `is_sidechain = 1`, so delegated spend would have VANISHED from the
+   * subagent breakout, while one-shot rates, activity streaks and the billed
+   * engagement report — all `is_sidechain = 0` — would have absorbed a
+   * generated delegation prompt as human work. (Codex P1 x2, PR #528.)
+   *
+   * So the flag keeps meaning what it meant, every consumer of it is
+   * untouched, and exactly one reader changes: the session-detail timeline,
+   * which stops filtering on it when the file is a delegated transcript. The
+   * turns are primary FOR THE TIMELINE and nothing else.
+   */
+  const isDelegatedAgentTranscript = parseSubagentParentSessionId(filePath) !== undefined;
   const canonicalDir = canonicalizeDirName(projectDirName);
   const projectSlug = projectSlugFromDirName(projectDirName);
   const fromOffset = options.fromOffset ?? 0;
@@ -1013,9 +1053,28 @@ async function readJsonlSession(
     }
 
     if (newTools.length > 0) {
+      // Not for a delegated transcript: its calls were already collected into
+      // `sidechain_tool_uses` above, and recording them here as well would both
+      // double-count them and move them onto the primary path #511 exists to
+      // move deliberately.
       const built = buildToolUses(newTools, turn.toolUses.length, open);
-      turn.toolUses.push(...built);
-      turn.usageTurn.toolCalls.push(...newTools.map(toToolCall));
+      // Suppressed at the STORE, not at the parse. A delegated agent's calls
+      // belong in `sidechain_tool_uses` rather than `tool_uses` (#487, with the
+      // move itself left to #511) — but skipping the block earlier, before the
+      // dedupe, also dropped it from `toolCallCount` and from the pending-id
+      // tracking that `open` feeds, while the first line of the same message
+      // still counted its blocks. That made the count depend on where the
+      // producer happened to split lines: the same tool call counted or not
+      // according to whether it arrived on the first line or a continuation.
+      // (Copilot, PR #528.)
+      if (isDelegatedAgentTranscript) {
+        // Ordered against the turn this line merged INTO, not against the line
+        // — which is the whole reason the ids alone were not enough.
+        collectDelegatedTools(built, turn.turnIndex, turn.ts);
+      } else {
+        turn.toolUses.push(...built);
+        turn.usageTurn.toolCalls.push(...newTools.map(toToolCall));
+      }
       toolCallCount += built.length;
       // Pending tool_use ids belong to the CURRENT last assistant turn only.
       // A continuation arriving after later turns (the 3,639-line gap above)
@@ -1087,6 +1146,65 @@ async function readJsonlSession(
    * 37,394 observed (Codex review of #428).
    */
   const sidechainToolUses = new Map<string, string>();
+
+  /**
+   * The same calls, with everything a TIMELINE needs (#487).
+   *
+   * `sidechainToolUses` above answers the roll-up question — how much tool work
+   * happened below this session — and a name and an id are enough for that. A
+   * delegated agent's own detail page asks a different question and needs
+   * ORDER and ARGUMENTS, which that map cannot carry.
+   *
+   * ALLOCATED for every parse and left EMPTY for an ordinary session — not
+   * absent, which the previous wording ("populated only for delegated
+   * transcripts") invited a reader to assume. An ordinary session's sidechain
+   * turns have no turn rows of their own to order against, so they keep the
+   * lean form and their extra columns stay NULL; the empty map is what carries
+   * that. An always-present map also keeps `writeSidechainToolUses` free of a
+   * second "is this delegated" test — it looks each id up and finds nothing.
+   * (Copilot, PR #528.)
+   *
+   * Keyed by `tool_use_id` for the same reason as the map: one JSONL line per
+   * content block means a block can be re-logged, and the id is what makes
+   * `INSERT OR IGNORE` settle it without dedupe state surviving between parses.
+   */
+  const delegatedToolUses = new Map<
+    string,
+    { turnIndex: number; ts: string | null; tool: ParsedToolUse }
+  >();
+  /**
+   * How many delegated calls this turn has already recorded.
+   *
+   * The sequence CANNOT be taken from `ParsedToolUse.sequenceInTurn` here.
+   * `buildToolUses` derives that from `turn.toolUses.length`, which for a
+   * delegated transcript never grows — those calls go to
+   * `sidechain_tool_uses`, so the array it counts stays empty and every
+   * continuation line of the same message starts again at 0. Two calls in one
+   * turn then shared a `sequence_in_turn`, and `loadSessionDetailFromDb` orders
+   * by exactly that column, so SQLite was free to render the agent's actions in
+   * some other order than the transcript's. (Codex P2, PR #528.)
+   */
+  const delegatedSeqByTurn = new Map<number, number>();
+  function collectDelegatedTools(
+    tools: ParsedToolUse[],
+    turnIndex: number,
+    ts: string | null
+  ): void {
+    for (const tool of tools) {
+      if (!tool.toolUseId) continue;
+      if (delegatedToolUses.has(tool.toolUseId)) continue;
+      const seq = delegatedSeqByTurn.get(turnIndex) ?? 0;
+      delegatedSeqByTurn.set(turnIndex, seq + 1);
+      // Counted here rather than trusted from the block, so the order is the
+      // order calls were SEEN in the transcript — which is the order they
+      // happened — regardless of how the producer split its lines.
+      delegatedToolUses.set(tool.toolUseId, {
+        turnIndex,
+        ts,
+        tool: { ...tool, sequenceInTurn: seq },
+      });
+    }
+  }
   function collectSidechainTools(content: unknown): void {
     if (!Array.isArray(content)) return;
     for (const b of content as Array<{ type?: string; name?: unknown; id?: unknown }>) {
@@ -1184,7 +1302,20 @@ async function readJsonlSession(
     // tokens/cost must fold into the usage totals. Collect them here and append
     // as rows after the primary pass; then `continue` so the primary logic below
     // is untouched (identical to the pre-A1 skip for every other purpose).
-    if (entry.isSidechain) {
+    // A delegated transcript's TOOL CALLS still go to `sidechain_tool_uses`,
+    // even though its turns are now primary (#487).
+    //
+    // #511 is explicit that moving them is a separate piece of work: 23
+    // `FROM tool_uses` sites across 11 modules read that table with no
+    // `is_sidechain` predicate, so letting these ride the primary path would
+    // shift /usage, /agents, /skills, /costs and the denial analytics as a side
+    // effect of a fix about a blank timeline. That is the silent widening this
+    // repo keeps unwinding, so the turn and the tool halves are kept apart on
+    // purpose.
+    if (entry.isSidechain && entry.type === "assistant" && isDelegatedAgentTranscript) {
+      collectSidechainTools(entry.message?.content);
+    }
+    if (entry.isSidechain && !isDelegatedAgentTranscript) {
       if (entry.type === "assistant") {
         collectSidechainTools(entry.message?.content);
         const model = entry.message?.model;
@@ -1361,8 +1492,31 @@ async function readJsonlSession(
         : undefined;
       if (messageId && openMessage) openMessages.set(messageId, openMessage);
 
-      const toolUses = buildToolUses(toolBlocks, 0, openMessage);
-      toolCallCount += toolUses.length;
+      // A delegated agent's calls go to `sidechain_tool_uses` and must not
+      // ALSO land in `tool_uses` (#487). Its TURNS become primary here — that
+      // is the whole fix — but moving its TOOL rows is #511's job: 23
+      // `FROM tool_uses` sites across 11 modules read that table with no
+      // sidechain predicate, so letting these ride along would shift /usage,
+      // /agents, /skills, /costs and the denial analytics as a side effect of
+      // a fix about a blank timeline.
+      //
+      // `toolBlocks` itself stays populated: `lastAssistantPendingIds` uses it
+      // for truncation detection, which is about what the file CONTAINS and is
+      // true regardless of which table the rows land in.
+      const primaryToolBlocks = isDelegatedAgentTranscript ? [] : toolBlocks;
+      // Built from every block and counted from the RESULT, then narrowed for
+      // storage. Counting `toolBlocks.length` instead would disagree with the
+      // continuation path above, which counts what `buildToolUses` returned —
+      // and `buildToolUses` drops an unkeyable block, so the two would differ
+      // by exactly those. `tool_call_count` describes the work the session did,
+      // and a delegated agent's calls are still work it performed, so it counts
+      // them; only the ROWS are withheld.
+      const allToolUses = buildToolUses(toolBlocks, 0, openMessage);
+      toolCallCount += allToolUses.length;
+      const toolUses = isDelegatedAgentTranscript ? [] : allToolUses;
+      if (isDelegatedAgentTranscript) {
+        collectDelegatedTools(allToolUses, turnIndex, timestamp);
+      }
 
       const usageTurn: UsageTurn = {
         timestamp,
@@ -1376,13 +1530,26 @@ async function readJsonlSession(
         cacheCreateTokens: tcc,
         cacheCreate1hTokens: tcc1h,
         cacheReadTokens: tcr,
-        toolCalls: toolBlocks.map(toToolCall),
+        toolCalls: primaryToolBlocks.map(toToolCall),
         // Cap to the same 500-char limit the file-parse path applies via
         // `extractText`. Without this, DB-ingest produces a longer
         // projection than file-parse and `selfCorrection.textHasSelfCorrection`
         // can fire on phrases past char 500 only when MINDER_USE_DB=1.
         assistantText: text ? text.slice(0, USAGE_USER_TEXT_LIMIT) : undefined,
-        isError: !!isError,
+        // NOT for a delegated transcript. `classifyTurn` reads this and books
+        // an errored turn's cost as Debugging, where the sidechain collector
+        // left it unset and the same spend came out as Conversation — and
+        // `queryByCategory` deliberately includes sidechain cost, so an
+        // `isApiErrorMessage` entry would move the usage-by-category report as
+        // a side effect of a fix about a blank timeline.
+        //
+        // The second independent path by which the primary writer changed
+        // classification for these turns; suppressing `prevUserText` closed the
+        // first and does not touch this one. The STORED `is_error` below is
+        // unchanged — the turn really did error, and that is what the column
+        // records; what is withheld is only the classifier's input.
+        // (Codex P2, PR #528.)
+        isError: isDelegatedAgentTranscript ? false : !!isError,
         // A3: triggering user prompt, so classifyTurn can attribute intent.
         userIntentText: prevUserText,
         // A1: mirrors the file-parse path so `MINDER_USE_DB=0/1` agree. `effort`
@@ -1420,7 +1587,10 @@ async function readJsonlSession(
         turnDurationMs: null,
         hasThinking: hasTurnThinking ? 1 : 0,
         textOffset: fromOffset + thisLineOffset,
-        isSidechain: 0,
+        // 1 for a delegated transcript — see the note on
+        // `isDelegatedAgentTranscript`. The row is written by the primary
+        // writer so it carries prose; the FLAG still says whose work it was.
+        isSidechain: isDelegatedAgentTranscript ? 1 : 0,
         effort: entry.effort,
         requestId: (entry as { requestId?: string }).requestId,
         attributionSkill: entry.attributionSkill,
@@ -1517,7 +1687,7 @@ async function readJsonlSession(
         turnDurationMs: null,
         hasThinking: 0,
         textOffset: null,
-        isSidechain: 0,
+        isSidechain: isDelegatedAgentTranscript ? 1 : 0,
       });
 
       // Status inference: walk this user turn's content for
@@ -1542,7 +1712,19 @@ async function readJsonlSession(
       prevUserTimestamp = timestamp;
       // A3: capture the human prompt text (handles both string and array
       // shapes via `userText` above) for propagation onto following assistant turns.
-      if (userText) prevUserText = userText;
+      //
+      // NOT for a delegated transcript. This text becomes `userIntentText` on
+      // the following assistant turn and is what `classifyTurn` reads, so a
+      // generated delegation prompt carrying an intent word — "debug this
+      // error", "plan the architecture" — would reclassify that agent's spend
+      // out of the category the sidechain collector gave it and into Debugging
+      // or Planning. `queryByCategory` deliberately includes sidechain cost, so
+      // the DB-backed usage-by-category report would move as a side effect of a
+      // fix about a blank timeline, and the file backend — which never
+      // propagates sidechain prompts as intent — would disagree with it.
+      // The prose is still STORED, which is all the timeline needs.
+      // (Codex P2, PR #528.)
+      if (userText && !isDelegatedAgentTranscript) prevUserText = userText;
     }
   }
 
@@ -1654,7 +1836,15 @@ async function readJsonlSession(
   // `sessions.turn_count` (a session-summary field, primary-only, mirrored by
   // the file-parse ClaudeUsageStats) excludes subagent turns. The usage totals
   // read `COUNT(*)`/`SUM` over the `turns` rows directly and DO include them.
-  const primaryTurnCount = turns.length;
+  //
+  // Counted by the FLAG, not by which writer produced the row. A delegated
+  // transcript's turns go through the primary writer so they carry prose for
+  // the timeline, but they keep `is_sidechain = 1` — and `turn_count` is a
+  // primary-only summary field, so it must follow the flag. Using
+  // `turns.length` here made a delegated transcript report a real turn count,
+  // which put it back in the sessions list (its exclusion is `turn_count > 0`)
+  // and into the Claude-usage totals. (#487.)
+  const primaryTurnCount = turns.filter((t) => t.isSidechain === 0).length;
 
   // A1: append subagent (sidechain) turns as `turns` rows now — AFTER the
   // primary detectors above (status/one-shot/quality/work-mode/resume all ran
@@ -1799,6 +1989,7 @@ async function readJsonlSession(
       fileSize,
       byteOffset: safeOffset,
       sidechainToolUses,
+      delegatedToolUses,
       startTs,
       endTs,
       primaryModel,
@@ -1806,22 +1997,75 @@ async function readJsonlSession(
       initialPrompt,
       lastPrompt,
       turnCount: primaryTurnCount,
-      userTurnCount,
-      assistantTurnCount,
-      toolCallCount,
-      errorCount,
-      inputTokens,
-      outputTokens,
-      cacheCreateTokens,
-      cacheReadTokens,
-      costUsd,
+      // Every one of these is a PRIMARY-ONLY summary field, and a delegated
+      // transcript has no primary turns — so they are zero for it, exactly as
+      // they were before #487 sent its entries through this writer.
+      //
+      // The tokens and cost are NOT lost: they live on the turn rows, which
+      // carry `is_sidechain = 1`, and the usage rollups derive from those rows
+      // rather than from this summary. What is withheld here is only the
+      // session CARD's own figures, which describe work the user's session did.
+      //
+      // THE RULE: if a consumer reads this column expecting "what the user's
+      // session did", it belongs in this block. The list is hand-maintained
+      // because most session columns are legitimately real for a delegated
+      // transcript — `slug`, `cliVersion`, `gitBranch`, the timestamps — so a
+      // blanket zero would be wrong. That makes omissions the failure mode, and
+      // it has already happened once: `hasOneShot`, `verifiedTaskCount` and
+      // `oneShotTaskCount` were missed, and `queryOneShot` sums those columns
+      // with no `is_sidechain`, `turn_count` or path filter, so automated agent
+      // tasks inflated the Usage dashboard's verified-task and one-shot rates.
+      // (Codex P2, PR #528.)
+      ...(isDelegatedAgentTranscript
+        ? {
+            userTurnCount: 0,
+            assistantTurnCount: 0,
+            toolCallCount: 0,
+            errorCount: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheCreateTokens: 0,
+            cacheReadTokens: 0,
+            costUsd: 0,
+            // One-shot counts are DEFENCE IN DEPTH, not a live fix, and the
+            // difference is worth stating because it decides whether this can
+            // be dropped.
+            //
+            // `detectOneShotTasks` anchors on an assistant turn carrying an
+            // Edit/Write TOOL CALL, reading `usageTurn.toolCalls` — which is
+            // `primaryToolBlocks.map(...)`, empty for a delegated transcript.
+            // So the detector cannot fire for these today and the three fields
+            // are already structurally zero. A review reported them as a live
+            // leak into `queryOneShot`; measured, the mechanism does not hold.
+            //
+            // They are zeroed anyway because #511 exists to move a delegated
+            // agent's tool calls onto the primary path, and the day it lands
+            // `toolCalls` is populated here and the leak becomes real — into a
+            // consumer that sums these columns with no `is_sidechain`,
+            // `turn_count` or path filter. Cheaper to hold the line now than to
+            // rediscover it from a wrong one-shot rate. (Codex P2, PR #528.)
+            hasOneShot: 0 as const,
+            verifiedTaskCount: 0,
+            oneShotTaskCount: 0,
+          }
+        : {
+            userTurnCount,
+            assistantTurnCount,
+            toolCallCount,
+            errorCount,
+            inputTokens,
+            outputTokens,
+            cacheCreateTokens,
+            cacheReadTokens,
+            costUsd,
+            hasOneShot,
+            verifiedTaskCount: oneShot.totalVerifiedTasks,
+            oneShotTaskCount: oneShot.oneShotTasks,
+          }),
       cacheHitRatio,
       maxContextFill,
       hasCompactionLoop,
       hasToolFailureStreak,
-      hasOneShot,
-      verifiedTaskCount: oneShot.totalVerifiedTasks,
-      oneShotTaskCount: oneShot.oneShotTasks,
       storedStatus,
       slug,
       hasThinking: hasThinkingSession ? 1 : 0,
@@ -1982,16 +2226,42 @@ function safeComputeQuality(
 function writeSidechainToolUses(
   db: DatabaseT.Database,
   sessionId: string,
-  toolUses: Map<string, string>
+  toolUses: Map<string, string>,
+  /**
+   * The timeline-grade form, for a delegated transcript (#487). Where an entry
+   * exists for a `tool_use_id` its columns are written too; where it does not —
+   * an ordinary session's sidechain turns, which have no turn rows to order
+   * against — they stay NULL and the detail reader treats that as "no ordering
+   * available" rather than "turn 0".
+   */
+  detailed?: Map<string, { turnIndex: number; ts: string | null; tool: ParsedToolUse }>
 ): number {
   if (toolUses.size === 0) return 0;
   const stmt = db.prepare(
-    `INSERT OR IGNORE INTO sidechain_tool_uses (session_id, tool_use_id, tool_name)
-     VALUES (?, ?, ?)`
+    `INSERT OR IGNORE INTO sidechain_tool_uses
+       (session_id, tool_use_id, tool_name,
+        turn_index, sequence_in_turn, ts,
+        agent_name, skill_name, arguments_json, file_path, file_op)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   let rows = 0;
   for (const [toolUseId, toolName] of toolUses) {
-    rows += Number(stmt.run(sessionId, toolUseId, toolName).changes ?? 0);
+    const d = detailed?.get(toolUseId);
+    rows += Number(
+      stmt.run(
+        sessionId,
+        toolUseId,
+        toolName,
+        d?.turnIndex ?? null,
+        d?.tool.sequenceInTurn ?? null,
+        d?.ts ?? null,
+        d?.tool.agentName ?? null,
+        d?.tool.skillName ?? null,
+        d?.tool.argumentsJson ?? null,
+        d?.tool.filePath ?? null,
+        d?.tool.fileOp ?? null
+      ).changes ?? 0
+    );
   }
   return rows;
 }
@@ -2166,7 +2436,7 @@ function writeSession(db: DatabaseT.Database, s: ParsedSession): number {
   // away on a rewrite, so this pass rebuilds them exactly; the same statement
   // serves `appendSessionTail`, which does NOT delete first and relies on the
   // id key to ignore what it has already stored.
-  rows += writeSidechainToolUses(db, s.sessionId, s.sidechainToolUses);
+  rows += writeSidechainToolUses(db, s.sessionId, s.sidechainToolUses, s.delegatedToolUses);
 
   // A1 one-to-many session metadata. DELETE-then-INSERT rather than INSERT OR
   // IGNORE: these have no natural unique key (the same hook command runs many
@@ -2742,7 +3012,7 @@ function appendSessionTail(
   // recorded. Keyed on `tool_use_id`, so a call re-logged across the boundary
   // between two windows settles to one row rather than being counted twice —
   // see `writeSidechainToolUses`.
-  rows += writeSidechainToolUses(db, sessionId, parsed.sidechainToolUses);
+  rows += writeSidechainToolUses(db, sessionId, parsed.sidechainToolUses, parsed.delegatedToolUses);
 
   for (const t of parsed.turns) {
     insertTurn.run({
