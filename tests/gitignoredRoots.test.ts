@@ -96,6 +96,21 @@ describe.skipIf(!HAS_GIT)("rootLevelGitignoredEntries", () => {
     expect(BUILD_INPUTS_KEEP.has("node_modules")).toBe(true);
   });
 
+  it("holds the keep-list case-insensitively", () => {
+    // On a `core.ignoreCase` checkout git can match the `/node_modules` rule
+    // against a directory named `NODE_MODULES` and report that casing back. An
+    // exact-case keep-list would miss it, `derivedNameForms` would lower-case it
+    // to `node_modules`, and the packager would prune the payload's entire
+    // dependency tree (Codex, PR #540).
+    //
+    // The property that prevents it: every keep-list entry is stored lower-cased,
+    // and the filter lower-cases the candidate before looking it up.
+    for (const entry of BUILD_INPUTS_KEEP) {
+      expect(entry).toBe(entry.toLowerCase());
+    }
+    expect(BUILD_INPUTS_KEEP.has("build_info.json")).toBe(true);
+  });
+
   it("stays at the root and drops the trailing slash on directories", () => {
     const entries = rootLevelGitignoredEntries(repo)!;
     // `docs/screenshots` is ignored too, but the payload rule is root-anchored,

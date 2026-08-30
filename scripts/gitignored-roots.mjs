@@ -56,7 +56,7 @@ export const REPO_ROOT = path.resolve(here, "..");
  * explicit literal rather than anything clever. Keep it short enough to read in
  * one glance.
  */
-export const BUILD_INPUTS_KEEP = new Set([
+const BUILD_INPUTS_KEEP_NAMES = [
   // Build inputs. All three are gitignored, and pruning any of them produces a
   // payload that cannot boot.
   "node_modules", // the payload's dependencies
@@ -75,7 +75,21 @@ export const BUILD_INPUTS_KEEP = new Set([
   "public",
   "workers",
   "src",
-]);
+];
+
+/**
+ * Compared case-INSENSITIVELY, because the derived lookup is.
+ *
+ * On a `core.ignoreCase` checkout git can match the `/node_modules` rule
+ * against a directory named `NODE_MODULES` and reports that casing back. An
+ * exact-case keep-list misses it, `derivedNameForms` then lower-cases it to
+ * `node_modules`, and the packager prunes the payload's entire dependency tree
+ * (Codex, PR #540). The two comparisons have to agree, and lower-case is the
+ * side everything else in the hygiene rules already uses.
+ */
+export const BUILD_INPUTS_KEEP = new Set(
+  BUILD_INPUTS_KEEP_NAMES.map((name) => name.toLowerCase())
+);
 
 /**
  * Names of root-level gitignored entries, or `null` when git could not answer.
@@ -136,14 +150,26 @@ export function rootLevelGitignoredEntries(root = REPO_ROOT) {
       }
     );
   } catch (err) {
-    // A missing git is expected and silent — a source-tarball build. Anything
-    // else means the derivation was ABLE to run and did not, which the static
-    // rules alone will not compensate for, so it must not pass unremarked.
-    if (err && (err.code === "ENOBUFS" || err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")) {
+    // Two expected cases stay silent, because they are the reason the fallback
+    // exists at all: git is not installed (`ENOENT`), or this is not a git
+    // repository (`git` exits 128) — a source-tarball build.
+    //
+    // Everything else means the derivation was ABLE to run and did not:
+    // a dubious-ownership refusal, an unreadable index, an output larger than
+    // the buffer. The static rules will not compensate, and the hygiene gate's
+    // success line would otherwise report a smaller checked set with no cause
+    // given (Codex, PR #540). Those warn.
+    const code = err?.code;
+    const expected = code === "ENOENT" || err?.status === 128;
+    if (!expected) {
+      const detail =
+        code === "ENOBUFS" || code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
+          ? "output exceeded maxBuffer — raise it in scripts/gitignored-roots.mjs"
+          : `${code ?? "unknown error"}${err?.status != null ? ` (exit ${err.status})` : ""}`;
       console.warn(
-        "[gitignored-roots] WARNING: `git ls-files` output exceeded maxBuffer — " +
-          "derived payload exclusions are DISABLED for this build. Only the static " +
-          "rules apply. Raise maxBuffer in scripts/gitignored-roots.mjs."
+        `[gitignored-roots] WARNING: \`git ls-files\` failed: ${detail}. ` +
+          "Derived payload exclusions are DISABLED for this build; only the static " +
+          "rules apply."
       );
     }
     return null;
@@ -161,7 +187,7 @@ export function rootLevelGitignoredEntries(root = REPO_ROOT) {
     // basename confusion this module exists to avoid.
     const normalized = entry.replace(/\/+$/, "");
     if (!normalized || normalized.includes("/")) continue;
-    if (BUILD_INPUTS_KEEP.has(normalized)) continue;
+    if (BUILD_INPUTS_KEEP.has(normalized.toLowerCase())) continue;
     names.add(normalized);
   }
   return [...names].sort();
