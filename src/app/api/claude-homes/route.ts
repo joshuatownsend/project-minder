@@ -51,6 +51,13 @@ export async function GET(): Promise<NextResponse> {
       unavailable: [],
       degraded: [],
       degradedTotal: 0,
+      // Present here too, because this route treats its response shape as
+      // invariant: a client that special-cases demo mode is a client that can
+      // drift from the real one. Demo fixtures are synthetic and complete by
+      // construction, so the honest values are the empty ones (Codex/Copilot,
+      // #544).
+      reconcileIncomplete: false,
+      reconcileFailures: 0,
       complete: true,
     });
     demo.headers.set("X-Minder-Homes-Unavailable", "0");

@@ -43,6 +43,18 @@ describe("computeCorpusVersion", () => {
     expect(a).toBe(b);
   });
 
+  it("treats an absent enabledAdapters as the default set, not as different", () => {
+    // The substrate adapter is always in the effective set, and the field is
+    // missing entirely on a default or older config. Hashing it verbatim made
+    // `undefined` and `["claude"]` two different corpora, so a perfectly valid
+    // verdict was discarded as "about something else" (Copilot, PR #544).
+    const implicit = computeCorpusVersion({ claudeHomes: ["C:/a"] } as MinderConfig);
+    const explicit = computeCorpusVersion(
+      { claudeHomes: ["C:/a"], enabledAdapters: ["claude"] } as MinderConfig
+    );
+    expect(implicit).toBe(explicit);
+  });
+
   it("changes when the swept set genuinely moves", () => {
     const base = computeCorpusVersion(cfg({ claudeHomes: ["C:/a"] }));
     expect(computeCorpusVersion(cfg({ claudeHomes: ["C:/a", "C:/c"] }))).not.toBe(base);

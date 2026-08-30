@@ -87,6 +87,13 @@ export function UnavailableHomesBanner() {
   // most. The API already returns the uncapped figure; this reads it.
   // (Codex P2, PR #527, round 4.)
   const [degradedTotal, setDegradedTotal] = useState(0);
+  // #529: the DB reconcile could not read part of the corpus.
+  //
+  // Its own state rather than folded into `degradedTotal`, because the two
+  // carry different evidence: the file sweeps name the PATHS they could not
+  // list, and the reconcile reports a count. Adding it to the total would make
+  // the detail list below claim to describe locations it was never given.
+  const [reconcileIncomplete, setReconcileIncomplete] = useState(false);
   const [allowRender, setAllowRender] = useState(false);
 
   useEffect(() => {
@@ -105,6 +112,7 @@ export function UnavailableHomesBanner() {
               unavailable?: UnavailableHome[];
               degraded?: DegradedPath[];
               degradedTotal?: number;
+              reconcileIncomplete?: boolean;
             } | null
           ) => {
             // A failed poll leaves the last good answer in place rather than
@@ -137,6 +145,12 @@ export function UnavailableHomesBanner() {
             } else if (data && Array.isArray(data.degraded)) {
               setDegradedTotal(data.degraded.length);
             }
+            // Only on an explicit boolean, matching how every other field here
+            // is read: a response that omits it leaves the last good answer
+            // standing rather than silently clearing the warning.
+            if (data && typeof data.reconcileIncomplete === "boolean") {
+              setReconcileIncomplete(data.reconcileIncomplete);
+            }
           }
         )
         .catch(() => {});
@@ -154,7 +168,12 @@ export function UnavailableHomesBanner() {
   // so a `degraded.length` gate hid the banner outright while the API went on
   // reporting incomplete coverage — the silence this whole feature exists to
   // end, arriving through its own cap. (Codex P2, PR #527.)
-  if (!allowRender || (homes.length === 0 && degradedTotal === 0)) return null;
+  // `reconcileIncomplete` is part of the gate, not just the text. Without it
+  // the API could answer `complete: false` for a reconcile that aborted while
+  // this banner — its only consumer — hid itself, which is the silence the
+  // whole feature exists to end, arriving one field later (Codex P1, PR #544).
+  if (!allowRender || (homes.length === 0 && degradedTotal === 0 && !reconcileIncomplete))
+    return null;
 
   const color = "var(--warn)";
   // Two different problems, and the headline names whichever is present. A home
@@ -165,9 +184,15 @@ export function UnavailableHomesBanner() {
       ? homes.length === 1
         ? "One Claude home is unavailable"
         : `${homes.length} Claude homes are unavailable`
-      : degradedTotal === 1
-        ? "Part of your history could not be read"
-        : `${degradedTotal} locations could not be read`;
+      : degradedTotal > 0
+        ? degradedTotal === 1
+          ? "Part of your history could not be read"
+          : `${degradedTotal} locations could not be read`
+        : // Reached when the reconcile is the ONLY thing reporting a gap: the
+          // file sweeps found nothing wrong because, on the default backend,
+          // they may not have run at all. Worded as staleness rather than as a
+          // location, since a count is all the index pass gives us.
+          "Some history may be missing from the index";
 
   return (
     <div

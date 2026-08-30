@@ -78,11 +78,17 @@ describe("route-level demo guards (no loader seam behind them)", () => {
     // gives for always setting its header: a client told the shape is
     // invariant must not have to special-case the one deployment that cannot
     // fall back to reading paths out of the body.
+    // `reconcileIncomplete` / `reconcileFailures` are present for the same
+    // reason `degraded: []` is (#529, #544): the shape is invariant, so a
+    // client is never asked to tell demo mode apart. Demo fixtures are
+    // synthetic and complete by construction, so the honest values are empty.
     expect(body).toEqual({
       readable: [],
       unavailable: [],
       degraded: [],
       degradedTotal: 0,
+      reconcileIncomplete: false,
+      reconcileFailures: 0,
       complete: true,
     });
     // Part of the contract, and the help page promises it on EVERY response

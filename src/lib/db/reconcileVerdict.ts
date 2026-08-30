@@ -3,6 +3,7 @@ import { createHash } from "crypto";
 import type { Database } from "better-sqlite3";
 import type { MinderConfig } from "@/lib/types";
 import { getClaudeHomes, homeDedupeKey } from "@/lib/claudeHome";
+import { normalizeEnabledAdapters } from "@/lib/adapters/substrate";
 
 /**
  * Whether the last full DB reconcile read the corpus through — and whether that
@@ -54,7 +55,14 @@ const META_KEY = "reconcile_verdict";
 /** A stable fingerprint of the set a full reconcile is expected to walk. */
 export function computeCorpusVersion(config: MinderConfig): string {
   const homes = [...new Set(getClaudeHomes(config).map(homeDedupeKey))].sort();
-  const adapters = [...(config.enabledAdapters ?? [])].sort();
+  // Through `normalizeEnabledAdapters`, not the raw array. The substrate
+  // adapter is always part of the effective set, and `enabledAdapters` is
+  // absent entirely on a default or older config — so hashing the field
+  // verbatim made `undefined` and `["claude"]` two different corpora and threw
+  // away a perfectly valid verdict as "about something else" (Copilot, #544).
+  // Same normalization the registry applies, so the fingerprint describes what
+  // a pass actually walks.
+  const adapters = [...normalizeEnabledAdapters(config.enabledAdapters ?? [])].sort();
   return createHash("sha256")
     .update(JSON.stringify({ homes, adapters }))
     .digest("hex")
