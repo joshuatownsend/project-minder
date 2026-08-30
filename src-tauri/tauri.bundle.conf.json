@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": {
+      "../dist/minder-server": "minder-server"
+    }
+  }
+}

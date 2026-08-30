@@ -179,6 +179,27 @@ export function formatSize(bytes) {
 }
 
 /**
+ * The arguments `pnpm tauri build` is invoked with — the single definition that
+ * both the printed plan and the actual spawn read from.
+ *
+ * They used to be written out twice, and they drifted the moment `--config`
+ * was added (#295, caught in review): the plan advertised a command that would
+ * build an installer with no server inside, which is precisely the command a
+ * developer copies out of a `--dry-run`. A plan that can disagree with the run
+ * is worse than no plan, so there is now nothing to keep in sync.
+ */
+export function tauriBuildArgs(bundles) {
+  return [
+    "tauri",
+    "build",
+    "--config",
+    "src-tauri/tauri.bundle.conf.json",
+    "--bundles",
+    bundles,
+  ];
+}
+
+/**
  * The ordered list of shell-equivalent steps a run will perform, for --dry-run
  * and the up-front plan printout.
  */
@@ -188,6 +209,6 @@ export function buildPlan(opts, bundles) {
     opts.skipBuild ? null : "pnpm package:standalone",
     "node scripts/verify-payload-hygiene.mjs",
     opts.skipNode ? null : "node scripts/fetch-node-runtime.mjs",
-    `pnpm tauri build --bundles ${bundles}`,
+    `pnpm ${tauriBuildArgs(bundles).join(" ")}`,
   ].filter(Boolean);
 }

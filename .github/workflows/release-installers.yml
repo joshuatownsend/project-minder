@@ -6,13 +6,20 @@
 #   2. pnpm package:standalone            -> dist/minder-server (the Node sidecar payload)
 #   3. payload hygiene gate               -> fails if .git/.env*/.claude/.mcp.json/agentlytics-repo leaked (issue #284)
 #   4. fetch a PINNED Node runtime        -> dist/node (SHA-256 verified from nodejs.org)
-#   5. pnpm tauri build --bundles <os>    -> bundles dist/minder-server + dist/node as Tauri resources
+#   5. pnpm tauri build --config src-tauri/tauri.bundle.conf.json --bundles <os>
+#                                          -> bundles dist/minder-server + dist/node as Tauri resources.
+#      The --config overlay is what adds dist/minder-server; the base config
+#      deliberately omits it so a bare `cargo build`/`clippy` does not emit a
+#      cargo:rerun-if-changed line for each of its ~29k files (#295). Forgetting
+#      the flag still builds and bundles cleanly — it just ships no server, which
+#      is why the size floor below verifies the artifact rather than the command.
 #
-# Both dist/minder-server and dist/node are declared as Tauri `resources` in
-# src-tauri/tauri.conf.json, so they land under the app's resource dir at
-# runtime; src-tauri/src/config.rs resolves the bundled Node
+# dist/node is declared as a Tauri `resource` in src-tauri/tauri.conf.json;
+# dist/minder-server is declared in src-tauri/tauri.bundle.conf.json and merged
+# in with --config (#295 — see step 5 above). Both land under the app's resource
+# dir at runtime, so src-tauri/src/config.rs resolves the bundled Node
 # (<resource_dir>/node/node.exe | node/bin/node) and the payload
-# (<resource_dir>/minder-server) from there.
+# (<resource_dir>/minder-server) from there exactly as before.
 #
 # Node pin: the bundled runtime AND the packaging Node are both 22.13.0. This is
 # load-bearing: package:standalone bundles better-sqlite3's prebuilt .node binary,
@@ -253,7 +260,7 @@ jobs:
           for attempt in 1 2; do
             EXTRA=""
             [ "$attempt" = "2" ] && EXTRA="--verbose"
-            if pnpm tauri build --bundles ${{ matrix.bundles }} $EXTRA; then
+            if pnpm tauri build --config src-tauri/tauri.bundle.conf.json --bundles ${{ matrix.bundles }} $EXTRA; then
               exit 0
             fi
             echo "::warning::tauri build attempt $attempt failed"
@@ -321,6 +328,53 @@ jobs:
             echo "::error::no installers were produced for ${{ matrix.os }}"
             exit 1
           fi
+
+      # The one failure the --config split can produce, and it is silent (#295).
+      #
+      # `../dist/minder-server` lives in tauri.bundle.conf.json, not in the base
+      # tauri.conf.json, so that a bare `cargo build`/`clippy` does not walk its
+      # ~29k files. A build that forgets `--config` therefore succeeds, bundles,
+      # signs, uploads, installs — and has no server inside. Nothing before this
+      # point can tell the difference; the user finds out.
+      #
+      # So check the artifact, not the command line. A build command can be
+      # inspected for the flag, but that proves intent rather than effect, and
+      # it would keep passing if the overlay itself were emptied or renamed.
+      # Size is the effect: the payload is ~1.3 GB uncompressed and dominates
+      # every bundle format. Real v1.12.1 assets ran 148-193 MB (smallest: the
+      # darwin-x86_64 updater tarball at 148.4 MB); a tray bundle with no server
+      # is single-digit MB. 50 MB sits ~3x under the smallest real artifact and
+      # ~5x over a payload-less one, so it discriminates without being brittle
+      # as the payload grows or shrinks.
+      - name: Verify installers carry the server payload
+        shell: bash
+        run: |
+          set -u
+          shopt -s nullglob
+          MIN=52428800   # 50 MiB
+          status=0
+          checked=0
+          for f in installers/*; do
+            [ -f "$f" ] || continue
+            checked=$((checked + 1))
+            size=$(wc -c < "$f")
+            if [ "$size" -lt "$MIN" ]; then
+              echo "::error::$f is $size bytes, under the $MIN-byte floor — built without --config src-tauri/tauri.bundle.conf.json?"
+              status=1
+            else
+              echo "ok: $f ($size bytes)"
+            fi
+          done
+          # A loop that ran zero times reports success, which is the failure mode
+          # this whole step exists to prevent — a gate that passes without having
+          # checked anything. Without nullglob the glob would also expand to the
+          # literal string `installers/*`, which `[ -f ]` skips, so the guard
+          # would silently pass on an empty directory.
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::no regular files in installers/ — the size floor checked nothing"
+            status=1
+          fi
+          exit "$status"
 
       # Always keep the installers on the workflow run (this is the whole output
       # of a workflow_dispatch dry run).

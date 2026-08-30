@@ -35,7 +35,6 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../dist/minder-server": "minder-server",
       "../dist/node": "node",
       "../scripts/service.mjs": "scripts/service.mjs",
       "../scripts/service": "scripts/service"
