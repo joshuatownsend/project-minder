@@ -540,6 +540,66 @@ function distResolvedVersion(parentName, depName) {
 //     finds it before walking up to the (different) top-level copy — so
 //     nesting wins for that requester without disturbing anyone else.
 // Returns the number of package copies made.
+// Resolve `depName` the way Node would from `fromDir`: nearest node_modules
+// first, then up through ancestors — stopping at the payload root, because
+// anything above it does not exist on the user's machine. That stop is the
+// whole point: resolving past it is how a broken payload passes on a developer's
+// box (#533).
+function resolvedVersionFrom(fromDir, depName) {
+  let dir = fromDir;
+  for (;;) {
+    const candidate = path.join(dir, "node_modules", depName, "package.json");
+    if (existsSync(candidate)) return readPkgVersion(candidate);
+    if (path.resolve(dir) === path.resolve(outDir)) return null;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+// Version-aware tripwire that understands DEEP nesting, unlike `unresolvedEdges`
+// — which only looks at `<parent>/node_modules/<dep>` and the top level, the two
+// levels the old placement pass could write.
+//
+// That limitation is not academic. The lint closure has
+// `inquirer -> ora@5.4.1 -> chalk@4`, three levels down and under a parent whose
+// hoisted version is 9.4.1; `unresolvedEdges` cannot see those edges at all, and
+// an earlier revision of this file excluded them from checking and left a
+// comment claiming an end-to-end spawn covered them. No such spawn exists here
+// (Codex, #539). This does the job instead: for every placement of the parent,
+// resolve the dependency from that directory and require the declared version.
+function unresolvedEdgesDeep(edges, placements) {
+  const failures = [];
+  for (const e of edges) {
+    if (!e.parentName) {
+      const got = topLevelPkgVersion(e.name);
+      if (got !== e.version) {
+        failures.push(`${e.name}@${e.version} (top level resolves ${got ?? "MISSING"})`);
+      }
+      continue;
+    }
+    const parentDirs = placements.get(`${e.parentName}@${e.parentVersion}`);
+    if (!parentDirs || parentDirs.size === 0) {
+      failures.push(
+        `${e.parentName}@${e.parentVersion} -> ${e.name}@${e.version} (parent copy not in the payload)`
+      );
+      continue;
+    }
+    for (const parentDir of parentDirs) {
+      const got = resolvedVersionFrom(parentDir, e.name);
+      if (got !== e.version) {
+        failures.push(
+          `${path.relative(outDir, parentDir)} -> ${e.name}@${e.version} ` +
+            `(resolves ${got ?? "MISSING"})`
+        );
+      }
+    }
+  }
+  return failures;
+}
+
+// Returns { copied, placements } — placements maps "name@version" to every
+// directory that copy occupies, which is what makes deep verification possible.
 function placeClosureEdges(edges) {
   const versionsByName = new Map(); // name -> Map<version, { dir, count }>
   for (const e of edges) {
@@ -598,21 +658,6 @@ function placeClosureEdges(edges) {
   for (const name of listTopLevelPackages(path.join(outDir, "node_modules"))) {
     const v = topLevelPkgVersion(name);
     if (v !== null) recordPlacement(name, v, path.join(outDir, "node_modules", name));
-  }
-
-  // Resolve `depName` the way Node would from `fromDir`: nearest node_modules
-  // first, then up through ancestors — stopping at the payload root, because
-  // anything above it does not exist on the user's machine.
-  function resolvedVersionFrom(fromDir, depName) {
-    let dir = fromDir;
-    for (;;) {
-      const candidate = path.join(dir, "node_modules", depName, "package.json");
-      if (existsSync(candidate)) return readPkgVersion(candidate);
-      if (path.resolve(dir) === path.resolve(outDir)) return null;
-      const parent = path.dirname(dir);
-      if (parent === dir) return null;
-      dir = parent;
-    }
   }
 
   const unplaceableEdges = [];
@@ -675,7 +720,7 @@ function placeClosureEdges(edges) {
     );
   }
 
-  return copied;
+  return { copied, placements };
 }
 
 // Version-aware tripwire: every edge must resolve, inside dist, to the
@@ -698,7 +743,7 @@ const initialTopLevelPackages = listTopLevelPackages(path.join(outDir, "node_mod
 const requiredEdges = walkDependencyClosure(initialTopLevelPackages);
 const optionalEdges = walkDependencyClosure(["sharp"], { optional: true });
 
-const backfilledCount = placeClosureEdges([...requiredEdges, ...optionalEdges]);
+const { copied: backfilledCount } = placeClosureEdges([...requiredEdges, ...optionalEdges]);
 
 if (backfilledCount > 0) {
   step(
@@ -1075,7 +1120,7 @@ if (existsSync(schemaSrcPath)) {
 // packaged worker would MODULE_NOT_FOUND at watch time (PR #285 review).
 step("Copying chokidar + its dependency closure (worker's file-watching, externalized from the esbuild bundle)");
 const chokidarEdges = walkDependencyClosure(["chokidar"], { optional: true });
-const chokidarCopied = placeClosureEdges(chokidarEdges);
+const { copied: chokidarCopied } = placeClosureEdges(chokidarEdges);
 if (chokidarEdges.length === 0) {
   console.warn(
     `[package-standalone] WARNING: could not resolve chokidar from the repo's node_modules — ` +
@@ -1326,7 +1371,7 @@ if (!transformersRepoDir || !stagedTransformers) {
   const embedEdges = transformersDeps.flatMap((dep) =>
     walkDependencyClosure([dep], { optional: true, seedDir: transformersRepoDir })
   );
-  const embedCopied = placeClosureEdges(embedEdges);
+  const { copied: embedCopied } = placeClosureEdges(embedEdges);
   step(
     embedCopied > 0
       ? `Backfilled ${embedCopied} package copy/copies so the staged embedding runtime resolves (#533)`
@@ -1387,7 +1432,7 @@ if (!transformersRepoDir || !stagedTransformers) {
 // `engineErrors` entry, so the library lint engine returned no findings in
 // every release while its 50 MB dependency shipped unused.
 const lintEdges = walkDependencyClosure(["claude-code-lint"], { optional: true });
-const lintCopied = placeClosureEdges(lintEdges);
+const { copied: lintCopied, placements: lintPlacements } = placeClosureEdges(lintEdges);
 step(
   lintCopied > 0
     ? `Backfilled ${lintCopied} package copy/copies so the lint CLI resolves (#533)`
@@ -1424,19 +1469,13 @@ if (!existsSync(lintBin)) {
 // the wrong major several levels down (#538). A gate that passes while the
 // thing it guards is broken is worse than no gate.
 //
-// So every edge placement actually guarantees is run through the same
-// version-aware tripwire the #287 backfill uses. Edges whose parent version is
-// not the hoisted one are excluded: placeClosureEdges deliberately does not
-// place those (they belong to a copy of the parent that is not on disk), so
-// asserting them here would fail on something the design does not promise.
-const placedLintEdges = lintEdges.filter(
-  (e) => !e.parentName || topLevelPkgVersion(e.parentName) === e.parentVersion
-);
-const lintFailures = unresolvedEdges(placedLintEdges);
-// `unresolvedEdges` only understands the two levels the OLD placement pass
-// wrote (parent's own node_modules, then top level). Edges nested deeper —
-// inquirer -> ora -> chalk — are invisible to it, so the end-to-end spawn below
-// is what actually covers them, and the mutation test is run against that.
+// EVERY edge is checked, from the real directories its parent occupies. A
+// previous revision filtered to edges whose parent was the hoisted version and
+// said a spawn elsewhere covered the rest — there is no such spawn in this
+// script, and the excluded set was exactly the interesting one:
+// `inquirer -> ora@5.4.1 -> chalk@4` sits under a parent whose hoisted version
+// is 9.4.1 (Codex, #539).
+const lintFailures = unresolvedEdgesDeep(lintEdges, lintPlacements);
 if (lintFailures.length > 0) {
   fail(
     `The lint CLI's dependency tree does not resolve correctly inside the payload:\n  ` +
@@ -1448,7 +1487,7 @@ if (lintFailures.length > 0) {
   );
 }
 step(
-  `Verified the lint CLI, its bin, and ${placedLintEdges.length} dependency ` +
+  `Verified the lint CLI, its bin, and all ${lintEdges.length} dependency ` +
     `edge(s) resolve correctly inside the payload`
 );
 
