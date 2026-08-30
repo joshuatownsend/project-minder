@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
@@ -224,5 +224,93 @@ describe.skipIf(!driverAvailable)("#511 delegated tool and file panels", () => {
     expect(detail).not.toBeNull();
     expect(detail!.toolUsage).toEqual({ Read: 1 });
     expect(detail!.fileOperations.map((f) => f.path)).toEqual(["/repo/z.ts"]);
+  });
+});
+
+describe("#511 the file-parse backend fills the same panels", () => {
+  // No `installIsolatedState` here: this path never opens the index. It reads
+  // the transcript directly, which is exactly the property under test.
+  let fbHome: string;
+
+  beforeEach(async () => {
+    fbHome = await fs.mkdtemp(path.join(os.tmpdir(), "pm-subagent-tools-fb-"));
+    vi.spyOn(os, "homedir").mockReturnValue(fbHome);
+    vi.resetModules();
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+    try {
+      await fs.rm(fbHome, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  it("lists the agent's calls in order, with arguments", async () => {
+    // The two backends reach this differently — the DB one reads a separate
+    // store, this one parses the JSONL — so "the panels work" has to be
+    // asserted of BOTH or the claim is only half true. A review of the help
+    // text caught me describing the DB mechanism as though it were the whole
+    // story, and measuring it is what turned a hedge into a fact.
+    const dir = path.join(
+      fbHome,
+      ".claude",
+      "projects",
+      "-home-me-dev-app",
+      "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+      "subagents"
+    );
+    await fs.mkdir(dir, { recursive: true });
+    const line = (ts: string, id: string, blocks: unknown[]) =>
+      JSON.stringify({
+        type: "assistant",
+        timestamp: ts,
+        isSidechain: true,
+        message: {
+          id,
+          model: "claude-opus-5",
+          content: blocks,
+          usage: { input_tokens: 10, output_tokens: 5 },
+        },
+      });
+    await fs.writeFile(
+      path.join(dir, "agent-fb.jsonl"),
+      [
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-03-01T10:00:00.000Z",
+          isSidechain: true,
+          message: { role: "user", content: [{ type: "text", text: "sweep it" }] },
+        }),
+        line("2026-03-01T10:00:05.000Z", "s0", [
+          { type: "tool_use", id: "t1", name: "Glob", input: { pattern: "**/*.ts" } },
+        ]),
+        line("2026-03-01T10:00:06.000Z", "s1", [
+          { type: "tool_use", id: "t2", name: "Read", input: { file_path: "/repo/a.ts" } },
+        ]),
+        line("2026-03-01T10:00:07.000Z", "s2", [
+          { type: "tool_use", id: "t3", name: "Edit", input: { file_path: "/repo/b.ts" } },
+        ]),
+      ].join("\n") + "\n"
+    );
+
+    const { scanSessionDetail } = await import("@/lib/scanner/claudeConversations");
+    const detail = await scanSessionDetail("agent-fb");
+    expect(detail).not.toBeNull();
+
+    const toolEvents = detail!.timeline.filter((e) => e.type === "tool_use");
+    expect(toolEvents.map((e) => e.toolName)).toEqual(["Glob", "Read", "Edit"]);
+    expect(toolEvents.map((e) => e.toolInput)).toEqual([
+      { pattern: "**/*.ts" },
+      { file_path: "/repo/a.ts" },
+      { file_path: "/repo/b.ts" },
+    ]);
+    expect(detail!.toolUsage).toEqual({ Glob: 1, Read: 1, Edit: 1 });
+    expect(detail!.fileOperations.map((f) => `${f.operation}:${f.path}`)).toEqual([
+      "read:/repo/a.ts",
+      "edit:/repo/b.ts",
+    ]);
   });
 });

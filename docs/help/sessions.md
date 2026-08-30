@@ -245,14 +245,19 @@ count only work a person actually did. It is the transcript view alone that
 stops treating it as a reason to hide a turn — because there, those turns are
 not a digression from someone else's conversation, they *are* the conversation.
 
-**Its Tools and Files panels are populated too.** Those read the same rows the
-timeline does, and a delegated agent's tool calls live in a separate table from
-an ordinary session's — deliberately, because roughly two dozen queries behind
-/usage, /agents, /skills and /costs read the primary table with no filter, and
-moving the rows would have shifted every one of those numbers. The separate
-table gained the ordering and arguments a timeline needs instead, so the panels
-list what the agent actually did, in order, without changing a single figure
-elsewhere.
+**Its Tools and Files panels are populated too**, on both backends — they list
+what the agent actually did, in order, with the arguments each call was made
+with.
+
+The two get there differently, which matters only if you are reading the code.
+Without the index (`MINDER_USE_DB=0`) the panels are derived straight from the
+transcript, so there is nothing special to do. With the index, a delegated
+agent's tool calls are stored apart from an ordinary session's — deliberately,
+because roughly two dozen queries behind /usage, /agents, /skills and /costs
+read the primary table with no filter, and moving those rows would have shifted
+every one of those numbers as a side effect. The separate store gained the
+ordering and arguments a timeline needs instead, so the panels fill in without
+changing a single figure elsewhere.
 
 One caveat: the file-parse backend does not walk the nested `subagents/`
 directories when building the list, so with the index switched off these
