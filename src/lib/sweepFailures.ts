@@ -477,14 +477,25 @@ export function recordSweepFailure(failure: SweepFailure, token: number): void {
   // rendered its path twice. (Codex P2, PR #527.)
   const key = sweepFailureKey(failure);
   if (result.seen.has(key)) {
-    // Deduplicated, but RE-STAMPED. Three overlapping callers sharing one cycle
-    // can observe a directory as failure -> success -> failure, and keeping the
+    // Deduplicated, but RE-STAMPED and REPLACED.
+    //
+    // Re-stamped because three overlapping callers sharing one cycle can
+    // observe a directory as failure -> success -> failure, and keeping the
     // first failure's timestamp made the intermediate success look newer than
     // the last observation — so `prunePublished` retired a failure that was
-    // still true and the endpoint reported complete. The location is still
-    // counted once; only WHEN it was last seen failing moves.
-    // (Codex P2, PR #527.)
+    // still true and the endpoint reported complete.
+    //
+    // Replaced because the ERRNO can change between those observations, and it
+    // is the actionable half of the message: a later `ENOTDIR` displayed as the
+    // earlier `EACCES` sends the user to fix permissions on a path that is
+    // actually a file. `getSweepFailures` was taught to prefer the newest
+    // detail ACROSS sweeps and this left the same defect WITHIN one cycle.
+    //
+    // The location is still counted once; only what is said about it, and when
+    // it was last seen failing, move. (Codex P2 x2, PR #527.)
     result.seen.set(key, observedAt());
+    const at = result.items.findIndex((f) => sweepFailureKey(f) === key);
+    if (at >= 0) result.items[at] = failure;
     return;
   }
   // Stamped with WHEN it was observed. The sweeps overlap — `sessions` can list
@@ -530,7 +541,22 @@ export function getSweepFailures(): SweepFailure[] {
       if (existing === undefined || at > existing.at) best.set(key, { failure: f, at });
     }
   }
-  return [...best.values()].map((e) => e.failure);
+  // Capped AFTER merging, newest first.
+  //
+  // `MAX_PER_SWEEP` bounds what each cycle retains, so two sweeps could hand
+  // back 100 distinct locations between them — while the API contract, the
+  // banner, and this module's own docs all say the detail is bounded at 50 with
+  // `degradedTotal` carrying the uncapped count. The cap has to apply where the
+  // lists are merged, or it is not a cap on what a caller receives.
+  // (Copilot, PR #527.)
+  //
+  // Newest first so the entries that survive the cut are the ones describing
+  // the corpus as it is now — the same reason the deduplication above prefers
+  // the newest observation.
+  return [...best.values()]
+    .sort((a, b) => b.at - a.at)
+    .slice(0, MAX_PER_SWEEP)
+    .map((e) => e.failure);
 }
 
 /**

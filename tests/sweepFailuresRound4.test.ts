@@ -467,7 +467,16 @@ describe("round 6 — the invalidation guard reaches the writes too", () => {
     expect(start).toBeGreaterThan(-1);
     // Bounded by the next top-level declaration, not a fixed character count —
     // a fixed window stops covering the function as the file grows.
+    //
+    // `\n}` matches a brace at COLUMN 0, which in this file's formatting only
+    // the function's own closing brace has; nested blocks are indented. A
+    // review suggested this stops at the first `for` loop's close and a
+    // brace-depth scan was needed — measured, and it does not: the slice runs
+    // the full 33 lines to the `return`. Rather than replace a guard that
+    // works, the assumption it rests on is asserted directly, so a reformat
+    // that broke it would fail here instead of silently shrinking the window.
     const body = text.slice(start, text.indexOf("\n}", start));
+    expect(body).toMatch(/return mergeClaudeUsageStats\(parts\);/);
     expect(body).not.toMatch(/beginSweepFailureCycle/);
   });
 });
@@ -1342,5 +1351,77 @@ describe("the banner distinguishes an empty list from a missing key", () => {
     // And the total follows the same rule rather than reading through a
     // missing key.
     expect(text).toMatch(/typeof data\.degradedTotal === "number"/);
+  });
+});
+
+describe("the merged detail list honours the documented cap", () => {
+  it("does not hand back 50 per sweep", async () => {
+    // `MAX_PER_SWEEP` bounds what each CYCLE retains, so two sweeps could
+    // return 100 distinct locations between them — while the API contract, the
+    // banner and this module's own docs all say the detail is bounded at 50
+    // with `degradedTotal` carrying the uncapped count. A cap that does not
+    // apply where the lists merge is not a cap on what a caller receives.
+    // (Copilot, PR #527.)
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      getSweepFailures,
+      getSweepFailureTotal,
+    } = await import("@/lib/sweepFailures");
+
+    // Disjoint paths per sweep, so nothing deduplicates and each cycle fills
+    // its own 50-entry detail list.
+    for (const sweep of ["usage", "sessions"] as const) {
+      const t = beginSweepFailureCycle(sweep);
+      for (let i = 0; i < 60; i++) {
+        recordSweepFailure(
+          { path: `/${sweep}/p-${i}`, scope: "project-dir", sweep },
+          t
+        );
+      }
+      endSweepFailureCycle(sweep, t);
+    }
+
+    expect(getSweepFailures()).toHaveLength(50);
+    // And the COUNT is unaffected by the detail cap — 120 distinct locations,
+    // which is the whole reason the two figures are separate.
+    expect(getSweepFailureTotal()).toBe(120);
+  });
+});
+
+describe("a re-observed failure carries its newest detail", () => {
+  it("replaces the errno within one cycle, not just the timestamp", async () => {
+    // `getSweepFailures` was taught to prefer the newest detail ACROSS sweeps;
+    // the same defect survived WITHIN a cycle, where re-stamping a duplicate
+    // left the original object in place. A later `ENOTDIR` displayed as the
+    // earlier `EACCES` sends the user to fix permissions on a path that is
+    // actually a file. (Codex P2, PR #527.)
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      getSweepFailures,
+      getSweepFailureTotal,
+    } = await import("@/lib/sweepFailures");
+
+    const home = "/home/me/.claude/projects";
+
+    const t = beginSweepFailureCycle("usage");
+    recordSweepFailure(
+      { path: home, scope: "projects-dir", code: "EACCES", sweep: "usage" },
+      t
+    );
+    recordSweepFailure(
+      { path: home, scope: "projects-dir", code: "ENOTDIR", sweep: "usage" },
+      t
+    );
+    endSweepFailureCycle("usage", t);
+
+    const failures = getSweepFailures();
+    expect(failures).toHaveLength(1);
+    expect(failures[0].code).toBe("ENOTDIR");
+    // Still one location — replacing must not re-count it.
+    expect(getSweepFailureTotal()).toBe(1);
   });
 });
