@@ -112,12 +112,15 @@ export function UnavailableHomesBanner() {
             // came back, and flickering a warning off and on is worse than
             // stale.
             if (cancelled) return;
-            if (data?.unavailable) setHomes(data.unavailable);
-            // `??` NOT `if (data?.degraded)`: an empty array is the RECOVERY
-            // signal, and treating it as "no news" would pin the banner up
-            // after the permissions were fixed. The unavailable list above
-            // keeps its truthiness check because a missing key there means an
-            // older server, not a recovery.
+            // `Array.isArray`, not truthiness: `[]` is falsy-adjacent in the
+            // sense that mattered here — an empty array IS the recovery signal,
+            // and a truthiness check treated it as "no news" and pinned the
+            // banner up after the home came back. Distinguishing an empty array
+            // from a MISSING key is the whole job, and only `Array.isArray`
+            // does both: an older server that omits the key leaves the last
+            // good answer alone. (Copilot, PR #527.)
+            if (data && Array.isArray(data.unavailable)) setHomes(data.unavailable);
+            // `??` for the same reason, one field over.
             if (data) setDegraded(data.degraded ?? []);
             // Falls back to the detail length for an older server that does not
             // send the field — which is what the banner used to show anyway, so

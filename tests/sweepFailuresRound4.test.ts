@@ -170,9 +170,16 @@ describe("the record is cleared by corpus changes only", () => {
     // changes which directories get enumerated, so clearing on them erased a
     // live diagnostic about a directory that is still unreadable.
     // (Codex P2, PR #527, round 9.)
-    expect(route).toMatch(
-      /if \(claudeHomePathsChanged\) forgetSweepFailuresUnder\(removedClaudeHomes\);/
-    );
+    // Inside the LOCKED mutation now — `mutateConfig`'s callback — so two
+    // overlapping PATCHes cannot both diff against the same pre-mutation
+    // config and prune each other's still-configured homes. Asserted as
+    // "the prune is reached from inside a patch", not as a literal call site,
+    // since pinning the exact expression is what broke this guard twice.
+    const patchAt = route.indexOf("patches.push((c) => {\n      const effective");
+    expect(patchAt).toBeGreaterThan(-1);
+    const patchBody = route.slice(patchAt, route.indexOf("\n    });", patchAt));
+    expect(patchBody).toMatch(/forgetSweepFailuresUnder\(/);
+    expect(patchBody).toMatch(/const before = effective\(c\);/);
 
     // And the narrower flag is set from a COMPARISON, not from the key being
     // present. A Settings save posts every field, so `Array.isArray(body.claudeHomes)`
@@ -184,12 +191,18 @@ describe("the record is cleared by corpus changes only", () => {
     // reorder, an equivalent spelling, an entry redundant with the implicit
     // primary — and all three were the same mistake: approximating a predicate
     // that already exists. (Copilot, then Codex x2, PR #527.)
-    expect(route).toMatch(/claudeHomePathsChanged\s*=\s*\n?\s*before\.size !== after\.size/);
+    // The comparison itself, wherever it is bound. It was a module-level
+    // `claudeHomePathsChanged` until the diff moved inside the locked
+    // mutation, where it became a local `changed` — a rename that preserved
+    // the property, and would have broken a guard pinned to the name.
+    expect(route).toMatch(/before\.size !== after\.size \|\|\s*\[\.\.\.after\.keys\(\)\]\.some/);
     // Asserts the two authorities are consulted, not the container they are
     // collected into — that became a Map when the reset needed to know WHICH
     // homes left, and pinning the literal would have broken on a change that
     // preserved the property.
-    expect(route).toMatch(/for \(const h of getClaudeHomes\(c\)\) out\.set\(homeDedupeKey\(h\), h\)/);
+    expect(route).toMatch(
+      /for \(const h of getClaudeHomes\(cfg\)\) out\.set\(homeDedupeKey\(h\), h\)/
+    );
   });
 });
 
@@ -1213,5 +1226,22 @@ describe("a repeated failure is deduplicated but re-stamped", () => {
     endSweepFailureCycle("sessions", t);
 
     expect(getSweepFailures()).toHaveLength(0);
+  });
+});
+
+describe("the banner treats an empty list as recovery, a missing key as silence", () => {
+  it("clears unavailable homes when the server reports none", async () => {
+    // `if (data?.unavailable)` treated `[]` as "no news", so the warning stuck
+    // after the home came back. `degraded` already had this right; `unavailable`
+    // did not. (Copilot, PR #527.)
+    //
+    // Source-level: no DOM in this suite. The distinction being asserted is
+    // `Array.isArray` over truthiness — an empty array is a real answer, a
+    // missing key is an older server and must leave the last one alone.
+    const { readFile } = await import("node:fs/promises");
+    const text = await readFile("src/components/UnavailableHomesBanner.tsx", "utf-8");
+
+    expect(text).toMatch(/if \(data && Array\.isArray\(data\.unavailable\)\) setHomes\(data\.unavailable\);/);
+    expect(text).not.toMatch(/if \(data\?\.unavailable\) setHomes/);
   });
 });
