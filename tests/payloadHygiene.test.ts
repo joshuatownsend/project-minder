@@ -132,13 +132,15 @@ describe("isForbiddenRootRelative", () => {
   });
 
   // #417: the list is derived from git rather than restated by hand.
-  it("forbids gitignored root entries the hand-written list never mentioned", () => {
-    // These are all gitignored at the repo root and none of them appeared in
-    // any hand-maintained set — which is the entire argument of #417. The
-    // payload mirrors the repo root, so each was shippable.
-    expect(DERIVATION_AVAILABLE).toBe(true);
-    for (const entry of ["screenshots", "uiux-review", "CLAUDE_MD_SNIPPET.md"]) {
-      expect(DERIVED_ROOT_IGNORED.has(entry.toLowerCase())).toBe(true);
+  //
+  // Asserted WITHOUT naming any particular file. An earlier version of this
+  // test expected `screenshots` and `uiux-review` to be derived, which held on
+  // the author's machine and failed in CI, where a clean clone has no such
+  // untracked files (Codex, PR #540). What is testable here is the wiring;
+  // what git reports about a tree is tested in `gitignoredRoots.test.ts`
+  // against a repository that suite builds and owns.
+  it("forbids whatever the derivation reports", () => {
+    for (const entry of DERIVED_ROOT_IGNORED) {
       expect(isForbiddenRootRelative(entry)).toBe(true);
     }
   });
@@ -147,10 +149,26 @@ describe("isForbiddenRootRelative", () => {
     // The catastrophic direction. node_modules, .next and dist are all
     // gitignored; a naive derivation prunes every dependency out of the payload
     // and ships something that cannot boot (#417 names this explicitly).
+    //
+    // Holds in both worlds: with git, the keep-list filters them out; without
+    // it, the derived set is empty. Neither may make them forbidden.
     for (const keep of ["node_modules", ".next", "dist"]) {
       expect(DERIVED_ROOT_IGNORED.has(keep)).toBe(false);
       expect(isForbiddenRootRelative(keep)).toBe(false);
     }
+  });
+
+  it("degrades to the static rules when git cannot answer", () => {
+    // `DERIVATION_AVAILABLE` is intentionally allowed to be false — a
+    // source-tarball build, or a runner without git (Copilot, PR #540). The
+    // static rules must still hold either way, so this asserts the fallback
+    // rather than the presence of git.
+    expect(typeof DERIVATION_AVAILABLE).toBe("boolean");
+    if (!DERIVATION_AVAILABLE) {
+      expect(DERIVED_ROOT_IGNORED.size).toBe(0);
+    }
+    expect(isForbiddenName(".git")).toBe(true);
+    expect(isForbiddenRootRelative(".cache")).toBe(true);
   });
 
   it("keeps derived entries root-anchored, never a substring rule", () => {
@@ -159,6 +177,9 @@ describe("isForbiddenRootRelative", () => {
     // `node_modules/@huggingface/transformers/.cache/` — measured dropping the
     // embedding model, weights included. Root-anchoring makes the collision
     // impossible rather than merely unlikely.
+    //
+    // These hold whether or not the names are derived on this checkout: a
+    // NESTED path must never be forbidden, which is the property under test.
     expect(isForbiddenRootRelative("node_modules/some-pkg/screenshots")).toBe(false);
     expect(isForbiddenRootRelative("node_modules/some-pkg/.cache")).toBe(false);
     expect(isForbiddenRootRelative("docs/screenshots")).toBe(false);

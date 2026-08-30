@@ -81,9 +81,17 @@ export function rootLevelGitignoredEntries(root = REPO_ROOT) {
     // applies the normal ignore files. Directories come back with a trailing
     // slash and are NOT descended into, which is what keeps this to one cheap
     // call instead of a recursive walk over node_modules.
+    //
+    // `-z` is not optional. Without it git QUOTES any path with non-ASCII or
+    // control characters — `unicodé` comes back as the literal
+    // `"unicod\303\251"` — and the derived name then matches nothing, so that
+    // ignored artifact ships. Newlines and edge whitespace in a filename are
+    // mangled by line-splitting for the same reason. NUL-delimited output is
+    // git's own answer to this (`git ls-files -h`: "separate paths with the NUL
+    // character"), so the bytes arrive exactly as they are on disk.
     out = execFileSync(
       "git",
-      ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory"],
+      ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"],
       { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
     );
   } catch {
@@ -91,15 +99,17 @@ export function rootLevelGitignoredEntries(root = REPO_ROOT) {
   }
 
   const names = new Set();
-  for (const line of out.split("\n")) {
-    const entry = line.trim();
+  for (const entry of out.split("\0")) {
+    // Only the NUL separator is stripped — no trimming. A filename may legally
+    // begin or end with a space, and quietly normalising it here would produce a
+    // rule that never matches the file it was derived from.
     if (!entry) continue;
     // Root level only. A nested ignored path (`docs/.cache/x`) is somebody
     // else's problem: the payload rule is anchored at the root, so a deeper
     // name could never match it anyway, and including it would only invite the
     // basename confusion this module exists to avoid.
     const normalized = entry.replace(/\/+$/, "");
-    if (normalized.includes("/")) continue;
+    if (!normalized || normalized.includes("/")) continue;
     if (BUILD_INPUTS_KEEP.has(normalized)) continue;
     names.add(normalized);
   }
