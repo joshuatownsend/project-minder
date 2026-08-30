@@ -568,12 +568,19 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
   }
 
-  const config = await mutateConfig((c) => {
-    for (const patch of patches) patch(c);
-  });
-  // AFTER the write, so a mutation that threw leaves the record describing the
-  // configuration still on disk (Codex P2, PR #527).
-  if (pendingSweepReset !== null) forgetSweepFailuresUnder(pendingSweepReset);
+  const config = await mutateConfig(
+    (c) => {
+      for (const patch of patches) patch(c);
+    },
+    // After the write AND inside the lock. Outside it, two overlapping
+    // `claudeHomes` PATCHes could apply their pruning out of commit order:
+    // from A+B, one commits A (staging B's removal) and the other commits B
+    // (staging A's), and if the second prunes first the final configuration
+    // holds B while B's live failure has been dropped. (Codex P2, PR #527.)
+    () => {
+      if (pendingSweepReset !== null) forgetSweepFailuresUnder(pendingSweepReset);
+    }
+  );
   if (newPricingRules !== undefined) setPricingRules(newPricingRules);
   invalidateAll();
   // The sweep-failure record describes the PREVIOUS set of swept paths, and

@@ -187,12 +187,19 @@ describe("the record is cleared by corpus changes only", () => {
     // ...and staged, not applied.
     expect(patchBody).toMatch(/pendingSweepReset = changed/);
     expect(patchBody).not.toMatch(/forgetSweepFailuresUnder\(/);
-    // Applied after `mutateConfig` resolves, which is after the write.
+    // Applied through `mutateConfig`'s afterCommit seam — after the write AND
+    // inside the lock. Outside the lock, two overlapping PATCHes could apply
+    // their pruning out of commit order; inside `fn`, a failed write would
+    // still have pruned. Both halves were shipped separately and each was
+    // wrong on its own, so the assertion pins the seam rather than the order
+    // of two statements.
     const mutateAt = route.indexOf("const config = await mutateConfig(");
     expect(mutateAt).toBeGreaterThan(-1);
-    expect(route.indexOf("forgetSweepFailuresUnder(pendingSweepReset)")).toBeGreaterThan(
-      mutateAt
-    );
+    const call = route.slice(mutateAt, route.indexOf("\n  );", mutateAt));
+    expect(call).toMatch(/forgetSweepFailuresUnder\(pendingSweepReset\)/);
+    // And `mutateConfig` actually has that seam, invoked after the write.
+    const config = await readFile("src/lib/config.ts", "utf-8");
+    expect(config).toMatch(/await writeConfig\(next\);\s*\n\s*await afterCommit\?\.\(next\);/);
 
     // And the narrower flag is set from a COMPARISON, not from the key being
     // present. A Settings save posts every field, so `Array.isArray(body.claudeHomes)`
@@ -1463,5 +1470,37 @@ describe("a dangling implicit home is not a fresh install", () => {
 
     await streamAllSessions(async () => {});
     expect(getSweepFailures()).toHaveLength(0);
+  });
+});
+
+describe("an ENOENT message fits the enumeration that failed", () => {
+  it("does not blame a missing home for one project directory", async () => {
+    // The plausible causes differ by scope. A `project-dir` path came back
+    // from a parent listing that had just succeeded, so "the home may be gone"
+    // is not a candidate — it was there moments ago. Three attempts at this
+    // wording each described a strictly narrower case than the code reports.
+    // (Copilot, PR #527, three times.)
+    const { describeSweepFailure } = await import("@/lib/sweepFailures");
+
+    const home = describeSweepFailure({
+      path: "/x/projects",
+      scope: "projects-dir",
+      code: "ENOENT",
+      sweep: "usage",
+    });
+    const project = describeSweepFailure({
+      path: "/x/projects/-p",
+      scope: "project-dir",
+      code: "ENOENT",
+      sweep: "usage",
+    });
+
+    expect(home).toContain("home may be gone");
+    expect(project).not.toContain("home may be gone");
+    expect(project).toContain("removed or renamed");
+    // Neither claims the path is simply absent, which is the one reading that
+    // cannot be true of a RECORDED ENOENT.
+    expect(home).not.toContain("no longer exists");
+    expect(project).not.toContain("no longer exists");
   });
 });

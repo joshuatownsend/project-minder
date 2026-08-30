@@ -713,16 +713,27 @@ export function describeSweepFailure(failure: SweepFailure): string {
       : "one project directory could not be listed";
   switch (failure.code) {
     case "ENOENT":
-      // Two situations reach here and the message has to fit both, or it sends
-      // the reader down the wrong path.
+      // The plausible causes differ by SCOPE, so the guidance does too.
       //
       // A RECORDED ENOENT is never "a fresh install with no `projects/` yet" —
-      // that case is deliberately silent. It is either the HOME being gone
-      // (moved, unmounted, a WSL distro that vanished) or the `projects` entry
-      // being there but unresolvable (a link to a disconnected drive). "It no
-      // longer exists" described only the first, and a first attempt at fixing
-      // that described only the second. (Copilot, PR #527, twice.)
-      return `${what} — it could not be found (the home may be gone, or a link may point at a drive that is not connected)`;
+      // that case is deliberately silent — but what it IS depends on which
+      // enumeration failed:
+      //
+      //   - `projects-dir`: the home is gone (moved, unmounted, a WSL distro
+      //     that vanished), or the `projects` entry is there and unresolvable
+      //     (a link to a disconnected drive).
+      //   - `project-dir`: that one directory was removed or renamed between
+      //     the parent listing and this read, or the filesystem under it went
+      //     away. The HOME being gone is not a plausible cause — the parent
+      //     listing that produced this path had just succeeded.
+      //
+      // Three attempts to word this each described a strictly narrower case
+      // than the code reports: "it no longer exists" (only the missing home),
+      // then only the dangling link, then both — but applied to a scope where
+      // neither fits. (Copilot, PR #527, three times.)
+      return failure.scope === "projects-dir"
+        ? `${what} — it could not be found (the home may be gone, or a link may point at a drive that is not connected)`
+        : `${what} — it could not be found (it may have been removed or renamed, or the filesystem under it may be unavailable)`;
     case "EACCES":
     case "EPERM":
       return `${what} — permission denied`;
