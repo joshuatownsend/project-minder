@@ -1256,9 +1256,23 @@ step("Wrote BUILD_INFO.json");
 // #284 cut `src/**` out of the trace, which took the payload's copy of the
 // source tree from 8.1 MB to these two files. They are not decoration: in a
 // standalone build there is no `schema.sql` anywhere under `.next/`, so
-// `resolveSchemaPath()`'s `__dirname` sibling lookup misses and its cwd-walk
-// resolves against exactly these. `outputFileTracingIncludes` in
-// next.config.ts is the only reason they survive the exclude.
+// `resolveSchemaPath()`'s `__dirname` sibling lookup misses and its anchor-walk
+// resolves against exactly these.
+//
+// The two arrive by different routes, which is the reason to check both rather
+// than reason about either:
+//
+//   - `src/lib/db/schema.sql` — twice over: `outputFileTracingIncludes` in
+//     next.config.ts, and step 3b above, which plants a copy for the worker
+//     bundle (esbuild output, never traced by Next). Note 3b only *warns* when
+//     its source is missing; this check is what makes that case fatal.
+//   - `src/lib/tasksDb/schema.sql` — by the include alone. Nothing else puts
+//     it there.
+//
+// So a mistake in `outputFileTracingIncludes` breaks one of them and not the
+// other, and the surviving copy makes the failure look like something else.
+// Measured: emptying the include leaves `db/schema.sql` present and drops only
+// `tasksDb/schema.sql`.
 //
 // Verified here rather than trusted, because the failure is invisible until
 // someone boots the artifact: packaging succeeds, the server starts, and DB
@@ -1273,12 +1287,13 @@ const missingRuntimeFiles = REQUIRED_RUNTIME_FILES.filter(
   (rel) => !existsSync(path.join(outDir, rel))
 );
 if (missingRuntimeFiles.length > 0) {
-  throw new Error(
+  fail(
     "Required runtime files are missing from the payload:\n  " +
       missingRuntimeFiles.join("\n  ") +
-      "\n\nThese are kept by `outputFileTracingIncludes` in next.config.ts, which " +
-      "must list every file the server reads from `src/` now that `./src/**` is " +
-      "excluded from tracing (#284). Without them the packaged server boots and " +
+      "\n\nEvery file the server reads from `src/` must be listed in " +
+      "`outputFileTracingIncludes` in next.config.ts, now that `./src/**` is " +
+      "excluded from tracing (#284) — and `src/lib/db/schema.sql` is also " +
+      "planted by step 3b above. Without them the packaged server boots and " +
       "then fails DB init away from a checkout."
   );
 }

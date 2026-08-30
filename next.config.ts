@@ -257,10 +257,17 @@ const nextConfig: NextConfig = {
    * `resolveSchemaPath()` in `src/lib/db/migrations.ts` used to claim the
    * `__dirname` sibling lookup is "what production and the standalone build
    * use". That is false for the standalone build: there is no `schema.sql`
-   * anywhere under `.next/`, so the only copies in the payload are these, and
-   * the cwd-walk the comment calls a dev/test-only fallback is what actually
-   * fires. Verified by booting a packaged copy outside the repo —
-   * `db: probed state=success`. (#284.)
+   * anywhere under `.next/`, so the copies that resolve are the ones in the
+   * payload's `src/` tree, and the anchor-walk the comment calls a
+   * dev/test-only fallback is what actually fires. Verified by booting a
+   * packaged copy outside the repo — `db: probed state=success`. (#284.)
+   *
+   * This include is the sole mechanism for `tasksDb/schema.sql`.
+   * `db/schema.sql` is additionally planted by `scripts/package-standalone.mjs`
+   * step 3b, for the esbuild-built worker that Next never traces — so removing
+   * this option breaks exactly one of the two, which is worse than breaking
+   * both. `scripts/package-standalone.mjs` checks for both at the end of
+   * packaging rather than trusting either route.
    *
    * So excluding `src/` without this include breaks DB init in the shipped
    * artifact, and the comment that would have reassured you is the thing that

@@ -1062,9 +1062,11 @@ function resolveSchemaPath(): string {
   //   - `next dev` / `next start` from the repo: the compiled module sits next
   //     to `schema.sql`, so the sibling lookup wins;
   //   - the STANDALONE build: there is no `schema.sql` anywhere under `.next/`,
-  //     so the sibling lookup misses and the cwd-walk below is what resolves —
-  //     against `src/lib/db/schema.sql`, which `outputFileTracingIncludes`
-  //     keeps in the payload precisely for this.
+  //     so the sibling lookup misses and the walk below is what resolves —
+  //     against `src/lib/db/schema.sql` in the payload, which gets there two
+  //     ways: `outputFileTracingIncludes` in next.config.ts, and the explicit
+  //     copy in `scripts/package-standalone.mjs` step 3b that exists for the
+  //     worker bundle. (`src/lib/tasksDb/schema.sql` has only the former.)
   //
   // This comment previously said the sibling lookup was "what production and
   // the standalone build use" and called the walk dev/test-only. That was
