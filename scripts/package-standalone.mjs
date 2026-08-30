@@ -703,10 +703,15 @@ function placeClosureEdges(edges) {
   // Never silent. An edge with no parent copy anywhere in the payload is a
   // dependency nothing can reach; reporting beats a build that quietly dropped
   // it and looked identical to one that had none.
-  if (unplaceableEdges.length > 0) {
+  // Deduped BEFORE counting, not after. walkDependencyClosure emits one edge
+  // per requester, so a shared dependency appears many times; counting the raw
+  // list while printing the unique one reports a number the list beneath it
+  // does not support (Copilot, #539).
+  const uniqueUnplaceable = [...new Set(unplaceableEdges)];
+  if (uniqueUnplaceable.length > 0) {
     step(
-      `${unplaceableEdges.length} edge(s) had no parent copy in the payload (#538/#539):\n  ` +
-        [...new Set(unplaceableEdges)].join("\n  ")
+      `${uniqueUnplaceable.length} edge(s) had no parent copy in the payload (#538/#539):\n  ` +
+        uniqueUnplaceable.join("\n  ")
     );
   }
 
