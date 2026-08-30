@@ -1504,3 +1504,76 @@ describe("an ENOENT message fits the enumeration that failed", () => {
     expect(project).not.toContain("no longer exists");
   });
 });
+
+describe("removing a home takes its untracked overflow with it", () => {
+  it("does not leave a departed home's uncounted failures in the total", async () => {
+    // Past `MAX_TRACKED_KEYS` (2,000) a cycle stops keeping keys, so those
+    // failures were counted and then anonymous — and subtracting only `seen`
+    // entries left hundreds of "unreadable locations" attributed to a home that
+    // had already left the swept set. (Codex P2, PR #527.)
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      getSweepFailureTotal,
+      forgetSweepFailuresUnder,
+    } = await import("@/lib/sweepFailures");
+
+    const leaving = "/homes/departing/.claude";
+
+    const t = beginSweepFailureCycle("usage");
+    // Comfortably past the 2,000-key tracking cap, so most of these are counted
+    // without a key behind them.
+    for (let i = 0; i < 2100; i++) {
+      recordSweepFailure(
+        { path: `${leaving}/projects/-p-${i}`, scope: "project-dir", sweep: "usage" },
+        t
+      );
+    }
+    endSweepFailureCycle("usage", t);
+
+    // The premise: the cap really was exceeded, so untracked overflow exists.
+    expect(getSweepFailureTotal()).toBe(2100);
+
+    forgetSweepFailuresUnder([leaving]);
+
+    // All of it goes, tracked and untracked alike.
+    expect(getSweepFailureTotal()).toBe(0);
+  });
+
+  it("keeps another home's overflow when one home leaves", async () => {
+    // The counterpart: attributing overflow is what makes it removable, so it
+    // must also be what makes the REST survive.
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      getSweepFailureTotal,
+      forgetSweepFailuresUnder,
+    } = await import("@/lib/sweepFailures");
+
+    const leaving = "/homes/departing/.claude";
+    const staying = "/homes/remaining/.claude";
+
+    const t = beginSweepFailureCycle("usage");
+    for (let i = 0; i < 1500; i++) {
+      recordSweepFailure(
+        { path: `${leaving}/projects/-p-${i}`, scope: "project-dir", sweep: "usage" },
+        t
+      );
+    }
+    for (let i = 0; i < 1500; i++) {
+      recordSweepFailure(
+        { path: `${staying}/projects/-q-${i}`, scope: "project-dir", sweep: "usage" },
+        t
+      );
+    }
+    endSweepFailureCycle("usage", t);
+    expect(getSweepFailureTotal()).toBe(3000);
+
+    forgetSweepFailuresUnder([leaving]);
+
+    // The departing home's 1,500 go; the remaining home's 1,500 stay.
+    expect(getSweepFailureTotal()).toBe(1500);
+  });
+});

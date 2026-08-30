@@ -122,6 +122,22 @@ interface CycleResult {
    */
   verified: Map<string, number>;
   /**
+   * Failures counted past `MAX_TRACKED_KEYS`, attributed to the home they sat
+   * under.
+   *
+   * Past the tracking cap a cycle stops keeping keys, so those failures are
+   * counted and then anonymous — and when their home is later removed from the
+   * configuration, `forgetSweepFailuresUnder` had nothing to subtract. A home
+   * that had blown the cap went on contributing hundreds of "unreadable
+   * locations" to the banner after it had left the swept set.
+   * (Codex P2, PR #527.)
+   *
+   * One counter per HOME, not per path: the whole point is that the paths are
+   * no longer retained, and a home's `<home>/projects` prefix is recoverable
+   * from any failure beneath it.
+   */
+  overflowByHome: Map<string, number>;
+  /**
    * The generation this cycle was opened under. A `clearSweepFailures()` — a
    * corpus-configuration change — bumps the generation, so a sweep still
    * running from before the change can be told apart from the replacement that
@@ -224,6 +240,7 @@ export function beginSweepFailureCycle(sweep: SweepName): number {
       total: 0,
       seen: new Map(),
       verified: new Map(),
+      overflowByHome: new Map(),
       gen,
     });
   return gen;
@@ -434,6 +451,21 @@ const MAX_PER_SWEEP = 50;
 const MAX_TRACKED_KEYS = 2000;
 
 /**
+ * The `<home>/projects` prefix a failure path sits under, canonically.
+ *
+ * Both scopes share the shape — a `projects-dir` failure IS that path and a
+ * `project-dir` failure sits beneath it — so one slice recovers the owner of
+ * either. Returns null for a path matching neither, which is not a shape the
+ * sweeps produce but must not throw if one ever does.
+ */
+function homeProjectsPrefix(rawPath: string): string | null {
+  const key = normalizePathKey(rawPath);
+  const at = key.lastIndexOf("/projects");
+  if (at < 0) return null;
+  return key.slice(0, at + "/projects".length);
+}
+
+/**
  * One location, however many sweeps trip over it — and however it is spelled.
  *
  * Built in `normalizePathKey`'s space, which is the project's existing answer
@@ -502,7 +534,17 @@ export function recordSweepFailure(failure: SweepFailure, token: number): void {
   // a directory successfully and stay busy while `usage` then fails on that
   // same path — so retirement has to compare observations rather than assume
   // the publishing cycle saw the world last. (Codex P2, PR #527.)
-  if (result.seen.size < MAX_TRACKED_KEYS) result.seen.set(key, observedAt());
+  if (result.seen.size < MAX_TRACKED_KEYS) {
+    result.seen.set(key, observedAt());
+  } else {
+    // Past the tracking cap the key is not kept, so this count would otherwise
+    // be anonymous — and an unattributable count cannot be retired when its
+    // home leaves the configuration. (Codex P2, PR #527.)
+    const owner = homeProjectsPrefix(failure.path);
+    if (owner) {
+      result.overflowByHome.set(owner, (result.overflowByHome.get(owner) ?? 0) + 1);
+    }
+  }
   // Counted ALWAYS, kept only up to the cap. The cap bounds memory and what a
   // banner can render; it must not bound what the count reports.
   result.total++;
@@ -665,11 +707,25 @@ export function forgetSweepFailuresUnder(removedHomes: string[]): void {
         removed++;
       }
     }
+
+    // The UNTRACKED remainder goes too. A home that blew the 2,000-key cap
+    // contributed a count with no key behind it, so subtracting only `seen`
+    // entries left hundreds of "unreadable locations" attributed to a home that
+    // had already left the swept set. (Codex P2, PR #527.)
+    const overflowByHome = new Map(result.overflowByHome);
+    for (const [owner, n] of result.overflowByHome) {
+      if (under(owner)) {
+        removed += n;
+        overflowByHome.delete(owner);
+      }
+    }
+
     if (removed === 0 && kept.length === result.items.length) continue;
     published().set(name, {
       ...result,
       items: kept,
       seen,
+      overflowByHome,
       total: Math.max(kept.length, result.total - removed),
     });
   }
