@@ -1153,10 +1153,16 @@ async function readJsonlSession(
    * `sidechainToolUses` above answers the roll-up question — how much tool work
    * happened below this session — and a name and an id are enough for that. A
    * delegated agent's own detail page asks a different question and needs
-   * ORDER and ARGUMENTS, which that map cannot carry. Populated only for
-   * delegated transcripts, where the turn rows exist to order against; an
-   * ordinary session's sidechain turns have no turn rows of their own, so they
-   * keep the lean form and their extra columns stay NULL.
+   * ORDER and ARGUMENTS, which that map cannot carry.
+   *
+   * ALLOCATED for every parse and left EMPTY for an ordinary session — not
+   * absent, which the previous wording ("populated only for delegated
+   * transcripts") invited a reader to assume. An ordinary session's sidechain
+   * turns have no turn rows of their own to order against, so they keep the
+   * lean form and their extra columns stay NULL; the empty map is what carries
+   * that. An always-present map also keeps `writeSidechainToolUses` free of a
+   * second "is this delegated" test — it looks each id up and finds nothing.
+   * (Copilot, PR #528.)
    *
    * Keyed by `tool_use_id` for the same reason as the map: one JSONL line per
    * content block means a block can be re-logged, and the id is what makes
