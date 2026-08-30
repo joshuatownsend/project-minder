@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A tracing exclusion added last release was silently pruning dependencies out of the trace** (#417, regression from #284). `outputFileTracingExcludes` entries are picomatch **substring** matches with the leading `./` stripped, so `"./src/**"` — added to stop the repo's own source tree shipping — also matched `node_modules/<pkg>/src/**`.
+
+  Three packages in this tree keep their entry point there (`web-push` → `src/index.js`, plus `debug` and `ecdsa-sig-formatter`), and excluding a package's entry point stops the tracer discovering anything that package depends on. Measured on `/api/health`: traced `node_modules` entries fell from **373 to 258** — 13 direct `/src/` matches cascading into **115** lost files. The shipped payload survived only because Next copies externalized packages by a separate route and packaging backfills what the tracer missed, which is luck rather than design.
+
+  The repo's `src/` is now pruned at the **payload boundary** instead, where the rule is root-anchored and cannot reach inside `node_modules`, with an explicit carve-out for the two `schema.sql` files the runtime reads. Payload composition is unchanged (`src/` stays 52 KB, exactly those two files); the three per-route counts return to **99 / 373 / 255**, matching #417's stated invariant, and the eight `all-MiniLM-L6-v2` model files are still present.
+
+  The same investigation found `outputFileTracingIncludes` is substring-matched too, **and overrides excludes** — so `./src/lib/db/schema.sql` also matched `src-tauri/target/debug/minder-server/src/lib/db/schema.sql`, a staged copy of an earlier payload that `tauri build` leaves behind. After a local `pnpm tray:build` that dragged 8 files, nested up to two payloads deep, back in past their own exclusion. `src-tauri` is now root-anchored in the payload rules as well.
+
+  This is the concrete cost of the hand-maintained list #417 is about: the rule these entries are trying to express is "gitignored developer state at the repo root", and a glob language that cannot anchor cannot express it. #417 stays open.
+
 - **The packaged server no longer ships the source tree it was built from** (#284). `dist/minder-server` carried 8.1 MB of `src/`, 3.2 MB of `scripts/`, all of `src-tauri/`, and ~2.7 MB of developer state (`tsconfig.tsbuildinfo`, `INSIGHTS.md`, `TODO.archive.md`, `pnpm-lock.yaml`, `manual-steps-tracker.html`) — none of it read at runtime. Next's tracer still reports "dynamic filesystem access causes tracing of the whole project" (22 warnings over 13 distinct patterns, all from the scanner's genuinely dynamic reads), so the payload is protected only by a hand-maintained exclusion list; these entries were simply never added to it. Source leakage drops from ~14 MB to ~148 KB.
 
   **`src/` is not fully excluded, and cannot be.** Two `schema.sql` files under it are read at DB init, and in a standalone build they are reachable by no other path: there is no `schema.sql` anywhere under `.next/`, so `resolveSchemaPath()`'s `__dirname` sibling lookup misses and its cwd-walk is what resolves. A new `outputFileTracingIncludes` keeps exactly those two files.

@@ -233,11 +233,26 @@ const nextConfig: NextConfig = {
       // class, caught earlier; these were simply never added, which is #417's
       // point about the list stating instances rather than a rule.
       //
-      // `src/**` is safe ONLY because of the `outputFileTracingIncludes` below.
-      // Two `schema.sql` files under it ARE read at runtime, and in the
-      // standalone build they are reachable by no other path — see the note
-      // there before touching either option.
-      "./src/**",
+      // NOTE: `./src/**` is deliberately NOT here. It was, and it was wrong.
+      // These globs are picomatch SUBSTRING matches with the leading `./`
+      // stripped, so `src/**` also matched `node_modules/<pkg>/src/**`. That
+      // pruned `web-push`'s entry point (`src/index.js`) out of the trace, and
+      // because the tracer discovers a package's dependencies by following its
+      // entry point, everything web-push pulls in went with it: /api/health's
+      // traced node_modules count fell from 373 to 258 — 13 direct `/src/`
+      // matches cascading into 115 lost files. The payload survived only
+      // because Next copies externalized packages separately and
+      // package-standalone backfills what the tracer missed, which is luck,
+      // not design. (#417; the exclusion shipped in #284 and is reverted here.)
+      //
+      // The repo's own `src/` is pruned at the PAYLOAD BOUNDARY instead, where
+      // the rule can be root-anchored and can carve out the two `schema.sql`
+      // files the runtime reads — see `isForbiddenRootRelative()` and
+      // `PAYLOAD_SRC_KEEP` in scripts/payload-hygiene-rules.mjs. (The `src/`
+      // rule is branching logic inside that function, not a member of the
+      // `FORBIDDEN_ROOT_RELATIVE` set beside it, precisely because it needs the
+      // carve-out.) Every other entry below was checked against the traced
+      // node_modules set and collides with nothing.
       "./scripts/**",
       "./tsconfig.tsbuildinfo",
       "./pnpm-lock.yaml",
@@ -262,12 +277,14 @@ const nextConfig: NextConfig = {
    * dev/test-only fallback is what actually fires. Verified by booting a
    * packaged copy outside the repo — `db: probed state=success`. (#284.)
    *
-   * This include is the sole mechanism for `tasksDb/schema.sql`.
    * `db/schema.sql` is additionally planted by `scripts/package-standalone.mjs`
-   * step 3b, for the esbuild-built worker that Next never traces — so removing
-   * this option breaks exactly one of the two, which is worse than breaking
-   * both. `scripts/package-standalone.mjs` checks for both at the end of
-   * packaging rather than trusting either route.
+   * step 3b, for the esbuild-built worker that Next never traces.
+   *
+   * Since #417 these files would also arrive via the whole-project sweep, now
+   * that `./src/**` is no longer excluded — but that sweep is the bug this
+   * repo is trying to get rid of, so the include stays as the mechanism that
+   * survives it being fixed. `scripts/package-standalone.mjs` checks for both
+   * at the end of packaging rather than trusting any of the three routes.
    *
    * So excluding `src/` without this include breaks DB init in the shipped
    * artifact, and the comment that would have reassured you is the thing that

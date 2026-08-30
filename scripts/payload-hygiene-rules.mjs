@@ -77,7 +77,50 @@ export const FORBIDDEN_EXACT = new Set([
 // error counts, and `resolveStateDir()` falls back to the checkout root
 // during ordinary development. A local release build from a checkout that has
 // run Minder would otherwise publish it.
-export const FORBIDDEN_ROOT_RELATIVE = new Set(["dist/node", ".cache"]);
+export const FORBIDDEN_ROOT_RELATIVE = new Set([
+  "dist/node",
+  ".cache",
+  // The Tauri crate. Nothing under it is read at server runtime — the only
+  // reference to it from `src/` is a comment — but it cannot be left to the
+  // tracer's `./src-tauri/**` exclude alone, because
+  // `outputFileTracingIncludes` OVERRIDES excludes and its globs are
+  // substring-matched just like theirs.
+  //
+  // The include `./src/lib/db/schema.sql` therefore also matches
+  // `src-tauri/target/debug/minder-server/src/lib/db/schema.sql` — a staged
+  // copy of a previous payload that `tauri build` leaves in `target/`. Measured
+  // after a local `pnpm tray:build`: 8 such files, nested up to two payloads
+  // deep, pulled back into the payload past their own exclusion. Anchoring the
+  // rule at the payload root is the only place that can express "this tree,
+  // never a path that merely looks like it". (#417.)
+  "src-tauri",
+]);
+
+// The repo's own source tree, pruned at the payload root — EXCEPT the SQL
+// schemas the runtime reads.
+//
+// This lives here rather than in next.config.ts's `outputFileTracingExcludes`
+// for the same reason `.cache` does, and the cost of getting it wrong was
+// measured rather than guessed. A tracer glob `./src/**` is a picomatch
+// substring match, so it also hit `node_modules/<pkg>/src/**`. Three packages
+// in this tree keep their entry point there (`web-push` -> `src/index.js`,
+// plus `debug` and `ecdsa-sig-formatter`), and excluding a package's entry
+// point stops the tracer discovering anything that package depends on:
+// /api/health's traced node_modules count went 373 -> 258, with only 13 of
+// those 115 files matching `/src/` directly. (#417, reverting #284's glob.)
+//
+// Root-anchored, it cannot reach inside node_modules at all. The carve-out is
+// explicit because the payload genuinely needs those two files: in a
+// standalone build nothing under `.next/` can serve them, so DB init away from
+// a checkout resolves against exactly these.
+//
+// Paths are compared lower-cased, so these must be written lower-cased —
+// `tasksDb` is spelled `tasksdb` here on purpose, not by mistake.
+const PAYLOAD_SRC_PREFIX = "src/";
+export const PAYLOAD_SRC_KEEP = new Set([
+  "src/lib/db/schema.sql",
+  "src/lib/tasksdb/schema.sql",
+]);
 
 // Human-readable summary for log lines. DERIVED from the sets above rather
 // than written out, because a hand-maintained restatement is exactly the thing
@@ -90,12 +133,28 @@ export const FORBIDDEN_SUMMARY = [
   ".env*",
   "*.pem",
   ...FORBIDDEN_ROOT_RELATIVE,
+  // Spelled out for the same reason `.env*` is: the repo-`src/` rule is
+  // branching logic inside `isForbiddenRootRelative`, not a set member, so
+  // nothing above can derive it. Omitting it would leave the hygiene gate's
+  // success line claiming to have checked a smaller set than it did — the
+  // exact false reassurance this comment block was written to prevent.
+  "src/** (except the two schema.sql files)",
 ].join(", ");
 
 // `relPath` is a payload-root-relative path in either separator style.
 export function isForbiddenRootRelative(relPath) {
   if (!relPath) return false;
-  return FORBIDDEN_ROOT_RELATIVE.has(relPath.replace(/\\/g, "/").toLowerCase());
+  const rel = relPath.replace(/\\/g, "/").toLowerCase();
+  if (FORBIDDEN_ROOT_RELATIVE.has(rel)) return true;
+  if (rel !== "src" && !rel.startsWith(PAYLOAD_SRC_PREFIX)) return false;
+  // Keep the carved-out files, and keep every directory on the way down to
+  // them — pruning `src/` or `src/lib/` wholesale would take the schemas with
+  // it before the copy ever reached them.
+  if (PAYLOAD_SRC_KEEP.has(rel)) return false;
+  for (const keep of PAYLOAD_SRC_KEEP) {
+    if (keep.startsWith(rel + "/")) return false;
+  }
+  return true;
 }
 
 // Maximum allowed path length INSIDE the payload, relative to the payload root.
