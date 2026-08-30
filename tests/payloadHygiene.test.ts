@@ -128,6 +128,67 @@ describe("isForbiddenRootRelative", () => {
     expect(isForbiddenRootRelative(".cache/claude-stats.json")).toBe(false);
   });
 
+  it("prunes src-tauri, which the include glob can otherwise drag back in", () => {
+    // `outputFileTracingIncludes` overrides excludes AND is substring-matched,
+    // so `./src/lib/db/schema.sql` also matches the staged payload copies that
+    // `tauri build` leaves under `src-tauri/target/`. Root-anchoring is what
+    // stops a path that merely resembles the include from qualifying.
+    expect(isForbiddenRootRelative("src-tauri")).toBe(true);
+    expect(isForbiddenRootRelative("SRC-TAURI")).toBe(true);
+    expect(isForbiddenRootRelative("src-tauri\\target")).toBe(false);
+
+    // Not a basename rule, and not confusable with the repo's own `src/`.
+    expect(isForbiddenName("src-tauri")).toBe(false);
+    expect(isForbiddenRootRelative("node_modules/some-pkg/src-tauri")).toBe(false);
+    expect(isForbiddenRootRelative("src-tauri-notes.md")).toBe(false);
+  });
+
+  // The repo's own source tree (#417). This rule exists because the tracer
+  // glob that used to do the job could not be anchored: `./src/**` was a
+  // picomatch substring match, so it also hit `node_modules/<pkg>/src/**` and
+  // pruned three packages' entry points out of the trace.
+  it("prunes the repo's src/ but never a dependency's", () => {
+    expect(isForbiddenRootRelative("src/app/page.tsx")).toBe(true);
+    expect(isForbiddenRootRelative("src/components/ui/badge.tsx")).toBe(true);
+    expect(isForbiddenRootRelative("src/lib/db/migrations.ts")).toBe(true);
+
+    // The whole point of anchoring. web-push's entry point IS src/index.js;
+    // excluding it stopped the tracer discovering everything web-push needs,
+    // which cost /api/health 115 traced files.
+    expect(isForbiddenRootRelative("node_modules/web-push/src/index.js")).toBe(false);
+    expect(isForbiddenRootRelative("node_modules/debug/src/browser.js")).toBe(false);
+    expect(
+      isForbiddenRootRelative("node_modules/.pnpm/debug@4.4.3/node_modules/debug/src/index.js")
+    ).toBe(false);
+
+    // Anchored, not a prefix match on the string.
+    expect(isForbiddenRootRelative("srcfoo")).toBe(false);
+    expect(isForbiddenRootRelative("workers/src/thing.js")).toBe(false);
+  });
+
+  it("carves out the two SQL schemas, and the path down to them", () => {
+    // These are read at DB init and, in a standalone build, are reachable by
+    // no other path — pruning them ships a payload that cannot initialise.
+    expect(isForbiddenRootRelative("src/lib/db/schema.sql")).toBe(false);
+    expect(isForbiddenRootRelative("src/lib/tasksDb/schema.sql")).toBe(false);
+
+    // Every ancestor must survive too: pruning a directory stops the copy
+    // before it ever reaches the file inside it.
+    for (const dir of ["src", "src/lib", "src/lib/db", "src/lib/tasksDb"]) {
+      expect(isForbiddenRootRelative(dir)).toBe(false);
+    }
+
+    // Siblings of the carve-out are still pruned — the exception is those two
+    // files, not the directories that happen to contain them.
+    expect(isForbiddenRootRelative("src/lib/db/ingest.ts")).toBe(true);
+    expect(isForbiddenRootRelative("src/lib/config.ts")).toBe(true);
+
+    // Case and separator handling, as everywhere else in this module.
+    expect(isForbiddenRootRelative("SRC/LIB/DB/SCHEMA.SQL")).toBe(false);
+    expect(isForbiddenRootRelative("src\\lib\\db\\schema.sql")).toBe(false);
+    expect(isForbiddenRootRelative("SRC/APP/PAGE.TSX")).toBe(true);
+  });
+
   // A prefix/substring implementation would wrongly claim the real payload
   // subtree is forbidden and prune far more than intended.
   it("matches the directory itself, not paths beneath or beside it", () => {
