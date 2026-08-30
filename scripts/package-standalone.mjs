@@ -452,11 +452,19 @@ step(`  repaired ${husksRepaired} tracer husk(s)`);
 // dirs and both get walked; and edges are recorded BEFORE the visited
 // check, so every requester of a shared package still produces its edge.
 function walkDependencyClosure(rootNames, { optional = false, seedDir = root } = {}) {
-  const edges = []; // { name, dir, version, parentName }
+  // `parentVersion` is what makes nesting safe when two versions of the same
+  // parent are in the tree — see placeClosureEdges. Without it an edge cannot
+  // say WHICH copy of its parent it belongs to, and the nesting loop guesses. (#538.)
+  const edges = []; // { name, dir, version, parentName, parentVersion }
   const visited = new Set(); // resolved dirs whose deps are already queued
-  const queue = rootNames.map((name) => ({ name, fromDir: seedDir, parentName: null }));
+  const queue = rootNames.map((name) => ({
+    name,
+    fromDir: seedDir,
+    parentName: null,
+    parentVersion: null,
+  }));
   while (queue.length > 0) {
-    const { name, fromDir, parentName } = queue.shift();
+    const { name, fromDir, parentName, parentVersion } = queue.shift();
     let pkgDir;
     try {
       pkgDir = resolvePackageDir(name, fromDir);
@@ -470,11 +478,11 @@ function walkDependencyClosure(rootNames, { optional = false, seedDir = root } =
     }
     const pkgJson = readJson(path.join(pkgDir, "package.json"));
     const version = pkgJson.version ?? "0.0.0-unknown";
-    edges.push({ name, dir: pkgDir, version, parentName });
+    edges.push({ name, dir: pkgDir, version, parentName, parentVersion });
     if (visited.has(pkgDir)) continue;
     visited.add(pkgDir);
     for (const dep of Object.keys(pkgJson.dependencies ?? {})) {
-      queue.push({ name: dep, fromDir: pkgDir, parentName: name });
+      queue.push({ name: dep, fromDir: pkgDir, parentName: name, parentVersion: version });
     }
   }
   return edges;
@@ -555,16 +563,53 @@ function placeClosureEdges(edges) {
     copied += 1;
   }
 
+  const orphanedEdges = [];
+
   for (const e of edges) {
     if (!e.parentName) continue; // root edges are served by the top level
     const occupant = topLevelPkgVersion(e.name);
     if (occupant === e.version) continue; // top level already serves this edge
+
+    // Nest ONLY when the parent copy on disk is the one this edge came from.
+    //
+    // `<outDir>/node_modules/<parentName>` holds exactly one version — whichever
+    // the hoist loop above chose. Keying the nest on the parent's NAME alone
+    // therefore drops every version's edges into that one directory, and the
+    // last writer wins. Measured (#538): `restore-cursor@5.1.0` was hoisted and
+    // requires `signal-exit@^4.1.0`; the correct 4.1.0 sat at the top level, and
+    // the `restore-cursor@3.1.0 -> signal-exit@3.0.7` edge was nested inside the
+    // 5.1.0 directory and shadowed it. Those majors differ in export shape, so
+    // the result was a hard `SyntaxError: does not provide an export named
+    // 'onExit'` from inside a dependency, with nothing in the packaging log.
+    const parentOccupant = topLevelPkgVersion(e.parentName);
+    if (parentOccupant !== e.parentVersion) {
+      // This edge belongs to a copy of the parent that is not the one on disk.
+      // Skipping it prevents the corruption; it does not place the dependency
+      // for that other copy, which is why it is reported rather than dropped.
+      orphanedEdges.push(
+        `${e.parentName}@${e.parentVersion} -> ${e.name}@${e.version} ` +
+          `(top level has ${e.parentName}@${parentOccupant ?? "no copy"})`
+      );
+      continue;
+    }
+
     const destDir = path.join(outDir, "node_modules", e.parentName, "node_modules", e.name);
     const destPkgJson = path.join(destDir, "package.json");
     if (existsSync(destPkgJson) && readPkgVersion(destPkgJson) === e.version) continue; // already nested
     step(`Nesting ${e.name}@${e.version} under ${e.parentName} (top level has ${occupant ?? "no copy"})`);
     copyDereferenced(e.dir, destDir);
     copied += 1;
+  }
+
+  // Never silent: a skipped edge is a dependency some non-hoisted copy of a
+  // parent still wants. Nothing observed needs one today, and the alternative
+  // (placing it anyway) is the corruption above — but a build that quietly
+  // dropped edges would be indistinguishable from one that had none.
+  if (orphanedEdges.length > 0) {
+    step(
+      `Skipped ${orphanedEdges.length} edge(s) whose parent version is not the hoisted one (#538):\n  ` +
+        [...new Set(orphanedEdges)].join("\n  ")
+    );
   }
 
   return copied;
@@ -1258,6 +1303,87 @@ if (!transformersRepoDir || !stagedTransformers) {
       `dependency/dependencies inside the payload`
   );
 }
+
+// --- 4d. Keep the lint CLI resolvable from the payload ---
+//
+// #533, second half. `resolveClaudelintBin()` does
+// `require.resolve("claude-code-lint/package.json")` to find the package root
+// and then `<root>/bin/claudelint`. Two things had to be true for that to work
+// in a shipped build and neither was:
+//
+//   1. Turbopack resolved the literal into its own module graph and replaced
+//      the call with a numeric module id, so the bundle read
+//      `path.dirname(31985)` and threw ERR_INVALID_ARG_TYPE. Fixed at the
+//      source with a `turbopackIgnore` annotation.
+//   2. Nothing in the payload answers that resolve. Next stages its own
+//      `.next/node_modules/claude-code-lint-<hash>/` copy, but the hashed name
+//      is unreachable from a bare specifier, and there was no top-level entry.
+//      That is this section.
+//
+// Both failures were caught by the call site's try/catch and recorded as an
+// `engineErrors` entry, so the library lint engine returned no findings in
+// every release while its 50 MB dependency shipped unused.
+const lintEdges = walkDependencyClosure(["claude-code-lint"], { optional: true });
+const lintCopied = placeClosureEdges(lintEdges);
+step(
+  lintCopied > 0
+    ? `Backfilled ${lintCopied} package copy/copies so the lint CLI resolves (#533)`
+    : "Lint CLI already resolves inside dist"
+);
+
+// The bin path resolveClaudelintBin() builds, checked by path rather than by
+// require.resolve: Node caches NEGATIVE module-resolution lookups
+// (Module._pathCache) and this runs in the process that just created the
+// directory — the footgun `readPkgVersion` documents above.
+const lintPkgDir = path.join(outDir, "node_modules", "claude-code-lint");
+const lintBin = path.join(lintPkgDir, "bin", "claudelint");
+if (!existsSync(path.join(lintPkgDir, "package.json"))) {
+  fail(
+    `claude-code-lint has no top-level entry in the payload ` +
+      `(${path.relative(outDir, lintPkgDir)}).\n\n` +
+      `resolveClaudelintBin() resolves the bare specifier, which cannot reach ` +
+      `Next's hashed .next/node_modules/claude-code-lint-<hash>/ copy. Without ` +
+      `this the library lint engine fails on every installed machine and reports ` +
+      `only an engineErrors entry (#533).`
+  );
+}
+if (!existsSync(lintBin)) {
+  fail(
+    `claude-code-lint is present at ${path.relative(outDir, lintPkgDir)} but its ` +
+      `bin is missing (${path.relative(outDir, lintBin)}). resolveClaudelintBin() ` +
+      `builds exactly this path, so the spawn would fail at runtime (#533).`
+  );
+}
+
+// Presence is not enough, and this is the part worth keeping. The first version
+// of this check stopped at "the files exist" — and they DO exist in a payload
+// where the CLI dies on startup, because the fault is a dependency resolving to
+// the wrong major several levels down (#538). A gate that passes while the
+// thing it guards is broken is worse than no gate.
+//
+// So every edge placement actually guarantees is run through the same
+// version-aware tripwire the #287 backfill uses. Edges whose parent version is
+// not the hoisted one are excluded: placeClosureEdges deliberately does not
+// place those (they belong to a copy of the parent that is not on disk), so
+// asserting them here would fail on something the design does not promise.
+const placedLintEdges = lintEdges.filter(
+  (e) => !e.parentName || topLevelPkgVersion(e.parentName) === e.parentVersion
+);
+const lintFailures = unresolvedEdges(placedLintEdges);
+if (lintFailures.length > 0) {
+  fail(
+    `The lint CLI's dependency tree does not resolve correctly inside the payload:\n  ` +
+      lintFailures.join("\n  ") +
+      `\n\nThe CLI is spawned as a child process, so it resolves these itself at ` +
+      `runtime on the user's machine, where there is no repo above dist/ to fall ` +
+      `back on. A wrong major here surfaces as a SyntaxError from inside a ` +
+      `dependency, with nothing in this log to explain it (#533, #538).`
+  );
+}
+step(
+  `Verified the lint CLI, its bin, and ${placedLintEdges.length} dependency ` +
+    `edge(s) resolve correctly inside the payload`
+);
 
 // --- 5. Record + verify the Node version this bundle was built with ---
 //

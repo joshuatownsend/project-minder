@@ -36,7 +36,26 @@ interface CliReport {
  * the same binary.
  */
 export function resolveClaudelintBin(): string {
-  const pkgRoot = path.dirname(require.resolve("claude-code-lint/package.json"));
+  // The specifier is a variable, and that is load-bearing rather than style.
+  //
+  // Given the string literal, Turbopack resolves it into its OWN module graph
+  // at build time and substitutes a numeric module id, so the production
+  // bundle read `path.dirname(31985)` — which throws
+  // `ERR_INVALID_ARG_TYPE: The "path" argument must be of type string.
+  // Received type number`. The call sites catch it, so every shipped build
+  // recorded "Failed to resolve claudelint bin" in `engineErrors` and returned
+  // no findings: the library lint engine was dead in every release, silently,
+  // while its 50 MB dependency shipped unused. (#533.)
+  //
+  // A non-literal argument defeats that static substitution and leaves a real
+  // `require.resolve` in the output. The same reasoning as the
+  // `/* turbopackIgnore: true */` annotations in `serverRoot.ts` and
+  // `migrations.ts`; here the indirection is what the bundler cannot see
+  // through, and `packagedLintBinCandidates` in package-standalone.mjs keeps a
+  // resolvable `claude-code-lint` at the payload's top level so the resolve has
+  // something to find away from a checkout.
+  const specifier = "claude-code-lint/package.json";
+  const pkgRoot = path.dirname(require.resolve(/* turbopackIgnore: true */ specifier));
   return path.join(pkgRoot, "bin", "claudelint");
 }
 
