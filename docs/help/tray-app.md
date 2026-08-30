@@ -73,6 +73,12 @@ To run the tray app from source during development:
 
 Both `dist/node` and `dist/minder-server` must exist for `pnpm tray:dev` to start — the resource paths are built into the tray binary.
 
+> **Why `tray:dev` and `tray:build` pass `--config`.** `../dist/minder-server` is declared in `src-tauri/tauri.bundle.conf.json`, not in the base `src-tauri/tauri.conf.json`. `tauri-build` emits a `cargo:rerun-if-changed` line for every file in every declared resource, and the payload is ~29,000 files — enough to make a no-op `cargo build` or `cargo clippy` take over a minute (measured: 1m6s before, 4s after). Keeping it out of the base config means plain cargo commands never walk it, and both `tray:` scripts merge it back in.
+>
+> If you are iterating on the Rust side and don't need the tray to manage a server, drop the flag and set `MINDER_SERVER_DIST` to your `dist/minder-server` instead — that path wins over the bundled resource and skips the staging copy entirely.
+>
+> **Don't run `pnpm package:standalone` while a cargo build is in flight.** The build script enumerates the payload; rebuilding it underneath can hang or produce a stale dependency record. Let one finish first.
+
 ## Tray Menu Reference
 
 Click the tray icon to open the menu. The menu resets its status display every 15 seconds by polling `/api/health`.
@@ -267,7 +273,9 @@ This runs the same five steps CI does, in the same order:
 2. `pnpm package:standalone` — the Node sidecar payload into `dist/minder-server`
 3. `node scripts/verify-payload-hygiene.mjs` — the gate that fails the build if `.git`, `.env*`, or `.claude/` leaked into the payload
 4. `node scripts/fetch-node-runtime.mjs` — the pinned, SHA-256-verified Node runtime into `dist/node`
-5. `pnpm tauri build --bundles <targets>` — the installers
+5. `pnpm tauri build --config src-tauri/tauri.bundle.conf.json --bundles <targets>` — the installers
+
+   The `--config` overlay is what puts `dist/minder-server` into the bundle; the base config leaves it out so plain cargo commands stay fast (see *Local Development* above). A build that omits the flag succeeds and produces an installer with no server inside, so CI checks the finished artifacts against a 50 MB floor — real installers run 148-193 MB, a payload-less one is single-digit MB.
 
 Finished installers are listed with their paths and sizes at the end, under `src-tauri/target/release/bundle/`.
 

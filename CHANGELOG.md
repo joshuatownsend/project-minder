@@ -36,6 +36,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **A no-op `cargo build` or `cargo clippy` in `src-tauri/` takes ~4s instead of over a minute** (#295). `tauri.conf.json` mapped `../dist/minder-server` as a bundle resource, and `tauri-build` emits a `cargo:rerun-if-changed` line for every file in every declared resource. Measured: **49,499 directives, of which 49,497 were the payload** — cargo then stat-walked ~29,000 files before deciding nothing had changed. A warm no-op `cargo clippy` took **1m6s**; it now takes **4.1s**, from 9 directives.
+
+  The payload moves to `src-tauri/tauri.bundle.conf.json`, merged back in via `--config` by `pnpm tray:dev`, `pnpm tray:build`, `pnpm release:local` and the release workflow — so what gets bundled is unchanged. Verified in both directions: the base config alone produces 9 directives, and a `tauri build --config …` produces 28,769, of which 28,760 are the payload.
+
+  Splitting it this way creates one failure mode, and it is silent: a build that omits `--config` compiles, bundles, signs and uploads an installer **with no server inside**, and nothing in the pipeline notices. All four callers therefore pass the flag, and CI checks the finished artifacts rather than the command line — a 50 MB floor on every collected installer, against real v1.12.1 assets of 148–193 MB and a payload-less bundle of single-digit MB. Checking the command for the flag would prove intent; checking the artifact proves effect, and keeps working if the overlay is later emptied or renamed.
+
+  Also documented, per the issue: don't run `pnpm package:standalone` while a cargo build is in flight — the build script is enumerating the tree it would be rewriting.
+
 - **The session-parse cache is bounded by memory, not by entry count** (#476). `FileCache` capped itself at 25,000 entries while each slot holds one transcript's whole parsed `UsageTurn[]` — and transcript sizes span orders of magnitude, so the cap said nothing about memory. Measured on the reference corpus: 5,498 files, 2.51 GB of JSONL, with **160 files (2.4%) holding 50% of the bytes** (p50 160 KB, p99 6.7 MB, max 72 MB). Parsed turns retain **≈2.0× the source bytes** in heap, so the whole corpus parsed at once is **≈5.0 GB** — past Node's default ~4 GB old-space limit. With the cap four times larger than the corpus, nothing was evicting at all.
 
   **Scope, stated plainly:** this bounds what is retained *between* sweeps, not the peak *during* one. `buildAllSessions` holds every parsed session in one map until its consumer is finished, so eviction there only drops a second reference to a still-reachable array. The peak needs the sweep to aggregate or stream, which is #515. What this buys is a process that no longer grows without limit across a long-running session.

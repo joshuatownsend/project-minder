@@ -7,7 +7,8 @@
 //   2. pnpm package:standalone                -> dist/minder-server (the Node sidecar payload)
 //   3. node scripts/verify-payload-hygiene.mjs -> fails if .git/.env*/.claude/... leaked (#284)
 //   4. node scripts/fetch-node-runtime.mjs    -> dist/node (SHA-256 verified from nodejs.org)
-//   5. pnpm tauri build --bundles <targets>   -> installers under src-tauri/target/release/bundle
+//   5. pnpm tauri build --config src-tauri/tauri.bundle.conf.json
+//        --bundles <targets>                   -> installers under src-tauri/target/release/bundle
 //
 // Before step 5 it STAMPS the real version from package.json into
 // src-tauri/tauri.conf.json, exactly as the CI "Stamp app version" step does,
@@ -336,7 +337,20 @@ function main() {
 
   const restore = stampTauriVersion(version);
   restoreOnExit(restore);
-  runPnpm("build Tauri installers", ["tauri", "build", "--bundles", bundles]);
+  // --config is not optional here. `../dist/minder-server` lives in
+  // tauri.bundle.conf.json rather than the base config so that a bare
+  // `cargo build`/`clippy` does not emit a rerun-if-changed line for each of
+  // its ~29k files (#295). Without the flag this script still produces
+  // installers — they just contain no server. CI passes the same flag, and its
+  // "Verify installers carry the server payload" step is the backstop.
+  runPnpm("build Tauri installers", [
+    "tauri",
+    "build",
+    "--config",
+    "src-tauri/tauri.bundle.conf.json",
+    "--bundles",
+    bundles,
+  ]);
   restore();
 
   reportArtifacts();

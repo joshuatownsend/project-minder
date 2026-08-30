@@ -6,7 +6,13 @@
 #   2. pnpm package:standalone            -> dist/minder-server (the Node sidecar payload)
 #   3. payload hygiene gate               -> fails if .git/.env*/.claude/.mcp.json/agentlytics-repo leaked (issue #284)
 #   4. fetch a PINNED Node runtime        -> dist/node (SHA-256 verified from nodejs.org)
-#   5. pnpm tauri build --bundles <os>    -> bundles dist/minder-server + dist/node as Tauri resources
+#   5. pnpm tauri build --config src-tauri/tauri.bundle.conf.json --bundles <os>
+#                                          -> bundles dist/minder-server + dist/node as Tauri resources.
+#      The --config overlay is what adds dist/minder-server; the base config
+#      deliberately omits it so a bare `cargo build`/`clippy` does not emit a
+#      cargo:rerun-if-changed line for each of its ~29k files (#295). Forgetting
+#      the flag still builds and bundles cleanly — it just ships no server, which
+#      is why the size floor below verifies the artifact rather than the command.
 #
 # Both dist/minder-server and dist/node are declared as Tauri `resources` in
 # src-tauri/tauri.conf.json, so they land under the app's resource dir at
@@ -253,7 +259,7 @@ jobs:
           for attempt in 1 2; do
             EXTRA=""
             [ "$attempt" = "2" ] && EXTRA="--verbose"
-            if pnpm tauri build --bundles ${{ matrix.bundles }} $EXTRA; then
+            if pnpm tauri build --config src-tauri/tauri.bundle.conf.json --bundles ${{ matrix.bundles }} $EXTRA; then
               exit 0
             fi
             echo "::warning::tauri build attempt $attempt failed"
@@ -321,6 +327,41 @@ jobs:
             echo "::error::no installers were produced for ${{ matrix.os }}"
             exit 1
           fi
+
+      # The one failure the --config split can produce, and it is silent (#295).
+      #
+      # `../dist/minder-server` lives in tauri.bundle.conf.json, not in the base
+      # tauri.conf.json, so that a bare `cargo build`/`clippy` does not walk its
+      # ~29k files. A build that forgets `--config` therefore succeeds, bundles,
+      # signs, uploads, installs — and has no server inside. Nothing before this
+      # point can tell the difference; the user finds out.
+      #
+      # So check the artifact, not the command line. A build command can be
+      # inspected for the flag, but that proves intent rather than effect, and
+      # it would keep passing if the overlay itself were emptied or renamed.
+      # Size is the effect: the payload is ~1.3 GB uncompressed and dominates
+      # every bundle format. Real v1.12.1 assets ran 148-193 MB (smallest: the
+      # darwin-x86_64 updater tarball at 148.4 MB); a tray bundle with no server
+      # is single-digit MB. 50 MB sits ~3x under the smallest real artifact and
+      # ~5x over a payload-less one, so it discriminates without being brittle
+      # as the payload grows or shrinks.
+      - name: Verify installers carry the server payload
+        shell: bash
+        run: |
+          set -u
+          MIN=52428800   # 50 MiB
+          status=0
+          for f in installers/*; do
+            [ -f "$f" ] || continue
+            size=$(wc -c < "$f")
+            if [ "$size" -lt "$MIN" ]; then
+              echo "::error::$f is $size bytes, under the $MIN-byte floor — built without --config src-tauri/tauri.bundle.conf.json?"
+              status=1
+            else
+              echo "ok: $f ($size bytes)"
+            fi
+          done
+          exit "$status"
 
       # Always keep the installers on the workflow run (this is the whole output
       # of a workflow_dispatch dry run).
