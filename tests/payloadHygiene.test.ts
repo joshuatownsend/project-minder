@@ -3,6 +3,7 @@ import {
   FORBIDDEN_ROOT_RELATIVE,
   isForbiddenName,
   isForbiddenRootRelative,
+  FORBIDDEN_SUMMARY,
 } from "../scripts/payload-hygiene-rules.mjs";
 
 // These rules decide what can ship inside an installer, so the tests are
@@ -126,6 +127,23 @@ describe("isForbiddenRootRelative", () => {
     expect(isForbiddenName(".cache")).toBe(false);
     expect(isForbiddenRootRelative("node_modules/some-pkg/.cache")).toBe(false);
     expect(isForbiddenRootRelative(".cache/claude-stats.json")).toBe(false);
+  });
+
+  it("names every rule in the summary the hygiene gate logs", () => {
+    // The gate prints FORBIDDEN_SUMMARY on success. A summary narrower than the
+    // rules is a log line that overstates what was checked, so each rule that
+    // cannot be derived from the sets is asserted here explicitly.
+    for (const rule of [
+      ".git",
+      ".env*",
+      "*.pem",
+      "dist/node",
+      ".cache",
+      "src-tauri",
+      "src/** (except the two schema.sql files)",
+    ]) {
+      expect(FORBIDDEN_SUMMARY).toContain(rule);
+    }
   });
 
   it("prunes src-tauri, which the include glob can otherwise drag back in", () => {

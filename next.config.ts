@@ -247,9 +247,12 @@ const nextConfig: NextConfig = {
       //
       // The repo's own `src/` is pruned at the PAYLOAD BOUNDARY instead, where
       // the rule can be root-anchored and can carve out the two `schema.sql`
-      // files the runtime reads — see FORBIDDEN_ROOT_RELATIVE in
-      // scripts/payload-hygiene-rules.mjs. Every other entry below was checked
-      // against the traced node_modules set and collides with nothing.
+      // files the runtime reads — see `isForbiddenRootRelative()` and
+      // `PAYLOAD_SRC_KEEP` in scripts/payload-hygiene-rules.mjs. (The `src/`
+      // rule is branching logic inside that function, not a member of the
+      // `FORBIDDEN_ROOT_RELATIVE` set beside it, precisely because it needs the
+      // carve-out.) Every other entry below was checked against the traced
+      // node_modules set and collides with nothing.
       "./scripts/**",
       "./tsconfig.tsbuildinfo",
       "./pnpm-lock.yaml",

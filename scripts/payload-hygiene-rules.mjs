@@ -133,6 +133,12 @@ export const FORBIDDEN_SUMMARY = [
   ".env*",
   "*.pem",
   ...FORBIDDEN_ROOT_RELATIVE,
+  // Spelled out for the same reason `.env*` is: the repo-`src/` rule is
+  // branching logic inside `isForbiddenRootRelative`, not a set member, so
+  // nothing above can derive it. Omitting it would leave the hygiene gate's
+  // success line claiming to have checked a smaller set than it did — the
+  // exact false reassurance this comment block was written to prevent.
+  "src/** (except the two schema.sql files)",
 ].join(", ");
 
 // `relPath` is a payload-root-relative path in either separator style.
