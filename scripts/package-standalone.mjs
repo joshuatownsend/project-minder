@@ -515,20 +515,6 @@ function topLevelPkgVersion(name) {
   return existsSync(p) ? readPkgVersion(p) : null;
 }
 
-// Simulate Node's resolution for a (parent -> dep) edge inside dist:
-// check the parent's own nested node_modules first (Node checks the
-// nearest node_modules before walking up), then the top level. Returns
-// the version Node would load, or null if it resolves to neither. Mirrors
-// exactly the two levels the placement pass writes to.
-function distResolvedVersion(parentName, depName) {
-  if (parentName) {
-    const nested = path.join(outDir, "node_modules", parentName, "node_modules", depName, "package.json");
-    if (existsSync(nested)) return readPkgVersion(nested);
-  }
-  const top = path.join(outDir, "node_modules", depName, "package.json");
-  return existsSync(top) ? readPkgVersion(top) : null;
-}
-
 // Place a set of dependency-closure edges into dist so every requester
 // resolves the exact version it declared:
 //   Pass 1 fills each EMPTY top-level slot with one version (the one the
@@ -557,17 +543,21 @@ function resolvedVersionFrom(fromDir, depName) {
   }
 }
 
-// Version-aware tripwire that understands DEEP nesting, unlike `unresolvedEdges`
-// — which only looks at `<parent>/node_modules/<dep>` and the top level, the two
+// Version-aware tripwire, and the only one — it replaced a `unresolvedEdges`
+// that inspected just `<parent>/node_modules/<dep>` and the top level, the two
 // levels the old placement pass could write.
 //
-// That limitation is not academic. The lint closure has
-// `inquirer -> ora@5.4.1 -> chalk@4`, three levels down and under a parent whose
-// hoisted version is 9.4.1; `unresolvedEdges` cannot see those edges at all, and
-// an earlier revision of this file excluded them from checking and left a
-// comment claiming an end-to-end spawn covered them. No such spawn exists here
-// (Codex, #539). This does the job instead: for every placement of the parent,
-// resolve the dependency from that directory and require the declared version.
+// That limitation was not academic. The lint closure has
+// `inquirer -> ora@5.4.1 -> chalk@4`: three levels down, under a parent whose
+// hoisted version is 9.4.1. The old checker could not see those edges at all, so
+// once placement started nesting deeper (#539) it would have reported a
+// correctly nested edge as a failure — a FALSE ABORT, which is the more
+// expensive direction to debug than a missed fault. It was deleted rather than
+// left beside this one, because the two disagree and the wrong one is the
+// easier reach.
+//
+// For every directory a parent occupies, resolve the dependency from there and
+// require the declared version.
 function unresolvedEdgesDeep(edges, placements) {
   const failures = [];
   for (const e of edges) {
@@ -723,27 +713,14 @@ function placeClosureEdges(edges) {
   return { copied, placements };
 }
 
-// Version-aware tripwire: every edge must resolve, inside dist, to the
-// exact version it resolved to in the repo. Returns human-readable
-// descriptions of the edges that don't (empty === all good).
-function unresolvedEdges(edges) {
-  const failures = [];
-  for (const e of edges) {
-    const got = distResolvedVersion(e.parentName, e.name);
-    if (got !== e.version) {
-      failures.push(
-        `${e.parentName ? `${e.parentName} -> ` : ""}${e.name}@${e.version} (dist resolves ${got ?? "MISSING"})`
-      );
-    }
-  }
-  return failures;
-}
-
 const initialTopLevelPackages = listTopLevelPackages(path.join(outDir, "node_modules"));
 const requiredEdges = walkDependencyClosure(initialTopLevelPackages);
 const optionalEdges = walkDependencyClosure(["sharp"], { optional: true });
 
-const { copied: backfilledCount } = placeClosureEdges([...requiredEdges, ...optionalEdges]);
+const { copied: backfilledCount, placements: runtimePlacements } = placeClosureEdges([
+  ...requiredEdges,
+  ...optionalEdges,
+]);
 
 if (backfilledCount > 0) {
   step(
@@ -765,7 +742,12 @@ if (backfilledCount > 0) {
 // edges are hard failures; `sharp` is optional (only image-optimization
 // routes that decode at request time need it), so its unresolved edges
 // warn instead.
-const requiredFailures = unresolvedEdges(requiredEdges);
+// Checked against the placement map rather than by name. Nothing in the current
+// closure has a two-version parent with differing children, which is exactly why
+// this was worth changing before something does: the name-keyed checker would
+// have reported the correctly nested edge as a failure and aborted packaging
+// (Codex, #539).
+const requiredFailures = unresolvedEdgesDeep(requiredEdges, runtimePlacements);
 if (requiredFailures.length > 0) {
   fail(
     `These required Next runtime dependency edges do not resolve to their expected ` +
@@ -775,7 +757,7 @@ if (requiredFailures.length > 0) {
       `repo's node_modules. See issue #287 for background.`
   );
 }
-const optionalFailures = unresolvedEdges(optionalEdges);
+const optionalFailures = unresolvedEdgesDeep(optionalEdges, runtimePlacements);
 if (optionalFailures.length > 0) {
   console.warn(
     `[package-standalone] WARNING: optional dependency edges unresolved inside dist ` +
@@ -1120,7 +1102,8 @@ if (existsSync(schemaSrcPath)) {
 // packaged worker would MODULE_NOT_FOUND at watch time (PR #285 review).
 step("Copying chokidar + its dependency closure (worker's file-watching, externalized from the esbuild bundle)");
 const chokidarEdges = walkDependencyClosure(["chokidar"], { optional: true });
-const { copied: chokidarCopied } = placeClosureEdges(chokidarEdges);
+const { copied: chokidarCopied, placements: chokidarPlacements } =
+  placeClosureEdges(chokidarEdges);
 if (chokidarEdges.length === 0) {
   console.warn(
     `[package-standalone] WARNING: could not resolve chokidar from the repo's node_modules — ` +
@@ -1128,7 +1111,7 @@ if (chokidarEdges.length === 0) {
       `against this package.`
   );
 } else {
-  const unresolvedWatch = unresolvedEdges(chokidarEdges);
+  const unresolvedWatch = unresolvedEdgesDeep(chokidarEdges, chokidarPlacements);
   if (unresolvedWatch.length > 0) {
     fail(
       `chokidar's dependency closure does not fully resolve inside ` +
@@ -1371,7 +1354,7 @@ if (!transformersRepoDir || !stagedTransformers) {
   const embedEdges = transformersDeps.flatMap((dep) =>
     walkDependencyClosure([dep], { optional: true, seedDir: transformersRepoDir })
   );
-  const { copied: embedCopied } = placeClosureEdges(embedEdges);
+  const { copied: embedCopied, placements: embedPlacements } = placeClosureEdges(embedEdges);
   step(
     embedCopied > 0
       ? `Backfilled ${embedCopied} package copy/copies so the staged embedding runtime resolves (#533)`
