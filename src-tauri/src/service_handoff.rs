@@ -652,12 +652,13 @@ impl ServiceHandoff {
     /// files are already swapped — so they exist as belt-and-braces, not as the
     /// safety net.
     ///
-    /// `Ok(Some(_))` means a Minder really was answering on the helper's port
-    /// and is now stopped — the token is the only thing [`arm_restore`] accepts.
-    /// `Ok(None)` means there was nothing to stop, which the helper also reports
-    /// as success, and which must never lead to *starting* a service the user
-    /// deliberately left down.
-    pub fn stop(self: &Arc<Self>) -> Result<Option<StoppedService>, String> {
+    /// `Ok(true)` means a Minder really was answering on the helper's port and
+    /// is now stopped, and the restore debt HAS ALREADY BEEN ARMED — see the
+    /// note at the end of this function for why the caller cannot be trusted to
+    /// do it. `Ok(false)` means there was nothing to stop, which the helper also
+    /// reports as success, and which must never lead to *starting* a service the
+    /// user deliberately left down.
+    pub fn stop(self: &Arc<Self>) -> Result<bool, String> {
         log(&format!(
             "update: {} registers the logon service against this app's own bundle — stopping it \
              so the installer can replace those files",
@@ -727,15 +728,31 @@ impl ServiceHandoff {
         if !matches!(verdict, Ok(true)) {
             clear_stop_in_flight();
         }
+        // The debt is armed HERE, not by the caller, and the flag is released
+        // only afterwards.
+        //
+        // Signalling completion first left a smaller copy of the very window
+        // this change closes (Codex P1, PR #541): the caller arms in
+        // `updater.rs` AFTER `stop()` returns, so a Quit waiting on the flag
+        // could wake in between, find `PENDING_RESTORE` empty, conclude nothing
+        // was owed and exit — and the updater would then record the debt too
+        // late for anything to act on it.
+        //
+        // `stop()` is the only thing that can mint a `StoppedService`, so it is
+        // also the only place that can close that gap. The token type still
+        // does its job: nothing else can record a debt, and this records one
+        // only when the verdict says a running service really was stopped.
+        let stopped = verdict.as_ref().is_ok_and(|v| *v);
+        if stopped {
+            arm_restore(StoppedService(self.clone()));
+        }
         // Released on EVERY path, including the error ones: a Quit blocked on
-        // this flag must never outlive the stop it is waiting for. Set after the
-        // verdict so a waiter that wakes on it sees any debt already recorded.
+        // this flag must never outlive the stop it is waiting for. By here the
+        // debt, if any, is already recorded — which is the point.
         if let Some(done) = &stop_done {
             done.store(true, Ordering::SeqCst);
         }
-        // The token exists only when something really did stop. That is the
-        // whole point: no caller can record a debt we do not owe.
-        Ok(verdict?.then(|| StoppedService(self.clone())))
+        verdict
     }
 
     /// Start the service again. Used on exactly one path: an update that
