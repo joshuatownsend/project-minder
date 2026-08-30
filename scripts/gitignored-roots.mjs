@@ -123,9 +123,29 @@ export function rootLevelGitignoredEntries(root = REPO_ROOT) {
         "--directory",
         "-z",
       ],
-      { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
+      {
+        cwd: root,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        // Node defaults `maxBuffer` to 1 MiB, and a root with enough ignored
+        // files exceeds it — reproduced at 15,000 entries / ~1.2 MB. The throw
+        // then lands in the catch below and returns `null`, which reads as "no
+        // git" and disables EVERY derived exclusion, so the largest trees get
+        // the least protection. 64 MiB is roughly 800k entries (Codex, PR #540).
+        maxBuffer: 64 * 1024 * 1024,
+      }
     );
-  } catch {
+  } catch (err) {
+    // A missing git is expected and silent — a source-tarball build. Anything
+    // else means the derivation was ABLE to run and did not, which the static
+    // rules alone will not compensate for, so it must not pass unremarked.
+    if (err && (err.code === "ENOBUFS" || err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")) {
+      console.warn(
+        "[gitignored-roots] WARNING: `git ls-files` output exceeded maxBuffer — " +
+          "derived payload exclusions are DISABLED for this build. Only the static " +
+          "rules apply. Raise maxBuffer in scripts/gitignored-roots.mjs."
+      );
+    }
     return null;
   }
 
