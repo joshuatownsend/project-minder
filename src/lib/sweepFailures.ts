@@ -804,15 +804,6 @@ export function describeSweepFailure(failure: SweepFailure): string {
 }
 
 /**
- * Does this path exist and is it a directory?
- *
- * Used to disambiguate ENOENT on `<home>/projects`. A fresh install has a
- * `~/.claude` and no `projects/` until the first session is written, and
- * reporting that as degraded would put a permanent warning on every new
- * install. ENOENT counts only when the HOME itself is gone — a moved or
- * unmounted home, which is a real gap (Codex P2 + Copilot, PR #527).
- */
-/**
  * Does a directory ENTRY exist at this path — even a broken one?
  *
  * `lstat`, deliberately, and this is the whole point: `readdir` on a symlink
@@ -844,6 +835,21 @@ export async function pathEntryExists(target: string): Promise<boolean> {
   }
 }
 
+/**
+ * Does this path exist and is it a directory?
+ *
+ * Used with `pathEntryExists` to disambiguate ENOENT on `<home>/projects`. A
+ * fresh install has a `~/.claude` and no `projects/` until the first session is
+ * written, and reporting that as degraded would put a permanent warning on
+ * every new install. ENOENT counts only when the home is gone — a moved or
+ * unmounted home, which is a real gap — or when the `projects` entry is there
+ * and unresolvable, which is what `pathEntryExists` separates out.
+ * (Codex P2 + Copilot, PR #527.)
+ *
+ * This docblock was stranded above `pathEntryExists` when that function was
+ * inserted ahead of it, where it documented neither. Second time in this file;
+ * the first was `lastFullPassWasIncomplete` at round 16. (Copilot, PR #527.)
+ */
 export async function directoryExists(dir: string): Promise<boolean> {
   try {
     const st = await fsPromises.stat(dir);
