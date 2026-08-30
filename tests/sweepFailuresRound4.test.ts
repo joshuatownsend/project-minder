@@ -1425,3 +1425,43 @@ describe("a re-observed failure carries its newest detail", () => {
     expect(getSweepFailureTotal()).toBe(1);
   });
 });
+
+describe("a dangling implicit home is not a fresh install", () => {
+  it.skipIf(!symlinkAvailable)("reports it rather than exempting it", async () => {
+    // The absent-primary exemption added last round was too broad: if
+    // `~/.claude` is ITSELF a symlink to a disconnected drive,
+    // `directoryExists(home)` is false (it follows the broken link) and so is
+    // `pathEntryExists(projectsDir)` — so the exemption fired and the sweep
+    // published a clean result while ALL Claude history was unavailable.
+    // (Codex P2, PR #527.)
+    //
+    // `tmpHome` is the mocked `os.homedir()`, so `<tmpHome>/.claude` IS the
+    // implicit primary — the exemption applies here and must not.
+    await fs.symlink(
+      path.join(tmpHome, "disconnected-drive", ".claude"),
+      path.join(tmpHome, ".claude"),
+      "dir"
+    );
+
+    const { streamAllSessions } = await import("@/lib/usage/parser");
+    const { getSweepFailures } = await import("@/lib/sweepFailures");
+
+    await streamAllSessions(async () => {});
+
+    const failures = getSweepFailures();
+    expect(failures.length).toBeGreaterThan(0);
+    expect(failures[0].scope).toBe("projects-dir");
+  });
+
+  it("still exempts a primary that was never created", async () => {
+    // The counterpart, and the reason this is an `lstat` rather than dropping
+    // the exemption: on a fresh machine — or one that only ever ran Codex or
+    // Gemini — `~/.claude` does not exist at all, and warning there would put a
+    // permanent banner on a machine with nothing wrong with it.
+    const { streamAllSessions } = await import("@/lib/usage/parser");
+    const { getSweepFailures } = await import("@/lib/sweepFailures");
+
+    await streamAllSessions(async () => {});
+    expect(getSweepFailures()).toHaveLength(0);
+  });
+});

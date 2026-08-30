@@ -907,9 +907,17 @@ export async function scanAllSessions(): Promise<SessionSummary[]> {
         const code = (err as NodeJS.ErrnoException)?.code;
         const isImplicitPrimary =
           homeDedupeKey(home) === homeDedupeKey(getPrimaryClaudeHome());
+        // ...and the implicit primary is exempt only when it is genuinely
+        // ABSENT. If `~/.claude` is itself a symlink to a disconnected drive,
+        // `directoryExists` is false (it follows the broken link) and so is
+        // `pathEntryExists(projectsDir)` — so the exemption fired and the sweep
+        // published a clean result while ALL Claude history was unavailable.
+        // `lstat` on the home entry separates "never created" from "there, and
+        // unresolvable". (Codex P2, PR #527.)
+        const primaryNeverCreated = isImplicitPrimary && !(await pathEntryExists(home));
         const benign =
           code === "ENOENT" &&
-          ((await directoryExists(home)) || isImplicitPrimary) &&
+          ((await directoryExists(home)) || primaryNeverCreated) &&
           !(await pathEntryExists(projectsDir));
         if (!benign) {
           recordSweepFailure(
