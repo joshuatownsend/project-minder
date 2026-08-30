@@ -282,6 +282,78 @@ describe.skipIf(!driverAvailable)("delegated transcripts keep their provenance",
     expect(rows.map((r) => r.tool_name)).toEqual(["Glob", "Grep", "Read"]);
   });
 
+  it("does not let a delegated API error reclassify the agent's spend", async () => {
+    // The SECOND independent path by which the primary writer changed
+    // classification for these turns. `isApiErrorMessage` sets `isError` on the
+    // usage turn, `classifyTurn` books that cost as Debugging, and the sidechain
+    // collector left it unset so the same spend came out as Conversation.
+    // `queryByCategory` deliberately includes sidechain cost, so this moved the
+    // usage-by-category report as a side effect of a timeline fix — and
+    // suppressing `prevUserText` (the first path) does not touch it.
+    // (Codex P2, PR #528.)
+    const { conn, mig, ingest } = await reload();
+    expect((await mig.initDb()).error).toBeNull();
+    const db = (await conn.getDb())!;
+
+    const { projectsDir } = await write(path.join("C--dev-myapp", "beef06.jsonl"), [
+      assistantLine("2026-08-01T10:00:00Z", "m1", [{ type: "text", text: "ok" }], false),
+    ]);
+
+    // Two delegated transcripts identical but for the API-error flag.
+    await write(path.join("C--dev-myapp", "beef06", "subagents", "plain.jsonl"), [
+      userLine("2026-08-01T10:05:00Z", "proceed", true),
+      assistantLine("2026-08-01T10:06:00Z", "p0", [{ type: "text", text: "did it" }], true),
+    ]);
+    const erroredFile = path.join(
+      "C--dev-myapp",
+      "beef06",
+      "subagents",
+      "errored.jsonl"
+    );
+    const projects = path.join(tmpHome, ".claude", "projects");
+    const full = path.join(projects, erroredFile);
+    await fs.mkdir(path.dirname(full), { recursive: true });
+    await fs.writeFile(
+      full,
+      [
+        userLine("2026-08-01T10:05:00Z", "proceed", true),
+        JSON.stringify({
+          type: "assistant",
+          timestamp: "2026-08-01T10:06:00Z",
+          isSidechain: true,
+          isApiErrorMessage: true,
+          message: {
+            id: "e0",
+            model: "claude-sonnet-4-5",
+            content: [{ type: "text", text: "did it" }],
+            stop_reason: "tool_use",
+            usage: USAGE,
+          },
+        }),
+      ].join("\n") + "\n"
+    );
+
+    expect((await ingest.reconcileAllSessions(db, { projectsDir })).errors).toBe(0);
+
+    const rows = db
+      .prepare(
+        `SELECT session_id, category, is_error FROM turns
+          WHERE session_id IN ('plain','errored') AND role = 'assistant'
+          ORDER BY session_id`
+      )
+      .all() as Array<{ session_id: string; category: string | null; is_error: number }>;
+
+    expect(rows).toHaveLength(2);
+    // Same category: an API error must not rebook a delegated agent's spend.
+    expect(rows[0].category).toBe(rows[1].category);
+    // ...while the STORED flag still records what happened. Withholding it from
+    // the classifier is not the same as pretending the turn succeeded, and a
+    // fix that zeroed the column would pass the assertion above for the wrong
+    // reason.
+    const errored = rows.find((r) => r.session_id === "errored")!;
+    expect(errored.is_error).toBe(1);
+  });
+
   it("does not let a delegated prompt reclassify the agent's spend", async () => {
     // The prose is STORED (the timeline needs it) but must not become
     // `userIntentText` on the following assistant turn, which is what

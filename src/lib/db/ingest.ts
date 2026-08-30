@@ -1530,7 +1530,20 @@ async function readJsonlSession(
         // projection than file-parse and `selfCorrection.textHasSelfCorrection`
         // can fire on phrases past char 500 only when MINDER_USE_DB=1.
         assistantText: text ? text.slice(0, USAGE_USER_TEXT_LIMIT) : undefined,
-        isError: !!isError,
+        // NOT for a delegated transcript. `classifyTurn` reads this and books
+        // an errored turn's cost as Debugging, where the sidechain collector
+        // left it unset and the same spend came out as Conversation — and
+        // `queryByCategory` deliberately includes sidechain cost, so an
+        // `isApiErrorMessage` entry would move the usage-by-category report as
+        // a side effect of a fix about a blank timeline.
+        //
+        // The second independent path by which the primary writer changed
+        // classification for these turns; suppressing `prevUserText` closed the
+        // first and does not touch this one. The STORED `is_error` below is
+        // unchanged — the turn really did error, and that is what the column
+        // records; what is withheld is only the classifier's input.
+        // (Codex P2, PR #528.)
+        isError: isDelegatedAgentTranscript ? false : !!isError,
         // A3: triggering user prompt, so classifyTurn can attribute intent.
         userIntentText: prevUserText,
         // A1: mirrors the file-parse path so `MINDER_USE_DB=0/1` agree. `effort`
