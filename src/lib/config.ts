@@ -189,13 +189,31 @@ export async function getProjectStatus(slug: string): Promise<ProjectStatus> {
  * written back atomically.
  */
 export async function mutateConfig(
-  fn: (config: MinderConfig) => Promise<MinderConfig | void> | MinderConfig | void
+  fn: (config: MinderConfig) => Promise<MinderConfig | void> | MinderConfig | void,
+  /**
+   * Side effects that must land AFTER the write and BEFORE the lock releases.
+   *
+   * Neither end of that window is optional, and getting one without the other
+   * was wrong in a different way each time (#513, PR #527):
+   *
+   *   - run it in `fn`, and a write that then fails on EACCES/ENOSPC has
+   *     already applied the effect while the OLD config is still on disk;
+   *   - run it after `mutateConfig` returns, and the lock is already released,
+   *     so two overlapping callers can apply their effects out of commit order
+   *     — the later commit's effect landing first, then the earlier one's
+   *     undoing part of it.
+   *
+   * Here it is serialized with the mutation it belongs to, and only reached
+   * when that mutation committed.
+   */
+  afterCommit?: (next: MinderConfig) => Promise<void> | void
 ): Promise<MinderConfig> {
   return withFileLock(CONFIG_PATH, async () => {
     const config = await readConfig();
     const result = await fn(config);
     const next = result ?? config;
     await writeConfig(next);
+    await afterCommit?.(next);
     return next;
   });
 }

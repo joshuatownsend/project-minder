@@ -31,6 +31,14 @@ import {
 import { readConfig } from "@/lib/config";
 import { getReadableClaudeHomes } from "@/lib/claudeHome";
 import { normalizePathKey } from "@/lib/platform";
+import {
+  beginSweepFailureCycle,
+  endSweepFailureCycle,
+  recordSweepFailure,
+  recordSweepSuccess,
+  directoryExists,
+  pathEntryExists,
+} from "@/lib/sweepFailures";
 
 const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -171,6 +179,7 @@ export function mostFrequent<K>(m: Map<K, number>): K | null {
 // those imports working without touching every callsite.
 export { isValidSessionId } from "./sessionPath";
 import { isValidSessionId } from "@/lib/sessionId";
+import { homeDedupeKey, getPrimaryClaudeHome } from "@/lib/claudeHome";
 
 // ── Single-file parser ────────────────────────────────────────────────────────
 
@@ -753,344 +762,469 @@ type SessionVisitor = (sessionId: string, turns: UsageTurn[]) => void | Promise<
  */
 async function sweepSessions(visit: SessionVisitor): Promise<void> {
   const cache = getFileCache();
-
+  // #513: the failures below used to be caught and discarded, so the corpus
+  // shrank silently and `complete: true` was still reported.
+  //
+  // The cycle collects into a PENDING list and publishes in the `finally` —
+  // it does not clear anything at the start. That is the whole point of the
+  // double buffer: the previous result stays readable while this sweep runs,
+  // so a poll landing mid-sweep sees the last complete answer instead of an
+  // empty one that reads as "all clear". Publishing from a `finally` is what
+  // makes a pass that throws part way through still report what it observed.
+  // (An earlier version of this comment said "cleared at the START", which
+  // described the flickering behaviour this PR exists to remove — Copilot,
+  // PR #527.)
   // Sweep every readable Claude home (primary + config.claudeHomes) — a home
   // inside a stopped WSL distro is excluded for the cycle rather than woken.
   // Each subdir keeps its own home so file paths resolve into the right tree.
+  //
+  // Read BEFORE the cycle opens, deliberately. If either of these rejects — a
+  // transient config read, a WSL lookup that times out — the `finally` below
+  // would still end a cycle that had enumerated nothing and publish its empty
+  // result as this pass's answer, erasing a known failure and reporting
+  // `complete: true` on the strength of a pass that never touched the
+  // filesystem. A cycle now exists only once there is something to sweep.
+  // (Codex P2, PR #527.)
   const config = await readConfig();
   const homes = await getReadableClaudeHomes(config);
-  const subdirs: { home: string; dirName: string }[] = [];
-  for (const home of homes) {
-    try {
-      const entries = await fs.readdir(path.join(home, "projects"), { withFileTypes: true });
-      const dirNames: string[] = [];
-      for (const e of entries) {
-        if (e.isDirectory()) dirNames.push(e.name);
-      }
-      // Sorted, because `readdir` gives no order guarantee and this list is now
-      // the PRIORITY for duplicate session ids (#522). Homes keep their
-      // configured order, so the primary home wins over a later-configured one.
-      dirNames.sort();
-      for (const dirName of dirNames) subdirs.push({ home, dirName });
-    } catch {
-      // No projects dir in this home
-    }
-  }
-  // Session ids emitted so far, so `visit` can be told whether it is seeing a
-  // repeat. Ids only — this is the one thing the sweep still accumulates, and
-  // it is ~5.5k strings rather than the corpus.
-  const emitted = new Set<string>();
 
-  /**
-   * Visitors run ONE AT A TIME, in the order sessions finished parsing.
-   *
-   * Parsing is `Promise.all` over batches of five, so without this the visitor
-   * calls overlap — and the usage visitor awaits per turn while costing, so a
-   * short session could finish updating every accumulator map before a long
-   * session that started earlier. The map path could not do that: `result.set`
-   * is synchronous, so the interleaving ended there and the consumer walked the
-   * map in one fixed order. Several report arrays sort by a single descending
-   * key and fall back to insertion order for ties — `byModel`, `byProject`,
-   * `byCategory`, `topTools` (Codex P2, PR #520).
-   *
-   * ENQUEUE, DO NOT AWAIT, at the call sites. `emit` fixes a session's place in
-   * the queue at the moment its parse completed, which is exactly where
-   * `result.set` put it — so the fold sees the map path's order. Awaiting each
-   * emission instead (the first attempt) stalled the per-directory file loop
-   * behind a slow visit, which delayed later parses and therefore CHANGED that
-   * order — the opposite of the intent (Codex P2, round 2).
-   *
-   * The queue is bounded, because an unbounded one would hold every session's
-   * turns whenever the visitor is slower than the parser and hand #515 its own
-   * defect back. `QUEUE_LIMIT` sessions may wait; past that the sweep drains
-   * before enqueueing more. The bound is still strictly better than the map
-   * path, which held all of them unconditionally.
-   *
-   * Order therefore matches the map path except under sustained visitor
-   * backpressure, where memory is bounded instead. Tie ordering is not stable
-   * run-to-run in either shape anyway — see #522.
-   */
-  const QUEUE_LIMIT = 5;
-  let queued = 0;
-  let visitChain: Promise<void> = Promise.resolve();
-  // The FIRST visitor error, rethrown after the queue drains. The chain itself
-  // must not reject — a rejected chain would skip every visit behind it — but
-  // the failure cannot be swallowed either, or a sweep would report success
-  // having folded nothing.
-  let visitError: unknown;
-  let visitFailed = false;
-
-  const emit = async (sessionId: string, turns: UsageTurn[]): Promise<void> => {
-    queued++;
-    visitChain = visitChain.then(async () => {
+  const sweepToken = beginSweepFailureCycle("usage");
+  try {
+    const subdirs: { home: string; dirName: string }[] = [];
+    for (const home of homes) {
       try {
-        await visit(sessionId, turns);
-      } catch (e) {
-        if (!visitFailed) {
-          visitFailed = true;
-          visitError = e;
+        const entries = await fs.readdir(path.join(home, "projects"), { withFileTypes: true });
+        // The success side of the same `readdir` whose failure is reported below,
+        // so the two can never disagree about what happened. A later clean pass
+        // is what retires an older sweep's complaint about this exact path — see
+        // `retireVerified` (#513).
+        recordSweepSuccess("usage", path.join(home, "projects"), sweepToken);
+        const dirNames: string[] = [];
+        for (const e of entries) {
+          if (e.isDirectory()) dirNames.push(e.name);
         }
-      } finally {
-        queued--;
-      }
-    });
-    // Backpressure only at the bound, so the common path never stalls a parse.
-    if (queued >= QUEUE_LIMIT) await visitChain;
-  };
-  // Track every JSONL we observed during this sweep so we can evict slots for
-  // files that were deleted since the last call. Without this, `maxMtimeMs()`
-  // keeps reflecting a deleted file's mtime forever and ETags stick to a
-  // value that no longer matches reality — clients would get 304s after a
-  // session deletion even though the response body changed.
-  const liveSet = new Set<string>();
-
-  // NOT `if (subdirs.length === 0) return new Map()`, which is what stood here
-  // and what this loop's condition now expresses instead. That early return
-  // predates adapter discovery and became a hole the moment the merge below was
-  // added: an installation running Codex or Gemini with no readable Claude
-  // projects tree has zero subdirs, so it returned an empty map before reaching
-  // the adapters — and the file backend reported an empty corpus for exactly the
-  // users this change exists to serve. (Codex P1, PR #490.)
-  //
-  // ── Phase 1: ENUMERATE ────────────────────────────────────────────────
-  //
-  // Every candidate file is listed before ANY of them is parsed, so which copy
-  // of a duplicated session id wins is decided by position in a sorted list
-  // rather than by which parse happened to finish first (#522).
-  //
-  // The old shape enumerated and parsed in the same per-directory callback and
-  // claimed ids at emission time — so two homes holding the same session UUID
-  // resolved to whichever won a race, and two sweeps of an unchanged tree could
-  // disagree. Listing first also means the losing copy is never parsed at all.
-  //
-  // Cost: one array of ~6.6k paths. Not the corpus.
-  const perDir: string[][] = new Array(subdirs.length);
-  for (let i = 0; i < subdirs.length; i += 5) {
-    const batch = subdirs.slice(i, i + 5);
-    await Promise.all(
-      batch.map(async ({ home, dirName }, k) => {
-        const dirPath = path.join(home, "projects", dirName);
-        const filePaths: string[] = [];
-        try {
-          const entries = await fs.readdir(dirPath, { withFileTypes: true });
-          for (const e of entries) {
-            if (e.isFile() && e.name.endsWith(".jsonl")) {
-              filePaths.push(path.join(dirPath, e.name));
-            }
-          }
-
-          // Newer Claude Code writes subagent transcripts to
-          // `<project>/<session-id>/subagents/agent-*.jsonl` instead of
-          // inlining sidechain entries in the parent file. The SQLite
-          // reconciler walks one level down for exactly this; this reader did
-          // not, so on the file backend every one of those sessions — and its
-          // turns, tokens and cost — was simply absent.
-          //
-          // That is a whole-report divergence, not an A3 one: totals,
-          // byModel, byProject, byCategory and byEffort were all short by the
-          // same population. It surfaced through `byEntrypoint` only because
-          // subagent transcripts inherit their parent's entrypoint and are
-          // overwhelmingly `cli`, which made the shortfall legible as a
-          // lopsided bucket rather than a slightly small number (Codex review,
-          // PR #381).
-          //
-          // Attributed to the PROJECT dir name, not "subagents", matching the
-          // reconciler. Session id is the file's own basename, so a subagent
-          // transcript is its own session on both backends.
-          const sessionDirs: string[] = [];
-          for (const e of entries) {
-            if (e.isDirectory()) sessionDirs.push(e.name);
-          }
-          sessionDirs.sort();
-          for (const name of sessionDirs) {
-            const subagentsDir = path.join(dirPath, name, "subagents");
-            try {
-              const nested = (await fs.readdir(subagentsDir)).filter((f) => f.endsWith(".jsonl"));
-              nested.sort();
-              for (const f of nested) filePaths.push(path.join(subagentsDir, f));
-            } catch {
-              /* no subagents dir for this session — the common case */
-            }
-          }
-        } catch {
-          perDir[i + k] = [];
-          return;
+        // Sorted, because `readdir` gives no order guarantee and this list is now
+        // the PRIORITY for duplicate session ids (#522). Homes keep their
+        // configured order, so the primary home wins over a later-configured one.
+        dirNames.sort();
+        for (const dirName of dirNames) subdirs.push({ home, dirName });
+      } catch (err) {
+        // Still not fatal — a home that cannot be listed must not take the sweep
+        // down — but no longer SILENT (#513).
+        // ENOENT here is AMBIGUOUS, and the benign reading is the common one: a
+        // fresh install has a `~/.claude` but no `projects/` until the first
+        // session is written. Reporting that as degraded would put a permanent
+        // warning on every new install (Codex P2 + Copilot, PR #527).
+        //
+        // So ENOENT counts only when the HOME itself is gone — a moved or
+        // unmounted home, which is a real gap. One extra `stat`, on a path that
+        // has already failed, so it costs nothing in the normal case.
+        //
+        // And `projects/` must be absent as an ENTRY, not merely unreadable.
+        // Checking the home alone let a `projects` SYMLINK pointing at a
+        // disconnected drive read as a fresh install: `readdir` gives ENOENT,
+        // the home is right there, and the one case a user most needs told about
+        // was reported as healthy. `pathEntryExists` uses `lstat`, which sees the
+        // broken link (Codex P2, PR #527).
+        //
+        // And an ABSENT PRIMARY home is benign too. `~/.claude` is always added
+        // to the sweep whether or not it exists, so on a fresh machine — or one
+        // that only ever ran Codex or Gemini — it is missing and that is a valid
+        // state, not lost coverage. `ingest.ts` already treats it that way. Only
+        // a home the user explicitly CONFIGURED going missing means history the
+        // sweep was expected to read and could not. (Codex P2, PR #527.)
+        const code = (err as NodeJS.ErrnoException)?.code;
+        const projectsDir = path.join(home, "projects");
+        const homeExists = await directoryExists(home);
+        const isImplicitPrimary = homeDedupeKey(home) === homeDedupeKey(getPrimaryClaudeHome());
+        // ...and the implicit primary is exempt only when it is genuinely
+        // ABSENT. If `~/.claude` is itself a symlink to a disconnected drive,
+        // `directoryExists` is false (it follows the broken link) and so is
+        // `pathEntryExists(projectsDir)` — so the exemption fired and the sweep
+        // published a clean result while ALL Claude history was unavailable.
+        // `lstat` on the home entry separates "never created" from "there, and
+        // unresolvable". (Codex P2, PR #527.)
+        const primaryNeverCreated = isImplicitPrimary && !(await pathEntryExists(home));
+        if (
+          code === "ENOENT" &&
+          (homeExists || primaryNeverCreated) &&
+          !(await pathEntryExists(projectsDir))
+        ) {
+          // Nothing has been recorded here, and nothing is missing: either the
+          // home is present with no `projects/` yet, or it is the implicit
+          // primary on a machine that has never run Claude Code.
+        } else {
+          recordSweepFailure({
+            path: projectsDir,
+            scope: "projects-dir",
+            code,
+            sweep: "usage",
+          }, sweepToken);
         }
-        // Sorted within the directory for the same reason the directories are:
-        // this list is the duplicate-resolution priority.
-        filePaths.sort();
-        perDir[i + k] = filePaths;
-      })
-    );
-  }
-
-  // ── Phase 2: RANK THE CANDIDATES ──────────────────────────────────────
-  //
-  // Each session id gets its candidate files in PREFERENCE order — first in
-  // (home order, directory name, file name). Not a single winner: the first
-  // copy is only preferred, not guaranteed usable.
-  //
-  // Claiming a winner here and discarding the rest was the first version, and
-  // it turned a transient problem in the preferred copy into a permanently
-  // missing session — unreadable, deleted after enumeration, over the size
-  // limit, or parsing to no turns all left the id claimed and the readable
-  // second-home copy dropped without ever being opened. The pre-restructure
-  // code deduped AFTER parsing and so fell through naturally (Codex P2 +
-  // Copilot, PR #524).
-  //
-  // `liveSet` records every file OBSERVED, alternates included: one may still
-  // hold a cache slot from a sweep it won, and dropping it from the live set
-  // would evict that slot and take its mtime out of the ETag signal.
-  type Candidate = { filePath: string; home: string; dirName: string };
-  const candidates = new Map<string, Candidate[]>();
-  const idOrder: string[] = [];
-  for (let idx = 0; idx < subdirs.length; idx++) {
-    const { home, dirName } = subdirs[idx];
-    for (const filePath of perDir[idx] ?? []) {
-      liveSet.add(filePath);
-      const sessionId = path.basename(filePath, ".jsonl");
-      const list = candidates.get(sessionId);
-      if (list) {
-        list.push({ filePath, home, dirName });
-      } else {
-        candidates.set(sessionId, [{ filePath, home, dirName }]);
-        idOrder.push(sessionId);
+        // No projects dir in this home
       }
     }
-  }
+    // Session ids emitted so far, so `visit` can be told whether it is seeing a
+    // repeat. Ids only — this is the one thing the sweep still accumulates, and
+    // it is ~5.5k strings rather than the corpus.
+    const emitted = new Set<string>();
 
-  // ── Phase 3: PARSE and EMIT ───────────────────────────────────────────
-  //
-  // Batched over FILES now rather than directories. The unit of concurrency
-  // changed with the restructure; five at a time is the same budget.
-  //
-  // Parsed concurrently, EMITTED IN CLAIM ORDER. Emitting as each parse
-  // resolved left order dependent on turn count — a 1-turn session overtook a
-  // 20-turn one in the same batch, so an unchanged tree still produced
-  // `[s1, s2, s4, s3]` on one run and `[s1, s2, s3, s4]` on another. Collecting
-  // a batch and then emitting it in order costs the same residency the visitor
-  // queue already allows (five sessions), and buys the order the whole issue is
-  // about (#522).
-  for (let i = 0; i < idOrder.length; i += 5) {
-    const batch = idOrder.slice(i, i + 5);
-    const parsed = await Promise.all(
-      batch.map(async (sessionId) => {
-        // FileCache stat's the file, returns the cached parse if mtime+size
-        // are unchanged, otherwise calls the factory. Skip oversized files
-        // before parsing — they're typically session-in-progress logs that
-        // we'll re-evaluate on the next sweep when they may have been rolled.
-        //
-        // A file can disappear in the gap between the FileCache's outer stat
-        // and our second stat (log rotation, session pruning), so one bad
-        // file must not kill the sweep.
-        //
-        // The catch used to be inside the factory, which converted a read
-        // failure into `[]` and CACHED it under the file's mtime+size. This
-        // is the biggest corpus in the app, and it carried the same defect
-        // #495 found twice on the adapter path: restoring permissions
-        // touches ctime, so an EACCES'd transcript stayed missing from every
-        // usage aggregate until its contents changed or the process
-        // restarted. `parseSessionTurns` swallowed the error on its own
-        // account too, hence `strict` — the option existed and nothing used
-        // it. (#498.)
-        //
-        // `getOrCompute` stores nothing when its factory rejects, so the
-        // retry is automatic and containment stays per-file.
-        //
-        // `return`, not `continue`: this is now a per-FILE callback, so
-        // returning abandons one file rather than a project's remaining
-        // transcripts. The keyword follows the shape, which is the rule
-        // Codex and Copilot established on PR #499 when the shapes differed.
-        // Each candidate in turn, until one yields turns. Ordinary sessions
-        // have exactly one, so this is a single iteration in every case but
-        // the duplicate one.
-        const forId = candidates.get(sessionId) ?? [];
-        for (let ci = 0; ci < forId.length; ci++) {
-        const { filePath, home, dirName } = forId[ci];
-        let turns: UsageTurn[] | undefined;
+    /**
+     * Visitors run ONE AT A TIME, in the order sessions finished parsing.
+     *
+     * Parsing is `Promise.all` over batches of five, so without this the visitor
+     * calls overlap — and the usage visitor awaits per turn while costing, so a
+     * short session could finish updating every accumulator map before a long
+     * session that started earlier. The map path could not do that: `result.set`
+     * is synchronous, so the interleaving ended there and the consumer walked the
+     * map in one fixed order. Several report arrays sort by a single descending
+     * key and fall back to insertion order for ties — `byModel`, `byProject`,
+     * `byCategory`, `topTools` (Codex P2, PR #520).
+     *
+     * ENQUEUE, DO NOT AWAIT, at the call sites. `emit` fixes a session's place in
+     * the queue at the moment its parse completed, which is exactly where
+     * `result.set` put it — so the fold sees the map path's order. Awaiting each
+     * emission instead (the first attempt) stalled the per-directory file loop
+     * behind a slow visit, which delayed later parses and therefore CHANGED that
+     * order — the opposite of the intent (Codex P2, round 2).
+     *
+     * The queue is bounded, because an unbounded one would hold every session's
+     * turns whenever the visitor is slower than the parser and hand #515 its own
+     * defect back. `QUEUE_LIMIT` sessions may wait; past that the sweep drains
+     * before enqueueing more. The bound is still strictly better than the map
+     * path, which held all of them unconditionally.
+     *
+     * Order therefore matches the map path except under sustained visitor
+     * backpressure, where memory is bounded instead. Tie ordering is not stable
+     * run-to-run in either shape anyway — see #522.
+     */
+    const QUEUE_LIMIT = 5;
+    let queued = 0;
+    let visitChain: Promise<void> = Promise.resolve();
+    // The FIRST visitor error, rethrown after the queue drains. The chain itself
+    // must not reject — a rejected chain would skip every visit behind it — but
+    // the failure cannot be swallowed either, or a sweep would report success
+    // having folded nothing.
+    let visitError: unknown;
+    let visitFailed = false;
+
+    const emit = async (sessionId: string, turns: UsageTurn[]): Promise<void> => {
+      queued++;
+      visitChain = visitChain.then(async () => {
         try {
-          turns = await cache.getOrCompute(filePath, async (fp) => {
-            // Oversized returns `[]` rather than rejecting: the file WAS
-            // stat'd and is deliberately not parsed, which is a verdict about
-            // it and stays true until the size changes. Cacheable.
-            const stat = await fs.stat(fp);
-            if (stat.size > MAX_SESSION_FILE_SIZE) return [];
-            // Parse WITH sidechains so the cached map carries subagent turns
-            // (tagged `isSidechain`). `parseAllSessions()` strips them by
-            // default for existing consumers; the usage aggregator opts in
-            // via `{ includeSidechains: true }` to fold subagent cost into
-            // the totals (A1).
-            return await parseSessionTurns(fp, dirName, {
-              includeSidechains: true,
-              homeKey: normalizePathKey(home),
-              strict: true,
+          await visit(sessionId, turns);
+        } catch (e) {
+          if (!visitFailed) {
+            visitFailed = true;
+            visitError = e;
+          }
+        } finally {
+          queued--;
+        }
+      });
+      // Backpressure only at the bound, so the common path never stalls a parse.
+      if (queued >= QUEUE_LIMIT) await visitChain;
+    };
+    // Track every JSONL we observed during this sweep so we can evict slots for
+    // files that were deleted since the last call. Without this, `maxMtimeMs()`
+    // keeps reflecting a deleted file's mtime forever and ETags stick to a
+    // value that no longer matches reality — clients would get 304s after a
+    // session deletion even though the response body changed.
+    const liveSet = new Set<string>();
+
+    // NOT `if (subdirs.length === 0) return new Map()`, which is what stood here
+    // and what this loop's condition now expresses instead. That early return
+    // predates adapter discovery and became a hole the moment the merge below was
+    // added: an installation running Codex or Gemini with no readable Claude
+    // projects tree has zero subdirs, so it returned an empty map before reaching
+    // the adapters — and the file backend reported an empty corpus for exactly the
+    // users this change exists to serve. (Codex P1, PR #490.)
+    //
+    // ── Phase 1: ENUMERATE ────────────────────────────────────────────────
+    //
+    // Every candidate file is listed before ANY of them is parsed, so which copy
+    // of a duplicated session id wins is decided by position in a sorted list
+    // rather than by which parse happened to finish first (#522).
+    //
+    // The old shape enumerated and parsed in the same per-directory callback and
+    // claimed ids at emission time — so two homes holding the same session UUID
+    // resolved to whichever won a race, and two sweeps of an unchanged tree could
+    // disagree. Listing first also means the losing copy is never parsed at all.
+    //
+    // Cost: one array of ~6.6k paths. Not the corpus.
+    const perDir: string[][] = new Array(subdirs.length);
+    for (let i = 0; i < subdirs.length; i += 5) {
+      const batch = subdirs.slice(i, i + 5);
+      await Promise.all(
+        batch.map(async ({ home, dirName }, k) => {
+          const dirPath = path.join(home, "projects", dirName);
+          const filePaths: string[] = [];
+          try {
+            const entries = await fs.readdir(dirPath, { withFileTypes: true });
+            for (const e of entries) {
+              if (e.isFile() && e.name.endsWith(".jsonl")) {
+                filePaths.push(path.join(dirPath, e.name));
+              }
+            }
+
+            // Newer Claude Code writes subagent transcripts to
+            // `<project>/<session-id>/subagents/agent-*.jsonl` instead of
+            // inlining sidechain entries in the parent file. The SQLite
+            // reconciler walks one level down for exactly this; this reader did
+            // not, so on the file backend every one of those sessions — and its
+            // turns, tokens and cost — was simply absent.
+            //
+            // That is a whole-report divergence, not an A3 one: totals,
+            // byModel, byProject, byCategory and byEffort were all short by the
+            // same population. It surfaced through `byEntrypoint` only because
+            // subagent transcripts inherit their parent's entrypoint and are
+            // overwhelmingly `cli`, which made the shortfall legible as a
+            // lopsided bucket rather than a slightly small number (Codex review,
+            // PR #381).
+            //
+            // Attributed to the PROJECT dir name, not "subagents", matching the
+            // reconciler. Session id is the file's own basename, so a subagent
+            // transcript is its own session on both backends.
+            const sessionDirs: string[] = [];
+            for (const e of entries) {
+              if (e.isDirectory()) sessionDirs.push(e.name);
+            }
+            sessionDirs.sort();
+            for (const name of sessionDirs) {
+              const subagentsDir = path.join(dirPath, name, "subagents");
+              try {
+                const nested = (await fs.readdir(subagentsDir)).filter((f) => f.endsWith(".jsonl"));
+                nested.sort();
+                for (const f of nested) filePaths.push(path.join(subagentsDir, f));
+              } catch (err) {
+                // Absent is the COMMON case and not a failure — most sessions
+                // delegate nothing. Unreadable is a different thing: those
+                // transcripts, and their tokens and cost, drop out of every
+                // aggregate exactly as a missing project directory's would
+                // (Codex P2, PR #527).
+                // ENOENT is ambiguous here exactly as it is at the home level,
+                // and for the same reason: no `subagents/` directory is the
+                // common case and reads as absence, but a `subagents` ENTRY that
+                // is a symlink to a disconnected drive fails `readdir` with the
+                // same code while the transcripts it points at are genuinely
+                // missing from the sweep. Suppressing every ENOENT published a
+                // complete result over them. The other two sites in this file
+                // already ask `pathEntryExists`; this one did not.
+                // (Codex P2, PR #527.)
+                const code = (err as NodeJS.ErrnoException)?.code;
+                const benignlyAbsent =
+                  code === "ENOENT" && !(await pathEntryExists(subagentsDir));
+                if (!benignlyAbsent) {
+                  recordSweepFailure(
+                    {
+                      path: subagentsDir,
+                      scope: "project-dir",
+                      code,
+                      sweep: "usage",
+                    },
+                    sweepToken
+                  );
+                }
+              }
+            }
+          } catch (err) {
+            // One encoded project directory with a restrictive ACL loses that
+            // project's whole history from every usage aggregate. Reported at
+            // this granularity rather than as "the home is gone", because those
+            // are different problems with different fixes (#513).
+            recordSweepFailure(
+              {
+                path: dirPath,
+                scope: "project-dir",
+                code: (err as NodeJS.ErrnoException)?.code,
+                sweep: "usage",
+              },
+              sweepToken
+            );
+            perDir[i + k] = [];
+            return;
+          }
+          // Sorted within the directory for the same reason the directories are:
+          // this list is the duplicate-resolution priority.
+          filePaths.sort();
+          perDir[i + k] = filePaths;
+        })
+      );
+    }
+
+    // ── Phase 2: RANK THE CANDIDATES ──────────────────────────────────────
+    //
+    // Each session id gets its candidate files in PREFERENCE order — first in
+    // (home order, directory name, file name). Not a single winner: the first
+    // copy is only preferred, not guaranteed usable.
+    //
+    // Claiming a winner here and discarding the rest was the first version, and
+    // it turned a transient problem in the preferred copy into a permanently
+    // missing session — unreadable, deleted after enumeration, over the size
+    // limit, or parsing to no turns all left the id claimed and the readable
+    // second-home copy dropped without ever being opened. The pre-restructure
+    // code deduped AFTER parsing and so fell through naturally (Codex P2 +
+    // Copilot, PR #524).
+    //
+    // `liveSet` records every file OBSERVED, alternates included: one may still
+    // hold a cache slot from a sweep it won, and dropping it from the live set
+    // would evict that slot and take its mtime out of the ETag signal.
+    type Candidate = { filePath: string; home: string; dirName: string };
+    const candidates = new Map<string, Candidate[]>();
+    const idOrder: string[] = [];
+    for (let idx = 0; idx < subdirs.length; idx++) {
+      const { home, dirName } = subdirs[idx];
+      for (const filePath of perDir[idx] ?? []) {
+        liveSet.add(filePath);
+        const sessionId = path.basename(filePath, ".jsonl");
+        const list = candidates.get(sessionId);
+        if (list) {
+          list.push({ filePath, home, dirName });
+        } else {
+          candidates.set(sessionId, [{ filePath, home, dirName }]);
+          idOrder.push(sessionId);
+        }
+      }
+    }
+
+    // ── Phase 3: PARSE and EMIT ───────────────────────────────────────────
+    //
+    // Batched over FILES now rather than directories. The unit of concurrency
+    // changed with the restructure; five at a time is the same budget.
+    //
+    // Parsed concurrently, EMITTED IN CLAIM ORDER. Emitting as each parse
+    // resolved left order dependent on turn count — a 1-turn session overtook a
+    // 20-turn one in the same batch, so an unchanged tree still produced
+    // `[s1, s2, s4, s3]` on one run and `[s1, s2, s3, s4]` on another. Collecting
+    // a batch and then emitting it in order costs the same residency the visitor
+    // queue already allows (five sessions), and buys the order the whole issue is
+    // about (#522).
+    for (let i = 0; i < idOrder.length; i += 5) {
+      const batch = idOrder.slice(i, i + 5);
+      const parsed = await Promise.all(
+        batch.map(async (sessionId) => {
+          // FileCache stat's the file, returns the cached parse if mtime+size
+          // are unchanged, otherwise calls the factory. Skip oversized files
+          // before parsing — they're typically session-in-progress logs that
+          // we'll re-evaluate on the next sweep when they may have been rolled.
+          //
+          // A file can disappear in the gap between the FileCache's outer stat
+          // and our second stat (log rotation, session pruning), so one bad
+          // file must not kill the sweep.
+          //
+          // The catch used to be inside the factory, which converted a read
+          // failure into `[]` and CACHED it under the file's mtime+size. This
+          // is the biggest corpus in the app, and it carried the same defect
+          // #495 found twice on the adapter path: restoring permissions
+          // touches ctime, so an EACCES'd transcript stayed missing from every
+          // usage aggregate until its contents changed or the process
+          // restarted. `parseSessionTurns` swallowed the error on its own
+          // account too, hence `strict` — the option existed and nothing used
+          // it. (#498.)
+          //
+          // `getOrCompute` stores nothing when its factory rejects, so the
+          // retry is automatic and containment stays per-file.
+          //
+          // `return`, not `continue`: this is now a per-FILE callback, so
+          // returning abandons one file rather than a project's remaining
+          // transcripts. The keyword follows the shape, which is the rule
+          // Codex and Copilot established on PR #499 when the shapes differed.
+          // Each candidate in turn, until one yields turns. Ordinary sessions
+          // have exactly one, so this is a single iteration in every case but
+          // the duplicate one.
+          const forId = candidates.get(sessionId) ?? [];
+          for (let ci = 0; ci < forId.length; ci++) {
+          const { filePath, home, dirName } = forId[ci];
+          let turns: UsageTurn[] | undefined;
+          try {
+            turns = await cache.getOrCompute(filePath, async (fp) => {
+              // Oversized returns `[]` rather than rejecting: the file WAS
+              // stat'd and is deliberately not parsed, which is a verdict about
+              // it and stays true until the size changes. Cacheable.
+              const stat = await fs.stat(fp);
+              if (stat.size > MAX_SESSION_FILE_SIZE) return [];
+              // Parse WITH sidechains so the cached map carries subagent turns
+              // (tagged `isSidechain`). `parseAllSessions()` strips them by
+              // default for existing consumers; the usage aggregator opts in
+              // via `{ includeSidechains: true }` to fold subagent cost into
+              // the totals (A1).
+              return await parseSessionTurns(fp, dirName, {
+                includeSidechains: true,
+                homeKey: normalizePathKey(home),
+                strict: true,
+              });
             });
-          });
-        } catch {
-          // This copy is unreadable; the next one may not be.
-          continue;
-        }
-
-        if (turns && turns.length > 0) {
-          // The copies we are about to SKIP are still part of the corpus, and
-          // the fingerprint has to know about them or a swap between copies can
-          // be invisible to it. One `stat` each, and only in the duplicate case.
-          for (let rest = ci + 1; rest < forId.length; rest++) {
-            await cache.observe(forId[rest].filePath);
+          } catch {
+            // This copy is unreadable; the next one may not be.
+            continue;
           }
-          return { sessionId, turns };
-        }
-        // Parsed to nothing — oversized, or empty. Try the next copy.
-        }
-        return null;
-      })
-    );
-    for (const entry of parsed) {
-      if (!entry) continue;
-      // Recorded HERE, at emission. The candidate restructure moved dedupe out
-      // of this loop and stopped populating `emitted` along with it — so
-      // `mergeAdapterSessions` could no longer see a collision with a Claude
-      // session, and an adapter reusing a Claude session id had its turns ADDED
-      // to the streaming totals while the map form silently replaced the Claude
-      // entry (Codex P2, PR #524).
-      //
-      // At emission rather than at claim time, so a session whose every copy
-      // failed to parse leaves its id free for an adapter that can supply one.
-      emitted.add(entry.sessionId);
-      await emit(entry.sessionId, entry.turns);
+
+          if (turns && turns.length > 0) {
+            // The copies we are about to SKIP are still part of the corpus, and
+            // the fingerprint has to know about them or a swap between copies can
+            // be invisible to it. One `stat` each, and only in the duplicate case.
+            for (let rest = ci + 1; rest < forId.length; rest++) {
+              await cache.observe(forId[rest].filePath);
+            }
+            return { sessionId, turns };
+          }
+          // Parsed to nothing — oversized, or empty. Try the next copy.
+          }
+          return null;
+        })
+      );
+      for (const entry of parsed) {
+        if (!entry) continue;
+        // Recorded HERE, at emission. The candidate restructure moved dedupe out
+        // of this loop and stopped populating `emitted` along with it — so
+        // `mergeAdapterSessions` could no longer see a collision with a Claude
+        // session, and an adapter reusing a Claude session id had its turns ADDED
+        // to the streaming totals while the map form silently replaced the Claude
+        // entry (Codex P2, PR #524).
+        //
+        // At emission rather than at claim time, so a session whose every copy
+        // failed to parse leaves its id free for an adapter that can supply one.
+        emitted.add(entry.sessionId);
+        await emit(entry.sessionId, entry.turns);
+      }
     }
+
+    // ── Non-Claude adapter sessions (#475) ────────────────────────────────
+    //
+    // Until this landed, `discoverAllSessions` was imported by `db/ingest.ts` and
+    // by nothing else: the SQL backend indexed every enabled adapter while every
+    // file-parse entry point walked `<claude-home>/projects/**` and stopped. The
+    // two backends were therefore not equivalent, and #472 made that matter by
+    // widening file-parse's serving window to the whole of the first reconcile —
+    // so `data/index.ts` had to add `fileParseCoversCorpus()` to REFUSE to divert
+    // whenever adapter sessions existed, leaving exactly those users with the
+    // original defect. This closes it for the three usage loaders.
+    //
+    // Merged after the Claude sweep and into the same map, because the aggregator
+    // is already source-aware: it filters on `t.source ?? "claude"` and builds its
+    // by-source breakdown from the same turns (`aggregator.ts:69,474`). Confirmed
+    // against that code rather than taken on the issue's word.
+    await mergeAdapterSessions(config, cache, emit, emitted, liveSet);
+
+    // Evict slots for files that disappeared since the last sweep. This keeps
+    // `maxMtimeMs()` honest as a change signal for ETag computation.
+    //
+    // Adapter files are in `liveSet` too — `mergeAdapterSessions` adds them.
+    // Omitting them would evict every adapter slot on each sweep, so they would
+    // be re-parsed every time AND `maxMtimeMs()` would ignore adapter edits,
+    // leaving ETags claiming "unchanged" across a real change.
+    // Drain. The call sites enqueue without awaiting, so this is where the tail
+    // of the queue is actually run — and where a visitor's failure surfaces.
+    await visitChain;
+    if (visitFailed) throw visitError;
+
+    cache.retainOnly(liveSet);
+  } finally {
+    // In a `finally`: a pass that threw still publishes what it observed, and
+    // those partial findings are usually the relevant ones — a failure severe
+    // enough to stop the sweep is exactly what a reader needs to see (#513).
+    endSweepFailureCycle("usage", sweepToken);
   }
-
-  // ── Non-Claude adapter sessions (#475) ────────────────────────────────
-  //
-  // Until this landed, `discoverAllSessions` was imported by `db/ingest.ts` and
-  // by nothing else: the SQL backend indexed every enabled adapter while every
-  // file-parse entry point walked `<claude-home>/projects/**` and stopped. The
-  // two backends were therefore not equivalent, and #472 made that matter by
-  // widening file-parse's serving window to the whole of the first reconcile —
-  // so `data/index.ts` had to add `fileParseCoversCorpus()` to REFUSE to divert
-  // whenever adapter sessions existed, leaving exactly those users with the
-  // original defect. This closes it for the three usage loaders.
-  //
-  // Merged after the Claude sweep and into the same map, because the aggregator
-  // is already source-aware: it filters on `t.source ?? "claude"` and builds its
-  // by-source breakdown from the same turns (`aggregator.ts:69,474`). Confirmed
-  // against that code rather than taken on the issue's word.
-  await mergeAdapterSessions(config, cache, emit, emitted, liveSet);
-
-  // Evict slots for files that disappeared since the last sweep. This keeps
-  // `maxMtimeMs()` honest as a change signal for ETag computation.
-  //
-  // Adapter files are in `liveSet` too — `mergeAdapterSessions` adds them.
-  // Omitting them would evict every adapter slot on each sweep, so they would
-  // be re-parsed every time AND `maxMtimeMs()` would ignore adapter edits,
-  // leaving ETags claiming "unchanged" across a real change.
-  // Drain. The call sites enqueue without awaiting, so this is where the tail
-  // of the queue is actually run — and where a visitor's failure surfaces.
-  await visitChain;
-  if (visitFailed) throw visitError;
-
-  cache.retainOnly(liveSet);
 }
 
 /**
