@@ -38,6 +38,7 @@ import {
   recordSweepSuccess,
   directoryExists,
   pathEntryExists,
+  isBenignAbsentProjectsDir,
 } from "@/lib/sweepFailures";
 
 const MAX_SESSION_FILE_SIZE = 50 * 1024 * 1024; // 50MB
@@ -835,21 +836,13 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
         // sweep was expected to read and could not. (Codex P2, PR #527.)
         const code = (err as NodeJS.ErrnoException)?.code;
         const projectsDir = path.join(home, "projects");
-        const homeExists = await directoryExists(home);
-        const isImplicitPrimary = homeDedupeKey(home) === homeDedupeKey(getPrimaryClaudeHome());
-        // ...and the implicit primary is exempt only when it is genuinely
-        // ABSENT. If `~/.claude` is itself a symlink to a disconnected drive,
-        // `directoryExists` is false (it follows the broken link) and so is
-        // `pathEntryExists(projectsDir)` — so the exemption fired and the sweep
-        // published a clean result while ALL Claude history was unavailable.
-        // `lstat` on the home entry separates "never created" from "there, and
-        // unresolvable". (Codex P2, PR #527.)
-        const primaryNeverCreated = isImplicitPrimary && !(await pathEntryExists(home));
-        if (
-          code === "ENOENT" &&
-          (homeExists || primaryNeverCreated) &&
-          !(await pathEntryExists(projectsDir))
-        ) {
+        // Shared with the DB reconcile since #529. This rule was stated twice
+        // and the copies disagreed: the reconcile kept a bare
+        // `code === "ENOENT"` and so recorded a dangling `projects` symlink as
+        // a clean pass, on the DEFAULT backend. One implementation is the fix
+        // for that, not a tidy-up — see `isBenignAbsentProjectsDir` for the
+        // three distinctions it encodes.
+        if (await isBenignAbsentProjectsDir(home, projectsDir, code)) {
           // Nothing has been recorded here, and nothing is missing: either the
           // home is present with no `projects/` yet, or it is the implicit
           // primary on a machine that has never run Claude Code.

@@ -1,5 +1,6 @@
 import { promises as fsPromises } from "fs";
 import { normalizePathKey } from "@/lib/platform";
+import { homeDedupeKey, getPrimaryClaudeHome } from "@/lib/claudeHome";
 
 /**
  * Enumeration failures the corpus sweeps hit, kept so they can be reported
@@ -483,6 +484,62 @@ function homeProjectsPrefix(rawPath: string): string | null {
  * saved with forward slashes failing to prune its own entries.
  * (Codex P2 x2 + Copilot, PR #527.)
  */
+/**
+ * Is a failed `readdir` of `<home>/projects` a benign absence rather than lost
+ * coverage?
+ *
+ * ONE implementation, called by every sweep, because the drift is the bug. #513
+ * taught the two file sweeps three distinctions; the DB reconcile — which is the
+ * DEFAULT backend — kept a bare `code === "ENOENT"` and therefore recorded a
+ * dangling `projects` symlink as a clean pass (#529, findings 4 and 5). Two
+ * copies of a rule this subtle will always end up disagreeing, and the one that
+ * disagrees silently is the one that ships.
+ *
+ * Benign means one of exactly two things:
+ *
+ *   - the home is there and simply has no `projects/` yet — every machine
+ *     before its first session;
+ *   - it is the IMPLICIT primary (`~/.claude`) and has never been created —
+ *     valid on a machine that only ever ran Codex or Gemini, since the primary
+ *     is swept whether or not it exists.
+ *
+ * Everything else is a gap the sweep was expected to read:
+ *
+ *   - `projects/` must be absent as an ENTRY, not merely unreadable. A symlink
+ *     pointing at a disconnected drive gives ENOENT from `readdir` while the
+ *     home sits right there, and `lstat` is what sees the difference — the one
+ *     case a user most needs told about.
+ *   - the implicit-primary exemption needs `lstat` on the HOME too: if
+ *     `~/.claude` is itself a link to a disconnected drive, `directoryExists`
+ *     follows the broken link and reads false, and the exemption would fire
+ *     while ALL Claude history was unavailable.
+ *   - a CONFIGURED home going missing is history the sweep was expected to
+ *     read, so it is never exempt.
+ *
+ * `home` is `null` when the caller was handed an explicit `projectsDir` rather
+ * than discovering one under a home — `reconcileAllSessions({ projectsDir })`,
+ * and the tests that drive it. There is no configured home to have gone
+ * missing in that case, so the home half of the rule has nothing to say and is
+ * skipped; the ENTRY check still applies, because a dangling link is a dangling
+ * link however the path arrived. Getting this wrong marks every pass aborted
+ * for a caller that simply pointed at a directory that is not there — the #471
+ * regression, which `dbIndexerRuns.test.ts` pins.
+ */
+export async function isBenignAbsentProjectsDir(
+  home: string | null,
+  projectsDir: string,
+  code: string | undefined
+): Promise<boolean> {
+  if (code !== "ENOENT") return false;
+  if (home !== null) {
+    const homeExists = await directoryExists(home);
+    const isImplicitPrimary = homeDedupeKey(home) === homeDedupeKey(getPrimaryClaudeHome());
+    const primaryNeverCreated = isImplicitPrimary && !(await pathEntryExists(home));
+    if (!homeExists && !primaryNeverCreated) return false;
+  }
+  return !(await pathEntryExists(projectsDir));
+}
+
 export function sweepFailureKey(failure: SweepFailure): string {
   return `${failure.scope}|${normalizePathKey(failure.path)}`;
 }
