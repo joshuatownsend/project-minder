@@ -593,8 +593,32 @@ async function runStop(platformKind) {
     // attempting every verified PID, so one bad PID doesn't stop us from
     // trying the rest).
     let anyRealKillFailure = false;
+    // Did we identify and stop a process belonging to THIS installation?
+    //
+    // The caller cannot infer it. `stop` exits 0 whether it killed our service,
+    // found nothing listening, or declined a stranger holding the port — and
+    // the updater's `served_minder` proxy ("a Minder answered there") is true
+    // for a second install too, which made it read a safe stop as a failed one
+    // and abort the update (#460).
+    //
+    // Windows only, deliberately. This is where the per-PID identity check
+    // lives; macOS and Linux target a launchd label / systemd unit and cannot
+    // tell whether the job was RUNNING, so reporting `true` there would claim a
+    // restart is owed for a service the user had left down. They emit nothing
+    // and the caller keeps its existing heuristic.
+    let stoppedRegistered = false;
+    // A PID whose command line we could not READ is not a PID we established
+    // isn't ours. `queryWindowsProcessCommandLine` returns "" when PowerShell is
+    // unavailable, access is denied, or the query fails transiently — and the
+    // loop then declines to kill it, which is right, but leaves the verdict
+    // looking like "examined every PID, none were ours". The caller treats that
+    // as definitive and skips its own safety check, so an update could proceed
+    // over files a live service still holds (Codex P1, #543). Report nothing
+    // instead and let the caller fall back to its heuristic.
+    let identityUnknown = false;
     for (const pid of pids) {
       const commandLine = await queryWindowsProcessCommandLine(pid);
+      if (!commandLine) identityUnknown = true;
       if (!commandLineMatchesServer(commandLine, identity)) {
         step(
           `Port ${port} is held by PID ${pid}, but its command line doesn't match this Minder ` +
@@ -607,8 +631,18 @@ async function runStop(platformKind) {
       step(`Port ${port} is held by PID ${pid} (verified as this installation) — hard-stopping (taskkill /F /T).`);
       const killResults = await runSteps([{ exe: "taskkill", args: ["/F", "/T", "/PID", pid] }]);
       const failure = findFirstStepFailure(killResults);
-      if (!failure) continue;
+      if (!failure) {
+        stoppedRegistered = true;
+        continue;
+      }
       if (isTaskkillAlreadyGone(failure)) {
+        // Still OUR service, and still now gone. `commandLineMatchesServer`
+        // already identified it; taskkill simply lost a benign race against a
+        // process that was on its way out. Reporting `false` here would emit a
+        // definitive negative, and the caller would then owe no restart — so a
+        // failed download or a Quit would leave the user without the service
+        // until their next logon (Codex, #543).
+        stoppedRegistered = true;
         step(`PID ${pid} had already exited by the time taskkill ran — nothing to do.`);
         continue;
       }
@@ -618,6 +652,11 @@ async function runStop(platformKind) {
     if (anyRealKillFailure) {
       fail("One or more verified Minder processes could not be stopped — see errors above.");
     }
+    // `true` survives an unknown elsewhere: positively identifying and killing
+    // one of ours is a fact, whatever a second PID turned out to be. Only the
+    // NEGATIVE claim needs every PID accounted for.
+    if (stoppedRegistered) writeStopReport({ stoppedRegistered: true });
+    else if (!identityUnknown) writeStopReport({ stoppedRegistered: false });
     return;
   }
   if (platformKind === "macos") {
@@ -633,6 +672,32 @@ async function runStop(platformKind) {
   step(`Stopping via systemctl --user unit "${SYSTEMD_UNIT_NAME}" (scoped by unit name, not by port — safe).`);
   const results = await runSteps(planActions("linux", "stop", { unitName: SYSTEMD_UNIT_NAME }));
   requireStopOk("linux", results, `systemd --user unit "${SYSTEMD_UNIT_NAME}"`);
+}
+
+/**
+ * Hand the stop's identity verdict back to whoever asked for it.
+ *
+ * A FILE rather than the exit code or stdout, and the reasons are worth keeping:
+ *
+ *   - the exit code is user-facing (`pnpm service:stop` is documented), and any
+ *     scheme where ordinary success is non-zero breaks shell and CI use;
+ *   - stdout would have to be piped, and this command is chatty — with the
+ *     caller's wait-with-timeout shape, a full pipe buffer deadlocks the helper
+ *     before it can exit, in the one path that must never hang.
+ *
+ * Absent env var means nobody asked (a plain `pnpm service:stop`), and a write
+ * failure is swallowed: this is a diagnostic channel, and no stop should fail
+ * because a report could not be written. A caller that finds no file must fall
+ * back to its own heuristic rather than assume either verdict.
+ */
+function writeStopReport(report) {
+  const target = process.env.MINDER_STOP_REPORT;
+  if (!target) return;
+  try {
+    writeFileSync(target, JSON.stringify(report), "utf8");
+  } catch {
+    /* diagnostics only — never fail a stop over it */
+  }
 }
 
 // --- CLI entry -------------------------------------------------------------
