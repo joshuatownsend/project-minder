@@ -71,6 +71,12 @@ export async function PATCH(request: NextRequest) {
   // grades computed without it. (Codex P2, PR #490.)
   let corpusShapeChanged = false;
   /**
+   * Homes that left the effective set, staged by the locked mutation and
+   * applied only once the config write has committed. `null` means the swept
+   * set did not move, so the collector is left alone entirely.
+   */
+  let pendingSweepReset: string[] | null = null;
+  /**
    * Narrower than `corpusShapeChanged`, and separate from it on purpose.
    *
    * `corpusShapeChanged` also fires for `pathMappings` and `enabledAdapters`,
@@ -151,16 +157,22 @@ export async function PATCH(request: NextRequest) {
       const after = effective({ ...c, claudeHomes: homes });
       const changed =
         before.size !== after.size || [...after.keys()].some((k) => !before.has(k));
-      if (changed) {
-        // WHICH homes left, not merely that the set moved: wiping every
-        // diagnostic on any change erased a still-valid failure for a home that
-        // is still configured and still unreadable. Called even when nothing
-        // was removed — the generation bump inside is what stops a sweep opened
-        // under the old configuration from publishing into the new one.
-        forgetSweepFailuresUnder(
-          [...before].filter(([k]) => !after.has(k)).map(([, home]) => home)
-        );
-      }
+      // COMPUTED here, APPLIED after the write commits. The diff needs the
+      // locked read to be correct; the collector mutation must not happen at
+      // all if `writeConfig` then fails on EACCES, ENOSPC or an I/O error,
+      // because the old configuration is still on disk and its unreadable home
+      // is still configured. Pruning inside this callback made a FAILED request
+      // report `complete: true`. (Codex P2, PR #527.)
+      //
+      // WHICH homes left, not merely that the set moved: wiping every
+      // diagnostic on any change erased a still-valid failure for a home that
+      // is still configured and still unreadable. Recorded even when nothing
+      // was removed — the generation bump inside `forgetSweepFailuresUnder` is
+      // what stops a sweep opened under the old configuration from publishing
+      // into the new one.
+      pendingSweepReset = changed
+        ? [...before].filter(([k]) => !after.has(k)).map(([, home]) => home)
+        : null;
       c.claudeHomes = homes;
     });
     corpusShapeChanged = true;
@@ -559,6 +571,9 @@ export async function PATCH(request: NextRequest) {
   const config = await mutateConfig((c) => {
     for (const patch of patches) patch(c);
   });
+  // AFTER the write, so a mutation that threw leaves the record describing the
+  // configuration still on disk (Codex P2, PR #527).
+  if (pendingSweepReset !== null) forgetSweepFailuresUnder(pendingSweepReset);
   if (newPricingRules !== undefined) setPricingRules(newPricingRules);
   invalidateAll();
   // The sweep-failure record describes the PREVIOUS set of swept paths, and

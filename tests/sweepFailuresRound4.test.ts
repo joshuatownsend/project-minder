@@ -170,16 +170,29 @@ describe("the record is cleared by corpus changes only", () => {
     // changes which directories get enumerated, so clearing on them erased a
     // live diagnostic about a directory that is still unreadable.
     // (Codex P2, PR #527, round 9.)
-    // Inside the LOCKED mutation now — `mutateConfig`'s callback — so two
-    // overlapping PATCHes cannot both diff against the same pre-mutation
-    // config and prune each other's still-configured homes. Asserted as
-    // "the prune is reached from inside a patch", not as a literal call site,
-    // since pinning the exact expression is what broke this guard twice.
+    // The diff is COMPUTED inside the locked mutation and the collector is
+    // mutated only AFTER the write commits. Both halves matter and they pull
+    // in opposite directions:
+    //
+    //   - computing outside the lock let two overlapping PATCHes diff against
+    //     the same pre-mutation config and prune each other's still-configured
+    //     homes;
+    //   - pruning inside it meant a request whose `writeConfig` then failed had
+    //     already dropped a diagnostic for a home still configured on disk.
     const patchAt = route.indexOf("patches.push((c) => {\n      const effective");
     expect(patchAt).toBeGreaterThan(-1);
     const patchBody = route.slice(patchAt, route.indexOf("\n    });", patchAt));
-    expect(patchBody).toMatch(/forgetSweepFailuresUnder\(/);
+    // Diffed against the LOCKED config...
     expect(patchBody).toMatch(/const before = effective\(c\);/);
+    // ...and staged, not applied.
+    expect(patchBody).toMatch(/pendingSweepReset = changed/);
+    expect(patchBody).not.toMatch(/forgetSweepFailuresUnder\(/);
+    // Applied after `mutateConfig` resolves, which is after the write.
+    const mutateAt = route.indexOf("const config = await mutateConfig(");
+    expect(mutateAt).toBeGreaterThan(-1);
+    expect(route.indexOf("forgetSweepFailuresUnder(pendingSweepReset)")).toBeGreaterThan(
+      mutateAt
+    );
 
     // And the narrower flag is set from a COMPARISON, not from the key being
     // present. A Settings save posts every field, so `Array.isArray(body.claudeHomes)`
@@ -1243,5 +1256,91 @@ describe("the banner treats an empty list as recovery, a missing key as silence"
 
     expect(text).toMatch(/if \(data && Array\.isArray\(data\.unavailable\)\) setHomes\(data\.unavailable\);/);
     expect(text).not.toMatch(/if \(data\?\.unavailable\) setHomes/);
+  });
+});
+
+describe("deduplication keeps the newest observation of a location", () => {
+  it("does not let an older errno mask a newer one", async () => {
+    // Insertion order kept whichever sweep's result was iterated first, so an
+    // older `EACCES` masked a later `ENOTDIR` for the same path — and the
+    // banner went on advising about permissions after the cause had changed.
+    // The errno is the actionable half: those two send someone to do
+    // completely different things. (Codex P2, PR #527.)
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      getSweepFailures,
+      getSweepFailureTotal,
+    } = await import("@/lib/sweepFailures");
+
+    const home = "/home/me/.claude/projects";
+
+    const older = beginSweepFailureCycle("usage");
+    recordSweepFailure(
+      { path: home, scope: "projects-dir", code: "EACCES", sweep: "usage" },
+      older
+    );
+    endSweepFailureCycle("usage", older);
+
+    const newer = beginSweepFailureCycle("sessions");
+    recordSweepFailure(
+      { path: home, scope: "projects-dir", code: "ENOTDIR", sweep: "sessions" },
+      newer
+    );
+    endSweepFailureCycle("sessions", newer);
+
+    const failures = getSweepFailures();
+    // Still one location...
+    expect(failures).toHaveLength(1);
+    expect(getSweepFailureTotal()).toBe(1);
+    // ...described by the NEWEST observation of it.
+    expect(failures[0].code).toBe("ENOTDIR");
+  });
+
+  it("keeps the newer one whichever sweep saw it first", async () => {
+    // The counterpart, so the test cannot be passing on iteration order: the
+    // same assertion with the sweeps swapped.
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      getSweepFailures,
+    } = await import("@/lib/sweepFailures");
+
+    const home = "/home/me/.claude/projects";
+
+    const older = beginSweepFailureCycle("sessions");
+    recordSweepFailure(
+      { path: home, scope: "projects-dir", code: "EACCES", sweep: "sessions" },
+      older
+    );
+    endSweepFailureCycle("sessions", older);
+
+    const newer = beginSweepFailureCycle("usage");
+    recordSweepFailure(
+      { path: home, scope: "projects-dir", code: "ENOTDIR", sweep: "usage" },
+      newer
+    );
+    endSweepFailureCycle("usage", newer);
+
+    expect(getSweepFailures()[0].code).toBe("ENOTDIR");
+  });
+});
+
+describe("the banner distinguishes an empty list from a missing key", () => {
+  it("applies the same rule to degraded as to unavailable", async () => {
+    // The previous revision fixed `unavailable` and left `degraded` on
+    // `?? []` — which clears the list when the key is MISSING, the exact
+    // behaviour the comment beside it argues against. An older server, or a
+    // rolling deploy, would have wiped a live warning. (Copilot, PR #527.)
+    const { readFile } = await import("node:fs/promises");
+    const text = await readFile("src/components/UnavailableHomesBanner.tsx", "utf-8");
+
+    expect(text).toMatch(/if \(data && Array\.isArray\(data\.degraded\)\) setDegraded\(data\.degraded\);/);
+    expect(text).not.toMatch(/setDegraded\(data\.degraded \?\? \[\]\)/);
+    // And the total follows the same rule rather than reading through a
+    // missing key.
+    expect(text).toMatch(/typeof data\.degradedTotal === "number"/);
   });
 });

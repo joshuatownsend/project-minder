@@ -120,12 +120,23 @@ export function UnavailableHomesBanner() {
             // does both: an older server that omits the key leaves the last
             // good answer alone. (Copilot, PR #527.)
             if (data && Array.isArray(data.unavailable)) setHomes(data.unavailable);
-            // `??` for the same reason, one field over.
-            if (data) setDegraded(data.degraded ?? []);
-            // Falls back to the detail length for an older server that does not
-            // send the field — which is what the banner used to show anyway, so
-            // the fallback is the previous behaviour rather than a new guess.
-            if (data) setDegradedTotal(data.degradedTotal ?? (data.degraded ?? []).length);
+            // The SAME rule, one field over — which is the point, because the
+            // previous revision fixed `unavailable` while leaving `degraded`
+            // on `?? []`, and `?? []` clears the list when the key is MISSING.
+            // That is the exact behaviour the comment above argues against: an
+            // older server, or a rolling deploy, would have wiped a live
+            // warning. (Copilot, PR #527.)
+            if (data && Array.isArray(data.degraded)) setDegraded(data.degraded);
+            // Likewise. A server that sends neither field tells us nothing, so
+            // the last good answer stands; one that sends `degraded` but not
+            // `degradedTotal` is an older server, and its detail length is what
+            // the banner used to show — the previous behaviour rather than a
+            // new guess.
+            if (data && typeof data.degradedTotal === "number") {
+              setDegradedTotal(data.degradedTotal);
+            } else if (data && Array.isArray(data.degraded)) {
+              setDegradedTotal(data.degraded.length);
+            }
           }
         )
         .catch(() => {});

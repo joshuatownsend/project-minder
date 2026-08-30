@@ -508,17 +508,29 @@ export function recordSweepFailure(failure: SweepFailure, token: number): void {
  * genuinely found twice. Merging happens here, where both are visible.
  */
 export function getSweepFailures(): SweepFailure[] {
-  const out: SweepFailure[] = [];
-  const seen = new Set<string>();
+  // Deduplicated by location, keeping the NEWEST observation of it.
+  //
+  // Insertion order kept whichever sweep's result happened to be iterated
+  // first, so an older `EACCES` masked a later `ENOTDIR` for the same path and
+  // the banner went on advising the user about permissions after the cause had
+  // changed. The errno is the actionable half of the message — `EACCES` and
+  // `ENOTDIR` send someone to do completely different things — so "which of the
+  // two" is not a cosmetic choice. (Codex P2, PR #527.)
+  //
+  // An entry with no recorded timestamp (past the tracking cap, so its key was
+  // never kept) sorts oldest: it loses to anything stamped, and among
+  // themselves the first wins, which is the previous behaviour for exactly the
+  // entries this cannot do better for.
+  const best = new Map<string, { failure: SweepFailure; at: number }>();
   for (const r of published().values()) {
     for (const f of r.items) {
       const key = sweepFailureKey(f);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(f);
+      const at = r.seen.get(key) ?? -1;
+      const existing = best.get(key);
+      if (existing === undefined || at > existing.at) best.set(key, { failure: f, at });
     }
   }
-  return out;
+  return [...best.values()].map((e) => e.failure);
 }
 
 /**
