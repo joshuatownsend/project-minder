@@ -60,6 +60,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as StdCommand, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -126,7 +127,15 @@ static PENDING_RESTORE: Mutex<Option<Arc<ServiceHandoff>>> = Mutex::new(None);
 /// than the token's (a foreign server on that port would also arm it), and
 /// deliberately so: a spurious start of a service that was not running is
 /// recoverable, losing a running one is not.
-static STOP_IN_FLIGHT: Mutex<Option<Arc<ServiceHandoff>>> = Mutex::new(None);
+static STOP_IN_FLIGHT: Mutex<Option<(Arc<ServiceHandoff>, Arc<AtomicBool>)>> =
+    Mutex::new(None);
+
+/// How long a Quit will wait for an in-flight stop to resolve before giving up.
+///
+/// `stop()` already bounds the helper at `STOP_TIMEOUT` and kills it on expiry,
+/// so the flag is set shortly after that in the worst case; the grace is for the
+/// bookkeeping in between, not for the helper.
+const STOP_JOIN_GRACE: Duration = Duration::from_secs(5);
 
 /// Proof that this process stopped a service that **was running**, and
 /// therefore owes it a restart if the update does not go through.
@@ -168,13 +177,15 @@ pub fn arm_restore(stopped: StoppedService) {
 
 /// Mark a stop as underway. Private, and called only from [`ServiceHandoff::stop`]
 /// once the port has been observed bound.
-fn mark_stop_in_flight(handoff: &Arc<ServiceHandoff>) {
+fn mark_stop_in_flight(handoff: &Arc<ServiceHandoff>) -> Arc<AtomicBool> {
+    let done = Arc::new(AtomicBool::new(false));
     if let Ok(mut slot) = STOP_IN_FLIGHT.lock() {
-        *slot = Some(handoff.clone());
+        *slot = Some((handoff.clone(), done.clone()));
     }
+    done
 }
 
-fn take_stop_in_flight() -> Option<Arc<ServiceHandoff>> {
+fn take_stop_in_flight() -> Option<(Arc<ServiceHandoff>, Arc<AtomicBool>)> {
     STOP_IN_FLIGHT.lock().ok().and_then(|mut slot| slot.take())
 }
 
@@ -208,12 +219,42 @@ pub fn restore_if_armed() {
         handoff.start();
         return;
     }
-    // Quit landed while the helper was still running. We know the port was
-    // bound when we began, so putting the service back is the safe direction —
-    // the helper may already have taken it down (#460).
-    if let Some(handoff) = take_stop_in_flight() {
-        log("update: quit arrived mid-stop — putting the logon service back");
-        handoff.start();
+    // Quit landed while the helper was still running.
+    //
+    // Starting here directly was the first attempt and it raced: `start()` runs
+    // `schtasks /run` on Windows, against a `taskkill /F /T` that has not
+    // finished (Codex P1, PR #541). So WAIT for the stop to resolve, and then
+    // ask the ordinary question again.
+    //
+    // Waiting also makes the answer exact, which is why this is simpler than
+    // what it replaces rather than more machinery. Before, the marker licensed
+    // an unconditional start on the theory that a spurious start is recoverable
+    // and a lost service is not — a real concession. Afterwards the stop has
+    // resolved, so `arm_restore` has recorded a debt if and only if something of
+    // ours was genuinely stopped: claim it and start, or find nothing and start
+    // nothing. The concession is gone.
+    //
+    // `take` before the wait, so a concurrent claimant cannot also be here; the
+    // debt it may promote into `PENDING_RESTORE` is what the second claim below
+    // reads.
+    if let Some((_handoff, done)) = take_stop_in_flight() {
+        log("update: quit arrived mid-stop — waiting for it to finish before deciding");
+        let deadline = Instant::now() + STOP_TIMEOUT + STOP_JOIN_GRACE;
+        while !done.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        match take_restore() {
+            Some(handoff) => {
+                log("update: the stop finished and owed a restart — putting the logon service back");
+                handoff.start();
+            }
+            None => {
+                // Either nothing of ours was running, or the stop failed and
+                // left it running. Neither owes a start, and inventing one here
+                // is what the token type exists to prevent.
+                log("update: the stop finished owing nothing — leaving the service as it is");
+            }
+        }
     }
 }
 
@@ -650,9 +691,11 @@ impl ServiceHandoff {
         // `was_listening` so this can only ever put back something that was
         // observed up — the invariant `StoppedService` protects, held one
         // observation earlier.
-        if was_listening {
-            mark_stop_in_flight(self);
-        }
+        let stop_done = if was_listening {
+            Some(mark_stop_in_flight(self))
+        } else {
+            None
+        };
         let exit = self.run_helper("stop");
         // Short-circuits: only worth the wait when something was there to go
         // away and the helper claims to have done its job.
@@ -683,6 +726,12 @@ impl ServiceHandoff {
         // Quit would find nothing.
         if !matches!(verdict, Ok(true)) {
             clear_stop_in_flight();
+        }
+        // Released on EVERY path, including the error ones: a Quit blocked on
+        // this flag must never outlive the stop it is waiting for. Set after the
+        // verdict so a waiter that wakes on it sees any debt already recorded.
+        if let Some(done) = &stop_done {
+            done.store(true, Ordering::SeqCst);
         }
         // The token exists only when something really did stop. That is the
         // whole point: no caller can record a debt we do not owe.
@@ -1304,6 +1353,7 @@ mod tests {
             arm_restore, clear_stop_in_flight, disarm_restore, mark_stop_in_flight,
             restore_if_armed, take_restore, take_stop_in_flight, StoppedService,
         };
+        use std::sync::atomic::Ordering;
         use std::sync::Arc;
 
         // Nothing armed — the state after every update that never stopped a
@@ -1381,6 +1431,31 @@ mod tests {
         assert!(
             take_stop_in_flight().is_none(),
             "a committed update must not leave a mid-stop marker behind either"
+        );
+
+        // --- and Quit no longer starts anything on faith (#541 P1) ---
+        //
+        // The first version of this marker licensed an UNCONDITIONAL start: it
+        // knew the port had been bound, not what the helper had done. That
+        // raced `schtasks /run` against a `taskkill /F /T` still in progress,
+        // and conceded a possible spurious start as the lesser evil.
+        //
+        // Waiting makes the answer exact instead. With the stop resolved and no
+        // debt recorded — the helper found nothing of ours — `restore_if_armed`
+        // must consume the marker and start NOTHING. Safe to call for real here
+        // precisely because nothing is owed: starting needs a `StoppedService`,
+        // and there is none.
+        assert!(take_restore().is_none(), "nothing owed before this case");
+        let done = mark_stop_in_flight(&handoff);
+        done.store(true, Ordering::SeqCst); // the stop has already resolved
+        restore_if_armed();
+        assert!(
+            take_stop_in_flight().is_none(),
+            "the marker is consumed even when the stop turned out to owe nothing"
+        );
+        assert!(
+            take_restore().is_none(),
+            "and no debt is invented on the way out"
         );
 
         // Leave the globals as they were found — these slots are process-wide
