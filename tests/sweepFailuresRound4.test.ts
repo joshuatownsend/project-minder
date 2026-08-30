@@ -1161,3 +1161,57 @@ describe("pruning a removed home uses the canonical path space too", () => {
     expect(getSweepFailures()).toHaveLength(1);
   });
 });
+
+describe("a repeated failure is deduplicated but re-stamped", () => {
+  it("survives an INTERMEDIATE success in the same cycle", async () => {
+    // Three overlapping callers can share one cycle and observe a directory as
+    // failure -> success -> failure. Keeping the FIRST failure's timestamp made
+    // the intermediate success look newer than the last observation, so
+    // `prunePublished` retired a failure that was still true and the endpoint
+    // reported complete. (Codex P2, PR #527.)
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      recordSweepSuccess,
+      getSweepFailures,
+      getSweepFailureTotal,
+    } = await import("@/lib/sweepFailures");
+
+    const home = "/home/me/.claude/projects";
+    const failure = { path: home, scope: "projects-dir" as const, sweep: "sessions" as const };
+
+    const t = beginSweepFailureCycle("sessions");
+    recordSweepFailure(failure, t);
+    recordSweepSuccess("sessions", home, t);
+    recordSweepFailure(failure, t); // the newest observation, and it failed
+    endSweepFailureCycle("sessions", t);
+
+    expect(getSweepFailures().map((f) => f.path)).toEqual([home]);
+    // Still ONE location — re-stamping must not re-count it.
+    expect(getSweepFailureTotal()).toBe(1);
+  });
+
+  it("still retires when the success really is the last word", async () => {
+    // The counterpart: re-stamping must not make failures unretirable, or
+    // round 8's whole point is undone.
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      recordSweepSuccess,
+      getSweepFailures,
+    } = await import("@/lib/sweepFailures");
+
+    const home = "/home/me/.claude/projects";
+    const failure = { path: home, scope: "projects-dir" as const, sweep: "sessions" as const };
+
+    const t = beginSweepFailureCycle("sessions");
+    recordSweepFailure(failure, t);
+    recordSweepFailure(failure, t);
+    recordSweepSuccess("sessions", home, t);
+    endSweepFailureCycle("sessions", t);
+
+    expect(getSweepFailures()).toHaveLength(0);
+  });
+});

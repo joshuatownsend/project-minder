@@ -476,7 +476,17 @@ export function recordSweepFailure(failure: SweepFailure, token: number): void {
   // "2 locations could not be read" about a single broken directory, and
   // rendered its path twice. (Codex P2, PR #527.)
   const key = sweepFailureKey(failure);
-  if (result.seen.has(key)) return;
+  if (result.seen.has(key)) {
+    // Deduplicated, but RE-STAMPED. Three overlapping callers sharing one cycle
+    // can observe a directory as failure -> success -> failure, and keeping the
+    // first failure's timestamp made the intermediate success look newer than
+    // the last observation — so `prunePublished` retired a failure that was
+    // still true and the endpoint reported complete. The location is still
+    // counted once; only WHEN it was last seen failing moves.
+    // (Codex P2, PR #527.)
+    result.seen.set(key, observedAt());
+    return;
+  }
   // Stamped with WHEN it was observed. The sweeps overlap — `sessions` can list
   // a directory successfully and stay busy while `usage` then fails on that
   // same path — so retirement has to compare observations rather than assume
