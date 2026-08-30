@@ -204,7 +204,9 @@ const nextConfig: NextConfig = {
     "*": [
       "./dist/minder-server/**",
       "./dist/node/**",
-      "./src-tauri/target/**",
+      // The whole tree, not just `target/`: nothing under `src-tauri/` is read
+      // at server runtime — the only reference to it in `src/` is a comment.
+      "./src-tauri/**",
       "./.git/**",
       "./.claude/**",
       "./.env*",
@@ -224,7 +226,48 @@ const nextConfig: NextConfig = {
       "./screenshots/**",
       "./uiux-review/**",
       "./plans/**",
+      // #284: the residual source-tree leak. Measured on `dist/minder-server`
+      // before this: `src/` 8.1 MB, `scripts/` 3.2 MB, plus ~2.7 MB of
+      // developer state — shipped to users in a server payload that reads none
+      // of it. `tests/`, `docs/`, `site/` and `plans/` above were the same
+      // class, caught earlier; these were simply never added, which is #417's
+      // point about the list stating instances rather than a rule.
+      //
+      // `src/**` is safe ONLY because of the `outputFileTracingIncludes` below.
+      // Two `schema.sql` files under it ARE read at runtime, and in the
+      // standalone build they are reachable by no other path — see the note
+      // there before touching either option.
+      "./src/**",
+      "./scripts/**",
+      "./tsconfig.tsbuildinfo",
+      "./pnpm-lock.yaml",
+      // Developer state, not product content. `CHANGELOG.md`, `CLAUDE.md` and
+      // `README.md` are deliberately NOT excluded: they are small, and a boot
+      // smoke test cannot prove no page renders them, so the conservative call
+      // is to keep what might be surfaced and drop only what plainly is not.
+      "./INSIGHTS.md",
+      "./TODO.archive.md",
+      "./MANUAL_STEPS.archive.md",
+      "./manual-steps-tracker.html",
     ],
+  },
+  /**
+   * The two files that make `"./src/**"` above survivable.
+   *
+   * `resolveSchemaPath()` in `src/lib/db/migrations.ts` used to claim the
+   * `__dirname` sibling lookup is "what production and the standalone build
+   * use". That is false for the standalone build: there is no `schema.sql`
+   * anywhere under `.next/`, so the only copies in the payload are these, and
+   * the cwd-walk the comment calls a dev/test-only fallback is what actually
+   * fires. Verified by booting a packaged copy outside the repo —
+   * `db: probed state=success`. (#284.)
+   *
+   * So excluding `src/` without this include breaks DB init in the shipped
+   * artifact, and the comment that would have reassured you is the thing that
+   * was wrong. Both are fixed together on purpose.
+   */
+  outputFileTracingIncludes: {
+    "*": ["./src/lib/db/schema.sql", "./src/lib/tasksDb/schema.sql"],
   },
 };
 

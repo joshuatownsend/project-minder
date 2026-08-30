@@ -1057,14 +1057,24 @@ export const LATEST_MIGRATION_VERSION = MIGRATIONS.reduce(
 );
 
 function resolveSchemaPath(): string {
-  // The compiled output of this module lives next to schema.sql, so
-  // __dirname/schema.sql is the canonical lookup. Fallback walks up
-  // looking for src/lib/db/schema.sql so tests run from any cwd find it.
+  // Two lookups, and which one fires depends on how the app was built:
+  //
+  //   - `next dev` / `next start` from the repo: the compiled module sits next
+  //     to `schema.sql`, so the sibling lookup wins;
+  //   - the STANDALONE build: there is no `schema.sql` anywhere under `.next/`,
+  //     so the sibling lookup misses and the cwd-walk below is what resolves —
+  //     against `src/lib/db/schema.sql`, which `outputFileTracingIncludes`
+  //     keeps in the payload precisely for this.
+  //
+  // This comment previously said the sibling lookup was "what production and
+  // the standalone build use" and called the walk dev/test-only. That was
+  // backwards for the packaged artifact, and it is the kind of wrong that
+  // costs someone a broken release: it reads as permission to drop `src/`
+  // from the payload, which would break DB init on every install. (#284.)
   const sibling = path.join(__dirname, "schema.sql");
   if (existsSync(sibling)) return sibling;
-  // turbopackIgnore: this cwd-walk is a dev/test-only fallback (the
-  // __dirname lookup above is what production and the standalone build
-  // use). Without the ignore comment, Turbopack's file tracer can't
+  // turbopackIgnore: the walk is bounded (5 levels) but the tracer cannot
+  // prove it. Without the ignore comment, Turbopack's file tracer can't
   // prove the loop is bounded and falls back to including every file
   // reachable from the project root in every route's output trace —
   // ballooning `.next/standalone` from a pruned few dozen MB to the

@@ -1251,6 +1251,39 @@ writeFileSync(
 );
 step("Wrote BUILD_INFO.json");
 
+// --- Verify the SQL schemas the runtime reads actually landed ---
+//
+// #284 cut `src/**` out of the trace, which took the payload's copy of the
+// source tree from 8.1 MB to these two files. They are not decoration: in a
+// standalone build there is no `schema.sql` anywhere under `.next/`, so
+// `resolveSchemaPath()`'s `__dirname` sibling lookup misses and its cwd-walk
+// resolves against exactly these. `outputFileTracingIncludes` in
+// next.config.ts is the only reason they survive the exclude.
+//
+// Verified here rather than trusted, because the failure is invisible until
+// someone boots the artifact: packaging succeeds, the server starts, and DB
+// init throws on a machine that has no repo to fall back to. That is the same
+// reasoning as the nested-dependency verification above — this script's job is
+// to fail loudly at build time instead of shipping a payload that cannot boot.
+const REQUIRED_RUNTIME_FILES = [
+  "src/lib/db/schema.sql",
+  "src/lib/tasksDb/schema.sql",
+];
+const missingRuntimeFiles = REQUIRED_RUNTIME_FILES.filter(
+  (rel) => !existsSync(path.join(outDir, rel))
+);
+if (missingRuntimeFiles.length > 0) {
+  throw new Error(
+    "Required runtime files are missing from the payload:\n  " +
+      missingRuntimeFiles.join("\n  ") +
+      "\n\nThese are kept by `outputFileTracingIncludes` in next.config.ts, which " +
+      "must list every file the server reads from `src/` now that `./src/**` is " +
+      "excluded from tracing (#284). Without them the packaged server boots and " +
+      "then fails DB init away from a checkout."
+  );
+}
+step(`Verified ${REQUIRED_RUNTIME_FILES.length} required runtime file(s) present`);
+
 // --- 6. Startup ABI check wrapper ---
 //
 // server.js (generated fresh by `next build` every run) is plain CJS
