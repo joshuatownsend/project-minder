@@ -34,6 +34,15 @@ import { installIsolatedState } from "./_helpers/isolatedState";
  *
  * and separately that `tool_uses` is still untouched, since the containment is
  * the reason the fix was acceptable at all.
+ *
+ * ## Fixture shape
+ *
+ * Session ids are `agent-<hex>`, which is what Claude Code writes. A friendlier
+ * `agent-x` passes just as well today and would stop covering the
+ * shape-sensitive id handling the moment that tightens — and #487's own history
+ * has this trap in it: an early fixture used `parent-1` as the parent directory
+ * and `parseSubagentParentSessionId` correctly refused it, so the test failed on
+ * its arrangement rather than on the code. (Copilot, PR #530.)
  */
 
 let driverAvailable: boolean;
@@ -90,10 +99,22 @@ describe.skipIf(!driverAvailable)("#511 delegated tool and file panels", () => {
       }) + "\n"
     );
 
-    // Four calls, deliberately NOT in alphabetical or tool-name order, so an
-    // implementation that sorted by anything other than the transcript would
-    // produce a different sequence. `Read` appears twice with different paths,
-    // so a per-name aggregation cannot stand in for ordering either.
+    // Four calls across THREE lines but only TWO message ids, so the ordering
+    // assertion exercises both keys:
+    //
+    //   - `turn_index` separates the two messages;
+    //   - `sequence_in_turn` orders the three calls INSIDE the first, which
+    //     arrive as one multi-block line plus a continuation line.
+    //
+    // The first version of this fixture gave every call its own message id, so
+    // every call got its own `turn_index` and the assertion held even if
+    // `sequence_in_turn` were dropped entirely — a guard that could not fail
+    // for the reason it existed, and #528 round 6 fixed a real
+    // `sequence_in_turn` collision that it would have missed. (Codex P2, #530.)
+    //
+    // Deliberately not alphabetical, and `Read` appears twice with different
+    // paths, so neither sorting by name nor per-name aggregation can stand in
+    // for order.
     const line = (ts: string, id: string, blocks: unknown[]) =>
       JSON.stringify({
         type: "assistant",
@@ -106,7 +127,7 @@ describe.skipIf(!driverAvailable)("#511 delegated tool and file panels", () => {
       "C--dev-myapp",
       "cafe99",
       "subagents",
-      "agent-x.jsonl"
+      "agent-3f2a1b9c.jsonl"
     );
     await fs.mkdir(path.dirname(agent), { recursive: true });
     await fs.writeFile(
@@ -118,16 +139,18 @@ describe.skipIf(!driverAvailable)("#511 delegated tool and file panels", () => {
           isSidechain: true,
           message: { content: [{ type: "text", text: "sweep it" }] },
         }),
+        // One message, two blocks — ordered only by `sequence_in_turn`.
         line("2026-08-01T10:06:00Z", "s0", [
           { type: "tool_use", id: "t1", name: "Glob", input: { pattern: "**/*.ts" } },
-        ]),
-        line("2026-08-01T10:07:00Z", "s1", [
           { type: "tool_use", id: "t2", name: "Read", input: { file_path: "/repo/a.ts" } },
         ]),
-        line("2026-08-01T10:08:00Z", "s2", [
+        // A CONTINUATION of that same message, which is how Claude Code splits
+        // a long turn — still the same `turn_index`, sequence 2.
+        line("2026-08-01T10:06:00Z", "s0", [
           { type: "tool_use", id: "t3", name: "Edit", input: { file_path: "/repo/b.ts" } },
         ]),
-        line("2026-08-01T10:09:00Z", "s3", [
+        // A new message, so a new turn.
+        line("2026-08-01T10:09:00Z", "s1", [
           { type: "tool_use", id: "t4", name: "Read", input: { file_path: "/repo/c.ts" } },
         ]),
       ].join("\n") + "\n"
@@ -136,7 +159,7 @@ describe.skipIf(!driverAvailable)("#511 delegated tool and file panels", () => {
     expect((await ingest.reconcileAllSessions(db, { projectsDir })).errors).toBe(0);
 
     const { loadSessionDetailFromDb } = await import("@/lib/data/sessionDetailFromDb");
-    const detail = await loadSessionDetailFromDb(db, "agent-x");
+    const detail = await loadSessionDetailFromDb(db, "agent-3f2a1b9c");
     expect(detail).not.toBeNull();
 
     // ── Timeline: order AND arguments ──────────────────────────────────────
@@ -164,14 +187,14 @@ describe.skipIf(!driverAvailable)("#511 delegated tool and file panels", () => {
     // across 11 modules moved. That is the property #511 weighed option 1
     // against option 2 on, so it is asserted rather than assumed.
     const primary = db
-      .prepare("SELECT COUNT(*) AS n FROM tool_uses WHERE session_id = 'agent-x'")
+      .prepare("SELECT COUNT(*) AS n FROM tool_uses WHERE session_id = 'agent-3f2a1b9c'")
       .get() as { n: number };
     expect(primary.n).toBe(0);
     // ...and they are all in the sidechain table, with ordering.
     const sidechain = db
       .prepare(
         `SELECT COUNT(*) AS n FROM sidechain_tool_uses
-          WHERE session_id = 'agent-x' AND turn_index IS NOT NULL`
+          WHERE session_id = 'agent-3f2a1b9c' AND turn_index IS NOT NULL`
       )
       .get() as { n: number };
     expect(sidechain.n).toBe(4);
@@ -276,7 +299,7 @@ describe("#511 the file-parse backend fills the same panels", () => {
         },
       });
     await fs.writeFile(
-      path.join(dir, "agent-fb.jsonl"),
+      path.join(dir, "agent-7d4e0a52.jsonl"),
       [
         JSON.stringify({
           type: "user",
@@ -284,20 +307,20 @@ describe("#511 the file-parse backend fills the same panels", () => {
           isSidechain: true,
           message: { role: "user", content: [{ type: "text", text: "sweep it" }] },
         }),
+        // Two calls in ONE message, then a third in another — the same shape
+        // as the DB test, so both backends are held to the same bar.
         line("2026-03-01T10:00:05.000Z", "s0", [
           { type: "tool_use", id: "t1", name: "Glob", input: { pattern: "**/*.ts" } },
-        ]),
-        line("2026-03-01T10:00:06.000Z", "s1", [
           { type: "tool_use", id: "t2", name: "Read", input: { file_path: "/repo/a.ts" } },
         ]),
-        line("2026-03-01T10:00:07.000Z", "s2", [
+        line("2026-03-01T10:00:07.000Z", "s1", [
           { type: "tool_use", id: "t3", name: "Edit", input: { file_path: "/repo/b.ts" } },
         ]),
       ].join("\n") + "\n"
     );
 
     const { scanSessionDetail } = await import("@/lib/scanner/claudeConversations");
-    const detail = await scanSessionDetail("agent-fb");
+    const detail = await scanSessionDetail("agent-7d4e0a52");
     expect(detail).not.toBeNull();
 
     const toolEvents = detail!.timeline.filter((e) => e.type === "tool_use");
