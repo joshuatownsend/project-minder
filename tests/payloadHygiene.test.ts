@@ -142,6 +142,10 @@ describe("isForbiddenRootRelative", () => {
   it("forbids whatever the derivation reports", () => {
     for (const entry of DERIVED_ROOT_IGNORED) {
       expect(isForbiddenRootRelative(entry)).toBe(true);
+      // And in the separator-normalized form the lookup actually receives. A
+      // derived name holding a literal backslash — legal on POSIX — would
+      // otherwise be compared against a `/` and never match (Codex, PR #540).
+      expect(isForbiddenRootRelative(entry.replace(/\\/g, "/"))).toBe(true);
     }
   });
 

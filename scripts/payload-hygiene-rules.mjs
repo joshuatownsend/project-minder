@@ -137,8 +137,21 @@ export const FORBIDDEN_ROOT_RELATIVE = new Set([
 // to say so in a log line can read `DERIVATION_AVAILABLE`.
 const derivedRootIgnored = rootLevelGitignoredEntries();
 export const DERIVATION_AVAILABLE = derivedRootIgnored !== null;
+
+// Both the raw name and its separator-normalized form.
+//
+// `isForbiddenRootRelative` converts the payload path's `\` to `/` before
+// looking it up, because on Windows that is what `path.relative` produces. On
+// POSIX a filename may legally CONTAIN a backslash, and `git ls-files -z`
+// returns such a name verbatim — so a derived `ignored\name` would be compared
+// against a normalized `ignored/name` and never match, and the artifact ships
+// (Codex, PR #540). Storing both forms closes that without weakening the
+// Windows path handling everything else depends on.
 export const DERIVED_ROOT_IGNORED = new Set(
-  (derivedRootIgnored ?? []).map((name) => name.toLowerCase())
+  (derivedRootIgnored ?? []).flatMap((name) => {
+    const lower = name.toLowerCase();
+    return [lower, lower.replace(/\\/g, "/")];
+  })
 );
 
 const PAYLOAD_SRC_PREFIX = "src/";
