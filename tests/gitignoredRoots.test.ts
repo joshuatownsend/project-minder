@@ -34,7 +34,11 @@ const IGNORED_FILE = "SNIPPET.md";
 const TRACKED_FILE = "kept.txt";
 const NON_ASCII = "unicodé.png";
 
-let repo: string;
+// Initialized rather than merely declared: `afterAll` reads it even when the
+// suite is skipped for want of git, which TypeScript flags as used-before-
+// assigned (TS2454). The empty string is falsy, so the existing `if (repo)`
+// guard still does the real work (Copilot, PR #540).
+let repo = "";
 
 beforeAll(() => {
   if (!HAS_GIT) return;

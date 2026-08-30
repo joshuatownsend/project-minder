@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
   Measured on this checkout, the hand list was still missing eight more: `CLAUDE_MD_SNIPPET.md`, `capture-new.mjs`, `next-env.d.ts`, `screenshots/`, `uiux-review/`, `.impeccable`, `.remember`, and seven stray `t2.1-*.png` files. Three of those — 676 KB — were **in the shipped payload**.
 
-  Root-level gitignored entries now come from `git ls-files --others --ignored --exclude-standard --directory`, minus an explicit keep-list of build inputs (`node_modules`, `.next`, `dist`). That keep-list is the guard #417 called for: all three are gitignored, and a naive derivation would prune every dependency out of the payload.
+  Root-level gitignored entries now come from `git ls-files --others --ignored --exclude-per-directory=.gitignore --directory -z`, minus an explicit keep-list of build inputs (`node_modules`, `.next`, `dist`). That keep-list is the guard #417 called for: all three are gitignored, and a naive derivation would prune every dependency out of the payload.
 
   **Nothing derived becomes a tracer glob.** The tracer's patterns are picomatch substring matches that cannot be anchored, so a derived `.cache` would also match `node_modules/@huggingface/transformers/.cache/` — the embedding model, weights included. Every derived entry is enforced at the payload boundary, root-anchored, where the collision is impossible by construction. The hand-maintained tracer globs remain, demoted to what they always should have been: a build-speed optimisation over names verified not to collide, rather than the mechanism keeping developer state out of a release.
 
