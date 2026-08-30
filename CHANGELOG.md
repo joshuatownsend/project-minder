@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The payload's exclusion list is derived from `.gitignore` instead of restated by hand** (#417). Next's whole-project tracing fallback (#284) sweeps everything under the tracing root that isn't explicitly excluded, and the tracer has no notion of `.gitignore` — so two hand-maintained lists were restating a file that already exists. Over one review round (PR #414) that list gained nine entries, every one already in `.gitignore`, one of them (`.agents`) already sitting in `.next/standalone`.
+
+  Measured on this checkout, the hand list was still missing eight more: `CLAUDE_MD_SNIPPET.md`, `capture-new.mjs`, `next-env.d.ts`, `screenshots/`, `uiux-review/`, `.impeccable`, `.remember`, and seven stray `t2.1-*.png` files. Three of those — 676 KB — were **in the shipped payload**.
+
+  Root-level gitignored entries now come from `git ls-files --others --ignored --exclude-standard --directory`, minus an explicit keep-list of build inputs (`node_modules`, `.next`, `dist`). That keep-list is the guard #417 called for: all three are gitignored, and a naive derivation would prune every dependency out of the payload.
+
+  **Nothing derived becomes a tracer glob.** The tracer's patterns are picomatch substring matches that cannot be anchored, so a derived `.cache` would also match `node_modules/@huggingface/transformers/.cache/` — the embedding model, weights included. Every derived entry is enforced at the payload boundary, root-anchored, where the collision is impossible by construction. The hand-maintained tracer globs remain, demoted to what they always should have been: a build-speed optimisation over names verified not to collide, rather than the mechanism keeping developer state out of a release.
+
+  When git cannot answer — a source-tarball build — the derivation returns `null` and the static rules stay in force, degrading to exactly the previous behaviour rather than silently widening what may ship. The hygiene gate's success line says which case it is.
+
 - **The library lint engine never ran in any shipped build, and packaging could nest the wrong version of a dependency** (#533, #538).
 
   `resolveClaudelintBin()` located the CLI with `require.resolve("claude-code-lint/package.json")`. Turbopack resolved that literal into its own module graph and substituted a numeric module id, so the production bundle read `path.dirname(31985)` and threw `ERR_INVALID_ARG_TYPE`. The call site catches it, so every release recorded `Failed to resolve claudelint bin` in `engineErrors` and returned no findings — the engine was dead, silently, while its 50 MB dependency shipped unused. A `/* turbopackIgnore: true */` annotation keeps a real `require.resolve` in the output; a non-literal specifier alone is not enough, since the folding sees through a local `const`.
@@ -77,6 +87,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   **A fresh install is not degraded.** A home with no `projects/` yet is every machine before its first session, so that case stays silent — but only when the directory is genuinely absent. A `projects` **symlink onto a disconnected drive** fails `readdir` with the same `ENOENT` while the home sits right there, so the check asks `lstat` about the path itself; the one genuinely broken case used to be reported as healthy.
 
 ### Changed
+
+- **The test suite's timeout is a starvation guard rather than a per-test budget** (#536). `tests/api/githubActivityRoute.test.ts` failed a full run at the 30 s limit and then passed three times in isolation at 20 ms, 28 ms and 17 ms — for the whole file. It had burned 37 seconds of wall clock doing 20 ms of work, on a machine simultaneously running a `next build`, a `package-standalone` and a booted packaged server; the worker simply never got scheduled. `maxWorkers` is already capped at 8, so lowering it would slow every run to fix a case that only appears under heavy external load. The ceiling moves to 60 s instead, which costs nothing except a slower failure on a genuine hang — a hang is unbounded and this is not. The failure it prevents is a red pre-commit hook on an unrelated change, which teaches people to re-run until green.
 
 - **A no-op `cargo build` or `cargo clippy` in `src-tauri/` takes ~4s instead of over a minute** (#295). `tauri.conf.json` mapped `../dist/minder-server` as a bundle resource, and `tauri-build` emits a `cargo:rerun-if-changed` line for every file in every declared resource. Measured: **49,499 directives, of which 49,497 were the payload** — cargo then stat-walked ~29,000 files before deciding nothing had changed. A warm no-op `cargo clippy` took **1m6s**; it now takes **4.1s**, from 9 directives.
 

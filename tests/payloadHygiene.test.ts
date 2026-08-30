@@ -4,6 +4,8 @@ import {
   isForbiddenName,
   isForbiddenRootRelative,
   FORBIDDEN_SUMMARY,
+  DERIVED_ROOT_IGNORED,
+  DERIVATION_AVAILABLE,
 } from "../scripts/payload-hygiene-rules.mjs";
 
 // These rules decide what can ship inside an installer, so the tests are
@@ -127,6 +129,40 @@ describe("isForbiddenRootRelative", () => {
     expect(isForbiddenName(".cache")).toBe(false);
     expect(isForbiddenRootRelative("node_modules/some-pkg/.cache")).toBe(false);
     expect(isForbiddenRootRelative(".cache/claude-stats.json")).toBe(false);
+  });
+
+  // #417: the list is derived from git rather than restated by hand.
+  it("forbids gitignored root entries the hand-written list never mentioned", () => {
+    // These are all gitignored at the repo root and none of them appeared in
+    // any hand-maintained set — which is the entire argument of #417. The
+    // payload mirrors the repo root, so each was shippable.
+    expect(DERIVATION_AVAILABLE).toBe(true);
+    for (const entry of ["screenshots", "uiux-review", "CLAUDE_MD_SNIPPET.md"]) {
+      expect(DERIVED_ROOT_IGNORED.has(entry.toLowerCase())).toBe(true);
+      expect(isForbiddenRootRelative(entry)).toBe(true);
+    }
+  });
+
+  it("never derives away a build input", () => {
+    // The catastrophic direction. node_modules, .next and dist are all
+    // gitignored; a naive derivation prunes every dependency out of the payload
+    // and ships something that cannot boot (#417 names this explicitly).
+    for (const keep of ["node_modules", ".next", "dist"]) {
+      expect(DERIVED_ROOT_IGNORED.has(keep)).toBe(false);
+      expect(isForbiddenRootRelative(keep)).toBe(false);
+    }
+  });
+
+  it("keeps derived entries root-anchored, never a substring rule", () => {
+    // Why nothing derived is allowed near the tracer. Its globs are picomatch
+    // substring matches, so a derived `.cache` also matches
+    // `node_modules/@huggingface/transformers/.cache/` — measured dropping the
+    // embedding model, weights included. Root-anchoring makes the collision
+    // impossible rather than merely unlikely.
+    expect(isForbiddenRootRelative("node_modules/some-pkg/screenshots")).toBe(false);
+    expect(isForbiddenRootRelative("node_modules/some-pkg/.cache")).toBe(false);
+    expect(isForbiddenRootRelative("docs/screenshots")).toBe(false);
+    expect(isForbiddenName("screenshots")).toBe(false);
   });
 
   it("names every rule in the summary the hygiene gate logs", () => {

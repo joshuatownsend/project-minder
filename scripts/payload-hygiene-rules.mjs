@@ -1,3 +1,5 @@
+import { rootLevelGitignoredEntries } from "./gitignored-roots.mjs";
+
 // Shared forbidden-entry rules for the standalone payload (issue #284).
 //
 // Two consumers, deliberately kept in lockstep by importing this module:
@@ -116,6 +118,29 @@ export const FORBIDDEN_ROOT_RELATIVE = new Set([
 //
 // Paths are compared lower-cased, so these must be written lower-cased —
 // `tasksDb` is spelled `tasksdb` here on purpose, not by mistake.
+// Everything gitignored at the REPO root, derived rather than restated (#417).
+//
+// The payload mirrors the repo root — that is the whole of #284 — so a
+// root-level name that is developer state in the checkout is developer state in
+// the payload. Deriving it is what stops this list drifting one review round at
+// a time; the static sets above stay because they also cover names at ANY depth
+// (`.claude`, `.git`) and patterns git cannot express as a root entry (`*.pem`).
+//
+// Root-anchored ONLY. Nothing here reaches the tracer, because these globs
+// cannot be anchored and a derived name like `.cache` or `screenshots` would
+// then match inside `node_modules`. See gitignored-roots.mjs for the measured
+// cost of getting that wrong.
+//
+// `null` from the derivation means git could not answer (a source-tarball
+// build). That degrades to exactly the pre-#417 behaviour — the static rules
+// still apply — rather than silently widening what may ship. Callers that want
+// to say so in a log line can read `DERIVATION_AVAILABLE`.
+const derivedRootIgnored = rootLevelGitignoredEntries();
+export const DERIVATION_AVAILABLE = derivedRootIgnored !== null;
+export const DERIVED_ROOT_IGNORED = new Set(
+  (derivedRootIgnored ?? []).map((name) => name.toLowerCase())
+);
+
 const PAYLOAD_SRC_PREFIX = "src/";
 export const PAYLOAD_SRC_KEEP = new Set([
   "src/lib/db/schema.sql",
@@ -139,6 +164,9 @@ export const FORBIDDEN_SUMMARY = [
   // success line claiming to have checked a smaller set than it did — the
   // exact false reassurance this comment block was written to prevent.
   "src/** (except the two schema.sql files)",
+  DERIVATION_AVAILABLE
+    ? `${DERIVED_ROOT_IGNORED.size} gitignored root entries (derived)`
+    : "gitignored root entries (DERIVATION UNAVAILABLE — git could not be queried)",
 ].join(", ");
 
 // `relPath` is a payload-root-relative path in either separator style.
@@ -146,6 +174,7 @@ export function isForbiddenRootRelative(relPath) {
   if (!relPath) return false;
   const rel = relPath.replace(/\\/g, "/").toLowerCase();
   if (FORBIDDEN_ROOT_RELATIVE.has(rel)) return true;
+  if (DERIVED_ROOT_IGNORED.has(rel)) return true;
   if (rel !== "src" && !rel.startsWith(PAYLOAD_SRC_PREFIX)) return false;
   // Keep the carved-out files, and keep every directory on the way down to
   // them — pruning `src/` or `src/lib/` wholesale would take the schemas with
