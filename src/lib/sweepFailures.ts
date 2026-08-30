@@ -1,5 +1,5 @@
-import path from "path";
 import { promises as fsPromises } from "fs";
+import { normalizePathKey } from "@/lib/platform";
 
 /**
  * Enumeration failures the corpus sweeps hit, kept so they can be reported
@@ -259,9 +259,60 @@ export function endSweepFailureCycle(sweep: SweepName, token: number): void {
     pending().delete(sweep);
     return;
   }
-  published().set(sweep, found);
+  // A cycle retires its OWN superseded failures before publishing, not only
+  // other sweeps'.
+  //
+  // Two `scanAllSessions()` calls can overlap and share one pending result, so
+  // within a single cycle a path can fail and then be listed successfully. The
+  // published result kept the failure — `retireVerified` deliberately skips the
+  // publishing sweep, since that result was just written — and the banner went
+  // on naming a directory the newest observation had read fine.
+  //
+  // The same observation ordering decides it, so a success only clears a
+  // failure it actually postdates. (Codex P2, PR #527.)
+  published().set(sweep, prunePublished(found, found.verified));
   pending().delete(sweep);
   retireVerified(sweep, found.verified);
+}
+
+/**
+ * Drop `projects-dir` entries a later success in `verified` supersedes.
+ *
+ * Shared by the publishing path and `retireVerified` so a cycle's own result
+ * and every other sweep's are pruned by exactly the same rule — the two used to
+ * differ, and the difference was invisible until a shared cycle produced it.
+ */
+function prunePublished(result: CycleResult, verified: Map<string, number>): CycleResult {
+  if (verified.size === 0) return result;
+
+  const supersededKey = (key: string, observedAt: number): boolean => {
+    if (!key.startsWith("projects-dir|")) return false;
+    const okAt = verified.get(key.slice("projects-dir|".length));
+    return okAt !== undefined && okAt > observedAt;
+  };
+
+  const seen = new Map(result.seen);
+  let removed = 0;
+  for (const [key, observedAt] of result.seen) {
+    if (supersededKey(key, observedAt)) {
+      seen.delete(key);
+      removed++;
+    }
+  }
+
+  const items = result.items.filter((f) => {
+    const key = sweepFailureKey(f);
+    const observedAt = result.seen.get(key);
+    return observedAt === undefined || !supersededKey(key, observedAt);
+  });
+
+  if (removed === 0 && items.length === result.items.length) return result;
+  return {
+    ...result,
+    items,
+    seen,
+    total: Math.max(items.length, result.total - removed),
+  };
 }
 
 /**
@@ -295,8 +346,8 @@ function retireVerified(sweep: SweepName, verified: Map<string, number>): void {
    * superseded — the same direction every other bound in this file fails in:
    * over-report rather than hide a gap.
    */
-  const supersedes = (path: string, observedAt: number | undefined): boolean => {
-    const okAt = verified.get(path);
+  const supersedes = (rawPath: string, observedAt: number | undefined): boolean => {
+    const okAt = verified.get(normalizePathKey(rawPath));
     return okAt !== undefined && observedAt !== undefined && okAt > observedAt;
   };
 
@@ -319,8 +370,13 @@ function retireVerified(sweep: SweepName, verified: Map<string, number>): void {
     const seen = new Map(result.seen);
     let retired = 0;
     for (const [key, observedAt] of result.seen) {
-      const path = key.startsWith("projects-dir|") ? key.slice("projects-dir|".length) : null;
-      if (path !== null && supersedes(path, observedAt)) {
+      // Already canonical — `sweepFailureKey` built it — so it is compared
+      // against `verified` directly rather than normalized a second time.
+      const canonical = key.startsWith("projects-dir|")
+        ? key.slice("projects-dir|".length)
+        : null;
+      const okAt = canonical === null ? undefined : verified.get(canonical);
+      if (okAt !== undefined && observedAt !== undefined && okAt > observedAt) {
         seen.delete(key);
         retired++;
       }
@@ -350,7 +406,9 @@ export function recordSweepSuccess(
   token: number
 ): void {
   if (token !== generation()) return;
-  pending().get(sweep)?.verified.set(projectsDir, observedAt());
+  // Canonical, so a success recorded under one spelling retires a failure
+  // recorded under another — the same key space `sweepFailureKey` uses.
+  pending().get(sweep)?.verified.set(normalizePathKey(projectsDir), observedAt());
 }
 
 /**
@@ -375,9 +433,26 @@ const MAX_PER_SWEEP = 50;
  */
 const MAX_TRACKED_KEYS = 2000;
 
-/** One location, however many sweeps trip over it. */
+/**
+ * One location, however many sweeps trip over it — and however it is spelled.
+ *
+ * Built in `normalizePathKey`'s space, which is the project's existing answer
+ * to "are these the same path": it normalizes separators, collapses the
+ * `wsl$` / `wsl.localhost` aliases, and folds case ONLY on Windows (on POSIX
+ * `/data/Claude` and `/data/claude` are genuinely different directories).
+ *
+ * The raw path stays on the failure for display; only the KEY is canonical.
+ *
+ * A first version of this compared raw strings, and a second hand-rolled
+ * `toLowerCase()` with `path.sep`. Both were the same mistake — approximating
+ * a predicate that already exists — and it produced three separate defects:
+ * duplicate counts for one directory across two WSL spellings, a success under
+ * one spelling failing to retire a failure under the other, and a removed home
+ * saved with forward slashes failing to prune its own entries.
+ * (Codex P2 x2 + Copilot, PR #527.)
+ */
 export function sweepFailureKey(failure: SweepFailure): string {
-  return `${failure.scope}|${failure.path}`;
+  return `${failure.scope}|${normalizePathKey(failure.path)}`;
 }
 
 export function recordSweepFailure(failure: SweepFailure, token: number): void {
@@ -510,28 +585,37 @@ export function forgetSweepFailuresUnder(removedHomes: string[]): void {
   globalForSweep.__minderSweepPending = undefined;
   globalForSweep.__minderSweepDepth = undefined;
 
+  // Canonical, like every other key in this module. A first version compared
+  // raw strings and a second hand-rolled `toLowerCase()` with `path.sep`, which
+  // missed a home saved with forward slashes on Windows and merged two homes
+  // differing only in case on POSIX — where they are genuinely different
+  // directories. `normalizePathKey` already answers both, and folds case only
+  // where the filesystem does. (Codex P2 + Copilot, PR #527.)
   const prefixes = removedHomes
     .map((h) => h.trim())
     .filter(Boolean)
-    .map((h) => `${h.replace(/[\\/]+$/, "")}${path.sep}projects`.toLowerCase());
+    .map((h) => `${normalizePathKey(h).replace(/\/+$/, "")}/projects`);
   if (prefixes.length === 0) return;
 
-  const under = (p: string): boolean => {
-    const lower = p.toLowerCase();
-    return prefixes.some((pre) => lower === pre || lower.startsWith(pre + path.sep));
+  // Separator-aware, so a home named `.../claude` cannot prune entries under a
+  // sibling `.../claude-backup`.
+  const under = (rawPath: string): boolean => {
+    const key = normalizePathKey(rawPath);
+    return prefixes.some((pre) => key === pre || key.startsWith(pre + "/"));
   };
 
   for (const [name, result] of published()) {
     const kept = result.items.filter((f) => !under(f.path));
     const seen = new Map(result.seen);
     let removed = 0;
-    for (const [key, at] of result.seen) {
+    for (const key of result.seen.keys()) {
+      // The key's path half is already canonical (`sweepFailureKey` built it),
+      // and `under` normalizes idempotently, so passing it through is safe.
       const idx = key.indexOf("|");
       if (idx >= 0 && under(key.slice(idx + 1))) {
         seen.delete(key);
         removed++;
       }
-      void at;
     }
     if (removed === 0 && kept.length === result.items.length) continue;
     published().set(name, {

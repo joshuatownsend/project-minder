@@ -972,3 +972,192 @@ describe("a config change forgets only the homes that left", () => {
     expect(getSweepFailures()).toHaveLength(0);
   });
 });
+
+describe("round 21 — one canonical path space, and a cycle that reads its own successes", () => {
+  it("treats two spellings of one path as one location", async () => {
+    // Keys were raw strings, so the two WSL host aliases counted as two
+    // locations and a success under one could not retire a failure under the
+    // other. The config layer has always treated them as one tree — the keys
+    // had to as well. (Codex P2, PR #527.)
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      getSweepFailureTotal,
+    } = await import("@/lib/sweepFailures");
+
+    const legacy = "\\\\wsl$\\Ubuntu\\home\\me\\.claude\\projects";
+    const modern = "\\\\wsl.localhost\\Ubuntu\\home\\me\\.claude\\projects";
+
+    const t1 = beginSweepFailureCycle("usage");
+    recordSweepFailure({ path: legacy, scope: "projects-dir", sweep: "usage" }, t1);
+    endSweepFailureCycle("usage", t1);
+
+    const t2 = beginSweepFailureCycle("sessions");
+    recordSweepFailure({ path: modern, scope: "projects-dir", sweep: "sessions" }, t2);
+    endSweepFailureCycle("sessions", t2);
+
+    // One directory, one location — not two.
+    expect(getSweepFailureTotal()).toBe(1);
+  });
+
+  it("lets a success under one spelling retire a failure under the other", async () => {
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      recordSweepSuccess,
+      getSweepFailures,
+    } = await import("@/lib/sweepFailures");
+
+    const legacy = "\\\\wsl$\\Ubuntu\\home\\me\\.claude\\projects";
+    const modern = "\\\\wsl.localhost\\Ubuntu\\home\\me\\.claude\\projects";
+
+    const t1 = beginSweepFailureCycle("sessions");
+    recordSweepFailure({ path: legacy, scope: "projects-dir", sweep: "sessions" }, t1);
+    endSweepFailureCycle("sessions", t1);
+    expect(getSweepFailures()).toHaveLength(1);
+
+    const t2 = beginSweepFailureCycle("usage");
+    recordSweepSuccess("usage", modern, t2);
+    endSweepFailureCycle("usage", t2);
+
+    expect(getSweepFailures()).toHaveLength(0);
+  });
+
+  it("retires a failure its OWN cycle later read successfully", async () => {
+    // Two `scanAllSessions()` calls can overlap and share one pending result,
+    // so within a single cycle a path can fail and then be listed fine. The
+    // published result kept the failure, because `retireVerified` skips the
+    // publishing sweep — so the banner named a directory the newest
+    // observation had read. (Codex P2, PR #527.)
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      recordSweepSuccess,
+      getSweepFailures,
+      getSweepFailureTotal,
+    } = await import("@/lib/sweepFailures");
+
+    const home = "/home/me/.claude/projects";
+
+    // Outer caller opens the cycle and trips over the path.
+    const outer = beginSweepFailureCycle("sessions");
+    recordSweepFailure({ path: home, scope: "projects-dir", sweep: "sessions" }, outer);
+
+    // An overlapping caller joins the SAME cycle and reads it fine.
+    const inner = beginSweepFailureCycle("sessions");
+    recordSweepSuccess("sessions", home, inner);
+    endSweepFailureCycle("sessions", inner); // inner does not publish
+
+    endSweepFailureCycle("sessions", outer);
+
+    expect(getSweepFailures()).toHaveLength(0);
+    // The count comes down too, or the banner reports a location it cannot name.
+    expect(getSweepFailureTotal()).toBe(0);
+  });
+
+  it("does not retire a failure its own cycle saw AFTER the success", async () => {
+    // The counterpart. Order decides it here exactly as it does across sweeps,
+    // or a stale success would hide a fresh fault.
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      recordSweepSuccess,
+      getSweepFailures,
+    } = await import("@/lib/sweepFailures");
+
+    const home = "/home/me/.claude/projects";
+
+    const t = beginSweepFailureCycle("sessions");
+    recordSweepSuccess("sessions", home, t);
+    recordSweepFailure({ path: home, scope: "projects-dir", sweep: "sessions" }, t);
+    endSweepFailureCycle("sessions", t);
+
+    expect(getSweepFailures().map((f) => f.path)).toEqual([home]);
+  });
+});
+
+describe("pruning a removed home uses the canonical path space too", () => {
+  const onWindows = path.sep === "\\";
+
+  it.skipIf(!onWindows)("prunes a home saved with the other separator", async () => {
+    // Config entries are hand-editable and `.minder.json` round-trips whatever
+    // was typed, so a home saved as `C:/x/.claude` must still prune failures
+    // recorded against `C:\x\.claude\projects`. A `path.sep`-based prefix
+    // missed it and left a stale warning after the home was removed.
+    // (Copilot, PR #527.)
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      getSweepFailures,
+      forgetSweepFailuresUnder,
+    } = await import("@/lib/sweepFailures");
+
+    const nativeHome = "C:\\devhomes\\alpha\\.claude";
+    const forwardSlashSpelling = "C:/devhomes/alpha/.claude";
+
+    const t = beginSweepFailureCycle("usage");
+    recordSweepFailure(
+      { path: `${nativeHome}\\projects`, scope: "projects-dir", sweep: "usage" },
+      t
+    );
+    endSweepFailureCycle("usage", t);
+    expect(getSweepFailures()).toHaveLength(1);
+
+    forgetSweepFailuresUnder([forwardSlashSpelling]);
+    expect(getSweepFailures()).toHaveLength(0);
+  });
+
+  it.skipIf(onWindows)("keeps a POSIX home that differs only in case", async () => {
+    // `/data/Claude` and `/data/claude` are DIFFERENT directories on POSIX, and
+    // `normalizePathKey` preserves that deliberately. Folding case
+    // unconditionally deleted a still-valid failure under the second when the
+    // first was removed. (Codex P2, PR #527.)
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      getSweepFailures,
+      forgetSweepFailuresUnder,
+    } = await import("@/lib/sweepFailures");
+
+    const t = beginSweepFailureCycle("usage");
+    recordSweepFailure(
+      { path: "/data/claude/projects", scope: "projects-dir", sweep: "usage" },
+      t
+    );
+    endSweepFailureCycle("usage", t);
+
+    forgetSweepFailuresUnder(["/data/Claude"]);
+
+    expect(getSweepFailures().map((f) => f.path)).toEqual(["/data/claude/projects"]);
+  });
+
+  it("does not prune a sibling whose name merely shares a prefix", async () => {
+    // Removing `.../claude` must not take `.../claude-backup` with it — the
+    // reason the match is separator-aware rather than a bare `startsWith`.
+    const {
+      beginSweepFailureCycle,
+      endSweepFailureCycle,
+      recordSweepFailure,
+      getSweepFailures,
+      forgetSweepFailuresUnder,
+    } = await import("@/lib/sweepFailures");
+
+    const sibling = path.join(tmpHome, "claude-backup");
+    const t = beginSweepFailureCycle("usage");
+    recordSweepFailure(
+      { path: path.join(sibling, "projects"), scope: "projects-dir", sweep: "usage" },
+      t
+    );
+    endSweepFailureCycle("usage", t);
+
+    forgetSweepFailuresUnder([path.join(tmpHome, "claude")]);
+
+    expect(getSweepFailures()).toHaveLength(1);
+  });
+});
