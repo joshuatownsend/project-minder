@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Embeddings could never have worked in an installed build** (#533). Semantic search shipped 445 MB of `@huggingface/transformers` that could not load on any machine without a checkout of this repo above it.
+
+  Next externalizes the package and stages its own copy at `.next/node_modules/@huggingface/transformers-<hash>/`, rewriting the dynamic `import()` to that hashed specifier. The specifier resolves. The package then throws `Cannot find module 'onnxruntime-node'`, because Next stages it with **no nested `node_modules`** and nothing above it carried the ONNX runtime. In a checkout, Node's resolver walks up out of `dist/` and finds the repo's own `node_modules`, so it worked everywhere it was ever tested and nowhere it was ever installed.
+
+  It also failed **silently and misleadingly**: `loadEmbedder()` catches `Cannot find module` and records the reason as *"@huggingface/transformers is not installed (optional dependency)"*. It was installed. Anyone debugging this was told to install a package already occupying a third of the payload.
+
+  Packaging now places the transformers dependency closure at the payload's top level — which is on the resolution walk from the staged copy — and verifies it by **resolving each dependency and requiring the answer to be inside the payload**. The tripwire that missed this asked "does it resolve?" from a machine holding the repo, which is a question every broken payload also passes. Verified end to end: a real `feature-extraction` pipeline over the model shipped in the payload, run from a copy outside the repo, returns 384 dimensions at unit norm.
+
+  `onnxruntime-web` (130 MB of browser/WASM runtime) is deliberately **not** shipped — the staged copy the server loads is the native `transformers.node.cjs`, and inference was measured identical with and without it. The trade-off, stated rather than buried: if the native binding ever fails to load there is no WASM fallback, which is a loud failure rather than a silent one, and the same outcome as today where nothing loads at all.
+
+  Net payload effect: **1.3 GB → 1.5 GB**. The added weight is the ONNX runtime that makes the 445 MB already being shipped actually function.
+
 - **A tracing exclusion added last release was silently pruning dependencies out of the trace** (#417, regression from #284). `outputFileTracingExcludes` entries are picomatch **substring** matches with the leading `./` stripped, so `"./src/**"` — added to stop the repo's own source tree shipping — also matched `node_modules/<pkg>/src/**`.
 
   Three packages in this tree keep their entry point there (`web-push` → `src/index.js`, plus `debug` and `ecdsa-sig-formatter`), and excluding a package's entry point stops the tracer discovering anything that package depends on. Measured on `/api/health`: traced `node_modules` entries fell from **373 to 258** — 13 direct `/src/` matches cascading into **115** lost files. The shipped payload survived only because Next copies externalized packages by a separate route and packaging backfills what the tracer missed, which is luck rather than design.
