@@ -179,10 +179,6 @@ export function formatSize(bytes) {
 }
 
 /**
- * The ordered list of shell-equivalent steps a run will perform, for --dry-run
- * and the up-front plan printout.
- */
-/**
  * The arguments `pnpm tauri build` is invoked with — the single definition that
  * both the printed plan and the actual spawn read from.
  *
@@ -203,6 +199,10 @@ export function tauriBuildArgs(bundles) {
   ];
 }
 
+/**
+ * The ordered list of shell-equivalent steps a run will perform, for --dry-run
+ * and the up-front plan printout.
+ */
 export function buildPlan(opts, bundles) {
   return [
     opts.skipBuild ? null : "pnpm build",

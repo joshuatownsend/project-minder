@@ -350,10 +350,13 @@ jobs:
         shell: bash
         run: |
           set -u
+          shopt -s nullglob
           MIN=52428800   # 50 MiB
           status=0
+          checked=0
           for f in installers/*; do
             [ -f "$f" ] || continue
+            checked=$((checked + 1))
             size=$(wc -c < "$f")
             if [ "$size" -lt "$MIN" ]; then
               echo "::error::$f is $size bytes, under the $MIN-byte floor — built without --config src-tauri/tauri.bundle.conf.json?"
@@ -362,6 +365,15 @@ jobs:
               echo "ok: $f ($size bytes)"
             fi
           done
+          # A loop that ran zero times reports success, which is the failure mode
+          # this whole step exists to prevent — a gate that passes without having
+          # checked anything. Without nullglob the glob would also expand to the
+          # literal string `installers/*`, which `[ -f ]` skips, so the guard
+          # would silently pass on an empty directory.
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::no regular files in installers/ — the size floor checked nothing"
+            status=1
+          fi
           exit "$status"
 
       # Always keep the installers on the workflow run (this is the whole output
