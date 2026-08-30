@@ -140,7 +140,7 @@ export function rootLevelGitignoredEntries(root = REPO_ROOT) {
       {
         cwd: root,
         encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
+        stdio: ["ignore", "pipe", "pipe"],
         // Node defaults `maxBuffer` to 1 MiB, and a root with enough ignored
         // files exceeds it — reproduced at 15,000 entries / ~1.2 MB. The throw
         // then lands in the catch below and returns `null`, which reads as "no
@@ -159,13 +159,22 @@ export function rootLevelGitignoredEntries(root = REPO_ROOT) {
     // the buffer. The static rules will not compensate, and the hygiene gate's
     // success line would otherwise report a smaller checked set with no cause
     // given (Codex, PR #540). Those warn.
+    // Exit 128 is NOT a synonym for "not a repository". `fatal: detected
+    // dubious ownership`, a corrupt index and permission failures all use it
+    // too, and those mean the derivation was ABLE to run and did not — the
+    // opposite of the case the silent fallback exists for (Codex, PR #540).
+    // Only git's own "not a repository" wording distinguishes them, so the
+    // stderr is captured and read rather than inferred from the status.
     const code = err?.code;
-    const expected = code === "ENOENT" || err?.status === 128;
+    const stderr = String(err?.stderr ?? "");
+    const notARepository = /not a git repository/i.test(stderr);
+    const expected = code === "ENOENT" || (err?.status === 128 && notARepository);
     if (!expected) {
       const detail =
         code === "ENOBUFS" || code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
           ? "output exceeded maxBuffer — raise it in scripts/gitignored-roots.mjs"
-          : `${code ?? "unknown error"}${err?.status != null ? ` (exit ${err.status})` : ""}`;
+          : `${code ?? "unknown error"}${err?.status != null ? ` (exit ${err.status})` : ""}` +
+            (stderr.trim() ? `: ${stderr.trim().split("\n")[0]}` : "");
       console.warn(
         `[gitignored-roots] WARNING: \`git ls-files\` failed: ${detail}. ` +
           "Derived payload exclusions are DISABLED for this build; only the static " +

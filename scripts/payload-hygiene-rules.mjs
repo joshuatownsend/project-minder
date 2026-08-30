@@ -151,29 +151,36 @@ export const DERIVATION_AVAILABLE = derivedRootIgnored !== null;
 /**
  * The lookup keys one derived name contributes.
  *
- * `isForbiddenRootRelative` normalizes `\` to `/` before its lookup, so on
- * Windows a derived name must be indexed in that form too. On POSIX it must
- * NOT be: a backslash there is a legal filename character, not a separator, and
- * mapping it would turn a ROOT-anchored rule into one that matches a NESTED
- * path. An ignored root file called `node_modules\next` would otherwise
- * contribute the key `node_modules/next` and prune the real dependency
- * directory (Codex, PR #540) — trading a vanishingly rare miss for a payload
- * that cannot boot.
+ * Windows folds; POSIX does not, and both directions were learned the hard
+ * way on PR #540.
  *
- * So the extra form is added only where a backslash genuinely is a separator,
- * which is also the only platform where such a filename cannot exist. The
- * residual gap — a POSIX root file whose name contains a literal backslash goes
- * unpruned — is the safe direction, and is accepted knowingly.
+ * On Windows a payload path arrives from `path.relative` with `\`
+ * separators and the filesystem is case-insensitive, so a derived name must be
+ * indexed lower-cased and separator-normalized to be findable. Neither fold can
+ * lose information there: no filename may contain `\`, and two entries
+ * differing only by case cannot coexist.
+ *
+ * On POSIX both folds are destructive:
+ *
+ *   - case: `Foo` (tracked, needed) and `foo` (ignored) are DIFFERENT entries.
+ *     Lower-casing the derived `foo` makes it match the payload's `Foo` and
+ *     prunes tracked content out of a perfectly valid repository.
+ *   - separators: a backslash is a legal filename character, so mapping it to
+ *     `/` turns a ROOT-anchored rule into one matching a NESTED path —
+ *     `node_modules\next` would prune the real dependency directory.
+ *
+ * So POSIX keeps the name verbatim, and `isForbiddenRootRelative` compares the
+ * raw candidate there. An earlier revision returned the raw key but still
+ * normalized the candidate before looking it up, which left the key
+ * unreachable — the rule existed and could never fire.
  *
  * Exported because it is the part of the derivation testable on every platform.
- * Two review rounds on PR #540 went into a fixture that tried to create such a
- * file; the behaviour is the function, so assert the function.
  */
 const SEPARATOR_IS_BACKSLASH = path.sep === "\\";
 
 export function derivedNameForms(name) {
+  if (!SEPARATOR_IS_BACKSLASH) return [name];
   const lower = name.toLowerCase();
-  if (!SEPARATOR_IS_BACKSLASH) return [lower];
   const normalized = lower.replace(/\\/g, "/");
   return normalized === lower ? [lower] : [lower, normalized];
 }
@@ -215,7 +222,11 @@ export function isForbiddenRootRelative(relPath) {
   if (!relPath) return false;
   const rel = relPath.replace(/\\/g, "/").toLowerCase();
   if (FORBIDDEN_ROOT_RELATIVE.has(rel)) return true;
-  if (DERIVED_ROOT_IGNORED.has(rel)) return true;
+  // The derived set is matched with the SAME convention it was built with:
+  // folded on Windows, verbatim on POSIX. Normalizing the candidate on POSIX
+  // would make every raw derived key unreachable, and lower-casing it would
+  // let an ignored `foo` prune a tracked `Foo` (Codex, PR #540).
+  if (DERIVED_ROOT_IGNORED.has(SEPARATOR_IS_BACKSLASH ? rel : relPath)) return true;
   if (rel !== "src" && !rel.startsWith(PAYLOAD_SRC_PREFIX)) return false;
   // Keep the carved-out files, and keep every directory on the way down to
   // them — pruning `src/` or `src/lib/` wholesale would take the schemas with

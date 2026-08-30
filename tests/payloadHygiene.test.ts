@@ -147,35 +147,40 @@ describe("isForbiddenRootRelative", () => {
     }
   });
 
-  it("indexes a derived name for the separator convention of THIS platform", () => {
-    // Two failure modes pull in opposite directions, and the platform decides
-    // which one is real (Codex, PR #540).
+  it("folds derived names on Windows and keeps them verbatim on POSIX", () => {
+    // Both directions were learned the hard way (Codex, PR #540).
     //
-    // On Windows `isForbiddenRootRelative` converts `\` to `/` before its
-    // lookup, because that is what `path.relative` yields — so a derived name
-    // must be indexed in that form too, and no filename can contain a literal
-    // backslash for it to collide with.
+    // Windows: payload paths arrive from `path.relative` with `\`
+    // separators and the filesystem is case-insensitive, so a derived name has
+    // to be folded to be findable. Neither fold can lose anything there — no
+    // filename may contain a backslash, and two names differing only by case
+    // cannot coexist.
     //
-    // On POSIX a backslash IS a legal filename character. Adding the `/` form
-    // there would turn a ROOT-anchored rule into one matching a NESTED path:
-    // an ignored root file named `node_modules\next` would contribute the
-    // key `node_modules/next` and prune the real dependency directory. A
-    // payload that cannot boot is far worse than failing to prune one
-    // oddly-named scratch file, so POSIX gets the raw form only.
-    const forms = derivedNameForms("odd\\name.txt");
+    // POSIX: both folds destroy information.
+    //   case — `Foo` (tracked, needed) and `foo` (ignored) are DIFFERENT
+    //          entries; lower-casing the derived `foo` prunes the tracked `Foo`.
+    //   separators — a backslash is a legal filename character, so mapping it
+    //          to `/` turns a ROOT rule into one matching a NESTED path.
     if (path.sep === "\\") {
-      expect(forms).toEqual(["odd\\name.txt", "odd/name.txt"]);
+      expect(derivedNameForms("odd\\name.txt")).toEqual([
+        "odd\\name.txt",
+        "odd/name.txt",
+      ]);
+      expect(derivedNameForms("SCREENSHOTS")).toEqual(["screenshots"]);
     } else {
-      expect(forms).toEqual(["odd\\name.txt"]);
-      // The property that matters: nothing derived may match a nested path.
+      // Verbatim: no separator mapping...
+      expect(derivedNameForms("odd\\name.txt")).toEqual(["odd\\name.txt"]);
       expect(derivedNameForms("node_modules\\next")).not.toContain(
         "node_modules/next"
       );
+      // ...and no case folding, which would let an ignored `foo` prune a
+      // tracked `Foo` and break a payload built from a valid repository.
+      expect(derivedNameForms("Foo")).toEqual(["Foo"]);
+      expect(derivedNameForms("Foo")).not.toContain("foo");
     }
 
-    // Platform-independent, and true either way.
+    // True on every platform: an ordinary name yields exactly one key.
     expect(derivedNameForms("screenshots")).toEqual(["screenshots"]);
-    expect(derivedNameForms("SCREENSHOTS")).toEqual(["screenshots"]);
   });
 
   it("never lets a derived name prune a required payload entry", () => {
