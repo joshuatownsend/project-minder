@@ -148,10 +148,22 @@ pub struct StoppedService(Arc<ServiceHandoff>);
 /// here, so the debt is recorded exactly once and `restore_if_armed` cannot
 /// start the service twice.
 pub fn arm_restore(stopped: StoppedService) {
-    if let Ok(mut slot) = PENDING_RESTORE.lock() {
-        *slot = Some(stopped.0);
+    // The marker is given up ONLY once the debt is actually recorded. Clearing
+    // it unconditionally meant a poisoned `PENDING_RESTORE` lock lost both: the
+    // restore was never stored AND the in-flight fallback was removed, which
+    // reopens the exact "Quit sees nothing armed" hole this marker closes
+    // (Copilot, PR #541). Keeping the marker is the safe direction — it fails
+    // towards restarting a service that was running.
+    let recorded = match PENDING_RESTORE.lock() {
+        Ok(mut slot) => {
+            *slot = Some(stopped.0);
+            true
+        }
+        Err(_) => false,
+    };
+    if recorded {
+        clear_stop_in_flight();
     }
-    clear_stop_in_flight();
 }
 
 /// Mark a stop as underway. Private, and called only from [`ServiceHandoff::stop`]
