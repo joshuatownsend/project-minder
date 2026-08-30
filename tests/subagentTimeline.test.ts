@@ -125,3 +125,61 @@ describe("delegated agent transcripts (#487)", () => {
     expect(text).not.toContain("DELEGATED REPLY");
   });
 });
+
+describe("meta entries in a delegated transcript (#487)", () => {
+  it("drops them, as the DB path already does", async () => {
+    // The DB path drops every meta entry; this branch never had that check,
+    // which was unobservable while `!entry.isSidechain` already excluded a
+    // delegated transcript's entries wholesale. Widening the gate to admit them
+    // exposed it, and the two backends then rendered DIFFERENT timelines for
+    // the same file — the divergence class this PR exists to close.
+    // (Codex P2, PR #528.)
+    await write(
+      path.join(
+        "-home-me-dev-app",
+        "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "subagents",
+        "agent-meta.jsonl"
+      ),
+      [
+        userTurn("2026-03-01T10:00:00.000Z", "find the flaky test", true),
+        {
+          ...assistantTurn("2026-03-01T10:00:03.000Z", "INTERNAL META NOTE", true),
+          isMeta: true,
+        },
+        assistantTurn("2026-03-01T10:00:05.000Z", "checked the retry markers", true),
+      ]
+    );
+
+    const { scanSessionDetail } = await import("@/lib/scanner/claudeConversations");
+    const detail = await scanSessionDetail("agent-meta");
+
+    expect(detail).not.toBeNull();
+    const text = JSON.stringify(detail!.timeline);
+    // The real turns are there...
+    expect(text).toContain("find the flaky test");
+    expect(text).toContain("checked the retry markers");
+    // ...and the meta entry is not.
+    expect(text).not.toContain("INTERNAL META NOTE");
+  });
+
+  it("leaves an ordinary session's meta assistant entries alone", async () => {
+    // Scoped to the delegated case deliberately: an ordinary session's meta
+    // assistant entries render today, and changing that is not this fix's
+    // business. Without this, a broader `!entry.isMeta` would look equally
+    // correct and would quietly change every normal session.
+    await write(path.join("-home-me-dev-app", "plain-meta.jsonl"), [
+      userTurn("2026-03-01T10:00:00.000Z", "the developer asked this", false),
+      {
+        ...assistantTurn("2026-03-01T10:00:05.000Z", "ORDINARY META NOTE", false),
+        isMeta: true,
+      },
+    ]);
+
+    const { scanSessionDetail } = await import("@/lib/scanner/claudeConversations");
+    const detail = await scanSessionDetail("plain-meta");
+
+    expect(detail).not.toBeNull();
+    expect(JSON.stringify(detail!.timeline)).toContain("ORDINARY META NOTE");
+  });
+});

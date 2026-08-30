@@ -1430,7 +1430,23 @@ export async function scanSessionDetail(
           continue;
         }
 
-        if (entry.type === "assistant" && entry.message && (isDelegated || !entry.isSidechain)) {
+        // `isMeta` is excluded for a DELEGATED transcript, and only there.
+        //
+        // The DB path drops every meta entry (`ingest.ts`, "if (entry.isMeta ||
+        // !entry.timestamp) continue"). This branch never had that check, which
+        // was unobservable while `!entry.isSidechain` already excluded a
+        // delegated transcript's entries wholesale — widening the gate to admit
+        // them exposed it, and the two backends then rendered different
+        // timelines for the same file. (Codex P2, PR #528.)
+        //
+        // Scoped to the delegated case rather than added to the branch as a
+        // whole: an ordinary session's meta assistant entries render today, and
+        // changing that is not this fix's business.
+        if (
+          entry.type === "assistant" &&
+          entry.message &&
+          (isDelegated ? !entry.isMeta : !entry.isSidechain)
+        ) {
           const msg = entry.message;
           lastAssistantTimelineIdx = -1;
 
