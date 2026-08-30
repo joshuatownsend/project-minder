@@ -222,9 +222,13 @@ async fn run_check<R: Runtime>(
     // recovery below would never run.
     if let Some(handoff) = &handoff {
         if handoff.should_stop_before_download(supervisor.is_attached()) {
-            if let Some(stopped) = handoff.stop()? {
-                crate::service_handoff::arm_restore(stopped);
-            }
+            // `stop()` arms the restore itself. It used to hand back a token for
+            // this line to arm, and that left a window: a Quit waiting on the
+            // in-flight stop could wake after the stop completed but before this
+            // line ran, find nothing owed, and exit having lost the service
+            // (Codex P1, PR #541). Only `stop()` can close that gap, because
+            // only `stop()` knows the moment the verdict exists.
+            handoff.stop()?;
         }
     }
 

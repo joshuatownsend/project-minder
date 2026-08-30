@@ -60,6 +60,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as StdCommand, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -109,6 +110,33 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// service; see this module's header).
 static PENDING_RESTORE: Mutex<Option<Arc<ServiceHandoff>>> = Mutex::new(None);
 
+/// A stop that is UNDERWAY, covering the interval `PENDING_RESTORE` cannot.
+///
+/// `stop()` blocks — up to `STOP_TIMEOUT`, and on Windows really can take
+/// seconds, since the helper shells `netstat` plus a PowerShell
+/// `Get-CimInstance` per candidate PID. `arm_restore` only runs after it
+/// returns. The tray's Quit item stays clickable throughout, so a user quitting
+/// inside that window exits a process that has already stopped the service and
+/// armed nothing: they lose both the logon service and the sidecar until their
+/// next logon, for an update that never happened (#460).
+///
+/// This slot is armed BEFORE the helper runs, and only when the port was
+/// observed bound. That is what keeps the guarantee `StoppedService` exists to
+/// enforce — "never start a service the user deliberately left down" — because
+/// nothing was left down if something was answering. It is a weaker observation
+/// than the token's (a foreign server on that port would also arm it), and
+/// deliberately so: a spurious start of a service that was not running is
+/// recoverable, losing a running one is not.
+static STOP_IN_FLIGHT: Mutex<Option<(Arc<ServiceHandoff>, Arc<AtomicBool>)>> =
+    Mutex::new(None);
+
+/// How long a Quit will wait for an in-flight stop to resolve before giving up.
+///
+/// `stop()` already bounds the helper at `STOP_TIMEOUT` and kills it on expiry,
+/// so the flag is set shortly after that in the worst case; the grace is for the
+/// bookkeeping in between, not for the helper.
+const STOP_JOIN_GRACE: Duration = Duration::from_secs(5);
+
 /// Proof that this process stopped a service that **was running**, and
 /// therefore owes it a restart if the update does not go through.
 ///
@@ -124,10 +152,45 @@ pub struct StoppedService(Arc<ServiceHandoff>);
 
 /// Record that a stopped service is owed a restart. Takes the token by value:
 /// there is no way to call this without having actually stopped something.
+///
+/// Promotes rather than adds: the in-flight marker this stop set is cleared
+/// here, so the debt is recorded exactly once and `restore_if_armed` cannot
+/// start the service twice.
 pub fn arm_restore(stopped: StoppedService) {
-    if let Ok(mut slot) = PENDING_RESTORE.lock() {
-        *slot = Some(stopped.0);
+    // The marker is given up ONLY once the debt is actually recorded. Clearing
+    // it unconditionally meant a poisoned `PENDING_RESTORE` lock lost both: the
+    // restore was never stored AND the in-flight fallback was removed, which
+    // reopens the exact "Quit sees nothing armed" hole this marker closes
+    // (Copilot, PR #541). Keeping the marker is the safe direction — it fails
+    // towards restarting a service that was running.
+    let recorded = match PENDING_RESTORE.lock() {
+        Ok(mut slot) => {
+            *slot = Some(stopped.0);
+            true
+        }
+        Err(_) => false,
+    };
+    if recorded {
+        clear_stop_in_flight();
     }
+}
+
+/// Mark a stop as underway. Private, and called only from [`ServiceHandoff::stop`]
+/// once the port has been observed bound.
+fn mark_stop_in_flight(handoff: &Arc<ServiceHandoff>) -> Arc<AtomicBool> {
+    let done = Arc::new(AtomicBool::new(false));
+    if let Ok(mut slot) = STOP_IN_FLIGHT.lock() {
+        *slot = Some((handoff.clone(), done.clone()));
+    }
+    done
+}
+
+fn take_stop_in_flight() -> Option<(Arc<ServiceHandoff>, Arc<AtomicBool>)> {
+    STOP_IN_FLIGHT.lock().ok().and_then(|mut slot| slot.take())
+}
+
+fn clear_stop_in_flight() {
+    let _ = take_stop_in_flight();
 }
 
 /// Claim the outstanding restore, if any. Taking it is what makes this safe to
@@ -141,15 +204,57 @@ fn take_restore() -> Option<Arc<ServiceHandoff>> {
 /// is committed, where leaving the service stopped is the intended outcome.
 pub fn disarm_restore() {
     let _ = take_restore();
+    clear_stop_in_flight();
 }
 
 /// Restart a service this process stopped for an update that is not going to
 /// happen. Safe to call unconditionally — it is a no-op unless a stop was armed
 /// and nobody has claimed it yet.
 pub fn restore_if_armed() {
+    // The completed stop first: it is the stronger claim, and taking it also
+    // means a promoted debt is never also served by the in-flight slot.
     if let Some(handoff) = take_restore() {
+        clear_stop_in_flight();
         log("update: abandoning the update — putting the logon service back");
         handoff.start();
+        return;
+    }
+    // Quit landed while the helper was still running.
+    //
+    // Starting here directly was the first attempt and it raced: `start()` runs
+    // `schtasks /run` on Windows, against a `taskkill /F /T` that has not
+    // finished (Codex P1, PR #541). So WAIT for the stop to resolve, and then
+    // ask the ordinary question again.
+    //
+    // Waiting also makes the answer exact, which is why this is simpler than
+    // what it replaces rather than more machinery. Before, the marker licensed
+    // an unconditional start on the theory that a spurious start is recoverable
+    // and a lost service is not — a real concession. Afterwards the stop has
+    // resolved, so `arm_restore` has recorded a debt if and only if something of
+    // ours was genuinely stopped: claim it and start, or find nothing and start
+    // nothing. The concession is gone.
+    //
+    // `take` before the wait, so a concurrent claimant cannot also be here; the
+    // debt it may promote into `PENDING_RESTORE` is what the second claim below
+    // reads.
+    if let Some((_handoff, done)) = take_stop_in_flight() {
+        log("update: quit arrived mid-stop — waiting for it to finish before deciding");
+        let deadline = Instant::now() + STOP_TIMEOUT + STOP_JOIN_GRACE;
+        while !done.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        match take_restore() {
+            Some(handoff) => {
+                log("update: the stop finished and owed a restart — putting the logon service back");
+                handoff.start();
+            }
+            None => {
+                // Either nothing of ours was running, or the stop failed and
+                // left it running. Neither owes a start, and inventing one here
+                // is what the token type exists to prevent.
+                log("update: the stop finished owing nothing — leaving the service as it is");
+            }
+        }
     }
 }
 
@@ -547,12 +652,13 @@ impl ServiceHandoff {
     /// files are already swapped — so they exist as belt-and-braces, not as the
     /// safety net.
     ///
-    /// `Ok(Some(_))` means a Minder really was answering on the helper's port
-    /// and is now stopped — the token is the only thing [`arm_restore`] accepts.
-    /// `Ok(None)` means there was nothing to stop, which the helper also reports
-    /// as success, and which must never lead to *starting* a service the user
-    /// deliberately left down.
-    pub fn stop(self: &Arc<Self>) -> Result<Option<StoppedService>, String> {
+    /// `Ok(true)` means a Minder really was answering on the helper's port and
+    /// is now stopped, and the restore debt HAS ALREADY BEEN ARMED — see the
+    /// note at the end of this function for why the caller cannot be trusted to
+    /// do it. `Ok(false)` means there was nothing to stop, which the helper also
+    /// reports as success, and which must never lead to *starting* a service the
+    /// user deliberately left down.
+    pub fn stop(self: &Arc<Self>) -> Result<bool, String> {
         log(&format!(
             "update: {} registers the logon service against this app's own bundle — stopping it \
              so the installer can replace those files",
@@ -581,6 +687,16 @@ impl ServiceHandoff {
         // port come free.
         let was_listening = crate::health::port_is_bound(target);
         let served_minder = crate::health::probe(target).is_minder();
+        // Armed BEFORE the helper, which blocks for as long as it takes and
+        // stays racing a clickable Quit the whole time (#460). Gated on
+        // `was_listening` so this can only ever put back something that was
+        // observed up — the invariant `StoppedService` protects, held one
+        // observation earlier.
+        let stop_done = if was_listening {
+            Some(mark_stop_in_flight(self))
+        } else {
+            None
+        };
         let exit = self.run_helper("stop");
         // Short-circuits: only worth the wait when something was there to go
         // away and the helper claims to have done its job.
@@ -603,9 +719,40 @@ impl ServiceHandoff {
             Ok(false) => log("update: no logon service was running — nothing to stop"),
             Err(why) => log(&format!("update: could not stop the logon service — {why}")),
         }
-        // The token exists only when something really did stop. That is the
-        // whole point: no caller can record a debt we do not owe.
-        Ok(verdict?.then(|| StoppedService(self.clone())))
+        // Nothing is owed on these paths, so the in-flight marker must not
+        // outlive the call — otherwise a later Quit would start a service this
+        // stop found already down. The owed path deliberately leaves it set:
+        // `arm_restore` clears it as it promotes, so there is no instant
+        // between `stop()` returning and the debt being recorded in which a
+        // Quit would find nothing.
+        if !matches!(verdict, Ok(true)) {
+            clear_stop_in_flight();
+        }
+        // The debt is armed HERE, not by the caller, and the flag is released
+        // only afterwards.
+        //
+        // Signalling completion first left a smaller copy of the very window
+        // this change closes (Codex P1, PR #541): the caller arms in
+        // `updater.rs` AFTER `stop()` returns, so a Quit waiting on the flag
+        // could wake in between, find `PENDING_RESTORE` empty, conclude nothing
+        // was owed and exit — and the updater would then record the debt too
+        // late for anything to act on it.
+        //
+        // `stop()` is the only thing that can mint a `StoppedService`, so it is
+        // also the only place that can close that gap. The token type still
+        // does its job: nothing else can record a debt, and this records one
+        // only when the verdict says a running service really was stopped.
+        let stopped = verdict.as_ref().is_ok_and(|v| *v);
+        if stopped {
+            arm_restore(StoppedService(self.clone()));
+        }
+        // Released on EVERY path, including the error ones: a Quit blocked on
+        // this flag must never outlive the stop it is waiting for. By here the
+        // debt, if any, is already recorded — which is the point.
+        if let Some(done) = &stop_done {
+            done.store(true, Ordering::SeqCst);
+        }
+        verdict
     }
 
     /// Start the service again. Used on exactly one path: an update that
@@ -1219,7 +1366,11 @@ mod tests {
     /// honest shape.
     #[test]
     fn the_outstanding_restore_slot_is_armed_claimed_once_and_disarmable() {
-        use super::{arm_restore, disarm_restore, restore_if_armed, take_restore, StoppedService};
+        use super::{
+            arm_restore, clear_stop_in_flight, disarm_restore, mark_stop_in_flight,
+            restore_if_armed, take_restore, take_stop_in_flight, StoppedService,
+        };
+        use std::sync::atomic::Ordering;
         use std::sync::Arc;
 
         // Nothing armed — the state after every update that never stopped a
@@ -1246,6 +1397,88 @@ mod tests {
             take_restore().is_none(),
             "a committed update must leave nothing to put back"
         );
+
+        // --- the interval the completed-stop slot cannot cover (#460) ---
+        //
+        // `stop()` blocks while the helper runs, and Quit stays clickable
+        // throughout. Before this, quitting there exited a process that had
+        // already taken the service down and armed nothing, costing the user
+        // both the service and the sidecar until their next logon.
+        //
+        // Asserted through the slots rather than by calling `restore_if_armed`
+        // with something armed — that would spawn a real service off a fake
+        // handoff. The claim semantics are the behaviour under test; `start()`
+        // is not.
+        let handoff = Arc::new(fake_handoff(4100, Some(4199)));
+
+        clear_stop_in_flight();
+        assert!(
+            take_stop_in_flight().is_none(),
+            "no stop underway means Quit has nothing to put back"
+        );
+
+        mark_stop_in_flight(&handoff);
+        assert!(
+            take_stop_in_flight().is_some(),
+            "a Quit landing mid-stop must find the handoff"
+        );
+        assert!(
+            take_stop_in_flight().is_none(),
+            "claiming it is destructive, so update and Quit cannot both act"
+        );
+
+        // Promotion, not accumulation. Arming the real debt consumes the
+        // marker, so the two slots can never start the same service twice.
+        mark_stop_in_flight(&handoff);
+        arm_restore(StoppedService(handoff.clone()));
+        assert!(
+            take_stop_in_flight().is_none(),
+            "arming the completed stop must consume the in-flight marker"
+        );
+        assert!(take_restore().is_some(), "the real debt is what remains");
+
+        // A committed update gives up both, for the same reason it gives up
+        // the first: the service is meant to stay down until the next logon,
+        // and a Quit racing the hand-off must not resurrect it onto the port
+        // the updated tray is about to take.
+        mark_stop_in_flight(&handoff);
+        arm_restore(StoppedService(handoff.clone()));
+        disarm_restore();
+        assert!(take_restore().is_none());
+        assert!(
+            take_stop_in_flight().is_none(),
+            "a committed update must not leave a mid-stop marker behind either"
+        );
+
+        // --- and Quit no longer starts anything on faith (#541 P1) ---
+        //
+        // The first version of this marker licensed an UNCONDITIONAL start: it
+        // knew the port had been bound, not what the helper had done. That
+        // raced `schtasks /run` against a `taskkill /F /T` still in progress,
+        // and conceded a possible spurious start as the lesser evil.
+        //
+        // Waiting makes the answer exact instead. With the stop resolved and no
+        // debt recorded — the helper found nothing of ours — `restore_if_armed`
+        // must consume the marker and start NOTHING. Safe to call for real here
+        // precisely because nothing is owed: starting needs a `StoppedService`,
+        // and there is none.
+        assert!(take_restore().is_none(), "nothing owed before this case");
+        let done = mark_stop_in_flight(&handoff);
+        done.store(true, Ordering::SeqCst); // the stop has already resolved
+        restore_if_armed();
+        assert!(
+            take_stop_in_flight().is_none(),
+            "the marker is consumed even when the stop turned out to owe nothing"
+        );
+        assert!(
+            take_restore().is_none(),
+            "and no debt is invented on the way out"
+        );
+
+        // Leave the globals as they were found — these slots are process-wide
+        // and this is the only test that touches them.
+        clear_stop_in_flight();
+        restore_if_armed();
     }
 
     /// Round 6, Codex P1 (missed on an earlier round): the port must be

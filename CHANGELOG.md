@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Quitting during an update's service stop no longer costs you the service** (#460). `ServiceHandoff::stop()` blocks while its helper runs — up to `STOP_TIMEOUT`, and on Windows genuinely seconds, since the helper shells `netstat` plus a PowerShell `Get-CimInstance` per candidate PID. The restore slot was only armed *after* it returned, and the tray's Quit item stays clickable throughout. Quitting inside that window exited a process that had already taken the logon service down and recorded no debt, leaving the user without both the service and the tray's sidecar until their next logon — for an update that never happened.
+
+  A second slot is now armed **before** the helper runs, gated on the port having been observed bound. That keeps the guarantee the `StoppedService` token exists to enforce — never start a service the user deliberately left down — one observation earlier: nothing was left down if something was answering. It is a weaker claim than the token's, and deliberately so, because a spurious start of a service that was not running is recoverable while losing a running one is not. Arming the real debt consumes the marker, so the two slots can never start the same service twice, and a committed update gives up both.
+
+  The other half of #460 — `served_minder` proving only that *a* Minder answered on that port, not that it is this installation's registered service — is unchanged and the issue stays open for it. It needs the stop helper to report an identity verdict across a process boundary, where today it exits 0 both when it stops our service and when it declines to touch a stranger.
+
 - **The payload's exclusion list is derived from `.gitignore` instead of restated by hand** (#417). Next's whole-project tracing fallback (#284) sweeps everything under the tracing root that isn't explicitly excluded, and the tracer has no notion of `.gitignore` — so two hand-maintained lists were restating a file that already exists. Over one review round (PR #414) that list gained nine entries, every one already in `.gitignore`, one of them (`.agents`) already sitting in `.next/standalone`.
 
   Measured on this checkout, the hand list was still missing eight more: `CLAUDE_MD_SNIPPET.md`, `capture-new.mjs`, `next-env.d.ts`, `screenshots/`, `uiux-review/`, `.impeccable`, `.remember`, and seven stray `t2.1-*.png` files. Three of those — 676 KB — were **in the shipped payload**.
