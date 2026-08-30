@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The packaged server no longer ships the source tree it was built from** (#284). `dist/minder-server` carried 8.1 MB of `src/`, 3.2 MB of `scripts/`, all of `src-tauri/`, and ~2.7 MB of developer state (`tsconfig.tsbuildinfo`, `INSIGHTS.md`, `TODO.archive.md`, `pnpm-lock.yaml`, `manual-steps-tracker.html`) — none of it read at runtime. Next's tracer still reports "dynamic filesystem access causes tracing of the whole project" (22 warnings over 13 distinct patterns, all from the scanner's genuinely dynamic reads), so the payload is protected only by a hand-maintained exclusion list; these entries were simply never added to it. Source leakage drops from ~14 MB to ~148 KB.
+
+  **`src/` is not fully excluded, and cannot be.** Two `schema.sql` files under it are read at DB init, and in a standalone build they are reachable by no other path: there is no `schema.sql` anywhere under `.next/`, so `resolveSchemaPath()`'s `__dirname` sibling lookup misses and its cwd-walk is what resolves. A new `outputFileTracingIncludes` keeps exactly those two files.
+
+  The comment on that function claimed the opposite — that the `__dirname` lookup is "what production and the standalone build use", and the walk a dev/test-only fallback. That is backwards for the packaged artifact, and it reads as permission to drop `src/` from the payload, which would break DB init on every install. It is corrected here, because the exclusion is the change that would have acted on it.
+
+  Packaging now **verifies** both files landed and fails the build if either is missing, rather than trusting the include. The failure it guards is invisible otherwise: packaging succeeds, the server starts, and DB init throws only on a machine with no repo to fall back on. Confirmed by mutation — dropping the include fails packaging, and it fails on only *one* of the two files: `db/schema.sql` is also planted by an existing step that exists for the untraced worker bundle, so it survives, while `tasksDb/schema.sql` has no second route. Without the guard the breakage would have been partial, with one DB initialising and the other not.
+
+  The payload remains 1.3 GB. That weight is deliberate runtime dependencies — `@huggingface/transformers` (445 MB) backs embeddings and must work in an installed build — not source leakage, which was ~1% of the total.
+
 - **A delegated agent's session opens onto its own conversation instead of a blank timeline** (#487). Clicking through to a subagent's transcript produced a page that loaded successfully and rendered nothing, which reads as "this agent did no work" — the opposite of the truth, and unfalsifiable from the UI.
 
   The cause is a flag that means something different depending on which file it is in. `isSidechain` marks a turn as *a sidechain of its parent*, and both backends skipped those turns — correct in an ordinary session. But in a file at `<project>/<parent>/subagents/<id>.jsonl` **every** entry carries the flag (sampled on a real transcript: 50 of 50), because the whole file *is* the sidechain. Such a file reached only the sidechain collector, which records one assistant row per turn for cost and carries no user turns and no prose — so the rows existed and there was simply nothing renderable in them.
