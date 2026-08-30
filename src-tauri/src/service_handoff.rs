@@ -509,6 +509,18 @@ impl ServiceHandoff {
 
     /// Run the bundled service CLI with one action and report how it ended.
     fn run_helper(&self, action: &str) -> StopExit {
+        self.run_helper_reporting(action, None)
+    }
+
+    /// `report_to` names a file the helper may write its identity verdict into.
+    ///
+    /// A file, not the exit code and not stdout. The exit code is user-facing —
+    /// `pnpm service:stop` is documented — so no scheme where ordinary success
+    /// is non-zero survives. And stdout would have to be piped: the helper is
+    /// chatty, and with the `wait_with_timeout` + `kill` shape below a full pipe
+    /// buffer deadlocks it before it can exit, in the one path that must never
+    /// hang (#460).
+    fn run_helper_reporting(&self, action: &str, report_to: Option<&Path>) -> StopExit {
         let mut cmd = StdCommand::new(&self.node);
         cmd.arg(&self.cli)
             .arg(action)
@@ -516,6 +528,9 @@ impl ServiceHandoff {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        if let Some(path) = report_to {
+            cmd.env("MINDER_STOP_REPORT", path);
+        }
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -581,7 +596,18 @@ impl ServiceHandoff {
         // port come free.
         let was_listening = crate::health::port_is_bound(target);
         let served_minder = crate::health::probe(target).is_minder();
-        let exit = self.run_helper("stop");
+        // A per-call path under the temp dir. Removed before the run so a stale
+        // file from an earlier stop can never be read as this one's verdict —
+        // the failure mode would be silent and wrong in the unsafe direction.
+        let report_path = std::env::temp_dir().join(format!(
+            "minder-stop-report-{}-{}.json",
+            std::process::id(),
+            target
+        ));
+        let _ = std::fs::remove_file(&report_path);
+        let exit = self.run_helper_reporting("stop", Some(&report_path));
+        let stopped_registered = read_stop_report(&report_path);
+        let _ = std::fs::remove_file(&report_path);
         // Short-circuits: only worth the wait when something was there to go
         // away and the helper claims to have done its job.
         let port_came_free =
@@ -592,6 +618,7 @@ impl ServiceHandoff {
                 served_minder,
                 exit,
                 port_came_free,
+                stopped_registered,
             },
             target,
         );
@@ -628,6 +655,27 @@ impl ServiceHandoff {
 }
 
 /// How running the bundled service CLI ended.
+/// The helper's identity verdict, or `None` when it did not leave one.
+///
+/// `None` is not a third answer — it means nobody was told. A helper too old to
+/// write the file, a write that failed, or a platform that does not do per-PID
+/// identity (macOS and Linux target a launchd label / systemd unit and cannot
+/// tell whether the job was running) all land here, and the caller must fall
+/// back to its own heuristic rather than assume either verdict.
+fn read_stop_report(path: &Path) -> Option<bool> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    // Deliberately not a JSON dependency for one boolean. The helper writes
+    // exactly `{"stoppedRegistered":true}` or `...:false}`; anything else is
+    // treated as no verdict, which is the safe direction.
+    if raw.contains("\"stoppedRegistered\":true") {
+        Some(true)
+    } else if raw.contains("\"stoppedRegistered\":false") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StopExit {
     /// It ran to completion and reported success.
@@ -663,6 +711,9 @@ pub struct StopObservations {
     /// A Minder *answered* on that port before the stop. Strictly stronger than
     /// `was_listening`, and the only thing that licenses demanding a release.
     pub served_minder: bool,
+    /// The helper's own answer to "did I stop THIS installation's service?",
+    /// or `None` when it left no verdict. See [`read_stop_report`].
+    pub stopped_registered: Option<bool>,
     /// How the helper itself ended.
     pub exit: StopExit,
     /// The port was observed to come free afterwards. Only ever set when it was
@@ -676,6 +727,7 @@ pub fn classify_stop(obs: StopObservations, port: u16) -> Result<bool, String> {
         served_minder,
         exit,
         port_came_free,
+        stopped_registered,
     } = obs;
     match exit {
         StopExit::Failed(why) => {
@@ -690,6 +742,24 @@ pub fn classify_stop(obs: StopObservations, port: u16) -> Result<bool, String> {
             ))
         }
         StopExit::Ok => {}
+    }
+    // When the helper told us what it did, that answer settles both questions
+    // and the port heuristics are not consulted at all (#460).
+    //
+    // `served_minder` only ever established that *a* Minder answered on that
+    // port — true of a second installation, or a `pnpm dev` checkout, holding it
+    // while our registered service is already down. The helper then correctly
+    // refuses the mismatched PID and exits 0, the port never comes free, and the
+    // check below reads a safe stop as a failed one and aborts an update that
+    // would have succeeded. The helper knew all along; it had no way to say so.
+    //
+    //   Some(true)  — it identified and killed a process of ours. Our files are
+    //                 free regardless of who else holds the port, and we owe a
+    //                 restart because something of ours really was running.
+    //   Some(false) — it examined every PID on that port and none were ours.
+    //                 Nothing of ours is holding files, and nothing is owed.
+    if let Some(stopped) = stopped_registered {
+        return Ok(stopped);
     }
     // A Minder that *was answering* must have let go. Only that case: something
     // foreign holding the port, or nothing holding it at all, tells us nothing
@@ -954,12 +1024,108 @@ mod tests {
 
     /// Build observations for the common shapes, so each test below reads as
     /// the situation it describes rather than four positional booleans.
+    /// The report parser answers three ways, and the third must be `None`.
+    /// Anything it cannot read is "nobody told us", which sends the caller back
+    /// to its heuristic — guessing either verdict here would be silent and
+    /// wrong in one direction or the other.
+    #[test]
+    fn the_stop_report_is_read_or_treated_as_no_verdict() {
+        use super::read_stop_report;
+        let dir = std::env::temp_dir().join(format!("minder-report-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, body: &str| {
+            let p = dir.join(name);
+            std::fs::write(&p, body).unwrap();
+            p
+        };
+        assert_eq!(read_stop_report(&write("t.json", r#"{"stoppedRegistered":true}"#)), Some(true));
+        assert_eq!(read_stop_report(&write("f.json", r#"{"stoppedRegistered":false}"#)), Some(false));
+        assert_eq!(read_stop_report(&write("junk.json", "not json at all")), None);
+        assert_eq!(read_stop_report(&write("other.json", r#"{"somethingElse":true}"#)), None);
+        // The common case: the helper wrote nothing, because it is older than
+        // this feature or the platform does no per-PID identity check.
+        assert_eq!(read_stop_report(&dir.join("absent.json")), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #460 finding 2 — the helper's own verdict, and why it outranks the port.
+    ///
+    /// `served_minder` only ever established that *a* Minder answered on that
+    /// port. A second installation, or a `pnpm dev` checkout, holding it while
+    /// our registered service is already down satisfies that just as well: the
+    /// helper then correctly refuses the mismatched PID and exits 0, the port
+    /// never comes free, and `classify_stop` read a perfectly safe stop as a
+    /// failed one and aborted the update. The helper knew all along and had no
+    /// way to say so.
+    #[test]
+    fn the_helpers_identity_verdict_outranks_the_port_observations() {
+        // The false abort, exactly as the issue describes it: a stranger's
+        // Minder on the port, ours already down, the port never freed.
+        let stranger = obs_reported(true, true, StopExit::Ok, false, None);
+        assert!(
+            classify_stop(stranger, 4199).is_err(),
+            "without a verdict this is the old, wrong reading — pinned so the fix is visible"
+        );
+
+        // Same observations, plus the helper saying it found nothing of ours.
+        // Nothing of ours holds files, so the update is safe and nothing is
+        // owed.
+        let told_none_ours = obs_reported(true, true, StopExit::Ok, false, Some(false));
+        assert_eq!(
+            classify_stop(told_none_ours, 4199),
+            Ok(false),
+            "a stranger on the port must not abort an update, and owes no restart"
+        );
+
+        // And when it did stop ours, our files are free whoever else holds the
+        // port — and we owe a restart because something of ours was running.
+        let told_stopped_ours = obs_reported(true, true, StopExit::Ok, false, Some(true));
+        assert_eq!(
+            classify_stop(told_stopped_ours, 4199),
+            Ok(true),
+            "a confirmed stop of our own service owes a restart"
+        );
+    }
+
+    /// A verdict never overrides a helper that failed or hung. Those are about
+    /// whether the stop RAN, which no report can answer — a file written before
+    /// a later timeout would otherwise license an update over held files.
+    #[test]
+    fn a_verdict_does_not_excuse_a_helper_that_failed_or_timed_out() {
+        for exit in [StopExit::Failed("boom".into()), StopExit::TimedOut] {
+            let o = obs_reported(true, true, exit, false, Some(true));
+            assert!(
+                classify_stop(o, 4199).is_err(),
+                "the helper not completing outranks anything it claimed on the way"
+            );
+        }
+    }
+
+    fn obs_reported(
+        was_listening: bool,
+        served_minder: bool,
+        exit: StopExit,
+        came_free: bool,
+        stopped_registered: Option<bool>,
+    ) -> StopObservations {
+        StopObservations {
+            was_listening,
+            served_minder,
+            exit,
+            port_came_free: came_free,
+            stopped_registered,
+        }
+    }
+
     fn obs(was_listening: bool, served_minder: bool, exit: StopExit, came_free: bool) -> StopObservations {
         StopObservations {
             was_listening,
             served_minder,
             exit,
             port_came_free: came_free,
+            // The existing cases predate the helper's verdict and describe the
+            // fallback path, where there is none.
+            stopped_registered: None,
         }
     }
 
