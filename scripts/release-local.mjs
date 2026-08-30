@@ -57,6 +57,7 @@ import {
   canSignUpdaterArtifacts,
   formatSize,
   buildPlan,
+  tauriBuildArgs,
 } from "./release/lib.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -337,20 +338,14 @@ function main() {
 
   const restore = stampTauriVersion(version);
   restoreOnExit(restore);
-  // --config is not optional here. `../dist/minder-server` lives in
-  // tauri.bundle.conf.json rather than the base config so that a bare
-  // `cargo build`/`clippy` does not emit a rerun-if-changed line for each of
-  // its ~29k files (#295). Without the flag this script still produces
-  // installers — they just contain no server. CI passes the same flag, and its
-  // "Verify installers carry the server payload" step is the backstop.
-  runPnpm("build Tauri installers", [
-    "tauri",
-    "build",
-    "--config",
-    "src-tauri/tauri.bundle.conf.json",
-    "--bundles",
-    bundles,
-  ]);
+  // Same array the plan above printed — see tauriBuildArgs(). The --config it
+  // carries is not optional: `../dist/minder-server` lives in
+  // tauri.bundle.conf.json rather than the base config so a bare `cargo
+  // build`/`clippy` does not emit a rerun-if-changed line for each of its ~29k
+  // files (#295). Without it this script still produces installers; they just
+  // contain no server. CI's "Verify installers carry the server payload" step
+  // is the backstop.
+  runPnpm("build Tauri installers", tauriBuildArgs(bundles));
   restore();
 
   reportArtifacts();

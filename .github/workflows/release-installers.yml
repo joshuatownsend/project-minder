@@ -14,11 +14,12 @@
 #      the flag still builds and bundles cleanly — it just ships no server, which
 #      is why the size floor below verifies the artifact rather than the command.
 #
-# Both dist/minder-server and dist/node are declared as Tauri `resources` in
-# src-tauri/tauri.conf.json, so they land under the app's resource dir at
-# runtime; src-tauri/src/config.rs resolves the bundled Node
+# dist/node is declared as a Tauri `resource` in src-tauri/tauri.conf.json;
+# dist/minder-server is declared in src-tauri/tauri.bundle.conf.json and merged
+# in with --config (#295 — see step 5 above). Both land under the app's resource
+# dir at runtime, so src-tauri/src/config.rs resolves the bundled Node
 # (<resource_dir>/node/node.exe | node/bin/node) and the payload
-# (<resource_dir>/minder-server) from there.
+# (<resource_dir>/minder-server) from there exactly as before.
 #
 # Node pin: the bundled runtime AND the packaging Node are both 22.13.0. This is
 # load-bearing: package:standalone bundles better-sqlite3's prebuilt .node binary,

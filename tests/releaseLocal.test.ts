@@ -10,7 +10,38 @@ import {
   canSignUpdaterArtifacts,
   formatSize,
   buildPlan,
+  tauriBuildArgs,
 } from "../scripts/release/lib.mjs";
+
+// The plan is asserted verbatim, so this must stay the flag the script
+// actually passes — an installer built without it silently ships no
+// server (#295).
+const TAURI_BUNDLE_CONFIG = "--config src-tauri/tauri.bundle.conf.json";
+
+describe("tauriBuildArgs", () => {
+  it("carries the bundle-config overlay", () => {
+    // Not decoration. Dropping --config still builds and bundles; the installer
+    // simply has no server in it, and nothing before the user notices (#295).
+    expect(tauriBuildArgs("nsis")).toEqual([
+      "tauri",
+      "build",
+      "--config",
+      "src-tauri/tauri.bundle.conf.json",
+      "--bundles",
+      "nsis",
+    ]);
+  });
+
+  it("is the same command the printed plan advertises", () => {
+    // The plan and the spawn were written out separately and drifted the moment
+    // --config was added, so a --dry-run advertised a command that would ship a
+    // payload-less installer. They read from one definition now; this fails if
+    // anyone splits them again.
+    const plan = buildPlan({ skipBuild: false, skipNode: false }, "deb,appimage");
+    const tauriLine = plan.find((step) => step?.includes("tauri build"));
+    expect(tauriLine).toBe(`pnpm ${tauriBuildArgs("deb,appimage").join(" ")}`);
+  });
+});
 
 describe("isValidBundleList", () => {
   it("accepts single and comma-separated lowercase targets", () => {
@@ -260,7 +291,7 @@ describe("buildPlan", () => {
       "pnpm package:standalone",
       "node scripts/verify-payload-hygiene.mjs",
       "node scripts/fetch-node-runtime.mjs",
-      "pnpm tauri build --bundles nsis",
+      `pnpm tauri build ${TAURI_BUNDLE_CONFIG} --bundles nsis`,
     ]);
   });
 
@@ -275,7 +306,7 @@ describe("buildPlan", () => {
 
   it("threads the bundle list into the tauri step", () => {
     expect(buildPlan(base, "deb,appimage")).toContain(
-      "pnpm tauri build --bundles deb,appimage"
+      `pnpm tauri build ${TAURI_BUNDLE_CONFIG} --bundles deb,appimage`
     );
   });
 });
