@@ -636,11 +636,16 @@ function placeClosureEdges(edges) {
   // node_modules/chalk` when that is what the tree requires.
   const placements = new Map(); // "name@version" -> Set<absolute package dir>
 
+  // Returns true when this is a NEW placement. The fixed-point loop counts that
+  // as progress: discovering where a copy lives can unblock its children even
+  // when nothing was copied (#539).
   function recordPlacement(name, version, dir) {
     const key = `${name}@${version}`;
     let set = placements.get(key);
     if (!set) placements.set(key, (set = new Set()));
+    if (set.has(dir)) return false;
     set.add(dir);
+    return true;
   }
 
   // Seed with every top-level package, including the app's own copies that the
@@ -670,13 +675,21 @@ function placeClosureEdges(edges) {
       }
       for (const parentDir of parentDirs) {
         if (resolvedVersionFrom(parentDir, e.name) === e.version) {
-          // Already served here — record where, so this edge's own children
-          // can be nested beneath it.
+          // Already served here — record WHERE, so this edge's own children can
+          // be nested beneath it.
+          //
+          // Discovering that placement counts as progress even though nothing
+          // was copied. `walkDependencyClosure` emits children only for the
+          // first copy of a package it visits, so a child edge can be processed
+          // before the parent copy it belongs to has been recorded; without
+          // counting discovery, the loop could stop while that child was still
+          // unapplied and `unresolvedEdgesDeep` would then abort a run that one
+          // more round would have repaired (Codex, #539).
           let dir = parentDir;
           for (;;) {
             const candidate = path.join(dir, "node_modules", e.name);
             if (existsSync(path.join(candidate, "package.json"))) {
-              recordPlacement(e.name, e.version, candidate);
+              if (recordPlacement(e.name, e.version, candidate)) placedThisRound += 1;
               break;
             }
             if (path.resolve(dir) === path.resolve(outDir)) break;
@@ -694,6 +707,7 @@ function placeClosureEdges(edges) {
         recordPlacement(e.name, e.version, destDir);
         copied += 1;
         placedThisRound += 1;
+        // (a copy is always progress, recorded or not)
       }
     }
 
