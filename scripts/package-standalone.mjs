@@ -1150,6 +1150,115 @@ if (packagedBindings.length === 0) {
   }
 }
 
+// --- 4c. Make the staged embedding runtime actually loadable ---
+//
+// #533. Next externalizes `@huggingface/transformers` and stages its own copy
+// at `.next/node_modules/@huggingface/transformers-<hash>/`, rewriting the
+// dynamic import in `loadEmbedder()` to that hashed specifier. The specifier
+// resolves. The package then cannot load, because Next stages it with NO
+// nested `node_modules`, and nothing above it carries `onnxruntime-node`:
+//
+//     Cannot find module 'onnxruntime-node'
+//
+// Measured by copying a finished payload outside the repo and importing the
+// staged entry point — in place it "works", because Node walks up out of
+// `dist/` and finds the repo's own node_modules, which no installed machine has.
+//
+// `loadEmbedder()` catches that and records "not installed (optional
+// dependency)", so it is silent AND misleading: 445 MB of transformers ships
+// and cannot run, which is the entire justification for the payload's size
+// (#284). Nothing measured it before shipping.
+//
+// The fix places transformers' dependency CLOSURE at the payload's top level —
+// which is on the resolution walk from the staged copy — and deliberately not
+// transformers itself: the server loads Next's staged copy, so a second 445 MB
+// copy at the top level would double the payload to no purpose.
+//
+// Seeded from the pnpm store rather than resolvePackageDir() for the reason
+// section 4b documents at length: transformers' `exports` map does not expose
+// `./package.json`, so resolving through it throws ERR_PACKAGE_PATH_NOT_EXPORTED
+// and the "optional dependency absent" skip path fires while the package is
+// right there.
+const transformersRepoDir = findPnpmStoreEntry(repoPnpmDir, "@huggingface/transformers");
+const stagedNextNm = path.join(outDir, ".next", "node_modules");
+
+function findStagedCopy(scope, name) {
+  const dir = scope ? path.join(stagedNextNm, scope) : stagedNextNm;
+  if (!existsSync(dir)) return null;
+  const match = readdirSync(dir).find((d) => d.startsWith(`${name}-`));
+  return match ? path.join(dir, match) : null;
+}
+
+const stagedTransformers = findStagedCopy("@huggingface", "transformers");
+
+if (!transformersRepoDir || !stagedTransformers) {
+  step(
+    "@huggingface/transformers not staged in this build (optional dependency) — " +
+      "skipping embedding-runtime reachability"
+  );
+} else {
+  // `onnxruntime-web` is 130 MB of browser/WASM runtime. The staged copy the
+  // server loads is `dist/transformers.node.cjs`, which drives the native
+  // `onnxruntime-node` backend, and inference was measured working without the
+  // web build present: a real `feature-extraction` pipeline over the model
+  // shipped in the payload returned 384 dims at unit norm both with and without
+  // it. Shipping it would put a browser artifact in a server payload whose size
+  // is already the subject of #284.
+  //
+  // The trade-off, stated rather than buried: if `onnxruntime-node`'s native
+  // binding ever fails to load on a user's machine, there is now no WASM build
+  // to fall back to. That failure is loud (no embeddings) rather than silent,
+  // and it is the same outcome as today, where nothing loads at all.
+  const EMBED_DEPS_NOT_SHIPPED = new Set(["onnxruntime-web"]);
+
+  const transformersDeps = Object.keys(
+    readJson(path.join(transformersRepoDir, "package.json")).dependencies ?? {}
+  ).filter((dep) => !EMBED_DEPS_NOT_SHIPPED.has(dep));
+
+  const embedEdges = transformersDeps.flatMap((dep) =>
+    walkDependencyClosure([dep], { optional: true, seedDir: transformersRepoDir })
+  );
+  const embedCopied = placeClosureEdges(embedEdges);
+  step(
+    embedCopied > 0
+      ? `Backfilled ${embedCopied} package copy/copies so the staged embedding runtime resolves (#533)`
+      : "Embedding runtime dependencies already resolve inside dist"
+  );
+
+  // Verify by EFFECT, and specifically that the answer lies inside the payload.
+  // The tripwire this section exists because of asked "does it resolve?" from a
+  // machine holding the repo, which is a question every broken payload also
+  // passes. Requiring the resolved path to be under outDir is what makes the
+  // check mean anything.
+  const unreachable = [];
+  for (const dep of transformersDeps) {
+    let resolved;
+    try {
+      resolved = createRequire(path.join(stagedTransformers, "package.json")).resolve(dep);
+    } catch (err) {
+      unreachable.push(`${dep} (${err.code ?? "resolve failed"})`);
+      continue;
+    }
+    if (path.relative(outDir, resolved).startsWith("..")) {
+      unreachable.push(`${dep} (resolves OUTSIDE the payload, to ${resolved})`);
+    }
+  }
+  if (unreachable.length > 0) {
+    fail(
+      "The staged embedding runtime cannot load from this payload:\n  " +
+        unreachable.join("\n  ") +
+        "\n\nNext stages @huggingface/transformers with no nested node_modules, so its " +
+        "dependencies must sit at the payload's top level (#533). On an installed machine " +
+        "there is no repo above dist/ to resolve them, and loadEmbedder() reports the " +
+        "failure as \"not installed\" — silently disabling embeddings."
+    );
+  }
+  step(
+    `Verified the staged embedding runtime resolves ${transformersDeps.length} ` +
+      `dependency/dependencies inside the payload`
+  );
+}
+
 // --- 5. Record + verify the Node version this bundle was built with ---
 //
 // This doesn't (and can't) guarantee the *runtime* host's Node major
