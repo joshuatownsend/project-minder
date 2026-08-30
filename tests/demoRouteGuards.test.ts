@@ -64,7 +64,17 @@ describe("route-level demo guards (no loader seam behind them)", () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body).toEqual({ readable: [], unavailable: [], complete: true });
+    // `degraded: []` is PRESENT, not omitted (#513). Same reason the route
+    // gives for always setting its header: a client told the shape is
+    // invariant must not have to special-case the one deployment that cannot
+    // fall back to reading paths out of the body.
+    expect(body).toEqual({
+      readable: [],
+      unavailable: [],
+      degraded: [],
+      degradedTotal: 0,
+      complete: true,
+    });
     // Part of the contract, and the help page promises it on EVERY response
     // — a header-only client would otherwise get an indeterminate answer in
     // exactly the deployment where it cannot read paths from the body.

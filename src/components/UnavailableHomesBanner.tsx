@@ -20,10 +20,31 @@
 
 import { useEffect, useState } from "react";
 import { AlertTriangle } from "lucide-react";
+import type { SweepName, SweepFailureScope } from "@/lib/sweepFailures";
 
 interface UnavailableHome {
   path: string;
   distro?: string;
+  reason: string;
+}
+
+/**
+ * An enumeration the SWEEPS could not complete (#513).
+ *
+ * Distinct from `UnavailableHome`, which is a home Minder decided not to touch.
+ * These are directories it DID try to read and could not — a disconnected
+ * drive, a moved home, changed permissions, one project directory with a
+ * restrictive ACL. #479 could only report the first kind, so the corpus quietly
+ * shrank for every case of the second.
+ */
+interface DegradedPath {
+  path: string;
+  // Imported rather than restated. A hand-copied `"usage" | "sessions"` drifted
+  // the moment a third sweep name was added on the server, and a client
+  // contract that silently disagrees with the API is how type-driven logic
+  // starts excluding a valid value without anyone noticing. (Copilot, PR #527.)
+  scope: SweepFailureScope;
+  sweep: SweepName;
   reason: string;
 }
 
@@ -58,6 +79,14 @@ function anyStopped(homes: UnavailableHome[]): boolean {
 
 export function UnavailableHomesBanner() {
   const [homes, setHomes] = useState<UnavailableHome[]>([]);
+  const [degraded, setDegraded] = useState<DegradedPath[]>([]);
+  // Separate from `degraded.length`, which is CAPPED at 50 detail entries. On a
+  // broad fault — a permissions problem near the root of a large tree — the
+  // banner used the array length and told the user that exactly 50 locations
+  // failed, understating it in precisely the case where the number matters
+  // most. The API already returns the uncapped figure; this reads it.
+  // (Codex P2, PR #527, round 4.)
+  const [degradedTotal, setDegradedTotal] = useState(0);
   const [allowRender, setAllowRender] = useState(false);
 
   useEffect(() => {
@@ -70,12 +99,46 @@ export function UnavailableHomesBanner() {
     const poll = () => {
       fetch("/api/claude-homes")
         .then((r) => (r.ok ? r.json() : null))
-        .then((data: { unavailable?: UnavailableHome[] } | null) => {
-          // A failed poll leaves the last good answer in place rather than
-          // clearing the banner — a network blip is not evidence the home came
-          // back, and flickering a warning off and on is worse than stale.
-          if (!cancelled && data?.unavailable) setHomes(data.unavailable);
-        })
+        .then(
+          (
+            data: {
+              unavailable?: UnavailableHome[];
+              degraded?: DegradedPath[];
+              degradedTotal?: number;
+            } | null
+          ) => {
+            // A failed poll leaves the last good answer in place rather than
+            // clearing the banner — a network blip is not evidence the home
+            // came back, and flickering a warning off and on is worse than
+            // stale.
+            if (cancelled) return;
+            // `Array.isArray`, not truthiness: `[]` is falsy-adjacent in the
+            // sense that mattered here — an empty array IS the recovery signal,
+            // and a truthiness check treated it as "no news" and pinned the
+            // banner up after the home came back. Distinguishing an empty array
+            // from a MISSING key is the whole job, and only `Array.isArray`
+            // does both: an older server that omits the key leaves the last
+            // good answer alone. (Copilot, PR #527.)
+            if (data && Array.isArray(data.unavailable)) setHomes(data.unavailable);
+            // The SAME rule, one field over — which is the point, because the
+            // previous revision fixed `unavailable` while leaving `degraded`
+            // on `?? []`, and `?? []` clears the list when the key is MISSING.
+            // That is the exact behaviour the comment above argues against: an
+            // older server, or a rolling deploy, would have wiped a live
+            // warning. (Copilot, PR #527.)
+            if (data && Array.isArray(data.degraded)) setDegraded(data.degraded);
+            // Likewise. A server that sends neither field tells us nothing, so
+            // the last good answer stands; one that sends `degraded` but not
+            // `degradedTotal` is an older server, and its detail length is what
+            // the banner used to show — the previous behaviour rather than a
+            // new guess.
+            if (data && typeof data.degradedTotal === "number") {
+              setDegradedTotal(data.degradedTotal);
+            } else if (data && Array.isArray(data.degraded)) {
+              setDegradedTotal(data.degraded.length);
+            }
+          }
+        )
         .catch(() => {});
     };
     poll();
@@ -86,13 +149,25 @@ export function UnavailableHomesBanner() {
     };
   }, []);
 
-  if (!allowRender || homes.length === 0) return null;
+  // Gated on the TOTAL, not on the detail array. `retireVerified` can clear
+  // every retained detail while failures past the 50-entry cap remain counted,
+  // so a `degraded.length` gate hid the banner outright while the API went on
+  // reporting incomplete coverage — the silence this whole feature exists to
+  // end, arriving through its own cap. (Codex P2, PR #527.)
+  if (!allowRender || (homes.length === 0 && degradedTotal === 0)) return null;
 
   const color = "var(--warn)";
+  // Two different problems, and the headline names whichever is present. A home
+  // Minder DECLINED to read is not the same as one it tried to read and could
+  // not, and a reader who is told the wrong one goes looking in the wrong place.
   const headline =
-    homes.length === 1
-      ? "One Claude home is unavailable"
-      : `${homes.length} Claude homes are unavailable`;
+    homes.length > 0
+      ? homes.length === 1
+        ? "One Claude home is unavailable"
+        : `${homes.length} Claude homes are unavailable`
+      : degradedTotal === 1
+        ? "Part of your history could not be read"
+        : `${degradedTotal} locations could not be read`;
 
   return (
     <div
@@ -130,13 +205,46 @@ export function UnavailableHomesBanner() {
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 600 }}>{headline}</div>
-        <div style={{ color: "var(--text-3)", marginTop: 2 }}>
-          Session, usage and cost figures may not account for{" "}
-          {homes.map((h) => describe(h)).join("; ")}. Direct reads omit it
-          entirely; the index still reports whatever it recorded when the home
-          was last reachable.
-          {anyStopped(homes) && " Minder will not start a stopped distro to check."}
-        </div>
+        {/* Only when there ARE unavailable homes. A degraded-only warning
+            rendered this anyway and produced "may not account for ." — and
+            went on to discuss an unreachable home's stale index, which is not
+            what happened (Codex P2 + Copilot, PR #527). */}
+        {homes.length > 0 && (
+          <div style={{ color: "var(--text-3)", marginTop: 2 }}>
+            Session, usage and cost figures may not account for{" "}
+            {homes.map((h) => describe(h)).join("; ")}. Direct reads omit it
+            entirely; the index still reports whatever it recorded when the home
+            was last reachable.
+            {anyStopped(homes) && " Minder will not start a stopped distro to check."}
+          </div>
+        )}
+        {degradedTotal > 0 && (
+          <div style={{ color: "var(--text-3)", marginTop: 4 }}>
+            {/* The paths, not just a count. "Something could not be read" is
+                not actionable; the directory and the reason are. Capped,
+                because a tree with a broken ACL near the root produces many
+                and the first few are what a reader needs. */}
+            {degraded.length === 0 ? (
+              // Count-only copy. The paths are the actionable part and are
+              // normally shown, but they can all have been retired while the
+              // count has not — saying nothing at all would be worse than
+              // saying how many.
+              <>
+                Could not read {degradedTotal}{" "}
+                {degradedTotal === 1 ? "location" : "locations"}. Figures from the
+                affected projects are missing rather than zero.
+              </>
+            ) : (
+              <>
+                Could not read{" "}
+                {degradedTotal === 1 ? "" : `${degradedTotal} locations, including `}
+                {degraded.slice(0, 3).map((d) => `${d.path} (${d.reason})`).join("; ")}
+                {degradedTotal > 3 && ", and others"}. Figures from the affected
+                projects are missing rather than zero.
+              </>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

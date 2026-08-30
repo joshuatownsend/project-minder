@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readConfig, mutateConfig } from "@/lib/config";
 import { invalidateCache } from "@/lib/cache";
+import { forgetSweepFailuresUnder } from "@/lib/sweepFailures";
 import { invalidateClaudeConfigRouteCache } from "@/app/api/claude-config/route";
 import { disposeAllRouteCaches } from "@/lib/routeCache";
 import { setProjectStatus } from "@/lib/server/mutations/projectStatus";
@@ -14,6 +15,7 @@ import { efficiencyGradeCache } from "@/lib/efficiencyGradeCache";
 import { invalidateClaudeUsageCache } from "@/lib/server/queries/stats";
 import { invalidateSessionCategoryCounts } from "@/lib/memory/seedCategoryCounts";
 import { validateNotificationRules } from "@/lib/notifications/rules/validate";
+import { homeDedupeKey, getClaudeHomes } from "@/lib/claudeHome";
 import {
   isShortcutActionId,
   isValidCombo,
@@ -68,6 +70,23 @@ export async function PATCH(request: NextRequest) {
   // does, and leaving it out meant a user could enable Codex and go on seeing
   // grades computed without it. (Codex P2, PR #490.)
   let corpusShapeChanged = false;
+  /**
+   * Homes that left the effective set, staged by the locked mutation and
+   * applied only once the config write has committed. `null` means the swept
+   * set did not move, so the collector is left alone entirely.
+   */
+  let pendingSweepReset: string[] | null = null;
+  /**
+   * Narrower than `corpusShapeChanged`, and separate from it on purpose.
+   *
+   * `corpusShapeChanged` also fires for `pathMappings` and `enabledAdapters`,
+   * which change what the usage rollups MEAN but not which Claude directories
+   * `sweepSessions` and `scanAllSessions` enumerate. Clearing the sweep-failure
+   * record on those erased a live diagnostic about a directory that is still
+   * unreadable, and `/api/claude-homes` then answered `complete: true` until a
+   * full sweep happened to run again. Only a change to the Claude home PATH SET
+   * can make a recorded path stop being swept. (Codex P2, PR #527.)
+   */
   const patches: Patch[] = [];
 
   // S5 — widening devRoots is a sensitive write (it gates validateProjectPath /
@@ -94,7 +113,68 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "claudeHomes elements must be strings" }, { status: 400 });
     }
     const homes = (body.claudeHomes as string[]).map((h) => h.trim()).filter(Boolean);
-    patches.push((c) => { c.claudeHomes = homes; });
+    // The diff AND the prune run inside the LOCKED mutation.
+    //
+    // Read outside it, two overlapping `claudeHomes` PATCHes both observe the
+    // same pre-mutation config even though `mutateConfig` serializes their
+    // writes. Starting with unreadable homes A and B, a request keeping only A
+    // and one keeping only B each compute the other as removed — and whichever
+    // prune lands last drops a failure for a home the winning write still
+    // configures, leaving `complete: true` with nothing having verified it.
+    // `mutateConfig`'s callback receives the config read under the lock, so
+    // each request diffs against what it is actually replacing and prunes in
+    // commit order. (Codex P2, PR #527.)
+    //
+    // Diffed against what is on disk, not merely "the key was present": a
+    // Settings save posts every field, so treating any `claudeHomes` in the
+    // body as a change would clear the record on every unrelated save.
+    //
+    // Compared as the set of homes that would ACTUALLY BE SWEPT — by running
+    // `getClaudeHomes`, the function that decides them, over both configs.
+    // Three narrower attempts each missed a different way for the config to
+    // change while the swept set does not, and all three were the same mistake:
+    // approximating a predicate that already exists.
+    //
+    //   1. Index-wise comparison — a mere reorder cleared the record. Order
+    //      decides which home wins a duplicate session id, not what is swept.
+    //   2. Raw strings as a set — a trailing separator, or the `wsl$` vs
+    //      `wsl.localhost` spelling of one UNC path, differs as a string while
+    //      collapsing to one tree.
+    //   3. `homeDedupeKey` over `config.claudeHomes` alone — that list omits
+    //      the implicit primary `~/.claude`, so adding an entry equal to it
+    //      changed the set while `getClaudeHomes` deduplicated it away.
+    //
+    // Asking `getClaudeHomes` ends the class rather than the third instance:
+    // whatever it decides IS the swept set, including any rule added to it
+    // later. (Copilot, then Codex x2, PR #527.)
+    patches.push((c) => {
+      const effective = (cfg: MinderConfig) => {
+        const out = new Map<string, string>();
+        for (const h of getClaudeHomes(cfg)) out.set(homeDedupeKey(h), h);
+        return out;
+      };
+      const before = effective(c);
+      const after = effective({ ...c, claudeHomes: homes });
+      const changed =
+        before.size !== after.size || [...after.keys()].some((k) => !before.has(k));
+      // COMPUTED here, APPLIED after the write commits. The diff needs the
+      // locked read to be correct; the collector mutation must not happen at
+      // all if `writeConfig` then fails on EACCES, ENOSPC or an I/O error,
+      // because the old configuration is still on disk and its unreadable home
+      // is still configured. Pruning inside this callback made a FAILED request
+      // report `complete: true`. (Codex P2, PR #527.)
+      //
+      // WHICH homes left, not merely that the set moved: wiping every
+      // diagnostic on any change erased a still-valid failure for a home that
+      // is still configured and still unreadable. Recorded even when nothing
+      // was removed — the generation bump inside `forgetSweepFailuresUnder` is
+      // what stops a sweep opened under the old configuration from publishing
+      // into the new one.
+      pendingSweepReset = changed
+        ? [...before].filter(([k]) => !after.has(k)).map(([, home]) => home)
+        : null;
+      c.claudeHomes = homes;
+    });
     corpusShapeChanged = true;
   }
 
@@ -488,15 +568,44 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
   }
 
-  const config = await mutateConfig((c) => {
-    for (const patch of patches) patch(c);
-  });
+  const config = await mutateConfig(
+    (c) => {
+      for (const patch of patches) patch(c);
+    },
+    // After the write AND inside the lock. Outside it, two overlapping
+    // `claudeHomes` PATCHes could apply their pruning out of commit order:
+    // from A+B, one commits A (staging B's removal) and the other commits B
+    // (staging A's), and if the second prunes first the final configuration
+    // holds B while B's live failure has been dropped. (Codex P2, PR #527.)
+    () => {
+      if (pendingSweepReset !== null) forgetSweepFailuresUnder(pendingSweepReset);
+    }
+  );
   if (newPricingRules !== undefined) setPricingRules(newPricingRules);
   invalidateAll();
+  // The sweep-failure record describes the PREVIOUS set of swept paths, and
+  // nothing else clears it — the next sweep simply would not re-record a home
+  // the user has removed, but until that sweep finishes the homes endpoint
+  // keeps naming a path they have already dealt with, which reads as "the fix
+  // did not work".
+  //
+  // Gated on the Claude home paths ACTUALLY changing. It started inside
+  // `invalidateAll()`, which every config write calls — a keyboard shortcut, a
+  // port override — and was then narrowed to `corpusShapeChanged`, which still
+  // fires for `pathMappings` and `enabledAdapters`. Neither of those changes
+  // which directories get enumerated, so clearing on them erased a live
+  // diagnostic about a directory that is still unreadable.
+  // (Codex P2, PR #527, rounds 4 and 9.)
   // Grades and the portfolio usage slot depend on the file-parse sweep; drop
   // both so the next request recomputes over the new corpus instead of serving
   // the old data for the rest of their TTLs (5 min / 10 min).
   if (corpusShapeChanged) {
+    // #513: the sweep-failure record describes the PREVIOUS configuration. If a
+    // user removes an unreachable extra home, nothing else clears it — the next
+    // sweep simply would not re-record it, but until that sweep finishes the
+    // homes endpoint keeps naming a path they have already dealt with, which
+    // reads as "the fix did not work" (Codex P2, PR #527).
+    //
     efficiencyGradeCache.invalidateGrades();
     invalidateClaudeUsageCache();
     invalidateSessionCategoryCounts();
