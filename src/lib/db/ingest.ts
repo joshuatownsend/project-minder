@@ -63,6 +63,7 @@ import type { SessionFile } from "@/lib/adapters/types";
 import { readConfig } from "@/lib/config";
 import type { MinderConfig } from "@/lib/types";
 import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptPath";
+import { isBenignAbsentProjectsDir } from "@/lib/sweepFailures";
 
 // ── Optional per-stage profiling ──────────────────────────────────────────
 // Gated on `MINDER_PROFILE_INGEST=1` so production stays at zero overhead.
@@ -4232,9 +4233,26 @@ async function runReconcileAllSessions(
     } catch (err) {
       // #471: an enumeration this pass was SUPPOSED to complete and could not.
       // Not the same as a home the never-wake gate deliberately skipped, and
-      // not the same as a root that simply is not there — see
-      // `isMissingDirError`.
-      if (!isMissingDirError(err)) stats.enumerationFailures++;
+      // not the same as a root that simply is not there.
+      //
+      // #529: the shared predicate, not the bare `code === "ENOENT"` this used
+      // to run. That treated a `projects` SYMLINK pointing at a disconnected
+      // drive as a fresh install and recorded the pass as clean, while all the
+      // history behind it was unreachable — and since the DB is the default
+      // backend, that is the reading users actually get. `awaited`, because the
+      // check has to `lstat`: an un-awaited call returns a Promise, `!promise`
+      // is always false, and this counter would silently stop incrementing —
+      // the exact shape of the bug #527 shipped and had to revert.
+      // The home is only meaningful when this dir was DISCOVERED under one.
+      // With an explicit `options.projectsDir` the caller pointed at a path
+      // directly, so there is no configured home that could have gone missing,
+      // and requiring one to exist would mark every such pass aborted — the
+      // #471 regression `dbIndexerRuns.test.ts` pins, which is exactly how this
+      // was caught.
+      const home = options.projectsDir ? null : path.dirname(dir);
+      if (!(await isBenignAbsentProjectsDir(home, dir, (err as NodeJS.ErrnoException)?.code))) {
+        stats.enumerationFailures++;
+      }
       // A projects dir that can't be listed — missing primary tree (a
       // WSL-only Claude setup, or a non-Claude user), a distro that stopped
       // mid-cycle, a transient UNC error — shields its rows from the prune

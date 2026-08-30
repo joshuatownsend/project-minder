@@ -10,6 +10,7 @@ import {
   getSweepFailureTotal,
   clearSweepFailures,
   describeSweepFailure,
+  isBenignAbsentProjectsDir,
 } from "@/lib/sweepFailures";
 
 /**
@@ -331,5 +332,83 @@ describe("clearing on a configuration change", () => {
     recordSweepFailure({ path: "/c", scope: "projects-dir", sweep: "usage" }, tok12);
     endSweepFailureCycle("usage", tok12);
     expect(getSweepFailures().map((f) => f.path)).toEqual(["/c"]);
+  });
+});
+
+/**
+ * #529 — the one predicate both the file sweeps and the DB reconcile ask.
+ *
+ * The reconcile used to run a bare `code === "ENOENT"`, so it recorded a
+ * dangling `projects` symlink and a missing configured home as clean passes.
+ * It is the DEFAULT backend, which is what made a duplicated rule expensive:
+ * the copy that disagreed was the one users actually got.
+ */
+describe("isBenignAbsentProjectsDir", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "pm-benign-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("is benign when the home is there and has no projects/ yet", async () => {
+    // Every machine before its first session.
+    const home = path.join(root, "home");
+    await fs.mkdir(home);
+    expect(await isBenignAbsentProjectsDir(home, path.join(home, "projects"), "ENOENT")).toBe(
+      true
+    );
+  });
+
+  it("is NOT benign when a configured home has gone missing", async () => {
+    // History the sweep was expected to read. Only the IMPLICIT primary is
+    // exempt from this, and a configured home is never implicit (#529 finding 5).
+    const home = path.join(root, "vanished");
+    expect(await isBenignAbsentProjectsDir(home, path.join(home, "projects"), "ENOENT")).toBe(
+      false
+    );
+  });
+
+  it("is NOT benign for any error other than ENOENT", async () => {
+    // EACCES on a mount, EIO, ENOTDIR from a file sitting where the dir should
+    // be — a corpus that may well be there and was not read.
+    const home = path.join(root, "home2");
+    await fs.mkdir(home);
+    for (const code of ["EACCES", "EIO", "ENOTDIR", undefined]) {
+      expect(
+        await isBenignAbsentProjectsDir(home, path.join(home, "projects"), code)
+      ).toBe(false);
+    }
+  });
+
+  it("skips the home check when there is no configured home", async () => {
+    // `reconcileAllSessions({ projectsDir })` points at a path directly, so no
+    // configured home could have gone missing. Requiring one marks every such
+    // pass aborted — the #471 regression, caught here by dbIndexerRuns' pin
+    // rather than by review.
+    const absent = path.join(root, "nowhere", "projects");
+    expect(await isBenignAbsentProjectsDir(null, absent, "ENOENT")).toBe(true);
+    // The ENTRY check still applies: a dangling link is one however it arrived.
+    expect(await isBenignAbsentProjectsDir(null, absent, "EACCES")).toBe(false);
+  });
+
+  it("is NOT benign when projects/ is a link to somewhere unreachable", async () => {
+    // The case a user most needs told about, and the one a bare ENOENT check
+    // reports as healthy: `readdir` fails with ENOENT, the home is right there,
+    // and only `lstat` sees that the entry exists as a broken link.
+    const home = path.join(root, "linked");
+    await fs.mkdir(home);
+    const projects = path.join(home, "projects");
+    try {
+      await fs.symlink(path.join(root, "no-such-target"), projects, "dir");
+    } catch {
+      // Windows needs privilege for symlinks; the assertion below is only
+      // meaningful if one was actually created.
+      return;
+    }
+    expect(await isBenignAbsentProjectsDir(home, projects, "ENOENT")).toBe(false);
   });
 });
