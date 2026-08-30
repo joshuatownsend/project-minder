@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import path from "node:path";
 import {
   FORBIDDEN_ROOT_RELATIVE,
   isForbiddenName,
@@ -146,22 +147,45 @@ describe("isForbiddenRootRelative", () => {
     }
   });
 
-  it("indexes a derived name under the separator form the lookup receives", () => {
-    // `isForbiddenRootRelative` converts `\` to `/` before its lookup, because
-    // that is what `path.relative` yields on Windows. On POSIX a filename may
-    // legally CONTAIN a backslash, so a derived `odd\name.txt` would be
-    // compared against `odd/name.txt` and never match — and that ignored
-    // artifact ships (Codex, PR #540).
+  it("indexes a derived name for the separator convention of THIS platform", () => {
+    // Two failure modes pull in opposite directions, and the platform decides
+    // which one is real (Codex, PR #540).
     //
-    // Asserted on the pure function rather than through a fixture file: such a
-    // filename cannot exist on Windows, so a fixture is unrunnable here, and
-    // getting its gitignore escaping right is a separate problem from the one
-    // under test.
-    expect(derivedNameForms("odd\\name.txt")).toEqual(["odd\\name.txt", "odd/name.txt"]);
-    // No backslash, no duplicate key.
+    // On Windows `isForbiddenRootRelative` converts `\` to `/` before its
+    // lookup, because that is what `path.relative` yields — so a derived name
+    // must be indexed in that form too, and no filename can contain a literal
+    // backslash for it to collide with.
+    //
+    // On POSIX a backslash IS a legal filename character. Adding the `/` form
+    // there would turn a ROOT-anchored rule into one matching a NESTED path:
+    // an ignored root file named `node_modules\next` would contribute the
+    // key `node_modules/next` and prune the real dependency directory. A
+    // payload that cannot boot is far worse than failing to prune one
+    // oddly-named scratch file, so POSIX gets the raw form only.
+    const forms = derivedNameForms("odd\\name.txt");
+    if (path.sep === "\\") {
+      expect(forms).toEqual(["odd\\name.txt", "odd/name.txt"]);
+    } else {
+      expect(forms).toEqual(["odd\\name.txt"]);
+      // The property that matters: nothing derived may match a nested path.
+      expect(derivedNameForms("node_modules\\next")).not.toContain(
+        "node_modules/next"
+      );
+    }
+
+    // Platform-independent, and true either way.
     expect(derivedNameForms("screenshots")).toEqual(["screenshots"]);
-    // Lower-cased, like every other rule in this module.
     expect(derivedNameForms("SCREENSHOTS")).toEqual(["screenshots"]);
+  });
+
+  it("never lets a derived name prune a required payload entry", () => {
+    // The derivation maps REPO-root names onto PAYLOAD-root paths, and the
+    // payload root holds server.js, package.json and node_modules. A checkout
+    // that ignored one of those — a global ignore rule plus a scratch file was
+    // the case raised — would otherwise prune the artifact's own entry point.
+    for (const required of ["server.js", "package.json", "node_modules", ".next"]) {
+      expect(isForbiddenRootRelative(required)).toBe(false);
+    }
   });
 
   it("never derives away a build input", () => {

@@ -57,9 +57,24 @@ export const REPO_ROOT = path.resolve(here, "..");
  * one glance.
  */
 export const BUILD_INPUTS_KEEP = new Set([
+  // Build inputs. All three are gitignored, and pruning any of them produces a
+  // payload that cannot boot.
   "node_modules", // the payload's dependencies
   ".next", // the build output the payload is made of
   "dist", // the payload's own tree; `dist/node` has its own narrower rule
+  // Payload-root entries the server needs. None is gitignored in this repo
+  // today, so these are pure insurance — but the derivation maps REPO-root
+  // names onto PAYLOAD-root paths, and the payload root holds `server.js`,
+  // `package.json` and friends. A checkout that ignored one of these for any
+  // reason would otherwise prune the artifact's own entry point, and the
+  // failure would arrive as a packaging abort with a confusing cause
+  // (Codex, PR #540).
+  "server.js",
+  "package.json",
+  "BUILD_INFO.json",
+  "public",
+  "workers",
+  "src",
 ]);
 
 /**
@@ -77,10 +92,19 @@ export const BUILD_INPUTS_KEEP = new Set([
 export function rootLevelGitignoredEntries(root = REPO_ROOT) {
   let out;
   try {
-    // `--others --ignored --directory` lists ignored paths; `--exclude-standard`
-    // applies the normal ignore files. Directories come back with a trailing
-    // slash and are NOT descended into, which is what keeps this to one cheap
-    // call instead of a recursive walk over node_modules.
+    // `--others --ignored --directory` lists ignored paths. Directories come
+    // back with a trailing slash and are NOT descended into, which is what
+    // keeps this to one cheap call instead of a recursive walk over
+    // node_modules.
+    //
+    // `--exclude-per-directory=.gitignore`, deliberately, NOT
+    // `--exclude-standard`. The latter also applies `core.excludesFile` — the
+    // developer's GLOBAL ignore config — which would make what ships depend on
+    // a personal setting. A global rule for a name like `server.js`, plus a
+    // scratch file of that name at the repo root, would derive an entry that
+    // prunes the payload's own entry point (Codex, PR #540). Release builds
+    // must depend on the repository, so only the repository's `.gitignore`
+    // files are consulted.
     //
     // `-z` is not optional. Without it git QUOTES any path with non-ASCII or
     // control characters — `unicodé` comes back as the literal
@@ -91,7 +115,14 @@ export function rootLevelGitignoredEntries(root = REPO_ROOT) {
     // character"), so the bytes arrive exactly as they are on disk.
     out = execFileSync(
       "git",
-      ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"],
+      [
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-per-directory=.gitignore",
+        "--directory",
+        "-z",
+      ],
       { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
     );
   } catch {

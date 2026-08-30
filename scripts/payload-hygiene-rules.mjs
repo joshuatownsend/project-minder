@@ -1,3 +1,4 @@
+import path from "node:path";
 import { rootLevelGitignoredEntries } from "./gitignored-roots.mjs";
 
 // Shared forbidden-entry rules for the standalone payload (issue #284).
@@ -150,15 +151,29 @@ export const DERIVATION_AVAILABLE = derivedRootIgnored !== null;
 /**
  * The lookup keys one derived name contributes.
  *
- * Exported because it is the only part of the derivation that is testable
- * everywhere. The POSIX-only behaviour it guards — a filename containing a
- * literal backslash — cannot be reproduced on Windows, where such a name is
- * illegal, and a fixture that creates one is both unrunnable here and easy to
- * get wrong (two review rounds on PR #540 went to the fixture rather than the
- * code). This function is the behaviour; assert it directly.
+ * `isForbiddenRootRelative` normalizes `\` to `/` before its lookup, so on
+ * Windows a derived name must be indexed in that form too. On POSIX it must
+ * NOT be: a backslash there is a legal filename character, not a separator, and
+ * mapping it would turn a ROOT-anchored rule into one that matches a NESTED
+ * path. An ignored root file called `node_modules\next` would otherwise
+ * contribute the key `node_modules/next` and prune the real dependency
+ * directory (Codex, PR #540) — trading a vanishingly rare miss for a payload
+ * that cannot boot.
+ *
+ * So the extra form is added only where a backslash genuinely is a separator,
+ * which is also the only platform where such a filename cannot exist. The
+ * residual gap — a POSIX root file whose name contains a literal backslash goes
+ * unpruned — is the safe direction, and is accepted knowingly.
+ *
+ * Exported because it is the part of the derivation testable on every platform.
+ * Two review rounds on PR #540 went into a fixture that tried to create such a
+ * file; the behaviour is the function, so assert the function.
  */
+const SEPARATOR_IS_BACKSLASH = path.sep === "\\";
+
 export function derivedNameForms(name) {
   const lower = name.toLowerCase();
+  if (!SEPARATOR_IS_BACKSLASH) return [lower];
   const normalized = lower.replace(/\\/g, "/");
   return normalized === lower ? [lower] : [lower, normalized];
 }
