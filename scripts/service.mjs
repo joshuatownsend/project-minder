@@ -607,8 +607,18 @@ async function runStop(platformKind) {
     // restart is owed for a service the user had left down. They emit nothing
     // and the caller keeps its existing heuristic.
     let stoppedRegistered = false;
+    // A PID whose command line we could not READ is not a PID we established
+    // isn't ours. `queryWindowsProcessCommandLine` returns "" when PowerShell is
+    // unavailable, access is denied, or the query fails transiently — and the
+    // loop then declines to kill it, which is right, but leaves the verdict
+    // looking like "examined every PID, none were ours". The caller treats that
+    // as definitive and skips its own safety check, so an update could proceed
+    // over files a live service still holds (Codex P1, #543). Report nothing
+    // instead and let the caller fall back to its heuristic.
+    let identityUnknown = false;
     for (const pid of pids) {
       const commandLine = await queryWindowsProcessCommandLine(pid);
+      if (!commandLine) identityUnknown = true;
       if (!commandLineMatchesServer(commandLine, identity)) {
         step(
           `Port ${port} is held by PID ${pid}, but its command line doesn't match this Minder ` +
@@ -635,7 +645,11 @@ async function runStop(platformKind) {
     if (anyRealKillFailure) {
       fail("One or more verified Minder processes could not be stopped — see errors above.");
     }
-    writeStopReport({ stoppedRegistered });
+    // `true` survives an unknown elsewhere: positively identifying and killing
+    // one of ours is a fact, whatever a second PID turned out to be. Only the
+    // NEGATIVE claim needs every PID accounted for.
+    if (stoppedRegistered) writeStopReport({ stoppedRegistered: true });
+    else if (!identityUnknown) writeStopReport({ stoppedRegistered: false });
     return;
   }
   if (platformKind === "macos") {

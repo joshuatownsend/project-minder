@@ -308,6 +308,29 @@ describe("extractLaunchFromVbs (F14 review fix: stop identity from installed art
     expect(commandLineMatchesServer(devCmd, identity)).toBe(false);
   });
 
+  // #543 — an identity we could not READ is not an identity we ruled out.
+  //
+  // `queryWindowsProcessCommandLine` returns "" when PowerShell is unavailable,
+  // access is denied, or the query fails transiently. The stop loop then
+  // declines to kill that PID, which is right — but the verdict it reports must
+  // not read as "examined every PID, none were ours", because the caller treats
+  // that as definitive and skips its own safety check. An update could then
+  // proceed over files a live service still holds.
+  it("refuses to match an unreadable command line, so it can be told apart from a stranger", () => {
+    const launch = {
+      exe: "C:\Program Files\nodejs\node.exe",
+      args: ["C:\repo\node_modules\next\dist\bin\next", "start", "-p", "4100"],
+      cwd: "C:\repo",
+    };
+    const identity = buildServerIdentityMarkers({ launch, vbsPath: "C:/x/run-hidden.vbs" });
+    // The values a failed query yields. All must be non-matches — the loop
+    // relies on that to decline the PID, and the caller relies on the emptiness
+    // itself to know the answer was inconclusive rather than negative.
+    for (const unreadable of ["", null, undefined]) {
+      expect(commandLineMatchesServer(unreadable as unknown as string, identity)).toBe(false);
+    }
+  });
+
   it("returns null for malformed/empty content", () => {
     expect(extractLaunchFromVbs("")).toBeNull();
     expect(extractLaunchFromVbs(null)).toBeNull();

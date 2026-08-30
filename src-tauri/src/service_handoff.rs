@@ -60,6 +60,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as StdCommand, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -107,6 +108,10 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// Armed only when a stop actually stopped something, and disarmed the moment
 /// the update commits (a successful install deliberately does *not* restart the
 /// service; see this module's header).
+/// Per-process counter, so two stops in the same nanosecond cannot collide
+/// on a report filename.
+static REPORT_SEQ: AtomicUsize = AtomicUsize::new(0);
+
 static PENDING_RESTORE: Mutex<Option<Arc<ServiceHandoff>>> = Mutex::new(None);
 
 /// Proof that this process stopped a service that **was running**, and
@@ -596,17 +601,44 @@ impl ServiceHandoff {
         // port come free.
         let was_listening = crate::health::port_is_bound(target);
         let served_minder = crate::health::probe(target).is_minder();
-        // A per-call path under the temp dir. Removed before the run so a stale
-        // file from an earlier stop can never be read as this one's verdict —
-        // the failure mode would be silent and wrong in the unsafe direction.
+        // A slot this call demonstrably OWNS.
+        //
+        // The first version derived the name from pid + port, which is
+        // predictable and reusable: a leftover that could not be removed, or a
+        // concurrent stop, would be read as this run's verdict (Copilot, #543).
+        // Since the verdict can license an update over a service's files, a
+        // stale read is wrong in the unsafe direction.
+        //
+        // So the name carries a nanosecond stamp and a per-process counter, and
+        // the file is created with `create_new` — which fails if anything is
+        // already there. No exclusive slot means no report path is passed at
+        // all, and the caller falls back to its heuristic rather than trusting a
+        // file it cannot prove is its own.
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let seq = REPORT_SEQ.fetch_add(1, Ordering::SeqCst);
         let report_path = std::env::temp_dir().join(format!(
-            "minder-stop-report-{}-{}.json",
+            "minder-stop-report-{}-{}-{}-{}.json",
             std::process::id(),
-            target
+            target,
+            stamp,
+            seq
         ));
-        let _ = std::fs::remove_file(&report_path);
-        let exit = self.run_helper_reporting("stop", Some(&report_path));
-        let stopped_registered = read_stop_report(&report_path);
+        let owns_report = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&report_path)
+            .is_ok();
+        let exit =
+            self.run_helper_reporting("stop", owns_report.then_some(report_path.as_path()));
+        let stopped_registered = if owns_report {
+            read_stop_report(&report_path)
+        } else {
+            log("update: could not claim a stop-report file — falling back to port heuristics");
+            None
+        };
         let _ = std::fs::remove_file(&report_path);
         // Short-circuits: only worth the wait when something was there to go
         // away and the helper claims to have done its job.
