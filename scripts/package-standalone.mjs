@@ -563,52 +563,115 @@ function placeClosureEdges(edges) {
     copied += 1;
   }
 
-  const orphanedEdges = [];
+  // Pass 2 nests each edge beneath the parent copy it ACTUALLY came from.
+  //
+  // Keying the nest on the parent's NAME alone was the #538 bug: one version per
+  // name is hoisted, so with two versions of a parent present, every version's
+  // edges landed in that single directory and the last writer won.
+  // `restore-cursor@5.1.0` was hoisted and needs `signal-exit@^4.1.0`; the
+  // `restore-cursor@3.1.0 -> signal-exit@3.0.7` edge was written inside it and
+  // shadowed the correct top-level 4.1.0. Those majors differ in export shape,
+  // so the CLI died with `SyntaxError: does not provide an export named
+  // 'onExit'` from inside a dependency, with nothing in the packaging log.
+  //
+  // Skipping such edges was the first attempt and is NOT enough (Codex, #539):
+  // a non-hoisted parent that is itself nested then inherits the HOISTED
+  // parent's dependency tree. In this lockfile `claude-code-lint` hoists
+  // `ora@9.4.1` while `inquirer@9.3.8` gets a nested `ora@5.4.1`; dropping
+  // ora@5.4.1's edges left it resolving top-level `chalk@5` when it needs
+  // `chalk@4`. That trades one corruption for another.
+  //
+  // So placements are tracked as real paths, and children are nested under
+  // every path their parent occupies — `node_modules/inquirer/node_modules/ora/
+  // node_modules/chalk` when that is what the tree requires.
+  const placements = new Map(); // "name@version" -> Set<absolute package dir>
 
-  for (const e of edges) {
-    if (!e.parentName) continue; // root edges are served by the top level
-    const occupant = topLevelPkgVersion(e.name);
-    if (occupant === e.version) continue; // top level already serves this edge
-
-    // Nest ONLY when the parent copy on disk is the one this edge came from.
-    //
-    // `<outDir>/node_modules/<parentName>` holds exactly one version — whichever
-    // the hoist loop above chose. Keying the nest on the parent's NAME alone
-    // therefore drops every version's edges into that one directory, and the
-    // last writer wins. Measured (#538): `restore-cursor@5.1.0` was hoisted and
-    // requires `signal-exit@^4.1.0`; the correct 4.1.0 sat at the top level, and
-    // the `restore-cursor@3.1.0 -> signal-exit@3.0.7` edge was nested inside the
-    // 5.1.0 directory and shadowed it. Those majors differ in export shape, so
-    // the result was a hard `SyntaxError: does not provide an export named
-    // 'onExit'` from inside a dependency, with nothing in the packaging log.
-    const parentOccupant = topLevelPkgVersion(e.parentName);
-    if (parentOccupant !== e.parentVersion) {
-      // This edge belongs to a copy of the parent that is not the one on disk.
-      // Skipping it prevents the corruption; it does not place the dependency
-      // for that other copy, which is why it is reported rather than dropped.
-      orphanedEdges.push(
-        `${e.parentName}@${e.parentVersion} -> ${e.name}@${e.version} ` +
-          `(top level has ${e.parentName}@${parentOccupant ?? "no copy"})`
-      );
-      continue;
-    }
-
-    const destDir = path.join(outDir, "node_modules", e.parentName, "node_modules", e.name);
-    const destPkgJson = path.join(destDir, "package.json");
-    if (existsSync(destPkgJson) && readPkgVersion(destPkgJson) === e.version) continue; // already nested
-    step(`Nesting ${e.name}@${e.version} under ${e.parentName} (top level has ${occupant ?? "no copy"})`);
-    copyDereferenced(e.dir, destDir);
-    copied += 1;
+  function recordPlacement(name, version, dir) {
+    const key = `${name}@${version}`;
+    let set = placements.get(key);
+    if (!set) placements.set(key, (set = new Set()));
+    set.add(dir);
   }
 
-  // Never silent: a skipped edge is a dependency some non-hoisted copy of a
-  // parent still wants. Nothing observed needs one today, and the alternative
-  // (placing it anyway) is the corruption above — but a build that quietly
-  // dropped edges would be indistinguishable from one that had none.
-  if (orphanedEdges.length > 0) {
+  // Seed with every top-level package, including the app's own copies that the
+  // hoist pass deliberately left alone.
+  for (const name of listTopLevelPackages(path.join(outDir, "node_modules"))) {
+    const v = topLevelPkgVersion(name);
+    if (v !== null) recordPlacement(name, v, path.join(outDir, "node_modules", name));
+  }
+
+  // Resolve `depName` the way Node would from `fromDir`: nearest node_modules
+  // first, then up through ancestors — stopping at the payload root, because
+  // anything above it does not exist on the user's machine.
+  function resolvedVersionFrom(fromDir, depName) {
+    let dir = fromDir;
+    for (;;) {
+      const candidate = path.join(dir, "node_modules", depName, "package.json");
+      if (existsSync(candidate)) return readPkgVersion(candidate);
+      if (path.resolve(dir) === path.resolve(outDir)) return null;
+      const parent = path.dirname(dir);
+      if (parent === dir) return null;
+      dir = parent;
+    }
+  }
+
+  const unplaceableEdges = [];
+
+  // Repeat to a fixed point: an edge can only be placed once its parent has
+  // been, and a single ordered pass does not guarantee that across the several
+  // closures this function is called with. Bounded so a cycle cannot spin.
+  for (let round = 0; round < 12; round += 1) {
+    let placedThisRound = 0;
+    unplaceableEdges.length = 0;
+
+    for (const e of edges) {
+      if (!e.parentName) continue; // root edges are served by the top level
+      const parentDirs = placements.get(`${e.parentName}@${e.parentVersion}`);
+      if (!parentDirs || parentDirs.size === 0) {
+        unplaceableEdges.push(
+          `${e.parentName}@${e.parentVersion} -> ${e.name}@${e.version} (parent copy not in the payload)`
+        );
+        continue;
+      }
+      for (const parentDir of parentDirs) {
+        if (resolvedVersionFrom(parentDir, e.name) === e.version) {
+          // Already served here — record where, so this edge's own children
+          // can be nested beneath it.
+          let dir = parentDir;
+          for (;;) {
+            const candidate = path.join(dir, "node_modules", e.name);
+            if (existsSync(path.join(candidate, "package.json"))) {
+              recordPlacement(e.name, e.version, candidate);
+              break;
+            }
+            if (path.resolve(dir) === path.resolve(outDir)) break;
+            const up = path.dirname(dir);
+            if (up === dir) break;
+            dir = up;
+          }
+          continue;
+        }
+        const destDir = path.join(parentDir, "node_modules", e.name);
+        step(
+          `Nesting ${e.name}@${e.version} under ${path.relative(path.join(outDir, "node_modules"), parentDir)}`
+        );
+        copyDereferenced(e.dir, destDir);
+        recordPlacement(e.name, e.version, destDir);
+        copied += 1;
+        placedThisRound += 1;
+      }
+    }
+
+    if (placedThisRound === 0) break;
+  }
+
+  // Never silent. An edge with no parent copy anywhere in the payload is a
+  // dependency nothing can reach; reporting beats a build that quietly dropped
+  // it and looked identical to one that had none.
+  if (unplaceableEdges.length > 0) {
     step(
-      `Skipped ${orphanedEdges.length} edge(s) whose parent version is not the hoisted one (#538):\n  ` +
-        [...new Set(orphanedEdges)].join("\n  ")
+      `${unplaceableEdges.length} edge(s) had no parent copy in the payload (#538/#539):\n  ` +
+        [...new Set(unplaceableEdges)].join("\n  ")
     );
   }
 
@@ -1370,6 +1433,10 @@ const placedLintEdges = lintEdges.filter(
   (e) => !e.parentName || topLevelPkgVersion(e.parentName) === e.parentVersion
 );
 const lintFailures = unresolvedEdges(placedLintEdges);
+// `unresolvedEdges` only understands the two levels the OLD placement pass
+// wrote (parent's own node_modules, then top level). Edges nested deeper —
+// inquirer -> ora -> chalk — are invisible to it, so the end-to-end spawn below
+// is what actually covers them, and the mutation test is run against that.
 if (lintFailures.length > 0) {
   fail(
     `The lint CLI's dependency tree does not resolve correctly inside the payload:\n  ` +
