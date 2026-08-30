@@ -7,11 +7,21 @@ import { GET as adapterConfigGET } from "@/app/api/adapters/[id]/config/route";
 import { GET as claudeHomesGET } from "@/app/api/claude-homes/route";
 import { demoPlans } from "@/lib/demo/plans";
 import { preserveEnvVars } from "./_helpers/preserveEnv";
+import { installIsolatedState } from "./_helpers/isolatedState";
 
 // #421 — a bare `delete process.env.X` in teardown restores this file's own
 // assignment and destroys anything it INHERITED, and vitest reuses a worker
 // across files, so the erasure outlives this one. Capture and put back instead.
 preserveEnvVars(["MINDER_DEMO"]);
+
+// `/api/claude-homes` opens the index through a runtime import() since #529 —
+// it reads the reconcile's completeness verdict. This file imports that route,
+// so if the branch ever runs it would resolve against the developer's real
+// ~/.minder. The demo tests below never reach it (the demo guard returns first),
+// but `dbIsolationGuard` asks for isolation on the IMPORT rather than on the
+// path being taken, which is the right bar: whether that branch runs is a
+// property of the test, and it changes.
+installIsolatedState();
 
 /**
  * The two W12 guards that do NOT sit at a shared loader.
