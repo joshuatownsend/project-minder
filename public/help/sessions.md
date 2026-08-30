@@ -245,6 +245,15 @@ count only work a person actually did. It is the transcript view alone that
 stops treating it as a reason to hide a turn — because there, those turns are
 not a digression from someone else's conversation, they *are* the conversation.
 
+**Its Tools and Files panels are populated too.** Those read the same rows the
+timeline does, and a delegated agent's tool calls live in a separate table from
+an ordinary session's — deliberately, because roughly two dozen queries behind
+/usage, /agents, /skills and /costs read the primary table with no filter, and
+moving the rows would have shifted every one of those numbers. The separate
+table gained the ordering and arguments a timeline needs instead, so the panels
+list what the agent actually did, in order, without changing a single figure
+elsewhere.
+
 One caveat: the file-parse backend does not walk the nested `subagents/`
 directories when building the list, so with the index switched off these
 sessions are neither listed nor linked. Opening one by URL still works.
