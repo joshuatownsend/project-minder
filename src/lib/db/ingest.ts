@@ -1999,6 +1999,17 @@ async function readJsonlSession(
       // carry `is_sidechain = 1`, and the usage rollups derive from those rows
       // rather than from this summary. What is withheld here is only the
       // session CARD's own figures, which describe work the user's session did.
+      //
+      // THE RULE: if a consumer reads this column expecting "what the user's
+      // session did", it belongs in this block. The list is hand-maintained
+      // because most session columns are legitimately real for a delegated
+      // transcript — `slug`, `cliVersion`, `gitBranch`, the timestamps — so a
+      // blanket zero would be wrong. That makes omissions the failure mode, and
+      // it has already happened once: `hasOneShot`, `verifiedTaskCount` and
+      // `oneShotTaskCount` were missed, and `queryOneShot` sums those columns
+      // with no `is_sidechain`, `turn_count` or path filter, so automated agent
+      // tasks inflated the Usage dashboard's verified-task and one-shot rates.
+      // (Codex P2, PR #528.)
       ...(isDelegatedAgentTranscript
         ? {
             userTurnCount: 0,
@@ -2010,6 +2021,26 @@ async function readJsonlSession(
             cacheCreateTokens: 0,
             cacheReadTokens: 0,
             costUsd: 0,
+            // One-shot counts are DEFENCE IN DEPTH, not a live fix, and the
+            // difference is worth stating because it decides whether this can
+            // be dropped.
+            //
+            // `detectOneShotTasks` anchors on an assistant turn carrying an
+            // Edit/Write TOOL CALL, reading `usageTurn.toolCalls` — which is
+            // `primaryToolBlocks.map(...)`, empty for a delegated transcript.
+            // So the detector cannot fire for these today and the three fields
+            // are already structurally zero. A review reported them as a live
+            // leak into `queryOneShot`; measured, the mechanism does not hold.
+            //
+            // They are zeroed anyway because #511 exists to move a delegated
+            // agent's tool calls onto the primary path, and the day it lands
+            // `toolCalls` is populated here and the leak becomes real — into a
+            // consumer that sums these columns with no `is_sidechain`,
+            // `turn_count` or path filter. Cheaper to hold the line now than to
+            // rediscover it from a wrong one-shot rate. (Codex P2, PR #528.)
+            hasOneShot: 0 as const,
+            verifiedTaskCount: 0,
+            oneShotTaskCount: 0,
           }
         : {
             userTurnCount,
@@ -2021,14 +2052,14 @@ async function readJsonlSession(
             cacheCreateTokens,
             cacheReadTokens,
             costUsd,
+            hasOneShot,
+            verifiedTaskCount: oneShot.totalVerifiedTasks,
+            oneShotTaskCount: oneShot.oneShotTasks,
           }),
       cacheHitRatio,
       maxContextFill,
       hasCompactionLoop,
       hasToolFailureStreak,
-      hasOneShot,
-      verifiedTaskCount: oneShot.totalVerifiedTasks,
-      oneShotTaskCount: oneShot.oneShotTasks,
       storedStatus,
       slug,
       hasThinking: hasThinkingSession ? 1 : 0,

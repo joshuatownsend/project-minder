@@ -173,13 +173,38 @@ describe.skipIf(!driverAvailable)("delegated transcripts keep their provenance",
     // `turn_count` is a primary-only summary field. It is also what keeps these
     // out of the sessions list, so a non-zero value here would put a blank
     // delegated card in front of the user as well as moving the usage totals.
+    //
+    // EVERY primary-only column, not a sample — the list in `writeSession` is
+    // hand-maintained, so an omission is the failure mode and this is where it
+    // should surface rather than in a dashboard.
+    //
+    // Honest about what this DOES and does not prove for the one-shot columns:
+    // they are structurally zero today because `detectOneShotTasks` anchors on
+    // a tool call and a delegated transcript's `usageTurn.toolCalls` is empty,
+    // so removing their explicit zeroing does NOT fail this test. The
+    // assertion below pins that premise, so if #511 populates those tool calls
+    // the guard stops being vacuous and this test starts carrying it.
     const summary = db
       .prepare(
-        "SELECT turn_count, input_tokens, cost_usd FROM sessions WHERE session_id = 'agent-1'"
+        `SELECT turn_count, user_turn_count, assistant_turn_count, tool_call_count,
+                error_count, input_tokens, output_tokens, cache_create_tokens,
+                cache_read_tokens, cost_usd, has_one_shot, verified_task_count,
+                one_shot_task_count
+           FROM sessions WHERE session_id = 'agent-1'`
       )
-      .get() as { turn_count: number; input_tokens: number; cost_usd: number };
-    expect(summary.turn_count).toBe(0);
-    expect(summary.input_tokens).toBe(0);
+      .get() as Record<string, number>;
+    for (const [column, value] of Object.entries(summary)) {
+      expect(`${column}=${value}`).toBe(`${column}=0`);
+    }
+
+    // The premise the one-shot columns currently rest on: no tool rows on the
+    // primary path for this session, so the detector has nothing to anchor on.
+    // When #511 changes that, this assertion fails and the zeroing above stops
+    // being defence in depth.
+    const primaryTools = db
+      .prepare("SELECT COUNT(*) AS n FROM tool_uses WHERE session_id = 'agent-1'")
+      .get() as { n: number };
+    expect(primaryTools.n).toBe(0);
   });
 
   it("renders the agent's TOOL events, not just its prose", async () => {
