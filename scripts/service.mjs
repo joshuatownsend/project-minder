@@ -609,13 +609,6 @@ async function runStop(platformKind) {
       const failure = findFirstStepFailure(killResults);
       if (!failure) continue;
       if (isTaskkillAlreadyGone(failure)) {
-        // Still OUR service, and still now gone. `commandLineMatchesServer`
-        // already identified it; taskkill simply lost a benign race against a
-        // process that was on its way out. Reporting `false` here would emit a
-        // definitive negative, and the caller would then owe no restart — so a
-        // failed download or a Quit would leave the user without the service
-        // until their next logon (Codex, #543).
-        stoppedRegistered = true;
         step(`PID ${pid} had already exited by the time taskkill ran — nothing to do.`);
         continue;
       }
