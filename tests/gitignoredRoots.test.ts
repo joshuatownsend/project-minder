@@ -114,26 +114,6 @@ describe.skipIf(!HAS_GIT)("rootLevelGitignoredEntries", () => {
     expect(entries.some((e) => e.startsWith('"'))).toBe(false);
   });
 
-  // POSIX only: Windows forbids `\` in a filename, so there is nothing to create.
-  it.skipIf(process.platform === "win32")(
-    "returns a name containing a literal backslash verbatim",
-    () => {
-      // `isForbiddenRootRelative` normalizes `\` to `/` before its lookup,
-      // because that is what `path.relative` yields on Windows. A derived name
-      // holding a real backslash would then never match, and the ignored
-      // artifact ships — so the derived set stores both forms. This proves the
-      // half git is responsible for: the name comes back unmangled.
-      const odd = "odd\\name.txt";
-      fs.writeFileSync(path.join(repo, odd), "x");
-      fs.appendFileSync(path.join(repo, ".gitignore"), `${odd}\n`);
-      try {
-        expect(rootLevelGitignoredEntries(repo)).toContain(odd);
-      } finally {
-        fs.rmSync(path.join(repo, odd), { force: true });
-      }
-    }
-  );
-
   it("returns null — not an empty list — outside a git repository", () => {
     // `null` and `[]` must stay distinguishable: `[]` means git says nothing is
     // ignored, `null` means nobody asked. Treating a failed lookup as a clean

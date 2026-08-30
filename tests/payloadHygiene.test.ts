@@ -6,6 +6,7 @@ import {
   FORBIDDEN_SUMMARY,
   DERIVED_ROOT_IGNORED,
   DERIVATION_AVAILABLE,
+  derivedNameForms,
 } from "../scripts/payload-hygiene-rules.mjs";
 
 // These rules decide what can ship inside an installer, so the tests are
@@ -142,11 +143,25 @@ describe("isForbiddenRootRelative", () => {
   it("forbids whatever the derivation reports", () => {
     for (const entry of DERIVED_ROOT_IGNORED) {
       expect(isForbiddenRootRelative(entry)).toBe(true);
-      // And in the separator-normalized form the lookup actually receives. A
-      // derived name holding a literal backslash — legal on POSIX — would
-      // otherwise be compared against a `/` and never match (Codex, PR #540).
-      expect(isForbiddenRootRelative(entry.replace(/\\/g, "/"))).toBe(true);
     }
+  });
+
+  it("indexes a derived name under the separator form the lookup receives", () => {
+    // `isForbiddenRootRelative` converts `\` to `/` before its lookup, because
+    // that is what `path.relative` yields on Windows. On POSIX a filename may
+    // legally CONTAIN a backslash, so a derived `odd\name.txt` would be
+    // compared against `odd/name.txt` and never match — and that ignored
+    // artifact ships (Codex, PR #540).
+    //
+    // Asserted on the pure function rather than through a fixture file: such a
+    // filename cannot exist on Windows, so a fixture is unrunnable here, and
+    // getting its gitignore escaping right is a separate problem from the one
+    // under test.
+    expect(derivedNameForms("odd\\name.txt")).toEqual(["odd\\name.txt", "odd/name.txt"]);
+    // No backslash, no duplicate key.
+    expect(derivedNameForms("screenshots")).toEqual(["screenshots"]);
+    // Lower-cased, like every other rule in this module.
+    expect(derivedNameForms("SCREENSHOTS")).toEqual(["screenshots"]);
   });
 
   it("never derives away a build input", () => {

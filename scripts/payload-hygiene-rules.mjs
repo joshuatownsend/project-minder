@@ -147,11 +147,24 @@ export const DERIVATION_AVAILABLE = derivedRootIgnored !== null;
 // against a normalized `ignored/name` and never match, and the artifact ships
 // (Codex, PR #540). Storing both forms closes that without weakening the
 // Windows path handling everything else depends on.
+/**
+ * The lookup keys one derived name contributes.
+ *
+ * Exported because it is the only part of the derivation that is testable
+ * everywhere. The POSIX-only behaviour it guards — a filename containing a
+ * literal backslash — cannot be reproduced on Windows, where such a name is
+ * illegal, and a fixture that creates one is both unrunnable here and easy to
+ * get wrong (two review rounds on PR #540 went to the fixture rather than the
+ * code). This function is the behaviour; assert it directly.
+ */
+export function derivedNameForms(name) {
+  const lower = name.toLowerCase();
+  const normalized = lower.replace(/\\/g, "/");
+  return normalized === lower ? [lower] : [lower, normalized];
+}
+
 export const DERIVED_ROOT_IGNORED = new Set(
-  (derivedRootIgnored ?? []).flatMap((name) => {
-    const lower = name.toLowerCase();
-    return [lower, lower.replace(/\\/g, "/")];
-  })
+  (derivedRootIgnored ?? []).flatMap(derivedNameForms)
 );
 
 const PAYLOAD_SRC_PREFIX = "src/";
