@@ -4131,14 +4131,23 @@ async function reconcileAllSessionsSerialized(
   // change landing mid-pass label stale observations as current (#529).
   let corpusVersion: string | null = null;
   try {
+    // ONE snapshot, used for the version AND handed to the pass. The pass reads
+    // config again itself — after an `await loadPricing()` — so computing the
+    // version from a separate read let a config change landing in between be
+    // walked under the OLD version's name: the homes endpoint would then
+    // discard a current failure as a mismatch, and switching back could accept
+    // that mislabeled verdict as evidence about the old corpus (Codex, #544).
+    let passOptions = options;
     try {
-      corpusVersion = computeCorpusVersion(options.config ?? (await readConfig()));
+      const snapshot = options.config ?? (await readConfig());
+      corpusVersion = computeCorpusVersion(snapshot);
+      passOptions = { ...options, config: snapshot };
     } catch {
       // No version means no verdict is written at all — a pass that cannot say
       // WHICH corpus it walked must not leave a claim about one.
       corpusVersion = null;
     }
-    stats = await runReconcileAllSessions(db, options);
+    stats = await runReconcileAllSessions(db, passOptions);
     return stats;
   } finally {
     // `finally`, not the happy path: a pass that threw still has to stop
