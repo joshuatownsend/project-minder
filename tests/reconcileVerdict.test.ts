@@ -55,6 +55,26 @@ describe("computeCorpusVersion", () => {
     expect(implicit).toBe(explicit);
   });
 
+  it("changes when an adapter home is relocated by environment", () => {
+    // Adapter homes are part of the corpus and do NOT live in the config:
+    // `codex.ts` resolves `$CODEX_HOME`, `gemini.ts` `$GEMINI_HOME`. Moving one
+    // and restarting against the same index walks a different corpus, and an
+    // unchanged fingerprint would let the old verdict be read as evidence about
+    // a tree it never saw (Codex, PR #544).
+    const cfgAdapters = cfg({ claudeHomes: ["C:/a"], enabledAdapters: ["claude", "codex"] });
+    const before = computeCorpusVersion(cfgAdapters);
+    const prev = process.env.CODEX_HOME;
+    try {
+      process.env.CODEX_HOME = "C:/moved-codex";
+      expect(computeCorpusVersion(cfgAdapters)).not.toBe(before);
+    } finally {
+      if (prev === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = prev;
+    }
+    // ...and putting it back restores the original fingerprint.
+    expect(computeCorpusVersion(cfgAdapters)).toBe(before);
+  });
+
   it("changes when the swept set genuinely moves", () => {
     const base = computeCorpusVersion(cfg({ claudeHomes: ["C:/a"] }));
     expect(computeCorpusVersion(cfg({ claudeHomes: ["C:/a", "C:/c"] }))).not.toBe(base);

@@ -63,8 +63,19 @@ export function computeCorpusVersion(config: MinderConfig): string {
   // Same normalization the registry applies, so the fingerprint describes what
   // a pass actually walks.
   const adapters = [...normalizeEnabledAdapters(config.enabledAdapters ?? [])].sort();
+  // Adapter homes are part of the corpus, and they do not live in the config.
+  // `codex.ts` resolves `$CODEX_HOME` and `gemini.ts` `$GEMINI_HOME`, so moving
+  // one and restarting against the same index walks a DIFFERENT corpus under an
+  // unchanged fingerprint — the verdict would then be read as evidence about a
+  // tree it never saw (Codex, #544). Recorded verbatim rather than resolved to
+  // their defaults: what matters is whether the value CHANGED, and a default is
+  // stable anyway.
+  const adapterHomes = {
+    codex: process.env.CODEX_HOME ?? null,
+    gemini: process.env.GEMINI_HOME ?? null,
+  };
   return createHash("sha256")
-    .update(JSON.stringify({ homes, adapters }))
+    .update(JSON.stringify({ homes, adapters, adapterHomes }))
     .digest("hex")
     .slice(0, 16);
 }
