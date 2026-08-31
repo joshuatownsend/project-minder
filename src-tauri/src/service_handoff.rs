@@ -734,19 +734,23 @@ impl ServiceHandoff {
         // "was something running?" even for a server that is bound but not yet
         // responding; only an actual health answer licenses demanding that the
         // port come free.
+        // The marker goes up FIRST, before any observation at all.
+        //
+        // Three rounds chased this window narrower — after the probe, then
+        // before it — and each time a Quit could still land in whatever ran
+        // ahead of the marker, see both slots empty, and exit while this
+        // function went on to stop the service (Codex, PR #545). Even
+        // `port_is_bound` is a TCP connect with a window inside it.
+        //
+        // Arming unconditionally is safe now, and was not when this started.
+        // The marker used to license an unconditional START, so it had to be
+        // gated on having seen something listening. It no longer does: a Quit
+        // WAITS for the stop to resolve and then re-runs the ordinary
+        // claim-once question, so a marker over a stop that turned out to owe
+        // nothing simply finds no debt and starts nothing. Removing the
+        // precondition removes the window rather than shrinking it again.
+        let stop_done = Some(mark_stop_in_flight(self));
         let was_listening = crate::health::port_is_bound(target);
-        // Armed BEFORE the health probe, not after. `probe` can block for
-        // seconds against a service that accepts TCP but is still booting —
-        // exactly the state this app was rewritten to stop misreading — and a
-        // Quit in that window would observe neither slot, proceed to shut down,
-        // and leave the update task free to stop the service behind it with
-        // nothing recorded (Codex, PR #545). `port_is_bound` is the only
-        // observation the marker needs, and it has already happened.
-        let stop_done = if was_listening {
-            Some(mark_stop_in_flight(self))
-        } else {
-            None
-        };
         let served_minder = crate::health::probe(target).is_minder();
         // Armed BEFORE the helper, which blocks for as long as it takes and
         // stays racing a clickable Quit the whole time (#460). Gated on
