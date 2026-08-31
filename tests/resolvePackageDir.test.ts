@@ -11,8 +11,9 @@
 // directory rather than on "it did not throw" is what makes it mean the same
 // thing on both.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { createRequire } from "node:module";
+import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { resolvePackageDir } from "../scripts/resolve-package-dir.mjs";
@@ -47,6 +48,27 @@ beforeAll(() => {
   });
 
   writePackage(path.join(subtree, "plain"), { name: "plain", version: "4.5.6" });
+
+  // pnpm's real layout: the top-level entry is a LINK into the virtual store,
+  // and the package's own dependencies are siblings there — not at the root.
+  // `linked` depends on `isolated`, which is deliberately absent from the root
+  // node_modules, exactly as chokidar's `readdirp` is.
+  const linkedStore = path.join(fixture, "store", "linked@2.0.0", "node_modules");
+  writePackage(path.join(linkedStore, "linked"), {
+    name: "linked",
+    version: "2.0.0",
+    dependencies: { isolated: "3.0.0" },
+  });
+  writePackage(path.join(linkedStore, "isolated"), { name: "isolated", version: "3.0.0" });
+  mkdirSync(path.join(fixture, "node_modules"), { recursive: true });
+  symlinkSync(
+    path.join(linkedStore, "linked"),
+    path.join(fixture, "node_modules", "linked"),
+    // Windows needs an explicit type and will not create a plain directory
+    // symlink without elevation; a junction needs none and behaves the same
+    // for this purpose.
+    process.platform === "win32" ? "junction" : "dir"
+  );
 
   // A shadowing copy further up, to pin that the search stops at the nearest
   // one rather than falling through to an ancestor at another version.
@@ -97,6 +119,27 @@ describe("resolvePackageDir", () => {
     const from = path.join(fixture, "store", "other@1.0.0", "node_modules", "other");
 
     expect(resolvePackageDir("plain", from)).toBe(path.join(fixture, "node_modules", "plain"));
+  });
+
+  // Codex and Copilot both caught this independently on PR #549. The first
+  // cut returned the LEXICAL path, where `require.resolve` returns the real
+  // one — so under pnpm the walk continued from the root `node_modules`, an
+  // isolated dependency was reported unresolved, and it was dropped from the
+  // payload. Only edges that DID resolve get re-verified afterwards, so the
+  // closure check would still have passed while the package broke at runtime.
+  it("returns the real path, so a package's isolated dependencies stay reachable", () => {
+    const viaLink = resolvePackageDir("linked", fixture);
+
+    expect(viaLink).toBe(
+      realpathSync(path.join(fixture, "store", "linked@2.0.0", "node_modules", "linked"))
+    );
+
+    // The consequence, which is the part that actually mattered: walking on
+    // from the answer finds the sibling in the store. From the link path this
+    // throws, because `isolated` is not hoisted to the root.
+    expect(resolvePackageDir("isolated", viaLink)).toBe(
+      realpathSync(path.join(fixture, "store", "linked@2.0.0", "node_modules", "isolated"))
+    );
   });
 
   it("throws MODULE_NOT_FOUND, the code callers already catch, when nothing matches", () => {

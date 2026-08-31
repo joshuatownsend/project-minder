@@ -38,11 +38,28 @@
 // cache (`Module._pathCache`), which `readPkgVersion` in the caller already
 // avoids for the same reason: these lookups run before and after files are
 // copied in, and a cached "not found" would outlive the copy.
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 /**
  * The directory holding `name`'s package.json, as resolved from `fromDir`.
+ *
+ * The answer is the REAL path, not the lexical one. `require.resolve` resolves
+ * symlinks by default (`preserveSymlinks` is off), and under pnpm every
+ * top-level `node_modules/<name>` is a link into
+ * `.pnpm/<key>/node_modules/<name>` — where the package's own dependencies are
+ * its siblings. Returning the link path instead would make the walk continue
+ * from the root `node_modules`, where an isolated dependency like chokidar's
+ * `readdirp` is not hoisted and so does not appear: it would be reported
+ * unresolved and dropped from the payload, and because only edges that DID
+ * resolve are re-verified afterwards, the closure check would still pass while
+ * the package failed at runtime. That is the same silent-degradation shape this
+ * whole function exists to remove, so it must not be reintroduced one line
+ * lower (Codex + Copilot, PR #549).
+ *
+ * It also keeps a package's identity single-valued: callers key on the resolved
+ * directory, and one package reachable through several links would otherwise
+ * look like several packages.
  *
  * Throws with `code: "MODULE_NOT_FOUND"` when no candidate exists, matching
  * what callers already catch from `require.resolve`.
@@ -58,7 +75,15 @@ export function resolvePackageDir(name, fromDir) {
     // is never a real location, and Node's own algorithm omits it too.
     if (path.basename(dir) !== "node_modules") {
       const candidate = path.join(dir, "node_modules", ...segments);
-      if (existsSync(path.join(candidate, "package.json"))) return candidate;
+      if (existsSync(path.join(candidate, "package.json"))) {
+        try {
+          return realpathSync(candidate);
+        } catch {
+          // Only reachable if the entry vanished between the two calls. The
+          // lexical path is still the better answer than throwing.
+          return candidate;
+        }
+      }
     }
     const parent = path.dirname(dir);
     if (parent === dir) break;
