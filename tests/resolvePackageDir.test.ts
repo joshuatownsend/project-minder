@@ -27,7 +27,13 @@ function writePackage(dir: string, json: Record<string, unknown>) {
 }
 
 beforeAll(() => {
-  fixture = mkdtempSync(path.join(tmpdir(), "resolve-pkg-dir-"));
+  // Canonicalized once, here, so every expectation below is stated in the same
+  // terms the resolver answers in. macOS `tmpdir()` is typically
+  // /var/folders/..., and /var is itself a link to /private/var — so a lexical
+  // expectation would disagree with a correct result on that platform alone
+  // (Codex, PR #549). Doing it at the root beats wrapping each assertion:
+  // there is then no expectation that CAN be written in the wrong terms.
+  fixture = realpathSync(mkdtempSync(path.join(tmpdir(), "resolve-pkg-dir-")));
 
   // A pnpm-shaped store subtree: the requiring package sits beside its
   // dependencies under one `node_modules`, not beneath its own.
@@ -130,15 +136,13 @@ describe("resolvePackageDir", () => {
   it("returns the real path, so a package's isolated dependencies stay reachable", () => {
     const viaLink = resolvePackageDir("linked", fixture);
 
-    expect(viaLink).toBe(
-      realpathSync(path.join(fixture, "store", "linked@2.0.0", "node_modules", "linked"))
-    );
+    expect(viaLink).toBe(path.join(fixture, "store", "linked@2.0.0", "node_modules", "linked"));
 
     // The consequence, which is the part that actually mattered: walking on
     // from the answer finds the sibling in the store. From the link path this
     // throws, because `isolated` is not hoisted to the root.
     expect(resolvePackageDir("isolated", viaLink)).toBe(
-      realpathSync(path.join(fixture, "store", "linked@2.0.0", "node_modules", "isolated"))
+      path.join(fixture, "store", "linked@2.0.0", "node_modules", "isolated")
     );
   });
 
