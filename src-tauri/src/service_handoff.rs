@@ -294,6 +294,16 @@ pub fn restore_if_armed() {
                 log("update: the stop finished owing nothing — leaving the service as it is");
             }
         }
+        return;
+    }
+    // Neither slot answered — which can mean the stop finished BETWEEN the two
+    // reads above: `arm_restore` writes `PENDING_RESTORE` and then clears
+    // `STOP_IN_FLIGHT`, so a Quit landing in that gap saw an empty debt and
+    // then an empty marker, and walked away from a service it had stopped
+    // (Codex, PR #545). One more claim closes it.
+    if let Some(handoff) = take_restore() {
+        log("update: the stop landed mid-claim and owed a restart — putting the service back");
+        handoff.start();
     }
 }
 
@@ -725,17 +735,24 @@ impl ServiceHandoff {
         // responding; only an actual health answer licenses demanding that the
         // port come free.
         let was_listening = crate::health::port_is_bound(target);
+        // Armed BEFORE the health probe, not after. `probe` can block for
+        // seconds against a service that accepts TCP but is still booting —
+        // exactly the state this app was rewritten to stop misreading — and a
+        // Quit in that window would observe neither slot, proceed to shut down,
+        // and leave the update task free to stop the service behind it with
+        // nothing recorded (Codex, PR #545). `port_is_bound` is the only
+        // observation the marker needs, and it has already happened.
+        let stop_done = if was_listening {
+            Some(mark_stop_in_flight(self))
+        } else {
+            None
+        };
         let served_minder = crate::health::probe(target).is_minder();
         // Armed BEFORE the helper, which blocks for as long as it takes and
         // stays racing a clickable Quit the whole time (#460). Gated on
         // `was_listening` so this can only ever put back something that was
         // observed up — the invariant `StoppedService` protects, held one
         // observation earlier.
-        let stop_done = if was_listening {
-            Some(mark_stop_in_flight(self))
-        } else {
-            None
-        };
         let exit = self.run_helper("stop");
         // Short-circuits: only worth the wait when something was there to go
         // away and the helper claims to have done its job.
