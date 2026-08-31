@@ -72,6 +72,7 @@ import {
   isForbiddenName,
   isForbiddenRootRelative,
 } from "./payload-hygiene-rules.mjs";
+import { resolvePackageDir } from "./resolve-package-dir.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -324,12 +325,12 @@ function readJson(p) {
   return JSON.parse(readFileSync(p, "utf8"));
 }
 
-function resolvePackageDir(name, fromDir) {
-  const pkgJsonPath = require_.resolve(path.join(name, "package.json"), {
-    paths: [fromDir],
-  });
-  return path.dirname(pkgJsonPath);
-}
+// `resolvePackageDir` lives in ./resolve-package-dir.mjs. It probes the
+// filesystem rather than asking Node to resolve `<name>/package.json`, because
+// that subpath is not exported by every package — and because `path.join` was
+// building the specifier with backslashes on Windows, which bypassed `exports`
+// and made this machine disagree with the CI runners about which packages
+// exist at all (#548).
 
 // Top-level entries already in dist's node_modules right now (before
 // any backfill) — the packages Next's tracer chose to externalize.
