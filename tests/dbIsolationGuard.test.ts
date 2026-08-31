@@ -731,6 +731,11 @@ describe("database isolation convention", () => {
     // nothing, that test would pass by vacuity.
     const openers = [...runtimeDbOpeners()].map(rel).sort();
     expect(openers).toEqual([
+      // #529: reads the DB reconcile's completeness verdict so
+      // `/api/claude-homes` stops answering `complete: true` over a corpus the
+      // default backend could not read. Dynamically imported precisely so it
+      // does not freeze the path constant.
+      "src/app/api/claude-homes/route.ts",
       "src/lib/bootstrap.ts",
       "src/lib/memory/usageTracker.ts",
       "src/lib/usage/agentCostFromOtel.ts",

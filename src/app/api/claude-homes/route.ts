@@ -51,6 +51,13 @@ export async function GET(): Promise<NextResponse> {
       unavailable: [],
       degraded: [],
       degradedTotal: 0,
+      // Present here too, because this route treats its response shape as
+      // invariant: a client that special-cases demo mode is a client that can
+      // drift from the real one. Demo fixtures are synthetic and complete by
+      // construction, so the honest values are the empty ones (Codex/Copilot,
+      // #544).
+      reconcileIncomplete: false,
+      reconcileFailures: 0,
       complete: true,
     });
     demo.headers.set("X-Minder-Homes-Unavailable", "0");
@@ -79,6 +86,56 @@ export async function GET(): Promise<NextResponse> {
   // The TRUE count, which can exceed the detail list: the cap bounds what a
   // banner can render, not what is reported (Codex P2, PR #527).
   const degradedTotal = getSweepFailureTotal();
+
+  /**
+   * The DB reconcile's own verdict on the last full pass (#529).
+   *
+   * The two sweeps above are FILE readers. With `MINDER_USE_DB=1` — the default
+   * — a session-list or stats request need never run either of them, because
+   * `src/lib/data/index.ts` answers from the index. So after a startup with a
+   * clean in-process collector this route reported `complete: true` while the
+   * latest index pass had explicitly marked itself incomplete and may have been
+   * serving stale rows.
+   *
+   * `null` covers every "no claim" case — DB disabled or unavailable, no full
+   * pass yet, or a verdict about a corpus the config has since changed — and
+   * none of them may read as a fault. A machine before its first index is not
+   * degraded, which is the same rule the file sweeps follow.
+   *
+   * `probeInitStatus` rather than `initDb`: routes must not drive DB init
+   * themselves, or they bypass the retry/classification the façade owns.
+   */
+  let reconcileIncomplete = false;
+  let reconcileFailures = 0;
+  try {
+    // Imported DYNAMICALLY, and `dbIsolationGuard.test.ts` is why. A static
+    // import of this chain freezes `src/lib/db/connection.ts`'s path constant to
+    // the real `~/.minder` at module load — before a test's isolation runs — so
+    // any suite that imports this route would point at the developer's real
+    // index. Deferring it also means the DB modules are not loaded at all unless
+    // this branch runs.
+    const [{ probeInitStatus }, { getDb }, { computeCorpusVersion, readReconcileVerdict }] =
+      await Promise.all([
+        import("@/lib/data"),
+        import("@/lib/db/connection"),
+        import("@/lib/db/reconcileVerdict"),
+      ]);
+    const init = await probeInitStatus();
+    // `probeInitStatus` reports the state; `getDb` hands back the handle it
+    // opened. Going through the probe first is what keeps this route out of the
+    // init/retry business — it never drives a connection, it only reads one
+    // that is already established.
+    const db = init.state === "success" ? await getDb() : null;
+    if (db) {
+      const verdict = readReconcileVerdict(db, computeCorpusVersion(config));
+      if (verdict?.incomplete) {
+        reconcileIncomplete = true;
+        reconcileFailures = verdict.enumerationFailures;
+      }
+    }
+  } catch {
+    // A completeness answer must never be the thing that takes this route down.
+  }
   const degraded = getSweepFailures().map((f) => ({
     path: f.path,
     scope: f.scope,
@@ -109,7 +166,28 @@ export async function GET(): Promise<NextResponse> {
      * short by a project directory nobody could list reported `complete: true`
      * (#513).
      */
-    complete: unavailable.length === 0 && degradedTotal === 0,
+    /**
+     * The last full DB reconcile could not enumerate part of the corpus.
+     *
+     * Reported separately from `degraded` because it is a different reader with
+     * a different granularity: the file sweeps name the paths they could not
+     * list, while the reconcile counts its enumeration failures. Folding the
+     * count into `degradedTotal` would make a client that renders those paths
+     * claim to know locations it has not been given.
+     */
+    reconcileIncomplete,
+    reconcileFailures,
+    /**
+     * True when every configured home answered, nothing failed to enumerate,
+     * AND the last full index pass read the corpus through.
+     *
+     * `unavailable.length === 0` alone was the UI's one-bit question and it was
+     * answering a narrower one: "no home was deliberately skipped". A corpus
+     * short by a project directory nobody could list reported `complete: true`
+     * (#513) — and so did one whose DB pass aborted, which is the default
+     * backend and so the answer most users actually get (#529).
+     */
+    complete: unavailable.length === 0 && degradedTotal === 0 && !reconcileIncomplete,
   });
   // Same convention as `X-Minder-Backend`: the fact rides a header too, so a
   // client that only cares whether coverage is whole does not have to parse

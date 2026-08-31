@@ -867,7 +867,10 @@ describe("round 13 — the capped arithmetic told the truth in neither direction
     const { readFile } = await import("node:fs/promises");
     const text = await readFile("src/components/UnavailableHomesBanner.tsx", "utf-8");
 
-    expect(text).toMatch(/homes\.length === 0 && degradedTotal === 0\)\) return null;/);
+    // Matched loosely enough to survive further gate CONDITIONS being added —
+    // #529 added `&& !reconcileIncomplete` — while still pinning the property
+    // this test is about: the gate reads the TOTAL, never the capped array.
+    expect(text).toMatch(/homes\.length === 0 && degradedTotal === 0/);
     expect(text).not.toMatch(/homes\.length === 0 && degraded\.length === 0/);
     // And the detail block is gated on the total as well, with count-only copy
     // for the case where nothing is left to name.

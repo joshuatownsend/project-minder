@@ -64,6 +64,10 @@ import { readConfig } from "@/lib/config";
 import type { MinderConfig } from "@/lib/types";
 import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptPath";
 import { isBenignAbsentProjectsDir } from "@/lib/sweepFailures";
+import {
+  computeCorpusVersion,
+  writeReconcileVerdict,
+} from "./reconcileVerdict";
 
 // ── Optional per-stage profiling ──────────────────────────────────────────
 // Gated on `MINDER_PROFILE_INGEST=1` so production stays at zero overhead.
@@ -4081,7 +4085,40 @@ function describeRunError(stats: IngestStats): string | null {
   return parts.length > 0 ? parts.join("; ") : null;
 }
 
-export async function reconcileAllSessions(
+/**
+ * Full passes run one at a time (#529, finding 3).
+ *
+ * `scheduleUnlink()` can call `reconcileAllSessions()` while a sweep tick is
+ * already running. If the older pass lists the corpus cleanly but stays busy,
+ * and a newer pass then hits a directory failure and finishes FIRST, the older
+ * pass writes its clean verdict last and hides the newer failure — completion
+ * order overwriting observation order.
+ *
+ * A queue rather than a version counter, deliberately. #527 solved the same
+ * ordering problem for the in-process collector with a monotonic counter, and
+ * that was right there because the collector's cycles genuinely overlap by
+ * design. Here they do not have to: a full pass is not something two callers
+ * need concurrently, and serializing removes the ordering question instead of
+ * answering it. Every verdict is then the last observation as well as the last
+ * write.
+ */
+let fullPassChain: Promise<unknown> = Promise.resolve();
+
+export function reconcileAllSessions(
+  db: DatabaseT.Database,
+  options: ReconcileOptions = {}
+): Promise<IngestStats> {
+  const run = fullPassChain.then(
+    () => reconcileAllSessionsSerialized(db, options),
+    () => reconcileAllSessionsSerialized(db, options)
+  );
+  // The chain must not inherit this pass's rejection, or one failure would
+  // reject every pass queued behind it.
+  fullPassChain = run.catch(() => undefined);
+  return run;
+}
+
+async function reconcileAllSessionsSerialized(
   db: DatabaseT.Database,
   options: ReconcileOptions = {}
 ): Promise<IngestStats> {
@@ -4089,8 +4126,28 @@ export async function reconcileAllSessions(
   // for why the 30 s sweep must not.
   const runId = options.recordRun ? beginIndexerRun(db, options.recordRun) : null;
   let stats: IngestStats | undefined;
+  // Captured BEFORE the work, so the verdict is stamped with the corpus this
+  // pass was actually asked to walk. Reading it afterwards would let a config
+  // change landing mid-pass label stale observations as current (#529).
+  let corpusVersion: string | null = null;
   try {
-    stats = await runReconcileAllSessions(db, options);
+    // ONE snapshot, used for the version AND handed to the pass. The pass reads
+    // config again itself — after an `await loadPricing()` — so computing the
+    // version from a separate read let a config change landing in between be
+    // walked under the OLD version's name: the homes endpoint would then
+    // discard a current failure as a mismatch, and switching back could accept
+    // that mislabeled verdict as evidence about the old corpus (Codex, #544).
+    let passOptions = options;
+    try {
+      const snapshot = options.config ?? (await readConfig());
+      corpusVersion = computeCorpusVersion(snapshot);
+      passOptions = { ...options, config: snapshot };
+    } catch {
+      // No version means no verdict is written at all — a pass that cannot say
+      // WHICH corpus it walked must not leave a claim about one.
+      corpusVersion = null;
+    }
+    stats = await runReconcileAllSessions(db, passOptions);
     return stats;
   } finally {
     // `finally`, not the happy path: a pass that threw still has to stop
@@ -4112,6 +4169,27 @@ export async function reconcileAllSessions(
       // stay `aborted: false` and count as ready. (#471, Codex P1.)
       aborted: stats === undefined || stats.enumerationFailures > 0,
     });
+    // Written by EVERY full pass, whatever `recordRun` said (#529, finding 1).
+    //
+    // `indexer_runs` cannot carry this: `recordOptionForSweep` deliberately
+    // returns `{}` once a clean full pass exists, so the 30-second sweeps write
+    // no row at all. Reading the latest RECORDED run therefore answers with the
+    // startup pass forever, and a permissions failure appearing an hour later
+    // stays invisible — on the DEFAULT backend.
+    //
+    // Same `finally` as the run row, for the same reason: a pass that threw
+    // enumerated nothing it can vouch for, and must say so rather than leave
+    // the previous pass's answer standing.
+    if (corpusVersion) {
+      try {
+        writeReconcileVerdict(db, corpusVersion, {
+          incomplete: stats === undefined || stats.enumerationFailures > 0,
+          enumerationFailures: stats?.enumerationFailures ?? 0,
+        });
+      } catch {
+        // A verdict is a diagnostic. Never fail a reconcile over one.
+      }
+    }
   }
 }
 
