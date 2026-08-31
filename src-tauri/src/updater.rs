@@ -184,7 +184,7 @@ async fn run_check<R: Runtime>(
             // why the same stop is repeated on the post-install path below —
             // which is the one those platforms reach.
             if let Some(handoff) = &exit_handoff {
-                let _ = handoff.stop();
+                let _ = handoff.stop(crate::service_handoff::StopIntent::Final);
             }
         })
         .build()
@@ -213,8 +213,10 @@ async fn run_check<R: Runtime>(
     // narrow one where our own sidecar is the only thing the helper could find.
     // `stop()` hands back a token only when it actually stopped a RUNNING
     // service — the helper exits 0 either way, and arming on "it exited 0"
-    // would later start a service the user deliberately left down. The token
-    // is the only thing `arm_restore` accepts, so that cannot be got wrong here.
+    // would later start a service the user deliberately left down. `stop()`
+    // arms the debt ITSELF when it stopped a running service and the intent
+    // says one is owed, so there is no token for a caller to remember to pass
+    // on — which is what closed the window a Quit could fall into (#460).
     //
     // Armed process-wide rather than held in this task, because the case it
     // covers is this task never finishing: Quit stays clickable through the
@@ -228,7 +230,7 @@ async fn run_check<R: Runtime>(
             // line ran, find nothing owed, and exit having lost the service
             // (Codex P1, PR #541). Only `stop()` can close that gap, because
             // only `stop()` knows the moment the verdict exists.
-            handoff.stop()?;
+            handoff.stop(crate::service_handoff::StopIntent::BeforeUpdate)?;
         }
     }
 
@@ -265,7 +267,7 @@ async fn run_check<R: Runtime>(
     // sidecar stops gracefully first, so the helper cannot mistake it for the
     // service and hard-kill it.
     if let Some(handoff) = &handoff {
-        let _ = handoff.stop();
+        let _ = handoff.stop(crate::service_handoff::StopIntent::Final);
     }
     // Committed here too: we are about to relaunch, and the service returns at
     // the next logon rather than racing us for the port.

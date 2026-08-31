@@ -130,12 +130,37 @@ static PENDING_RESTORE: Mutex<Option<Arc<ServiceHandoff>>> = Mutex::new(None);
 static STOP_IN_FLIGHT: Mutex<Option<(Arc<ServiceHandoff>, Arc<AtomicBool>)>> =
     Mutex::new(None);
 
+/// Why a stop is being made, and therefore whether it owes a restart.
+///
+/// An enum rather than a bool, because a bare `true`/`false` at a call site is
+/// exactly the mistake this module keeps designing against — and the two kinds
+/// want opposite things:
+///
+///   - `BeforeUpdate` stops so the installer can replace files, and the service
+///     is expected back if the update does not happen.
+///   - `Final` runs AFTER the install is committed, where the service is meant
+///     to stay down until the next logon. `updater.rs` deliberately calls
+///     `disarm_restore()` around those, and an unconditional arm inside `stop()`
+///     recreated the debt it had just given up — putting the service back onto
+///     the port the updated app is about to take (Codex, PR #545).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopIntent {
+    BeforeUpdate,
+    Final,
+}
+
 /// How long a Quit will wait for an in-flight stop to resolve before giving up.
 ///
-/// `stop()` already bounds the helper at `STOP_TIMEOUT` and kills it on expiry,
-/// so the flag is set shortly after that in the worst case; the grace is for the
-/// bookkeeping in between, not for the helper.
-const STOP_JOIN_GRACE: Duration = Duration::from_secs(5);
+/// `stop()` bounds the helper at `STOP_TIMEOUT`, but the flag is not set the
+/// moment the helper dies: `wait_with_timeout` polls before checking the clock
+/// so it can return slightly past its own deadline, and `stop()` then still has
+/// `port_released(.., RELEASE_GRACE)` and the verdict to get through.
+///
+/// A grace that only covered the bookkeeping could therefore expire while the
+/// stop was still working, and a Quit would decide "nothing owed" about a stop
+/// that had not finished — the failure this wait exists to prevent, one layer
+/// down (Codex, PR #545). So the grace covers `RELEASE_GRACE` too, with margin.
+const STOP_JOIN_GRACE: Duration = Duration::from_secs(20);
 
 /// Proof that this process stopped a service that **was running**, and
 /// therefore owes it a restart if the update does not go through.
@@ -163,30 +188,36 @@ pub fn arm_restore(stopped: StoppedService) {
     // reopens the exact "Quit sees nothing armed" hole this marker closes
     // (Copilot, PR #541). Keeping the marker is the safe direction — it fails
     // towards restarting a service that was running.
-    let recorded = match PENDING_RESTORE.lock() {
-        Ok(mut slot) => {
-            *slot = Some(stopped.0);
-            true
-        }
-        Err(_) => false,
-    };
-    if recorded {
-        clear_stop_in_flight();
+    // Poisoning is RECOVERED, not treated as failure. A poisoned mutex means
+    // some other thread panicked while holding it — it says nothing about
+    // whether this debt is real, and dropping it leaves the user's service
+    // stopped indefinitely with nothing able to claim it (Copilot, PR #545).
+    // The data behind this lock is a single `Option`, so there is no invariant a
+    // panic could have left half-applied.
+    match PENDING_RESTORE.lock() {
+        Ok(mut slot) => *slot = Some(stopped.0),
+        Err(poisoned) => *poisoned.into_inner() = Some(stopped.0),
     }
+    clear_stop_in_flight();
 }
 
 /// Mark a stop as underway. Private, and called only from [`ServiceHandoff::stop`]
 /// once the port has been observed bound.
 fn mark_stop_in_flight(handoff: &Arc<ServiceHandoff>) -> Arc<AtomicBool> {
     let done = Arc::new(AtomicBool::new(false));
-    if let Ok(mut slot) = STOP_IN_FLIGHT.lock() {
-        *slot = Some((handoff.clone(), done.clone()));
+    match STOP_IN_FLIGHT.lock() {
+        Ok(mut slot) => *slot = Some((handoff.clone(), done.clone())),
+        Err(poisoned) => *poisoned.into_inner() = Some((handoff.clone(), done.clone())),
     }
     done
 }
 
 fn take_stop_in_flight() -> Option<(Arc<ServiceHandoff>, Arc<AtomicBool>)> {
-    STOP_IN_FLIGHT.lock().ok().and_then(|mut slot| slot.take())
+    let mut slot = match STOP_IN_FLIGHT.lock() {
+        Ok(slot) => slot,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    slot.take()
 }
 
 fn clear_stop_in_flight() {
@@ -197,7 +228,15 @@ fn clear_stop_in_flight() {
 /// call from both the update task and the Quit handler concurrently: whichever
 /// arrives first gets the handoff and the other gets `None`.
 fn take_restore() -> Option<Arc<ServiceHandoff>> {
-    PENDING_RESTORE.lock().ok().and_then(|mut slot| slot.take())
+    // Poison is recovered here for the same reason `arm_restore` recovers it:
+    // a panic elsewhere says nothing about whether this debt is real. Bailing
+    // on `Err` meant the debt could be RECORDED and never claimable, which is
+    // the same lost service by a longer route (Copilot, PR #545).
+    let mut slot = match PENDING_RESTORE.lock() {
+        Ok(slot) => slot,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    slot.take()
 }
 
 /// Forget any outstanding restore without acting on it. Called once the update
@@ -658,7 +697,7 @@ impl ServiceHandoff {
     /// do it. `Ok(false)` means there was nothing to stop, which the helper also
     /// reports as success, and which must never lead to *starting* a service the
     /// user deliberately left down.
-    pub fn stop(self: &Arc<Self>) -> Result<bool, String> {
+    pub fn stop(self: &Arc<Self>, intent: StopIntent) -> Result<bool, String> {
         log(&format!(
             "update: {} registers the logon service against this app's own bundle — stopping it \
              so the installer can replace those files",
@@ -743,7 +782,7 @@ impl ServiceHandoff {
         // does its job: nothing else can record a debt, and this records one
         // only when the verdict says a running service really was stopped.
         let stopped = verdict.as_ref().is_ok_and(|v| *v);
-        if stopped {
+        if stopped && intent == StopIntent::BeforeUpdate {
             arm_restore(StoppedService(self.clone()));
         }
         // Released on EVERY path, including the error ones: a Quit blocked on
@@ -1369,6 +1408,7 @@ mod tests {
         use super::{
             arm_restore, clear_stop_in_flight, disarm_restore, mark_stop_in_flight,
             restore_if_armed, take_restore, take_stop_in_flight, StoppedService,
+            PENDING_RESTORE,
         };
         use std::sync::atomic::Ordering;
         use std::sync::Arc;
@@ -1474,6 +1514,31 @@ mod tests {
             take_restore().is_none(),
             "and no debt is invented on the way out"
         );
+
+        // --- a poisoned slot must still record the debt (#545) ---
+        //
+        // Poisoning means another thread panicked while holding the lock. It
+        // says nothing about whether this debt is real, and treating it as a
+        // failure left the user's service stopped with nothing able to claim
+        // it. The data behind it is a single `Option`, so no panic can have
+        // left an invariant half-applied.
+        //
+        // Folded into THIS test rather than added as its own, for the reason
+        // the note below gives: these slots are process-wide, cargo runs tests
+        // in parallel threads, and a separate test poisoning them broke this
+        // one. Learned by doing exactly that.
+        let _ = take_restore();
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = PENDING_RESTORE.lock().unwrap();
+            panic!("poisoning the restore slot on purpose");
+        });
+        assert!(PENDING_RESTORE.is_poisoned(), "the slot must actually be poisoned");
+        arm_restore(StoppedService(Arc::new(fake_handoff(4100, Some(4199)))));
+        assert!(
+            take_restore().is_some(),
+            "a poisoned lock must not lose a debt the user's service depends on"
+        );
+        PENDING_RESTORE.clear_poison();
 
         // Leave the globals as they were found — these slots are process-wide
         // and this is the only test that touches them.
