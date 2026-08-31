@@ -78,9 +78,14 @@ export function resolvePackageDir(name, fromDir) {
       if (existsSync(path.join(candidate, "package.json"))) {
         try {
           return realpathSync(candidate);
-        } catch {
-          // Only reachable if the entry vanished between the two calls. The
-          // lexical path is still the better answer than throwing.
+        } catch (err) {
+          // ENOENT here means the entry vanished between the two calls, and
+          // the lexical path is a better answer than throwing. Anything else —
+          // EACCES, ELOOP, ENOTDIR — is a real filesystem problem, and
+          // swallowing it would hand back a path this function has not
+          // actually verified, which is how a broken payload gets built
+          // quietly (Copilot, PR #549).
+          if (err.code !== "ENOENT") throw err;
           return candidate;
         }
       }

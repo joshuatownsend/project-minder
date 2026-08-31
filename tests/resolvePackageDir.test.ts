@@ -11,9 +11,15 @@
 // directory rather than on "it did not throw" is what makes it mean the same
 // thing on both.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  symlinkSync,
+  realpathSync,
+} from "node:fs";
 import { createRequire } from "node:module";
-import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { resolvePackageDir } from "../scripts/resolve-package-dir.mjs";
