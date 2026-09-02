@@ -5,6 +5,7 @@ import {
   ratio,
   type AggregatableProject,
 } from "@/lib/groups/aggregate";
+import { deriveProjectGroups } from "@/lib/groups/derive";
 import type { TodoItem, InsightEntry, ManualStepEntry } from "@/lib/types/checklist";
 import type { BoardEpic, BoardIssue } from "@/lib/types/board";
 import type { OpsRunbookSection } from "@/lib/types/ops";
@@ -15,8 +16,9 @@ import type { OpsRunbookSection } from "@/lib/types/ops";
 
 const WIN = "C:\\dev\\bamcli";
 const OTHER = "D:\\dev\\bamcli";
-// A UNC path normalizes to //wsl…, which sorts BEFORE c:/… by codepoint, so a
-// WSL member is always first in path order. Used only where a UNC path matters.
+// Members sort by RAW path codepoint order, matching deriveProjectGroups, so a
+// UNC path (leading backslash, 0x5C) lands AFTER a drive letter (`C`, 0x43).
+// Used only where a UNC path matters.
 const WSL = "\\\\wsl.localhost\\Ubuntu-26.04\\home\\josh\\printing-press\\library\\bamcli";
 
 function member(over: Partial<AggregatableProject> & { slug: string; path: string }): AggregatableProject {
@@ -394,7 +396,7 @@ describe("aggregateGroup — locations", () => {
     const agg = aggregateGroup([a, b], {
       skippedRootPaths: ["//wsl.localhost/Ubuntu-26.04/home/josh/printing-press/library/"],
     });
-    expect(agg.locations.map((l) => [l.slug, l.stale])).toEqual([["b", true], ["a", false]]);
+    expect(agg.locations.map((l) => [l.slug, l.stale])).toEqual([["a", false], ["b", true]]);
     expect(agg.partial).toBe(true);
   });
 
@@ -442,14 +444,24 @@ describe("aggregateGroup — primary and determinism", () => {
 
 // ── Usage keys ───────────────────────────────────────────────────────────────
 
+describe("aggregateGroup — alignment with deriveProjectGroups", () => {
+  it("lists locations in the same order deriveProjectGroups lists members", () => {
+    const win = member({ slug: "bamcli", path: WIN });
+    const wsl = member({ slug: "bamcli-library", path: WSL });
+    const [group] = deriveProjectGroups([wsl, win]);
+    const agg = aggregateGroup([wsl, win]);
+    expect(agg.locations.map((l) => l.path)).toEqual(group.members.map((m) => m.path));
+  });
+});
+
 describe("groupUsageKeys", () => {
   it("collapses two local drives that share a usageSlug and keeps a WSL home distinct", () => {
     const c = member({ slug: "c", path: "C:\\dev\\foo", usageSlug: "dev-foo" });
     const d = member({ slug: "d", path: "D:\\dev\\foo", usageSlug: "dev-foo" });
     const w = member({ slug: "w", path: WSL, usageSlug: "dev-foo", usageHomeKey: "wsl:Ubuntu-26.04" });
     expect(groupUsageKeys([w, d, c])).toEqual([
-      { usageSlug: "dev-foo", usageHomeKey: "wsl:Ubuntu-26.04" },
       { usageSlug: "dev-foo" },
+      { usageSlug: "dev-foo", usageHomeKey: "wsl:Ubuntu-26.04" },
     ]);
     expect(aggregateGroup([w, d, c]).usageKeys).toHaveLength(2);
   });

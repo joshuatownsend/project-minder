@@ -358,7 +358,9 @@ export function aggregateGroup(
 // ── Members, primary, locations ──────────────────────────────────────────────
 
 function sortMembers(members: readonly AggregatableProject[]): AggregatableProject[] {
-  return [...members].sort((a, b) => compare(normalizePathKey(a.path), normalizePathKey(b.path)));
+  // Raw-path codepoint order, exactly as `deriveProjectGroups` sorts
+  // `ProjectGroup.members`, so `locations[i]` and `members[i]` always line up.
+  return [...members].sort((a, b) => compare(a.path, b.path));
 }
 
 /** Most recent `lastActivity` wins; ties (including all-undefined) go to path order. */
