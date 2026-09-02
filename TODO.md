@@ -4,7 +4,7 @@
 
 *Reconciled 2026-08-14 — read the plan's **Status reconciliation** section first; the two ledger tables at the top of that doc are the 2026-08-08 baseline and are superseded there. Current state (re-reviewed 2026-09-02): 5 open issues, all parked and confirmed parked, and 21 unchecked items below. The standing gate is gone: the #432 re-test-before-un-pinning item was discharged 2026-08-18 when 16.3.1 was verified clean and the pin lifted. **W12 — demo-mode coverage** is in progress: its three verified-leak items (`RootLayout` devRoot, the `/stats` cross-check, and the `/adapters`+`/config`+`/plans` family) shipped 2026-08-16 along with #441, and are archived. Four remain — the empty screens, the untriaged route tail, `/analytics`, and Home's header count.*
 
-*The Claude Code schema-alignment wave (v2.1.202 → 2.1.222) is fully closed: the wave itself shipped 2026-08-04 → 2026-08-06 and its last three follow-ups (A2, A3, A6) shipped 2026-08-10 in W5. History in `TODO.archive.md`, spec in `docs/superpowers/plans/2026-08-04-claude-code-schema-alignment.md`. Its out-of-scope review findings live as GitHub issues, not TODO items: **#391 is the only one still open** (#393, #394 closed in W4; #395 closed in W5).*
+*The Claude Code schema-alignment wave (v2.1.202 → 2.1.222) is fully closed: the wave itself shipped 2026-08-04 → 2026-08-06 and its last three follow-ups (A2, A3, A6) shipped 2026-08-10 in W5. History in `TODO.archive.md`, spec in `docs/superpowers/plans/2026-08-04-claude-code-schema-alignment.md`. Its out-of-scope review findings live as GitHub issues, not TODO items: **all four are now closed** (#393, #394 in W4; #395 in W5; #391 on 2026-08-29).*
 
 ## Project Groups — one project, many locations
 

@@ -273,7 +273,7 @@ the critical path. The updater work (free) can proceed in parallel while you wai
 
 ## 2026-05-10 14:00 | screenshot-to-code | Phase 6: build, key, register MCP server
 
-> archived 2026-09-02 — done 2026-09-02 — decision: registered with the OpenAI provider (`claude mcp add screenshot-to-code -s user --env SCREENSHOT_PROVIDER=openai -- node C:devproject-minderdistmcpscreenshot-to-codeindex.mjs`), using the OPENAI_API_KEY already on the machine; `claude mcp list` shows it Connected and a stdio tools/list smoke test advertises `convert_screenshot_to_react`. The dashboard Playground reads the same env var, so a tray restart is needed only if OPENAI_API_KEY was set after the tray last started.
+> archived 2026-09-02 — done 2026-09-02 — decision: registered with the OpenAI provider (`claude mcp add screenshot-to-code -s user --env SCREENSHOT_PROVIDER=openai -- node C:\dev\project-minder\dist\mcp\screenshot-to-code\index.mjs`), using the OPENAI_API_KEY already on the machine; `claude mcp list` shows it Connected and an end-to-end stdio `tools/call` of `convert_screenshot_to_react` against the live OpenAI endpoint with `screenshots/01-config-initial.png` (68 KB) returned 4,239 chars of TSX, no markdown fences, in 36 s. The dashboard Playground reads the same env var, so a tray restart is needed only if OPENAI_API_KEY was set after the tray last started.
 
 - [x] Build the bundled MCP server
   `npm run build:mcp-screenshot`
