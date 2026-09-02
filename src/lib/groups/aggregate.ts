@@ -92,7 +92,14 @@ export type RepoFile =
 
 export interface Divergence {
   file: RepoFile;
-  /** `missing`: some members lack the file. `differs`: the copies disagree. */
+  /**
+   * `missing`: some members have no parsed content for the file. The scanner
+   * returns `undefined` both for an absent file and for one that parses to
+   * nothing (a `TODO.md` with no checkboxes, an `INSIGHTS.md` with no
+   * markers), and `ProjectData` carries no separate presence flag, so this
+   * layer cannot tell the two apart — the wording says "no content", not
+   * "absent". `differs`: the copies disagree.
+   */
   kind: "missing" | "differs";
   /** Member slugs involved — the ones lacking the file, or the ones that disagree. */
   locations: string[];
@@ -396,8 +403,9 @@ function instant(iso: string): number | undefined {
  * True when `a` is strictly newer than `b`. Timestamps are compared as
  * parsed instants — `lastActivity` can come from git's offset-bearing commit
  * date, and `2026-09-02T10:00:00-07:00` is later than `2026-09-02T16:30:00Z`
- * though it sorts lexically smaller. Undefined never wins; an unparsable
- * value falls back to lexical order so nothing is silently dropped.
+ * though it sorts lexically smaller. Undefined never wins; a valid instant
+ * always beats an unparsable string; lexical order is the tie-break only when
+ * neither side parses, so a malformed date can never outrank a real one.
  */
 function isNewer(a: string | undefined, b: string | undefined): boolean {
   if (!a) return false;
@@ -405,6 +413,8 @@ function isNewer(a: string | undefined, b: string | undefined): boolean {
   const ta = instant(a);
   const tb = instant(b);
   if (ta !== undefined && tb !== undefined) return ta > tb;
+  if (ta !== undefined) return true;
+  if (tb !== undefined) return false;
   return a > b;
 }
 
@@ -547,7 +557,7 @@ function withFile<T>(
       file,
       kind: "missing",
       locations: ordered.filter((m) => pick(m) === undefined).map((m) => m.slug),
-      detail: `${file} is missing in ${ordered.length - have.length} of ${ordered.length} locations`,
+      detail: `${file} has no content in ${ordered.length - have.length} of ${ordered.length} locations (absent or empty)`,
     });
   }
   return have;

@@ -178,7 +178,7 @@ describe("aggregateGroup — divergence", () => {
     const b = member({ slug: "b", path: OTHER });
     const agg = aggregateGroup([a, b]);
     expect(agg.divergences).toEqual([
-      { file: "TODO.md", kind: "missing", locations: ["b"], detail: expect.stringContaining("missing in 1 of 2") },
+      { file: "TODO.md", kind: "missing", locations: ["b"], detail: "TODO.md has no content in 1 of 2 locations (absent or empty)" },
     ]);
     expect(agg.todos?.total).toBe(1);
   });
@@ -567,6 +567,15 @@ describe("aggregateGroup — primary and determinism", () => {
     expect(agg.activity.lastSessionDate).toBe("2026-09-02T10:00:00-07:00");
     expect(agg.activity.lastActivity).toBe("2026-09-02T10:00:00-07:00");
     expect(agg.activity.mostRecent?.slug).toBe("a");
+  });
+
+  it("a valid timestamp always beats a malformed one", () => {
+    const good = member({ slug: "good", path: OTHER, lastActivity: "2026-01-01T00:00:00Z", claude: { sessionCount: 1, lastSessionDate: "2026-01-01T00:00:00Z" } });
+    const bad = member({ slug: "bad", path: WIN, lastActivity: "not-a-date-zzz", claude: { sessionCount: 1, lastSessionDate: "zzz" } });
+    const agg = aggregateGroup([bad, good]);
+    expect(agg.primary).toBe("good");
+    expect(agg.activity.lastSessionDate).toBe("2026-01-01T00:00:00Z");
+    expect(agg.activity.lastActivity).toBe("2026-01-01T00:00:00Z");
   });
 
   it("produces identical output regardless of input order", () => {

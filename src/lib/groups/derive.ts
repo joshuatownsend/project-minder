@@ -83,7 +83,7 @@ export function deriveProjectGroups(
  * rejecting it outright. Case is folded because Windows paths are
  * case-insensitive, and a trailing separator is trimmed for the same reason.
  */
-export function normalizePathKey(value: string): string {
+function normalizePathKey(value: string): string {
   return value.replace(/[\\/]+/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
