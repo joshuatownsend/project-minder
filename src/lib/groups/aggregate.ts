@@ -7,7 +7,7 @@ import type {
   BoardStatus,
 } from "@/lib/types/board";
 import type { OpsSectionKey } from "@/lib/types/ops";
-import { compare, normalizePathKey } from "./derive";
+import { compareCodepoint, normalizePathKey } from "./derive";
 
 /**
  * P2 — the aggregation layer for Project Groups.
@@ -378,7 +378,7 @@ export function aggregateGroup(
 function sortMembers(members: readonly AggregatableProject[]): AggregatableProject[] {
   // Raw-path codepoint order, exactly as `deriveProjectGroups` sorts
   // `ProjectGroup.members`, so `locations[i]` and `members[i]` always line up.
-  return [...members].sort((a, b) => compare(a.path, b.path));
+  return [...members].sort((a, b) => compareCodepoint(a.path, b.path));
 }
 
 /** Most recent `lastActivity` wins; ties (including all-undefined) go to path order. */
@@ -486,7 +486,7 @@ function mergeKeyed<T, R>(
       seen.set(base, n + 1);
       const key = `${base}#${n}`;
       const existing = out.get(key);
-      if (existing) fold(existing, item, m.slug);
+      if (existing !== undefined) fold(existing, item, m.slug);
       else out.set(key, build(item, m.slug));
     }
   }
@@ -519,7 +519,7 @@ function pushDiffers(
   detail: string
 ): void {
   if (locations.size === 0) return;
-  divergences.push({ file, kind: "differs", locations: [...locations].sort(compare), detail });
+  divergences.push({ file, kind: "differs", locations: [...locations].sort(compareCodepoint), detail });
 }
 
 /** Presence/completion bookkeeping shared by every checkbox-shaped merge. */
@@ -669,7 +669,7 @@ function issueFingerprint(i: {
   return JSON.stringify([
     normText(i.title),
     i.priority ?? null,
-    [...i.labels].sort(compare),
+    [...i.labels].sort(compareCodepoint),
     i.detail === undefined ? null : normText(i.detail),
     i.worktree ?? null,
     i.sessionId ?? null,
@@ -685,7 +685,7 @@ function epicFingerprint(e: {
   return JSON.stringify([
     normText(e.title),
     e.priority ?? null,
-    [...e.labels].sort(compare),
+    [...e.labels].sort(compareCodepoint),
     e.description === undefined ? null : normText(e.description),
   ]);
 }
@@ -1053,7 +1053,7 @@ function fact<T extends string | number>(
       divergences,
       file,
       new Set(valueIn.map((v) => v.slug)),
-      `${label} differs between locations: ${[...distinct].map(String).sort(compare).join(" vs ")}`
+      `${label} differs between locations: ${[...distinct].map(String).sort(compareCodepoint).join(" vs ")}`
     );
   }
   // A fact defined in some locations and absent in others is a difference
@@ -1064,7 +1064,7 @@ function fact<T extends string | number>(
     divergences.push({
       file,
       kind: "missing",
-      locations: [...lacking].sort(compare),
+      locations: [...lacking].sort(compareCodepoint),
       detail: `${label} is missing in ${lacking.length} of ${ordered.length} locations`,
     });
   }
