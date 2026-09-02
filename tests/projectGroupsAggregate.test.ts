@@ -388,10 +388,26 @@ describe("aggregateGroup — BOARD.md", () => {
     expect(agg.board?.total).toBe(2);
     expect(agg.board?.inbox).toEqual([]);
     const merged = agg.board!.epics[0].issues[0];
-    expect(merged).toMatchObject({ id: "i-1", presentIn: ["a", "b"], editedIn: ["b"], containerIn: { a: "id:e-1", b: "inbox" } });
+    expect(merged).toMatchObject({ id: "i-1", presentIn: ["a", "b"], editedIn: ["b"], containerIn: { a: "id:e-1#0", b: "inbox" } });
     expect(agg.divergences).toEqual([
       { file: "BOARD.md", kind: "differs", locations: ["a", "b"], detail: "1 board item edited differently between locations (title, priority, labels, detail, or container)" },
     ]);
+  });
+
+  it("two un-backfilled epics with the same title keep their own issues", () => {
+    const a = member({
+      slug: "a",
+      path: WIN,
+      board: board([
+        epic({ title: "Cleanup", issues: [issue({ title: "first" })] }),
+        epic({ title: "Cleanup", issues: [issue({ title: "second" })] }),
+      ], []),
+    });
+    const agg = aggregateGroup([a]);
+    expect(agg.board?.epics).toHaveLength(2);
+    expect(agg.board?.epics.map((e) => e.issues.map((i) => i.title))).toEqual([["first"], ["second"]]);
+    expect(agg.board?.total).toBe(4);
+    expect(agg.divergences).toEqual([]);
   });
 
   it("renumbers order after dedupe", () => {

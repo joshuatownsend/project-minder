@@ -225,7 +225,8 @@ export interface AggregatedBoardIssue {
    *  (title, priority, labels, detail, worktree, session, or container) —
    *  the edits a stable id is designed to survive, and therefore must not hide. */
   editedIn: string[];
-  /** Where each location keeps this issue: `"inbox"`, or its epic's merge key. */
+  /** Where each location keeps this issue: `"inbox"`, or its epic's
+   *  occurrence-scoped merge key (`id:e-1#0`, `t:epic title#1`). */
   containerIn: Record<string, string>;
 }
 
@@ -715,6 +716,14 @@ function insightFingerprint(e: { content: string; sessionId: string; date: strin
 
 // ── BOARD.md ─────────────────────────────────────────────────────────────────
 
+/** `base#n` where n counts prior occurrences of `base` in `seen` — the same
+ *  scoping rule mergeKeyed applies within one member. */
+function occurrenceKey(base: string, seen: Map<string, number>): string {
+  const n = seen.get(base) ?? 0;
+  seen.set(base, n + 1);
+  return `${base}#${n}`;
+}
+
 /** Surrogate id when the writer has backfilled one; container-scoped title otherwise. */
 function boardKey(item: { id: string; title: string }): string {
   return item.id ? `id:${item.id}` : `t:${normText(item.title)}`;
@@ -829,8 +838,13 @@ function aggregateBoard(
   const placedBy = new Map<string, Placed[]>();
   for (const m of have) {
     const list: Placed[] = [];
+    // Container identity carries the epic's occurrence index, exactly as
+    // mergeKeyed scopes the epics themselves — two un-backfilled epics with
+    // the same title stay two containers.
+    const seen = new Map<string, number>();
     for (const e of m.board?.epics ?? []) {
-      for (const i of e.issues) list.push({ issue: i, container: boardKey(e) });
+      const container = occurrenceKey(boardKey(e), seen);
+      for (const i of e.issues) list.push({ issue: i, container });
     }
     for (const i of m.board?.inbox ?? []) list.push({ issue: i, container: "inbox" });
     placedBy.set(m.slug, list);
@@ -852,7 +866,11 @@ function aggregateBoard(
     }
   );
   // Place each merged issue where the headline (primary-first) location keeps it.
-  const epicByKey = new Map(finalEpics.map((e) => [boardKey(e), e] as const));
+  // finalEpics is in first-insertion order, so counting occurrences here
+  // reproduces the same `base#n` keys mergeKeyed assigned.
+  const epicByKey = new Map<string, AggregatedBoardEpic>();
+  const seenEpics = new Map<string, number>();
+  for (const e of finalEpics) epicByKey.set(occurrenceKey(boardKey(e), seenEpics), e);
   const inbox: AggregatedBoardIssue[] = [];
   for (const it of allIssues) {
     const home = it.containerIn[it.presentIn[0]];
