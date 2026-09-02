@@ -637,14 +637,32 @@ describe("aggregateGroup — alignment with deriveProjectGroups", () => {
 });
 
 describe("groupUsageKeys", () => {
-  it("collapses two local drives that share a usageSlug and keeps a WSL home distinct", () => {
+  it("collapses two local drives that share a usageSlug", () => {
     const c = member({ slug: "c", path: "C:\\dev\\foo", usageSlug: "dev-foo" });
     const d = member({ slug: "d", path: "D:\\dev\\foo", usageSlug: "dev-foo" });
-    const w = member({ slug: "w", path: WSL, usageSlug: "dev-foo", usageHomeKey: "wsl:Ubuntu-26.04" });
-    expect(groupUsageKeys([w, d, c])).toEqual([
+    expect(groupUsageKeys([d, c])).toEqual([{ usageSlug: "dev-foo" }]);
+  });
+
+  it("keeps pinned homes distinct when their slugs differ", () => {
+    const c = member({ slug: "c", path: "C:\\dev\\foo", usageSlug: "dev-foo" });
+    const w = member({ slug: "w", path: WSL, usageSlug: "printing-press-library-foo", usageHomeKey: "wsl:Ubuntu-26.04" });
+    expect(groupUsageKeys([w, c])).toEqual([
       { usageSlug: "dev-foo" },
-      { usageSlug: "dev-foo", usageHomeKey: "wsl:Ubuntu-26.04" },
+      { usageSlug: "printing-press-library-foo", usageHomeKey: "wsl:Ubuntu-26.04" },
     ]);
-    expect(aggregateGroup([w, d, c]).usageKeys).toHaveLength(2);
+  });
+
+  it("an unpinned member's key absorbs a pinned member with the same slug — the unpinned query already spans every home", () => {
+    const c = member({ slug: "c", path: "C:\\home\\josh\\dev\\foo", usageSlug: "home-josh-dev-foo" });
+    const w = member({ slug: "w", path: WSL, usageSlug: "home-josh-dev-foo", usageHomeKey: "wsl:Ubuntu-26.04" });
+    expect(groupUsageKeys([w, c])).toEqual([{ usageSlug: "home-josh-dev-foo" }]);
+    expect(groupUsageKeys([c, w])).toEqual([{ usageSlug: "home-josh-dev-foo" }]);
+    expect(aggregateGroup([w, c]).usageKeys).toHaveLength(1);
+  });
+
+  it("two pinned homes with the same slug and no unpinned member stay separate", () => {
+    const w1 = member({ slug: "w1", path: WSL, usageSlug: "dev-foo", usageHomeKey: "wsl:Ubuntu-26.04" });
+    const w2 = member({ slug: "w2", path: "\\\\wsl.localhost\\Debian\\home\\josh\\dev\\foo", usageSlug: "dev-foo", usageHomeKey: "wsl:Debian" });
+    expect(groupUsageKeys([w1, w2])).toHaveLength(2);
   });
 });

@@ -326,18 +326,27 @@ export function ratio(numerator: number, denominator: number): number | undefine
 }
 
 /**
- * Deduplicated `(usageSlug, usageHomeKey)` pairs. `C:\dev\foo` and `D:\dev\foo`
- * share a `usageSlug` with no home key, so summing per-member usage responses
- * would double-count; the composite key mirrors `CostReportDashboard`.
+ * Non-overlapping usage scopes to fetch and sum. `C:\dev\foo` and `D:\dev\foo`
+ * share a `usageSlug` with no home key, so summing per-member responses would
+ * double-count; the composite key mirrors `CostReportDashboard`.
+ *
+ * An unpinned query (`/api/usage?project=<slug>` with no `home`) returns the
+ * slug's turns from EVERY configured home — `src/lib/usage/aggregator.ts`
+ * filters by home only when one is supplied. So once a slug has an unpinned
+ * member, the unpinned key is already the superset and a pinned key for the
+ * same slug would count that home's turns twice: the unpinned key wins.
  */
 export function groupUsageKeys(members: readonly AggregatableProject[]): UsageKey[] {
+  const unpinned = new Set<string>();
+  for (const m of members) if (!m.usageHomeKey) unpinned.add(m.usageSlug);
   const seen = new Set<string>();
   const out: UsageKey[] = [];
   for (const m of sortMembers(members)) {
-    const k = `${m.usageSlug}\u0000${m.usageHomeKey ?? ""}`;
+    const home = unpinned.has(m.usageSlug) ? undefined : m.usageHomeKey;
+    const k = `${m.usageSlug}\u0000${home ?? ""}`;
     if (seen.has(k)) continue;
     seen.add(k);
-    out.push(m.usageHomeKey ? { usageSlug: m.usageSlug, usageHomeKey: m.usageHomeKey } : { usageSlug: m.usageSlug });
+    out.push(home ? { usageSlug: m.usageSlug, usageHomeKey: home } : { usageSlug: m.usageSlug });
   }
   return out;
 }
