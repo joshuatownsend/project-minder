@@ -1,28 +1,3 @@
-## 2026-08-05 19:30 | index-downgrade | Don't restart the v1.7.0 tray until a new build is packaged
-
-The installed tray (`%LOCALAPPDATA%\Project Minder Tray`, packaged 2026-08-03) ships
-`DERIVED_VERSION = 12`. On 2026-08-05 it reverted the whole index from v14 to v12,
-discarding 22,682 `turns.effort` values and 1,141 `task_outcome` stamps roughly 30 minutes
-after a 45-minute re-parse completed, reporting `errors: 0` throughout.
-
-The guard that prevents this (`fix(db): never let an older build downgrade a newer index`,
-`d6dc4bf`) is in the repo, **not in that packaged build** — a build can only refuse a
-downgrade if the guard is in the build doing the writing. So the installed tray will do it
-again if it starts.
-
-- [ ] Leave the tray stopped until a build carrying `d6dc4bf` is packaged and installed
-  It was stopped at 2026-08-05 ~18:10 (tray PID 54768 + node sidecar 19124, both confirmed down).
-  Restarting the current v1.7.0 build re-runs the downgrade on the freshly re-indexed DB.
-- [ ] Package and install a tray build from `main` once this branch merges
-  `pnpm package:standalone` then `pnpm tray:build` (see `docs/help/tray-app.md`)
-  Verify before trusting it: `node -e "..."` on `~/.minder/index.db` should show
-  `derived_version = 14` holding steady after the tray has been running a few minutes.
-- [ ] Confirm the guard fires rather than silently doing nothing
-  A build older than the index now logs `[ingest] N session(s) left untouched: their rows
-  were derived by a newer build than this one`. Seeing that line is the success case.
-
----
-
 ## 2026-07-19 14:30 | signing-updater | Accounts + keys for signed installers and auto-updates
 
 Plan: `docs/superpowers/plans/2026-07-19-signing-updater-release.md`.
@@ -73,15 +48,15 @@ the critical path. The updater work (free) can proceed in parallel while you wai
 
 ## 2026-07-18 16:00 | wsl-integration | Bring the Ubuntu-26.04 WSL projects + sessions into the dashboard
 
-- [ ] Restart your running Minder server after the WSL PRs merge (#307/#308 + multi-home)
+- [x] Restart your running Minder server after the WSL PRs merge (#307/#308 + multi-home)
   The live service on :4100 runs the old build; the Settings sections and WSL scanning
   only exist after it picks up the new code (`pnpm build` + service restart, or tray restart).
-- [ ] Add the WSL scan root: Settings → Scan Roots → add `\\wsl.localhost\Ubuntu-26.04\home\josh\printing-press\library` → Save & Rescan
+- [x] Add the WSL scan root: Settings → Scan Roots → add `\\wsl.localhost\Ubuntu-26.04\home\josh\printing-press\library` → Save & Rescan
   Your real repos (`bamcli`, `micetrocli`, both with `.git`) live in `~/printing-press/library`,
   not `~/dev` (those are older git-less copies the scanner ignores), so type the path into the
   editor manually — the Detect WSL button only suggests `~/dev`-shaped roots. The distro must be
   Running during the first scan — Minder never starts it.
-- [ ] Add the WSL Claude home: Settings → Claude Homes → Detect WSL → "Add home + mapping" for `\\wsl.localhost\Ubuntu-26.04\home\josh\.claude` → Save & Rescan
+- [x] Add the WSL Claude home: Settings → Claude Homes → Detect WSL → "Add home + mapping" for `\\wsl.localhost\Ubuntu-26.04\home\josh\.claude` → Save & Rescan
   This also auto-adds the `/home/josh` ↔ `\\wsl.localhost\Ubuntu-26.04\home\josh` path mapping.
   That single mapping correlates the `-home-josh-printing-press-library-*` session dirs with the
   UNC projects automatically — no per-project mapping needed.
@@ -92,41 +67,9 @@ the critical path. The updater work (free) can proceed in parallel while you wai
 
 ---
 
-## 2026-07-17 08:00 | service-mode | Register Minder's autostart service (task A3, one time per machine)
-
-- [ ] Build the server, then register the logon autostart task
-  `pnpm build && pnpm package:standalone` (recommended — self-contained `dist/minder-server`)
-  then `pnpm service:install`
-  Windows may show a UAC/consent prompt for Task Scheduler — accept it. This registers a
-  **Scheduled Task with a logon trigger** (not a Windows Service — services default to
-  LocalSystem, which can't see `~/.claude`, `C:\dev`, or `~/.minder`). Verify with
-  `pnpm service:status` or `schtasks /query /tn MinderDashboard`.
-- [ ] Know the two related commands and their limits
-  `pnpm service:uninstall` removes the registration only — it does **not** stop an already-running
-  server. If one is running and you want it stopped too, run `pnpm service:stop` yourself first.
-  `pnpm service:stop` on Windows is a hard-stop (kills whatever is listening on port 4100) — Task
-  Scheduler loses track of the process almost immediately after logon, so there is no graceful-signal
-  path yet. Confirm nothing else you care about is bound to port 4100 before running it. A2's boot
-  reconcile + SQLite WAL recovery make an unclean stop safe for Minder's own data.
-- [ ] macOS (`com.minder.dashboard.plist`) and Linux (`minder.service`, systemd `--user`) templates
-  ship in this PR but are reviewed-only — no CI/hands-on verification on those platforms yet.
-- [ ] macOS/Linux only: PATH is captured from the installing shell and frozen into the plist/unit
-  at install time (launchd/systemd `--user` services don't inherit your login shell's PATH, so
-  without this `git`/`gh`/`claude` would silently fail to resolve). If you later install Homebrew,
-  switch your active Node via nvm, or otherwise change PATH, re-run `pnpm service:install` to pick
-  up the new value — the service won't see PATH changes on its own. Not applicable on Windows (the
-  Scheduled Task already tracks the live registry PATH on every run).
-
----
-
 ## 2026-05-09 | wave12.1 | GitHub repo hardening — ruleset + permission changes
 
-- [ ] **Enable "Require signed commits" on the `main` branch ruleset**
-  GitHub → Settings → Branches → `main-protection` → enable "Require signed commits"
-  Prerequisite: at least one signed commit must already exist on the branch.
-  See: https://docs.github.com/en/authentication/managing-commit-signature-verification
-
-- [ ] **Verify release workflow has `contents: write` permission**
+- [x] **Verify release workflow has `contents: write` permission** (v1.13.0 released via the workflow 2026-08-30)
   After pushing a `v*` tag, check the workflow run in Actions → Release.
   If it fails with a 403, go to GitHub → Settings → Actions → General → Workflow permissions
   and ensure "Read and write permissions" is selected.
@@ -137,38 +80,9 @@ the critical path. The updater work (free) can proceed in parallel while you wai
 
 ---
 
-## 2026-05-07 | wave8.1b | Phase 0 — Capture real OTEL data (reinstall required — wizard was broken)
-
-**Context**: The wizard was missing OTEL_METRICS_EXPORTER=otlp and OTEL_LOGS_EXPORTER=otlp.
-Without those the SDK exports nothing. If you already installed via the wizard, click Remove first,
-then Install again to pick up the fix.
-
-- [x] Root cause identified: wizard missing OTEL_METRICS_EXPORTER and OTEL_LOGS_EXPORTER (fixed in code)
-- [ ] With Project Minder running (`npm run dev`):
-  1. Open http://localhost:4100/settings (or Settings → Integrations → OTEL)
-  2. If OTEL shows as **Installed**, click **Remove** first
-  3. Click **Install** — this now writes all 6 required env vars:
-     CLAUDE_CODE_ENABLE_TELEMETRY=1, OTEL_METRICS_EXPORTER=otlp, OTEL_LOGS_EXPORTER=otlp,
-     OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_PROTOCOL=http/json, OTEL_LOG_TOOL_DETAILS=1
-- [ ] Verify ~/.claude/settings.json contains all 6 vars (especially the two new ones):
-  `node -e "const s=require('fs').readFileSync(require('os').homedir()+'/.claude/settings.json','utf8'); console.log(JSON.stringify(JSON.parse(s).env,null,2))"`
-- [ ] **Fully restart Claude Code** — close all windows, reopen from Start menu / taskbar
-- [ ] Confirm Project Minder is running on port 4100 (OTEL needs to reach localhost:4100)
-- [ ] Run a Claude Code session in ANY project that exercises:
-  - At least 5 different tools (Read, Edit, Write, Bash, mcp__*)
-  - At least 3 Edit/Write proposals with mixed accept/reject decisions
-  - Long enough for one full API call cycle (>1 minute total)
-- [ ] Run the Phase 0 probe script:
-  `node scripts/probe-otel.mjs`
-  Confirm the "Request log" section shows ≥1 request (proves endpoint is being hit)
-  Confirm it reports ≥1 row for tool_result, tool_decision, api_request, and ≥1 metric data point
-- [ ] Share the probe output so otelQueries.ts can be written against the verified attribute schema
-
----
-
 ## 2026-05-05 | pr-review-responder | GitHub Action secrets + permissions setup
 
-- [ ] Add `ANTHROPIC_API_KEY` to repository secrets
+- [x] Add `ANTHROPIC_API_KEY` to repository secrets (present per `gh secret list`, 2026-05-06)
   Settings → Secrets and variables → Actions → New repository secret
   Name: `ANTHROPIC_API_KEY`, Value: your Anthropic API key
   See: https://docs.anthropic.com/en/api/getting-started
@@ -178,56 +92,6 @@ then Install again to pick up the fix.
 - [ ] Confirm fork PR protection is acceptable
   The responder posts a comment on fork PRs instead of fixing — it cannot push to fork branches
   with GITHUB_TOKEN. If you need fork support, create a dedicated PAT and add it as a secret.
-
----
-
-## 2026-04-16 | repo-hardening | Enable branch protection + CI for public release
-
-- [ ] Apply `main-protection` ruleset in GitHub UI
-  Settings → Rules → Rulesets → New branch ruleset
-  Target: `refs/heads/main`, Enforcement: Active
-  Bypass list: add `joshuatownsend` with role `bypass` set to `always`
-  Rules: Restrict deletions ON, Block force pushes ON, Require linear history ON,
-         Require PR before merging ON (0 required approvals), Dismiss stale approvals ON,
-         Require conversation resolution ON
-- [ ] Set repo merge settings to squash-only
-  Settings → General → Pull Requests
-  Disable: Allow merge commits, Allow rebase merging
-  Enable: Allow squash merging (default message: "Pull request title and description")
-  Enable: Automatically delete head branches
-  Enable: Always suggest updating pull request branches
-- [ ] Turn on Dependabot alerts + security updates
-  Settings → Code security and analysis → Dependabot
-- [ ] Turn on Secret scanning + Push protection
-  Settings → Code security and analysis → Secret scanning
-- [ ] Enable Private vulnerability reporting
-  Settings → Code security and analysis → Private vulnerability reporting
-- [ ] Commit `.github/workflows/ci.yml` on a PR, confirm first CI run passes
-  The job is named `verify` — confirm it appears in the Checks tab
-- [ ] After first successful CI run, re-open the `main-protection` ruleset and add required status check
-  Require status checks to pass: ON
-  Require branches to be up to date: ON
-  Required check: `verify`
-- [ ] Run verification: try `git push --force-with-lease origin main` — should be rejected
-- [ ] Run verification: try pushing directly to main — should be rejected (PR required)
-- [ ] Run verification: open a PR that breaks a test, confirm CI blocks merge
-
----
-
-## 2026-04-27 | skill-provenance | GITHUB_TOKEN for update-check rate limits
-
-- [ ] Set `GITHUB_TOKEN` environment variable on this machine for GitHub API rate-limit headroom
-  The update-check cache in `/api/catalog-updates` calls the GitHub API to compare lockfile skill
-  hashes against upstream tree SHAs. Unauthenticated requests are capped at 60/hour per IP.
-  With a 24-hour cache TTL this is sufficient for most cases, but adding a token raises the
-  limit to 5,000/hour and avoids any risk of rate-limit errors.
-  Steps:
-  1. Create a GitHub personal access token (classic) at https://github.com/settings/tokens
-     with no scopes — only public repo access is needed.
-  2. Set in your shell profile:
-     `$env:GITHUB_TOKEN = "ghp_xxxxxxxxxxxx"` (PowerShell profile)
-     or `export GITHUB_TOKEN=ghp_xxxxxxxxxxxx` (bash/zsh .profile)
-  3. Restart the Project Minder dev server so the server process inherits the env var.
 
 ---
 
