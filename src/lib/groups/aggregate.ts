@@ -448,7 +448,14 @@ function skippedRootKey(value: string): string {
   // UNC prefix (`\\` or `//`) into a single `/`, so testing afterwards would
   // never see it and WSL roots would silently skip case folding.
   const windowsShaped = /^([a-z]:|[\\/]{2})/i.test(value);
-  const n = value.replace(/[\\/]+/g, "/").replace(/\/+$/, "");
+  // `\\wsl$\X` and `\\wsl.localhost\X` are one distro tree; the scanner keys
+  // roots on the canonical host (`src/lib/platform.ts`), so a member cached
+  // under one spelling must still match a skipped root given in the other.
+  let n = value.replace(/[\\/]+/g, "/").replace(/\/+$/, "");
+  // The collapse above reduces a UNC prefix to one slash; restore the second
+  // so the key reads `//host/...` and the host rewrite below can see it.
+  if (/^[\\/]{2}/.test(value)) n = "/" + n;
+  n = n.replace(/^\/\/wsl\$(?=\/)/i, "//wsl.localhost");
   return windowsShaped ? n.toLowerCase() : n;
 }
 

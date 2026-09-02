@@ -558,6 +558,10 @@ describe("aggregateGroup — locations", () => {
     // the separator collapse must not hide the UNC prefix from the shape test.
     const unc = member({ slug: "u", path: "\\\\wsl.localhost\\Ubuntu-26.04\\home\\Josh\\dev\\foo" });
     expect(aggregateGroup([unc], { skippedRootPaths: ["//wsl.localhost/ubuntu-26.04/home/josh/dev"] }).locations[0].stale).toBe(true);
+    // The legacy `\\wsl$` host is the same tree as `\\wsl.localhost`, in either direction.
+    const legacy = member({ slug: "l", path: "\\\\wsl$\\Ubuntu-26.04\\home\\josh\\dev\\foo" });
+    expect(aggregateGroup([legacy], { skippedRootPaths: ["\\\\wsl.localhost\\Ubuntu-26.04\\home\\josh\\dev"] }).locations[0].stale).toBe(true);
+    expect(aggregateGroup([unc], { skippedRootPaths: ["\\\\wsl$\\Ubuntu-26.04\\home\\josh\\dev"] }).locations[0].stale).toBe(true);
     const win = member({ slug: "w", path: "C:\\Dev\\Foo" });
     expect(aggregateGroup([win], { skippedRootPaths: ["c:/dev"] }).locations[0].stale).toBe(true);
   });
