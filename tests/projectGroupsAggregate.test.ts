@@ -554,6 +554,10 @@ describe("aggregateGroup — locations", () => {
     const posix = member({ slug: "p", path: "/home/me/foo" });
     expect(aggregateGroup([posix], { skippedRootPaths: ["/home/me/Foo"] }).locations[0].stale).toBe(false);
     expect(aggregateGroup([posix], { skippedRootPaths: ["/home/me"] }).locations[0].stale).toBe(true);
+    // A UNC (WSL) root differing only in case must still mark the member stale —
+    // the separator collapse must not hide the UNC prefix from the shape test.
+    const unc = member({ slug: "u", path: "\\\\wsl.localhost\\Ubuntu-26.04\\home\\Josh\\dev\\foo" });
+    expect(aggregateGroup([unc], { skippedRootPaths: ["//wsl.localhost/ubuntu-26.04/home/josh/dev"] }).locations[0].stale).toBe(true);
     const win = member({ slug: "w", path: "C:\\Dev\\Foo" });
     expect(aggregateGroup([win], { skippedRootPaths: ["c:/dev"] }).locations[0].stale).toBe(true);
   });

@@ -1,11 +1,6 @@
 import type { ProjectData, ProjectStatus } from "@/lib/types/project";
 import type { SessionStatus } from "@/lib/types/session";
-import type {
-  BoardEpic,
-  BoardIssue,
-  BoardPriority,
-  BoardStatus,
-} from "@/lib/types/board";
+import type { BoardIssue, BoardPriority, BoardStatus } from "@/lib/types/board";
 import type { OpsSectionKey } from "@/lib/types/ops";
 import { compareCodepoint } from "./derive";
 
@@ -34,8 +29,10 @@ import { compareCodepoint } from "./derive";
  * Headline rule for a divergent item: the value shown is the **primary**
  * location's — the member with the most recent `lastActivity`, ties broken by
  * codepoint path order — because that is the checkout most likely to be
- * current. The rule is deterministic in the data, so output is independent of
- * input order.
+ * current. When the primary has no content for that file (or lacks the item),
+ * the headline is the first location in primary-first order that has it.
+ * Doc comments below say "the headline copy" for this rule. It is
+ * deterministic in the data, so output is independent of input order.
  *
  * Usage/cost is not on `ProjectData` either. `usageKeys` is the deduplicated
  * set of `(usageSlug, usageHomeKey)` pairs a caller must fetch to sum a
@@ -147,7 +144,7 @@ export interface GroupActivity {
 
 export interface AggregatedTodoItem {
   text: string;
-  /** Headline value — the primary location's state. */
+  /** Headline state — the headline copy (see module header). */
   completed: boolean;
   presentIn: string[];
   completedIn: string[];
@@ -162,7 +159,7 @@ export interface AggregatedTodos {
 
 export interface AggregatedInsightEntry {
   id: string;
-  /** Headline values — the primary location's copy. */
+  /** Headline values — the headline copy (see module header). */
   content: string;
   sessionId: string;
   date: string;
@@ -180,7 +177,7 @@ export interface AggregatedInsights {
 export interface AggregatedManualStep {
   text: string;
   completed: boolean;
-  /** Headline details — the primary location's. */
+  /** Headline details — the headline copy (see module header). */
   details: string[];
   presentIn: string[];
   completedIn: string[];
@@ -192,7 +189,7 @@ export interface AggregatedManualStepEntry {
   date: string;
   featureSlug: string;
   title: string;
-  /** Headline note — the primary location's. */
+  /** Headline note — the headline copy (see module header). */
   note?: string;
   steps: AggregatedManualStep[];
   presentIn: string[];
@@ -210,7 +207,7 @@ export interface AggregatedManualSteps {
 export interface AggregatedBoardIssue {
   id: string;
   title: string;
-  /** Headline value — the primary location's status. */
+  /** Headline status — the headline copy (see module header). */
   status: BoardStatus;
   priority?: BoardPriority;
   labels: string[];
@@ -255,7 +252,7 @@ export interface AggregatedBoard {
 export interface AggregatedOpsItem {
   text: string;
   done: boolean;
-  /** Headline details — the primary location's. */
+  /** Headline details — the headline copy (see module header). */
   details: string[];
   presentIn: string[];
   doneIn: string[];
@@ -266,7 +263,7 @@ export interface AggregatedOpsItem {
 export interface AggregatedOpsSection {
   key: OpsSectionKey;
   heading: string;
-  /** Headline prose — the primary location's. */
+  /** Headline prose — the headline copy (see module header). */
   body: string;
   items: AggregatedOpsItem[];
   presentIn: string[];
@@ -282,7 +279,7 @@ export interface AggregatedOperations {
 
 /** A scalar repo-borne fact with its per-location values. */
 export interface RepoFact<T> {
-  /** Headline value — the primary location's, or the first defined one. */
+  /** Headline value — the headline copy (see module header): the first defined value in primary-first order. */
   value?: T;
   valueIn: { slug: string; value: T }[];
   diverged: boolean;
@@ -438,8 +435,12 @@ function pickPrimary(byPath: readonly AggregatableProject[]): AggregatableProjec
  * module stays client-safe (mirrors the rule in `src/lib/platform.ts`).
  */
 function skippedRootKey(value: string): string {
+  // Decide the shape on the RAW value: the separator collapse below turns a
+  // UNC prefix (`\\` or `//`) into a single `/`, so testing afterwards would
+  // never see it and WSL roots would silently skip case folding.
+  const windowsShaped = /^([a-z]:|[\\/]{2})/i.test(value);
   const n = value.replace(/[\\/]+/g, "/").replace(/\/+$/, "");
-  return /^([a-z]:|\/\/)/i.test(n) ? n.toLowerCase() : n;
+  return windowsShaped ? n.toLowerCase() : n;
 }
 
 function isUnderSkippedRoot(path: string, skipped: readonly string[]): boolean {
