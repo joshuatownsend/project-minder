@@ -178,9 +178,12 @@ export interface AggregatedManualStepEntry {
   date: string;
   featureSlug: string;
   title: string;
+  /** Headline note — the primary location's. */
   note?: string;
   steps: AggregatedManualStep[];
   presentIn: string[];
+  /** Entry-level note per location that has one (an archive explanation, say). */
+  noteIn: Record<string, string>;
 }
 
 export interface AggregatedManualSteps {
@@ -204,6 +207,10 @@ export interface AggregatedBoardIssue {
   order: number;
   presentIn: string[];
   statusIn: Record<string, BoardStatus>;
+  /** Locations whose copy differs from the headline in a non-status field
+   *  (title, priority, labels, detail, worktree, session) — the edits a
+   *  stable id is designed to survive, and therefore must not hide. */
+  editedIn: string[];
 }
 
 export interface AggregatedBoardEpic {
@@ -217,6 +224,8 @@ export interface AggregatedBoardEpic {
   issues: AggregatedBoardIssue[];
   presentIn: string[];
   statusIn: Record<string, BoardStatus>;
+  /** Locations whose copy differs in title, priority, labels, or description. */
+  editedIn: string[];
 }
 
 export interface AggregatedBoard {
@@ -237,9 +246,12 @@ export interface AggregatedOpsItem {
 export interface AggregatedOpsSection {
   key: OpsSectionKey;
   heading: string;
+  /** Headline prose — the primary location's. */
   body: string;
   items: AggregatedOpsItem[];
   presentIn: string[];
+  /** Section prose per location, so another checkout's instructions are never discarded. */
+  bodyIn: Record<string, string>;
 }
 
 export interface AggregatedOperations {
@@ -611,6 +623,42 @@ function boardKey(item: { id: string; title: string }): string {
   return item.id ? `id:${item.id}` : `t:${normText(item.title)}`;
 }
 
+/**
+ * Everything on an issue that a stable id is meant to carry across edits.
+ * Status is tracked separately (`statusIn`); `line`/`order` are location-bound.
+ */
+function issueFingerprint(i: {
+  title: string;
+  priority?: BoardPriority;
+  labels: string[];
+  detail?: string;
+  worktree?: string;
+  sessionId?: string;
+}): string {
+  return JSON.stringify([
+    normText(i.title),
+    i.priority ?? null,
+    [...i.labels].sort(compare),
+    i.detail === undefined ? null : normText(i.detail),
+    i.worktree ?? null,
+    i.sessionId ?? null,
+  ]);
+}
+
+function epicFingerprint(e: {
+  title: string;
+  priority?: BoardPriority;
+  labels: string[];
+  description?: string;
+}): string {
+  return JSON.stringify([
+    normText(e.title),
+    e.priority ?? null,
+    [...e.labels].sort(compare),
+    e.description === undefined ? null : normText(e.description),
+  ]);
+}
+
 function buildIssue(i: BoardIssue, slug: string): AggregatedBoardIssue {
   return {
     id: i.id,
@@ -624,12 +672,14 @@ function buildIssue(i: BoardIssue, slug: string): AggregatedBoardIssue {
     order: 0,
     presentIn: [slug],
     statusIn: { [slug]: i.status },
+    editedIn: [],
   };
 }
 
 function foldIssue(acc: AggregatedBoardIssue, i: BoardIssue, slug: string): void {
   acc.presentIn.push(slug);
   acc.statusIn[slug] = i.status;
+  if (issueFingerprint(i) !== issueFingerprint(acc)) acc.editedIn.push(slug);
 }
 
 function renumber<T extends { order: number }>(items: T[]): T[] {
@@ -664,11 +714,13 @@ function aggregateBoard(
       issues: [],
       presentIn: [slug],
       statusIn: { [slug]: e.status },
+      editedIn: [],
       sources: [{ slug, epic: e }],
     }),
     (acc, e, slug) => {
       acc.presentIn.push(slug);
       acc.statusIn[slug] = e.status;
+      if (epicFingerprint(e) !== epicFingerprint(acc)) acc.editedIn.push(slug);
       acc.sources.push({ slug, epic: e });
     }
   );
@@ -693,9 +745,11 @@ function aggregateBoard(
   // Divergence: presence gaps, and status disagreements.
   const partial = new Set<string>();
   const statusDiff = new Set<string>();
+  const editDiff = new Set<string>();
   let partialCount = 0;
   let statusCount = 0;
-  const check = (it: { presentIn: string[]; statusIn: Record<string, BoardStatus> }) => {
+  let editCount = 0;
+  const check = (it: { presentIn: string[]; statusIn: Record<string, BoardStatus>; editedIn: string[] }) => {
     if (it.presentIn.length < have.length) {
       partialCount++;
       for (const m of have) if (!it.presentIn.includes(m.slug)) partial.add(m.slug);
@@ -705,6 +759,10 @@ function aggregateBoard(
       statusCount++;
       for (const s of it.presentIn) statusDiff.add(s);
     }
+    if (it.editedIn.length > 0) {
+      editCount++;
+      for (const s of it.presentIn) editDiff.add(s);
+    }
   };
   finalEpics.forEach(check);
   allIssues.forEach(check);
@@ -713,6 +771,9 @@ function aggregateBoard(
   }
   if (statusCount > 0) {
     pushDiffers(divergences, "BOARD.md", statusDiff, `${statusCount} board item${statusCount === 1 ? "" : "s"} with a different status between locations`);
+  }
+  if (editCount > 0) {
+    pushDiffers(divergences, "BOARD.md", editDiff, `${editCount} board item${editCount === 1 ? "" : "s"} edited differently between locations (title, priority, labels, or detail)`);
   }
 
   return {
@@ -743,10 +804,12 @@ function aggregateManualSteps(
       note: e.note,
       steps: [],
       presentIn: [slug],
+      noteIn: e.note === undefined ? {} : { [slug]: e.note },
       sources: [{ slug, steps: e.steps.map((s) => toStep(s, slug)) }],
     }),
     (acc, e, slug) => {
       acc.presentIn.push(slug);
+      if (e.note !== undefined) acc.noteIn[slug] = e.note;
       acc.sources.push({ slug, steps: e.steps.map((s) => toStep(s, slug)) });
     }
   );
@@ -789,10 +852,25 @@ function aggregateManualSteps(
   if (entryCount > 0) {
     pushDiffers(divergences, "MANUAL_STEPS.md", entryPartial, `${entryCount} entr${entryCount === 1 ? "y" : "ies"} not present in every location`);
   }
-  // Step-level ticks are compared only within entries every location has;
-  // otherwise a step's absence is already reported as the entry's.
-  const shared = finalEntries.filter((e) => e.presentIn.length === have.length).flatMap((e) => e.steps);
-  tickDivergence(shared, have, "MANUAL_STEPS.md", "step", divergences);
+  // Step-level ticks and entry notes are compared only within entries every
+  // location has; otherwise the absence is already reported as the entry's.
+  const sharedEntries = finalEntries.filter((e) => e.presentIn.length === have.length);
+  tickDivergence(sharedEntries.flatMap((e) => e.steps), have, "MANUAL_STEPS.md", "step", divergences);
+  // A note present in one checkout and absent in another (an archive
+  // explanation, say) is exactly the difference worth seeing, so absence
+  // counts as a distinct value.
+  const noteDiff = new Set<string>();
+  let noteCount = 0;
+  for (const e of sharedEntries) {
+    const distinct = new Set(e.presentIn.map((slug) => normText(e.noteIn[slug] ?? "")));
+    if (distinct.size > 1) {
+      noteCount++;
+      for (const slug of e.presentIn) noteDiff.add(slug);
+    }
+  }
+  if (noteCount > 0) {
+    pushDiffers(divergences, "MANUAL_STEPS.md", noteDiff, `${noteCount} entr${noteCount === 1 ? "y" : "ies"} with a different note between locations`);
+  }
 
   const completedSteps = allSteps.filter((s) => s.completed).length;
   return {
@@ -833,10 +911,12 @@ function aggregateOperations(
       body: s.body,
       items: [],
       presentIn: [slug],
+      bodyIn: { [slug]: s.body },
       sources: [{ slug, items: s.items.map((i) => toOpsItem(i, slug)) }],
     }),
     (acc, s, slug) => {
       acc.presentIn.push(slug);
+      acc.bodyIn[slug] = s.body;
       acc.sources.push({ slug, items: s.items.map((i) => toOpsItem(i, slug)) });
     }
   );
@@ -866,14 +946,28 @@ function aggregateOperations(
     return section;
   });
 
-  const shared = finalSections.filter((s) => s.presentIn.length === have.length).flatMap((s) => s.items);
+  const sharedSections = finalSections.filter((s) => s.presentIn.length === have.length);
   tickDivergence(
-    shared.map((i) => ({ presentIn: i.presentIn, completedIn: i.doneIn })),
+    sharedSections.flatMap((s) => s.items).map((i) => ({ presentIn: i.presentIn, completedIn: i.doneIn })),
     have,
     "OPERATIONS.md",
     "runbook item",
     divergences
   );
+  // Section prose is operational instruction; a checkout whose wording
+  // differs must not be silently dropped behind the primary's copy.
+  const bodyDiff = new Set<string>();
+  let bodyCount = 0;
+  for (const sec of sharedSections) {
+    const distinct = new Set(sec.presentIn.map((slug) => normText(sec.bodyIn[slug] ?? "")));
+    if (distinct.size > 1) {
+      bodyCount++;
+      for (const slug of sec.presentIn) bodyDiff.add(slug);
+    }
+  }
+  if (bodyCount > 0) {
+    pushDiffers(divergences, "OPERATIONS.md", bodyDiff, `${bodyCount} section${bodyCount === 1 ? "" : "s"} with different prose between locations`);
+  }
   const sectionPartial = new Set<string>();
   let sectionCount = 0;
   for (const s of finalSections) {
@@ -915,8 +1009,8 @@ function fact<T extends string | number>(
     if (v !== undefined) valueIn.push({ slug: m.slug, value: v });
   }
   const distinct = new Set(valueIn.map((v) => v.value));
-  const diverged = distinct.size > 1;
-  if (diverged) {
+  const differs = distinct.size > 1;
+  if (differs) {
     pushDiffers(
       divergences,
       file,
@@ -924,6 +1018,18 @@ function fact<T extends string | number>(
       `${label} differs between locations: ${[...distinct].map(String).sort(compare).join(" vs ")}`
     );
   }
+  // A fact defined in some locations and absent in others is a difference
+  // too — "surface every difference" — and must not read as agreement.
+  const lacking = ordered.filter((m) => pick(m) === undefined).map((m) => m.slug);
+  const missing = valueIn.length > 0 && lacking.length > 0;
+  if (missing) {
+    divergences.push({
+      file,
+      kind: "missing",
+      locations: [...lacking].sort(compare),
+      detail: `${label} is missing in ${lacking.length} of ${ordered.length} locations`,
+    });
+  }
   // valueIn is in primary-first order, so [0] is the headline.
-  return { value: valueIn[0]?.value, valueIn, diverged };
+  return { value: valueIn[0]?.value, valueIn, diverged: differs || missing };
 }

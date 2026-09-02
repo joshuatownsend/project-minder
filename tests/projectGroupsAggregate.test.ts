@@ -228,6 +228,17 @@ describe("aggregateGroup — divergence", () => {
     ]);
   });
 
+  it("MANUAL_STEPS.md: an archive note present in one checkout only", () => {
+    const steps = [step("gen key", true)];
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", manualSteps: manualSteps([entry({ title: "Keys", steps })]) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", manualSteps: manualSteps([entry({ title: "Keys", note: "archived 2026-09-01 — done", steps })]) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.manualSteps?.entries[0]).toMatchObject({ note: undefined, noteIn: { b: "archived 2026-09-01 — done" } });
+    expect(agg.divergences).toEqual([
+      { file: "MANUAL_STEPS.md", kind: "differs", locations: ["a", "b"], detail: "1 entry with a different note between locations" },
+    ]);
+  });
+
   it("reports scalar facts that differ, with the primary's value as headline", () => {
     const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", framework: "Next.js", frameworkVersion: "16.3.1" });
     const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", framework: "Next.js", frameworkVersion: "16.2.12" });
@@ -238,6 +249,23 @@ describe("aggregateGroup — divergence", () => {
     expect(agg.divergences).toEqual([
       { file: "package.json", kind: "differs", locations: ["a", "b"], detail: "frameworkVersion differs between locations: 16.2.12 vs 16.3.1" },
     ]);
+  });
+
+  it("a fact defined in one location and absent in another is a divergence, not agreement", () => {
+    const a = member({ slug: "a", path: WIN, framework: "Next.js", frameworkVersion: "16.3.1" });
+    const b = member({ slug: "b", path: OTHER, framework: "Next.js" });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.facts.framework.diverged).toBe(false);
+    expect(agg.facts.frameworkVersion).toEqual({ value: "16.3.1", valueIn: [{ slug: "a", value: "16.3.1" }], diverged: true });
+    expect(agg.divergences).toEqual([
+      { file: "package.json", kind: "missing", locations: ["b"], detail: "frameworkVersion is missing in 1 of 2 locations" },
+    ]);
+  });
+
+  it("a fact absent everywhere is not a divergence", () => {
+    const agg = aggregateGroup([member({ slug: "a", path: WIN }), member({ slug: "b", path: OTHER })]);
+    expect(agg.facts.claudeMdSummary).toEqual({ value: undefined, valueIn: [], diverged: false });
+    expect(agg.divergences).toEqual([]);
   });
 });
 
@@ -287,6 +315,36 @@ describe("aggregateGroup — BOARD.md", () => {
     expect(agg.divergences).toEqual([]);
   });
 
+  it("flags a stable-id item whose non-status fields were edited in one checkout", () => {
+    const a = member({
+      slug: "a",
+      path: WIN,
+      lastActivity: "2026-08-20T00:00:00Z",
+      board: board([epic({ id: "e-1", title: "Epic", description: "v1", issues: [] })], [issue({ id: "i-1", title: "Old title", priority: "low", labels: ["x"] })]),
+    });
+    const b = member({
+      slug: "b",
+      path: OTHER,
+      lastActivity: "2026-08-01T00:00:00Z",
+      board: board([epic({ id: "e-1", title: "Epic", description: "v2", issues: [] })], [issue({ id: "i-1", title: "New title", priority: "high", labels: ["x"] })]),
+    });
+    const agg = aggregateGroup([a, b]);
+    // Headline is the primary's copy; the other location is recorded as edited.
+    expect(agg.board?.inbox[0]).toMatchObject({ title: "Old title", priority: "low", presentIn: ["a", "b"], editedIn: ["b"] });
+    expect(agg.board?.epics[0]).toMatchObject({ description: "v1", editedIn: ["b"] });
+    expect(agg.divergences).toEqual([
+      { file: "BOARD.md", kind: "differs", locations: ["a", "b"], detail: "2 board items edited differently between locations (title, priority, labels, or detail)" },
+    ]);
+  });
+
+  it("label order and whitespace are not edits", () => {
+    const a = member({ slug: "a", path: WIN, board: board([], [issue({ id: "i-1", title: "Same  title", labels: ["x", "y"] })]) });
+    const b = member({ slug: "b", path: OTHER, board: board([], [issue({ id: "i-1", title: "Same title", labels: ["y", "x"] })]) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.board?.inbox[0].editedIn).toEqual([]);
+    expect(agg.divergences).toEqual([]);
+  });
+
   it("renumbers order after dedupe", () => {
     const a = member({ slug: "a", path: WIN, board: board([], [issue({ id: "i-1", title: "x", order: 7 }), issue({ id: "i-2", title: "y", order: 9 })]) });
     const b = member({ slug: "b", path: OTHER, board: board([], [issue({ id: "i-2", title: "y", order: 0 }), issue({ id: "i-3", title: "z", order: 1 })]) });
@@ -298,6 +356,16 @@ describe("aggregateGroup — BOARD.md", () => {
 // ── OPERATIONS.md ────────────────────────────────────────────────────────────
 
 describe("aggregateGroup — OPERATIONS.md", () => {
+  it("keeps every checkout's section prose and flags when it differs", () => {
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", operations: operations([section({ heading: "Restore", body: "run restore.sh", items: [] })]) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", operations: operations([section({ heading: "Restore", body: "run restore.sh --from s3", items: [] })]) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.operations?.sections[0]).toMatchObject({ body: "run restore.sh", bodyIn: { a: "run restore.sh", b: "run restore.sh --from s3" } });
+    expect(agg.divergences).toEqual([
+      { file: "OPERATIONS.md", kind: "differs", locations: ["a", "b"], detail: "1 section with different prose between locations" },
+    ]);
+  });
+
   it("merges sections by key+heading and recomputes pending items", () => {
     const a = member({ slug: "a", path: WIN, operations: operations([section({ heading: "Backups", items: [opsItem("nightly", true), opsItem("offsite")] })]) });
     const b = member({ slug: "b", path: OTHER, operations: operations([section({ heading: "Backups", items: [opsItem("nightly", true), opsItem("offsite")] }), section({ key: "oncall", heading: "On-call", items: [opsItem("rota")] })]) });
