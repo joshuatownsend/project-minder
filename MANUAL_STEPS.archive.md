@@ -253,3 +253,55 @@ the critical path. The updater work (free) can proceed in parallel while you wai
   Append an entry to any project's `MANUAL_STEPS.md` → expect an OS toast within ~90s (watcher ≤60s + tray poll ≤30s).
 
 ---
+
+## 2026-05-05 | pr-review-responder | GitHub Action secrets + permissions setup
+
+> archived 2026-09-02 — done 2026-09-02 — ANTHROPIC_API_KEY secret present; repo default workflow permission verified as write via the API; decision: comment-only on fork PRs is acceptable, no PAT (no fork PRs exist and a PAT would add a standing credential).
+
+- [x] Add `ANTHROPIC_API_KEY` to repository secrets (present per `gh secret list`, 2026-05-06)
+  Settings → Secrets and variables → Actions → New repository secret
+  Name: `ANTHROPIC_API_KEY`, Value: your Anthropic API key
+  See: https://docs.anthropic.com/en/api/getting-started
+- [x] Verify `GITHUB_TOKEN` has write permissions for `contents` and `pull-requests`
+  Settings → Actions → General → Workflow permissions → Read and write permissions
+  (Required for the bot to push commits and post PR comments)
+- [x] Confirm fork PR protection is acceptable
+  The responder posts a comment on fork PRs instead of fixing — it cannot push to fork branches
+  with GITHUB_TOKEN. If you need fork support, create a dedicated PAT and add it as a secret.
+
+---
+
+## 2026-05-10 14:00 | screenshot-to-code | Phase 6: build, key, register MCP server
+
+> archived 2026-09-02 — done 2026-09-02 — decision: registered with the OpenAI provider (`claude mcp add screenshot-to-code -s user --env SCREENSHOT_PROVIDER=openai -- node C:\dev\project-minder\dist\mcp\screenshot-to-code\index.mjs`), using the OPENAI_API_KEY already on the machine; `claude mcp list` shows it Connected and an end-to-end stdio `tools/call` of `convert_screenshot_to_react` against the live OpenAI endpoint with `screenshots/01-config-initial.png` (68 KB) returned 4,239 chars of TSX, no markdown fences, in 36 s. The dashboard Playground reads the same env var, so a tray restart is needed only if OPENAI_API_KEY was set after the tray last started.
+
+- [x] Build the bundled MCP server
+  `npm run build:mcp-screenshot`
+  Produces `dist/mcp/screenshot-to-code/index.mjs` (~9 KB ESM, shebang-prefixed). The build
+  is `packages: "external"`, so Node resolves `@modelcontextprotocol/sdk`, `zod`, and
+  every other dep from the project's `node_modules/` at spawn time — keep that tree intact.
+- [x] Export an API key for the provider you want to use
+  Default provider is **Gemini** (cheapest vision-capable model).
+  PowerShell:
+  `$env:GOOGLE_API_KEY = "AIza…"`     (or `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`)
+  bash/zsh:
+  `export GOOGLE_API_KEY=AIza…`
+  Set this in your shell profile if you want it across new terminals.
+  - Gemini keys: https://aistudio.google.com/app/apikey
+  - OpenAI keys: https://platform.openai.com/api-keys
+  - Anthropic keys: https://console.anthropic.com/settings/keys
+- [x] Register the MCP server with Claude Code (so the `convert_screenshot_to_react` tool is callable)
+  `claude mcp add screenshot-to-code -- node C:\dev\project-minder\dist\mcp\screenshot-to-code\index.mjs`
+  To pin a non-default provider/model at spawn time:
+  `claude mcp add screenshot-to-code --env SCREENSHOT_PROVIDER=anthropic --env SCREENSHOT_MODEL=claude-sonnet-4-5 -- node C:\dev\project-minder\dist\mcp\screenshot-to-code\index.mjs`
+  Verify:
+  `claude mcp list`     should show `screenshot-to-code` as `connected`
+- [x] Restart the Project Minder dev server so the Next.js process inherits the new env var
+  The `/config` → Playground tab uses the same env var the MCP server does. If the dashboard
+  shows `412 API_KEY_MISSING`, the dev server was started before the env var was exported —
+  stop it and re-run `npm run dev`.
+- [x] Smoke-test the tool from Claude Code
+  In Claude Code: ask "Use the screenshot-to-code MCP tool on this image:" and attach a UI
+  screenshot. The tool should return TSX with no markdown fences.
+
+---
