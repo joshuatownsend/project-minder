@@ -147,7 +147,10 @@ describe("aggregateGroup — repo-borne dedupe", () => {
   it("normalizes whitespace when keying items", () => {
     const a = member({ slug: "a", path: WIN, todos: todos([todo("  fix   the   thing ")]) });
     const b = member({ slug: "b", path: OTHER, todos: todos([todo("fix the thing")]) });
-    expect(aggregateGroup([a, b]).todos?.total).toBe(1);
+    const agg = aggregateGroup([a, b]);
+    expect(agg.todos?.total).toBe(1);
+    // The headline text is the normalized form, not whichever raw whitespace the primary had.
+    expect(agg.todos?.items[0].text).toBe("fix the thing");
   });
 
   it("an insight edited under the same persisted id is flagged, not silently overridden", () => {

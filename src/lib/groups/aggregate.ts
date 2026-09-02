@@ -646,7 +646,7 @@ function aggregateTodos(
     (m) => m.todos?.items,
     (t) => normText(t.text),
     (t, slug): AggregatedTodoItem => ({
-      text: t.text,
+      text: normText(t.text),
       completed: t.completed,
       presentIn: [slug],
       completedIn: t.completed ? [slug] : [],
@@ -1006,7 +1006,7 @@ function aggregateManualSteps(
 
 function toStep(s: { text: string; completed: boolean; details: string[] }, slug: string): AggregatedManualStep {
   return {
-    text: s.text,
+    text: normText(s.text),
     completed: s.completed,
     details: [...s.details],
     presentIn: [slug],
@@ -1112,7 +1112,7 @@ function aggregateOperations(
 
 function toOpsItem(i: { text: string; done: boolean; details: string[] }, slug: string): AggregatedOpsItem {
   return {
-    text: i.text,
+    text: normText(i.text),
     done: i.done,
     details: [...i.details],
     presentIn: [slug],
