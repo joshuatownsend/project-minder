@@ -228,6 +228,19 @@ describe("aggregateGroup — divergence", () => {
     ]);
   });
 
+  it("MANUAL_STEPS.md: same step text, different detail lines", () => {
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", manualSteps: manualSteps([entry({ title: "Keys", steps: [{ ...step("gen key"), details: ["tauri signer generate"] }] })]) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", manualSteps: manualSteps([entry({ title: "Keys", steps: [{ ...step("gen key"), details: ["tauri signer generate -w ~/.tauri/minder.key"] }] })]) });
+    const agg = aggregateGroup([a, b]);
+    const merged = agg.manualSteps!.entries[0].steps[0];
+    expect(merged.details).toEqual(["tauri signer generate"]);
+    expect(merged.detailsIn).toEqual({ a: ["tauri signer generate"], b: ["tauri signer generate -w ~/.tauri/minder.key"] });
+    expect(agg.manualSteps?.totalSteps).toBe(1);
+    expect(agg.divergences).toEqual([
+      { file: "MANUAL_STEPS.md", kind: "differs", locations: ["a", "b"], detail: "1 step with different details between locations" },
+    ]);
+  });
+
   it("MANUAL_STEPS.md: an archive note present in one checkout only", () => {
     const steps = [step("gen key", true)];
     const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", manualSteps: manualSteps([entry({ title: "Keys", steps })]) });
@@ -356,6 +369,23 @@ describe("aggregateGroup — BOARD.md", () => {
 // ── OPERATIONS.md ────────────────────────────────────────────────────────────
 
 describe("aggregateGroup — OPERATIONS.md", () => {
+  it("keeps every checkout's runbook item details and flags when they differ", () => {
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", operations: operations([section({ heading: "Restore", items: [{ ...opsItem("restore db"), details: ["pg_restore -d app dump.sql"] }] })]) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", operations: operations([section({ heading: "Restore", items: [{ ...opsItem("restore db"), details: ["pg_restore -d app -j 4 dump.sql"] }] })]) });
+    const agg = aggregateGroup([a, b]);
+    const merged = agg.operations!.sections[0].items[0];
+    expect(merged.detailsIn).toEqual({ a: ["pg_restore -d app dump.sql"], b: ["pg_restore -d app -j 4 dump.sql"] });
+    expect(agg.divergences).toEqual([
+      { file: "OPERATIONS.md", kind: "differs", locations: ["a", "b"], detail: "1 runbook item with different details between locations" },
+    ]);
+  });
+
+  it("identical details are not a divergence", () => {
+    const a = member({ slug: "a", path: WIN, operations: operations([section({ heading: "Restore", items: [{ ...opsItem("restore db"), details: ["  pg_restore  x "] }] })]) });
+    const b = member({ slug: "b", path: OTHER, operations: operations([section({ heading: "Restore", items: [{ ...opsItem("restore db"), details: ["pg_restore x"] }] })]) });
+    expect(aggregateGroup([a, b]).divergences).toEqual([]);
+  });
+
   it("keeps every checkout's section prose and flags when it differs", () => {
     const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", operations: operations([section({ heading: "Restore", body: "run restore.sh", items: [] })]) });
     const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", operations: operations([section({ heading: "Restore", body: "run restore.sh --from s3", items: [] })]) });

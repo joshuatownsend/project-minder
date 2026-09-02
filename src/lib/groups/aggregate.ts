@@ -169,9 +169,12 @@ export interface AggregatedInsights {
 export interface AggregatedManualStep {
   text: string;
   completed: boolean;
+  /** Headline details — the primary location's. */
   details: string[];
   presentIn: string[];
   completedIn: string[];
+  /** Indented detail lines per location (commands, URLs) — never dropped. */
+  detailsIn: Record<string, string[]>;
 }
 
 export interface AggregatedManualStepEntry {
@@ -238,9 +241,12 @@ export interface AggregatedBoard {
 export interface AggregatedOpsItem {
   text: string;
   done: boolean;
+  /** Headline details — the primary location's. */
   details: string[];
   presentIn: string[];
   doneIn: string[];
+  /** Indented detail lines per location (operational instructions) — never dropped. */
+  detailsIn: Record<string, string[]>;
 }
 
 export interface AggregatedOpsSection {
@@ -551,6 +557,31 @@ function tickDivergence(
   }
 }
 
+/**
+ * Items whose indented detail lines differ between the locations that have
+ * them — a changed command or URL under an otherwise identical checkbox is
+ * exactly the kind of edit that must not vanish behind the primary's copy.
+ */
+function detailsDivergence(
+  items: readonly { presentIn: string[]; detailsIn: Record<string, string[]> }[],
+  file: RepoFile,
+  noun: string,
+  divergences: Divergence[]
+): void {
+  const where = new Set<string>();
+  let count = 0;
+  for (const it of items) {
+    const distinct = new Set(it.presentIn.map((slug) => (it.detailsIn[slug] ?? []).map(normText).join("\n")));
+    if (distinct.size > 1) {
+      count++;
+      for (const slug of it.presentIn) where.add(slug);
+    }
+  }
+  if (count > 0) {
+    pushDiffers(divergences, file, where, `${count} ${noun}${count === 1 ? "" : "s"} with different details between locations`);
+  }
+}
+
 // ── TODO.md ──────────────────────────────────────────────────────────────────
 
 function aggregateTodos(
@@ -829,6 +860,7 @@ function aggregateManualSteps(
         if (existing) {
           existing.presentIn.push(slug);
           if (s.completed) existing.completedIn.push(slug);
+          existing.detailsIn[slug] = s.details;
         } else {
           merged.set(key, s);
         }
@@ -855,7 +887,9 @@ function aggregateManualSteps(
   // Step-level ticks and entry notes are compared only within entries every
   // location has; otherwise the absence is already reported as the entry's.
   const sharedEntries = finalEntries.filter((e) => e.presentIn.length === have.length);
-  tickDivergence(sharedEntries.flatMap((e) => e.steps), have, "MANUAL_STEPS.md", "step", divergences);
+  const sharedSteps = sharedEntries.flatMap((e) => e.steps);
+  tickDivergence(sharedSteps, have, "MANUAL_STEPS.md", "step", divergences);
+  detailsDivergence(sharedSteps, "MANUAL_STEPS.md", "step", divergences);
   // A note present in one checkout and absent in another (an archive
   // explanation, say) is exactly the difference worth seeing, so absence
   // counts as a distinct value.
@@ -888,6 +922,7 @@ function toStep(s: { text: string; completed: boolean; details: string[] }, slug
     details: [...s.details],
     presentIn: [slug],
     completedIn: s.completed ? [slug] : [],
+    detailsIn: { [slug]: [...s.details] },
   };
 }
 
@@ -936,6 +971,7 @@ function aggregateOperations(
         if (existing) {
           existing.presentIn.push(slug);
           if (it.done) existing.doneIn.push(slug);
+          existing.detailsIn[slug] = it.details;
         } else {
           merged.set(key, it);
         }
@@ -954,6 +990,7 @@ function aggregateOperations(
     "runbook item",
     divergences
   );
+  detailsDivergence(sharedSections.flatMap((s) => s.items), "OPERATIONS.md", "runbook item", divergences);
   // Section prose is operational instruction; a checkout whose wording
   // differs must not be silently dropped behind the primary's copy.
   const bodyDiff = new Set<string>();
@@ -991,6 +1028,7 @@ function toOpsItem(i: { text: string; done: boolean; details: string[] }, slug: 
     details: [...i.details],
     presentIn: [slug],
     doneIn: i.done ? [slug] : [],
+    detailsIn: { [slug]: [...i.details] },
   };
 }
 
