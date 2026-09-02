@@ -7,7 +7,7 @@ import type {
   BoardStatus,
 } from "@/lib/types/board";
 import type { OpsSectionKey } from "@/lib/types/ops";
-import { compareCodepoint, normalizePathKey } from "./derive";
+import { compareCodepoint } from "./derive";
 
 /**
  * P2 — the aggregation layer for Project Groups.
@@ -155,10 +155,14 @@ export interface AggregatedTodos {
 
 export interface AggregatedInsightEntry {
   id: string;
+  /** Headline values — the primary location's copy. */
   content: string;
   sessionId: string;
   date: string;
   presentIn: string[];
+  /** Locations whose copy under this id differs in content, session, or date
+   *  (the parser trusts a persisted marker id rather than recomputing it). */
+  editedIn: string[];
 }
 
 export interface AggregatedInsights {
@@ -211,9 +215,11 @@ export interface AggregatedBoardIssue {
   presentIn: string[];
   statusIn: Record<string, BoardStatus>;
   /** Locations whose copy differs from the headline in a non-status field
-   *  (title, priority, labels, detail, worktree, session) — the edits a
-   *  stable id is designed to survive, and therefore must not hide. */
+   *  (title, priority, labels, detail, worktree, session, or container) —
+   *  the edits a stable id is designed to survive, and therefore must not hide. */
   editedIn: string[];
+  /** Where each location keeps this issue: `"inbox"`, or its epic's merge key. */
+  containerIn: Record<string, string>;
 }
 
 export interface AggregatedBoardEpic {
@@ -346,7 +352,7 @@ export function aggregateGroup(
   // any repo-borne item is the primary's copy and headline values fall out of
   // iteration order without special-casing.
   const ordered = [primary, ...byPath.filter((m) => m !== primary)];
-  const skipped = (options.skippedRootPaths ?? []).map(normalizePathKey);
+  const skipped = (options.skippedRootPaths ?? []).map(skippedRootKey);
   const divergences: Divergence[] = [];
 
   const locations = byPath.map((m) => toLocation(m, skipped));
@@ -381,17 +387,52 @@ function sortMembers(members: readonly AggregatableProject[]): AggregatableProje
   return [...members].sort((a, b) => compareCodepoint(a.path, b.path));
 }
 
+function instant(iso: string): number | undefined {
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? undefined : t;
+}
+
+/**
+ * True when `a` is strictly newer than `b`. Timestamps are compared as
+ * parsed instants — `lastActivity` can come from git's offset-bearing commit
+ * date, and `2026-09-02T10:00:00-07:00` is later than `2026-09-02T16:30:00Z`
+ * though it sorts lexically smaller. Undefined never wins; an unparsable
+ * value falls back to lexical order so nothing is silently dropped.
+ */
+function isNewer(a: string | undefined, b: string | undefined): boolean {
+  if (!a) return false;
+  if (!b) return true;
+  const ta = instant(a);
+  const tb = instant(b);
+  if (ta !== undefined && tb !== undefined) return ta > tb;
+  return a > b;
+}
+
 /** Most recent `lastActivity` wins; ties (including all-undefined) go to path order. */
 function pickPrimary(byPath: readonly AggregatableProject[]): AggregatableProject {
   let best = byPath[0];
   for (const m of byPath.slice(1)) {
-    if ((m.lastActivity ?? "") > (best.lastActivity ?? "")) best = m;
+    if (isNewer(m.lastActivity, best.lastActivity)) best = m;
   }
   return best;
 }
 
+/**
+ * Comparison key for the skipped-root containment test. Separators fold and a
+ * trailing separator drops, as in `normalizePathKey`, but case folds only for
+ * Windows-shaped paths (drive letter or UNC, which includes every
+ * `\\\\wsl.localhost` root): on POSIX, `/home/me/Foo` and `/home/me/foo` are
+ * different directories, and folding would mark the wrong project stale.
+ * Decided from the path's own shape rather than `process.platform` so the
+ * module stays client-safe (mirrors the rule in `src/lib/platform.ts`).
+ */
+function skippedRootKey(value: string): string {
+  const n = value.replace(/[\\/]+/g, "/").replace(/\/+$/, "");
+  return /^([a-z]:|\/\/)/i.test(n) ? n.toLowerCase() : n;
+}
+
 function isUnderSkippedRoot(path: string, skipped: readonly string[]): boolean {
-  const p = normalizePathKey(path);
+  const p = skippedRootKey(path);
   return skipped.some((root) => p === root || p.startsWith(root + "/"));
 }
 
@@ -426,11 +467,11 @@ function aggregateActivity(byPath: readonly AggregatableProject[]): GroupActivit
   for (const m of byPath) {
     sessionCount += m.claude?.sessionCount ?? 0;
     const lsd = m.claude?.lastSessionDate;
-    if (lsd && (!lastSessionDate || lsd > lastSessionDate)) {
+    if (isNewer(lsd, lastSessionDate)) {
       lastSessionDate = lsd;
       winner = m;
     }
-    if (m.lastActivity && (!lastActivity || m.lastActivity > lastActivity)) {
+    if (isNewer(m.lastActivity, lastActivity)) {
       lastActivity = m.lastActivity;
     }
   }
@@ -628,23 +669,38 @@ function aggregateInsights(
       sessionId: e.sessionId,
       date: e.date,
       presentIn: [slug],
+      editedIn: [],
     }),
-    (acc, _e, slug) => {
+    (acc, e, slug) => {
       acc.presentIn.push(slug);
+      if (insightFingerprint(e) !== insightFingerprint(acc)) acc.editedIn.push(slug);
     }
   );
   const partial = new Set<string>();
+  const edited = new Set<string>();
   let count = 0;
+  let editCount = 0;
   for (const e of entries) {
     if (e.presentIn.length < have.length) {
       count++;
       for (const m of have) if (!e.presentIn.includes(m.slug)) partial.add(m.slug);
     }
+    if (e.editedIn.length > 0) {
+      editCount++;
+      for (const slug of e.presentIn) edited.add(slug);
+    }
   }
   if (count > 0) {
     pushDiffers(divergences, "INSIGHTS.md", partial, `${count} insight${count === 1 ? "" : "s"} not present in every location`);
   }
+  if (editCount > 0) {
+    pushDiffers(divergences, "INSIGHTS.md", edited, `${editCount} insight${editCount === 1 ? "" : "s"} edited differently between locations`);
+  }
   return { entries, total: entries.length };
+}
+
+function insightFingerprint(e: { content: string; sessionId: string; date: string }): string {
+  return JSON.stringify([normText(e.content), e.sessionId, e.date]);
 }
 
 // ── BOARD.md ─────────────────────────────────────────────────────────────────
@@ -704,6 +760,7 @@ function buildIssue(i: BoardIssue, slug: string): AggregatedBoardIssue {
     presentIn: [slug],
     statusIn: { [slug]: i.status },
     editedIn: [],
+    containerIn: {},
   };
 }
 
@@ -729,12 +786,11 @@ function aggregateBoard(
 
   // Epics carry their members' issue lists so issues can be merged inside the
   // merged epic (container-scoped), not by the location-bound `epicId`.
-  type EpicAcc = AggregatedBoardEpic & { sources: { slug: string; epic: BoardEpic }[] };
   const epics = mergeKeyed(
     have,
     (m) => m.board?.epics,
     boardKey,
-    (e, slug): EpicAcc => ({
+    (e, slug): AggregatedBoardEpic => ({
       id: e.id,
       title: e.title,
       status: e.status,
@@ -746,32 +802,55 @@ function aggregateBoard(
       presentIn: [slug],
       statusIn: { [slug]: e.status },
       editedIn: [],
-      sources: [{ slug, epic: e }],
     }),
     (acc, e, slug) => {
       acc.presentIn.push(slug);
       acc.statusIn[slug] = e.status;
       if (epicFingerprint(e) !== epicFingerprint(acc)) acc.editedIn.push(slug);
-      acc.sources.push({ slug, epic: e });
     }
   );
+  const finalEpics = renumber(epics);
 
-  const allIssues: AggregatedBoardIssue[] = [];
-  const finalEpics: AggregatedBoardEpic[] = epics.map((acc) => {
-    const { sources, ...epic } = acc;
-    // Rebuild a member-shaped view so the same keyed merge applies within the epic.
-    const pseudo: AggregatableProject[] = sources.map(({ slug, epic: e }) => ({
-      ...ordered.find((m) => m.slug === slug)!,
-      board: { epics: [], inbox: e.issues, total: 0 },
-    }));
-    epic.issues = renumber(mergeKeyed(pseudo, (m) => m.board?.inbox, boardKey, buildIssue, foldIssue));
-    allIssues.push(...epic.issues);
-    return epic;
-  });
-  renumber(finalEpics);
-
-  const inbox = renumber(mergeKeyed(have, (m) => m.board?.inbox, boardKey, buildIssue, foldIssue));
-  allIssues.push(...inbox);
+  // Issues: a stable id dedupes ACROSS containers — an issue moved from an
+  // epic to the Inbox in one checkout is still one issue, and the move is an
+  // edit. Only the title fallback stays container-scoped. Each member's
+  // issues are flattened with the merge key of the container they sit in.
+  type Placed = { issue: BoardIssue; container: string };
+  const placedBy = new Map<string, Placed[]>();
+  for (const m of have) {
+    const list: Placed[] = [];
+    for (const e of m.board?.epics ?? []) {
+      for (const i of e.issues) list.push({ issue: i, container: boardKey(e) });
+    }
+    for (const i of m.board?.inbox ?? []) list.push({ issue: i, container: "inbox" });
+    placedBy.set(m.slug, list);
+  }
+  const allIssues = mergeKeyed(
+    have,
+    (m) => placedBy.get(m.slug),
+    (p) => (p.issue.id ? `id:${p.issue.id}` : `${p.container}|t:${normText(p.issue.title)}`),
+    (p, slug): AggregatedBoardIssue => {
+      const built = buildIssue(p.issue, slug);
+      built.containerIn[slug] = p.container;
+      return built;
+    },
+    (acc, p, slug) => {
+      foldIssue(acc, p.issue, slug);
+      acc.containerIn[slug] = p.container;
+      const home = acc.containerIn[acc.presentIn[0]];
+      if (p.container !== home && !acc.editedIn.includes(slug)) acc.editedIn.push(slug);
+    }
+  );
+  // Place each merged issue where the headline (primary-first) location keeps it.
+  const epicByKey = new Map(finalEpics.map((e) => [boardKey(e), e] as const));
+  const inbox: AggregatedBoardIssue[] = [];
+  for (const it of allIssues) {
+    const home = it.containerIn[it.presentIn[0]];
+    const epic = home === "inbox" ? undefined : epicByKey.get(home);
+    (epic ? epic.issues : inbox).push(it);
+  }
+  for (const e of finalEpics) renumber(e.issues);
+  renumber(inbox);
 
   // Divergence: presence gaps, and status disagreements.
   const partial = new Set<string>();
@@ -804,7 +883,7 @@ function aggregateBoard(
     pushDiffers(divergences, "BOARD.md", statusDiff, `${statusCount} board item${statusCount === 1 ? "" : "s"} with a different status between locations`);
   }
   if (editCount > 0) {
-    pushDiffers(divergences, "BOARD.md", editDiff, `${editCount} board item${editCount === 1 ? "" : "s"} edited differently between locations (title, priority, labels, or detail)`);
+    pushDiffers(divergences, "BOARD.md", editDiff, `${editCount} board item${editCount === 1 ? "" : "s"} edited differently between locations (title, priority, labels, detail, or container)`);
   }
 
   return {

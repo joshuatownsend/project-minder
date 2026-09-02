@@ -150,6 +150,16 @@ describe("aggregateGroup — repo-borne dedupe", () => {
     expect(aggregateGroup([a, b]).todos?.total).toBe(1);
   });
 
+  it("an insight edited under the same persisted id is flagged, not silently overridden", () => {
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", insights: insights([insight("111", { content: "original" })]) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", insights: insights([insight("111", { content: "reworded" })]) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.insights?.entries[0]).toMatchObject({ content: "original", presentIn: ["a", "b"], editedIn: ["b"] });
+    expect(agg.divergences).toEqual([
+      { file: "INSIGHTS.md", kind: "differs", locations: ["a", "b"], detail: "1 insight edited differently between locations" },
+    ]);
+  });
+
   it("dedupes insights by id and drops the location-bound project path", () => {
     const a = member({ slug: "a", path: WIN, insights: insights([insight("111"), insight("222")]) });
     const b = member({ slug: "b", path: OTHER, insights: insights([insight("111", { projectPath: OTHER })]) });
@@ -346,7 +356,7 @@ describe("aggregateGroup — BOARD.md", () => {
     expect(agg.board?.inbox[0]).toMatchObject({ title: "Old title", priority: "low", presentIn: ["a", "b"], editedIn: ["b"] });
     expect(agg.board?.epics[0]).toMatchObject({ description: "v1", editedIn: ["b"] });
     expect(agg.divergences).toEqual([
-      { file: "BOARD.md", kind: "differs", locations: ["a", "b"], detail: "2 board items edited differently between locations (title, priority, labels, or detail)" },
+      { file: "BOARD.md", kind: "differs", locations: ["a", "b"], detail: "2 board items edited differently between locations (title, priority, labels, detail, or container)" },
     ]);
   });
 
@@ -356,6 +366,29 @@ describe("aggregateGroup — BOARD.md", () => {
     const agg = aggregateGroup([a, b]);
     expect(agg.board?.inbox[0].editedIn).toEqual([]);
     expect(agg.divergences).toEqual([]);
+  });
+
+  it("a stable id moved between an epic and the Inbox in one checkout is still one issue", () => {
+    const a = member({
+      slug: "a",
+      path: WIN,
+      lastActivity: "2026-08-20T00:00:00Z",
+      board: board([epic({ id: "e-1", title: "Epic", issues: [issue({ id: "i-1", title: "Moved" })] })], []),
+    });
+    const b = member({
+      slug: "b",
+      path: OTHER,
+      lastActivity: "2026-08-01T00:00:00Z",
+      board: board([epic({ id: "e-1", title: "Epic", issues: [] })], [issue({ id: "i-1", title: "Moved" })]),
+    });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.board?.total).toBe(2);
+    expect(agg.board?.inbox).toEqual([]);
+    const merged = agg.board!.epics[0].issues[0];
+    expect(merged).toMatchObject({ id: "i-1", presentIn: ["a", "b"], editedIn: ["b"], containerIn: { a: "id:e-1", b: "inbox" } });
+    expect(agg.divergences).toEqual([
+      { file: "BOARD.md", kind: "differs", locations: ["a", "b"], detail: "1 board item edited differently between locations (title, priority, labels, detail, or container)" },
+    ]);
   });
 
   it("renumbers order after dedupe", () => {
@@ -498,6 +531,14 @@ describe("aggregateGroup — locations", () => {
     expect(agg.partial).toBe(true);
   });
 
+  it("keeps case on POSIX paths but folds it on Windows-shaped paths", () => {
+    const posix = member({ slug: "p", path: "/home/me/foo" });
+    expect(aggregateGroup([posix], { skippedRootPaths: ["/home/me/Foo"] }).locations[0].stale).toBe(false);
+    expect(aggregateGroup([posix], { skippedRootPaths: ["/home/me"] }).locations[0].stale).toBe(true);
+    const win = member({ slug: "w", path: "C:\\Dev\\Foo" });
+    expect(aggregateGroup([win], { skippedRootPaths: ["c:/dev"] }).locations[0].stale).toBe(true);
+  });
+
   it("does not treat a sibling root with a shared prefix as skipped", () => {
     const a = member({ slug: "a", path: "C:\\dev\\bamcli" });
     const agg = aggregateGroup([a], { skippedRootPaths: ["C:\\dev\\bam"] });
@@ -515,6 +556,17 @@ describe("aggregateGroup — primary and determinism", () => {
     expect(aggregateGroup([a, b]).primary).toBe("b");
     const c = member({ slug: "c", path: "E:\\dev\\x", lastActivity: "2026-08-11T00:00:00Z" });
     expect(aggregateGroup([a, b, c]).primary).toBe("c");
+  });
+
+  it("compares timestamps as instants, so an offset-bearing later time wins", () => {
+    // 10:00-07:00 is 17:00Z — later than 16:30Z, though lexically smaller.
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-09-02T10:00:00-07:00", claude: { sessionCount: 1, lastSessionDate: "2026-09-02T10:00:00-07:00" } });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-09-02T16:30:00Z", claude: { sessionCount: 1, lastSessionDate: "2026-09-02T16:30:00Z" } });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.primary).toBe("a");
+    expect(agg.activity.lastSessionDate).toBe("2026-09-02T10:00:00-07:00");
+    expect(agg.activity.lastActivity).toBe("2026-09-02T10:00:00-07:00");
+    expect(agg.activity.mostRecent?.slug).toBe("a");
   });
 
   it("produces identical output regardless of input order", () => {
