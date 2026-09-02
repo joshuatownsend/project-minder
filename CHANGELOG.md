@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Project Groups P2 — the aggregation layer.** `aggregateGroup(members)` (`src/lib/groups/aggregate.ts`) folds several checkouts of one repository into one serializable view under the plan's four merge rules: repo-borne files (`TODO.md`, `INSIGHTS.md`, `BOARD.md`, `MANUAL_STEPS.md`, `OPERATIONS.md`, the `CLAUDE.md` summary, framework facts) **deduplicate** and every difference between checkouts is surfaced as a `Divergence` rather than resolved; activity **sums** (session counts) and **maxes** (last-session dates), with `ratio()` for the numerator-over-denominator recomputation that keeps a 3-session checkout from weighing like a 100-session one; location-bound state (branch, dirty files, dev port, worktrees, status) is **never merged** and is listed per member; and `usageKeys` gives the deduplicated `(usageSlug, usageHomeKey)` pairs a caller must fetch to sum cost without double-counting two drives that share a slug. Every merged item carries `presentIn` / `completedIn` so a UI can show the split. Members under a skipped scan root (a stopped WSL distro) are flagged `stale` and the aggregate `partial`. No UI yet — P3 consumes this. Counts are recomputed from the merged set, never summed from member totals; a mutation check confirmed the tests go red when dedupe is replaced by concatenation. 27 tests.
+
+
 ## [1.13.0] - 2026-08-30
 
 *The release where several things that had never worked start working — and where the reason nobody noticed turns out to be one shape, repeated. Embeddings shipped 445 MB of runtime that could not load on any machine without a checkout of this repo above it, and told anyone debugging it that the package was "not installed". The library lint engine died on startup in every build since it was added, behind a `catch` that recorded the error and returned no findings. `/api/claude-homes` answered `complete: true` over a corpus the index had visibly failed to read. A directory Minder could not enumerate passed as a directory with nothing in it, so a project's sessions, tokens and cost came back as **zero rather than missing** — indistinguishable from a quiet week. Every one of them reported success while doing nothing.*
