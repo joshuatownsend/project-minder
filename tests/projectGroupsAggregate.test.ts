@@ -483,6 +483,36 @@ describe("aggregateGroup — BOARD.md", () => {
     expect(agg.board?.inbox[0]).toMatchObject({ id: "i-1", priority: "high", presentIn: ["a", "b", "c"], editedIn: ["b"] });
   });
 
+  it("renaming an epic does not mark its unchanged issues as moved", () => {
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", board: board([epic({ id: "e-1", title: "Old", issues: [issue({ id: "i-1", title: "Child" })] })], []) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", board: board([epic({ id: "e-1", title: "New", issues: [issue({ id: "i-1", title: "Child" })] })], []) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.board?.epics[0]).toMatchObject({ title: "Old", editedIn: ["b"] });
+    expect(agg.board?.epics[0].issues[0]).toMatchObject({ id: "i-1", editedIn: [] });
+    expect(agg.divergences).toEqual([
+      { file: "BOARD.md", kind: "differs", locations: ["a", "b"], detail: "1 board item edited differently between locations (title, priority, labels, detail, or container)" },
+    ]);
+  });
+
+  it("moving an issue between two same-titled epics is a move", () => {
+    const a = member({
+      slug: "a",
+      path: WIN,
+      lastActivity: "2026-08-20T00:00:00Z",
+      board: board([epic({ title: "Cleanup", issues: [issue({ id: "i-1", title: "Child" })] }), epic({ title: "Cleanup", issues: [] })], []),
+    });
+    const b = member({
+      slug: "b",
+      path: OTHER,
+      lastActivity: "2026-08-01T00:00:00Z",
+      board: board([epic({ title: "Cleanup", issues: [] }), epic({ title: "Cleanup", issues: [issue({ id: "i-1", title: "Child" })] })], []),
+    });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.board?.epics).toHaveLength(2);
+    expect(agg.board?.epics[0].issues[0]).toMatchObject({ id: "i-1", presentIn: ["a", "b"], editedIn: ["b"] });
+    expect(agg.board?.epics[1].issues).toEqual([]);
+  });
+
   it("reconciliation never merges two same-titled items that share a checkout", () => {
     const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", board: board([], [issue({ id: "i-1", title: "Dup" }), issue({ title: "Dup" })]) });
     const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", board: board([], [issue({ title: "Dup" })]) });
@@ -518,7 +548,11 @@ describe("aggregateGroup — OPERATIONS.md", () => {
   it("identical details are not a divergence", () => {
     const a = member({ slug: "a", path: WIN, operations: operations([section({ heading: "Restore", items: [{ ...opsItem("restore db"), details: ["  pg_restore  x "] }] })]) });
     const b = member({ slug: "b", path: OTHER, operations: operations([section({ heading: "Restore", items: [{ ...opsItem("restore db"), details: ["pg_restore x"] }] })]) });
-    expect(aggregateGroup([a, b]).divergences).toEqual([]);
+    const agg = aggregateGroup([a, b]);
+    expect(agg.divergences).toEqual([]);
+    // Headline details are normalized; per-location details stay verbatim.
+    expect(agg.operations?.sections[0].items[0].details).toEqual(["pg_restore x"]);
+    expect(agg.operations?.sections[0].items[0].detailsIn).toEqual({ a: ["  pg_restore  x "], b: ["pg_restore x"] });
   });
 
   it("keeps every checkout's section prose and flags when it differs", () => {
@@ -727,23 +761,23 @@ describe("groupUsageKeys", () => {
   it("collapses two local drives that share a usageSlug", () => {
     const c = member({ slug: "c", path: "C:\\dev\\foo", usageSlug: "dev-foo" });
     const d = member({ slug: "d", path: "D:\\dev\\foo", usageSlug: "dev-foo" });
-    expect(groupUsageKeys([d, c])).toEqual([{ usageSlug: "dev-foo" }]);
+    expect(groupUsageKeys([d, c])).toEqual([{ usageSlug: "dev-foo", exact: false }]);
   });
 
   it("keeps pinned homes distinct when their slugs differ", () => {
     const c = member({ slug: "c", path: "C:\\dev\\foo", usageSlug: "dev-foo" });
     const w = member({ slug: "w", path: WSL, usageSlug: "printing-press-library-foo", usageHomeKey: "wsl:Ubuntu-26.04" });
     expect(groupUsageKeys([w, c])).toEqual([
-      { usageSlug: "dev-foo" },
-      { usageSlug: "printing-press-library-foo", usageHomeKey: "wsl:Ubuntu-26.04" },
+      { usageSlug: "dev-foo", exact: false },
+      { usageSlug: "printing-press-library-foo", usageHomeKey: "wsl:Ubuntu-26.04", exact: true },
     ]);
   });
 
   it("an unpinned member's key absorbs a pinned member with the same slug — the unpinned query already spans every home", () => {
     const c = member({ slug: "c", path: "C:\\home\\josh\\dev\\foo", usageSlug: "home-josh-dev-foo" });
     const w = member({ slug: "w", path: WSL, usageSlug: "home-josh-dev-foo", usageHomeKey: "wsl:Ubuntu-26.04" });
-    expect(groupUsageKeys([w, c])).toEqual([{ usageSlug: "home-josh-dev-foo" }]);
-    expect(groupUsageKeys([c, w])).toEqual([{ usageSlug: "home-josh-dev-foo" }]);
+    expect(groupUsageKeys([w, c])).toEqual([{ usageSlug: "home-josh-dev-foo", exact: false }]);
+    expect(groupUsageKeys([c, w])).toEqual([{ usageSlug: "home-josh-dev-foo", exact: false }]);
     expect(aggregateGroup([w, c]).usageKeys).toHaveLength(1);
   });
 

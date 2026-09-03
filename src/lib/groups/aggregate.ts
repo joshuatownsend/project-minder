@@ -288,6 +288,15 @@ export interface RepoFact<T> {
 export interface UsageKey {
   usageSlug: string;
   usageHomeKey?: string;
+  /**
+   * `true`: the key scopes exactly one member home. `false`: an unpinned key,
+   * which the usage API answers with the slug's turns from EVERY configured
+   * home (it filters by one home or none) — the same scope the project's own
+   * Costs tab shows today. A nonmember checkout under another home with the
+   * same encoded layout is over-included until the API grows a home-set
+   * filter; P3 should label such totals accordingly.
+   */
+  exact: boolean;
 }
 
 export interface GroupAggregate {
@@ -346,7 +355,7 @@ export function groupUsageKeys(members: readonly AggregatableProject[]): UsageKe
     const k = `${m.usageSlug}\u0000${home ?? ""}`;
     if (seen.has(k)) continue;
     seen.add(k);
-    out.push(home ? { usageSlug: m.usageSlug, usageHomeKey: home } : { usageSlug: m.usageSlug });
+    out.push(home ? { usageSlug: m.usageSlug, usageHomeKey: home, exact: true } : { usageSlug: m.usageSlug, exact: false });
   }
   return out;
 }
@@ -951,23 +960,32 @@ function aggregateBoard(
   // issues are flattened with the merge key of the container they sit in,
   // plus the container's TITLE, which is what "same container" means across
   // checkouts whose epics carry different identities.
-  type Placed = { issue: BoardIssue; container: string; containerTitle: string };
+  // "Same container" across checkouts means the same RECONCILED epic — not
+  // the same title (a renamed epic is still one epic; two same-titled epics
+  // are two containers). Each member-specific container key resolves through
+  // epicByKey to a merged epic, identified by its position in finalEpics.
+  const resolveContainer = (key: string): string => {
+    if (key === "inbox") return "inbox";
+    const epic = epicByKey.get(key);
+    return epic ? `epic:${finalEpics.indexOf(epic)}` : key;
+  };
+  type Placed = { issue: BoardIssue; container: string; resolved: string };
   const placedBy = new Map<string, Placed[]>();
   for (const m of have) {
     const list: Placed[] = [];
     const seen = new Map<string, number>();
     for (const e of m.board?.epics ?? []) {
       const container = occurrenceKey(boardKey(e), seen);
-      const containerTitle = normText(e.title);
-      for (const i of e.issues) list.push({ issue: i, container, containerTitle });
+      const resolved = resolveContainer(container);
+      for (const i of e.issues) list.push({ issue: i, container, resolved });
     }
-    for (const i of m.board?.inbox ?? []) list.push({ issue: i, container: "inbox", containerTitle: "inbox" });
+    for (const i of m.board?.inbox ?? []) list.push({ issue: i, container: "inbox", resolved: "inbox" });
     placedBy.set(m.slug, list);
   }
-  const containerTitleIn = new Map<AggregatedBoardIssue, Record<string, string>>();
+  const containerIdIn = new Map<AggregatedBoardIssue, Record<string, string>>();
   const issueTitleIn = new Map<AggregatedBoardIssue, Record<string, string>>();
   const issueFpIn = new Map<AggregatedBoardIssue, Record<string, string>>();
-  const homeTitle = (it: AggregatedBoardIssue): string => containerTitleIn.get(it)?.[it.presentIn[0]] ?? "inbox";
+  const homeContainer = (it: AggregatedBoardIssue): string => containerIdIn.get(it)?.[it.presentIn[0]] ?? "inbox";
   const merged = mergeKeyed(
     have,
     (m) => placedBy.get(m.slug),
@@ -975,7 +993,7 @@ function aggregateBoard(
     (p, slug): AggregatedBoardIssue => {
       const built = buildIssue(p.issue, slug);
       built.containerIn[slug] = p.container;
-      containerTitleIn.set(built, { [slug]: p.containerTitle });
+      containerIdIn.set(built, { [slug]: p.resolved });
       issueTitleIn.set(built, { [slug]: normText(p.issue.title) });
       issueFpIn.set(built, { [slug]: issueFingerprint(p.issue) });
       return built;
@@ -983,24 +1001,30 @@ function aggregateBoard(
     (acc, p, slug) => {
       foldIssue(acc, p.issue, slug);
       acc.containerIn[slug] = p.container;
-      containerTitleIn.get(acc)![slug] = p.containerTitle;
+      containerIdIn.get(acc)![slug] = p.resolved;
       issueTitleIn.get(acc)![slug] = normText(p.issue.title);
       issueFpIn.get(acc)![slug] = issueFingerprint(p.issue);
-      if (p.containerTitle !== homeTitle(acc) && !acc.editedIn.includes(slug)) acc.editedIn.push(slug);
+      if (p.resolved !== homeContainer(acc) && !acc.editedIn.includes(slug)) acc.editedIn.push(slug);
     }
   );
   const allIssues = reconcileUnmatched(
     merged,
     (it) => {
-      const containers = containerTitleIn.get(it) ?? {};
+      const containers = containerIdIn.get(it) ?? {};
       const titles = issueTitleIn.get(it) ?? {};
       return it.presentIn.map((slug) => `${containers[slug] ?? "inbox"}|${titles[slug] ?? ""}`);
     },
     issueFpIn,
     (absorbed, into) => {
+      const home = homeContainer(into);
       for (const [slug, c] of Object.entries(absorbed.containerIn)) into.containerIn[slug] = c;
-      Object.assign(containerTitleIn.get(into)!, containerTitleIn.get(absorbed));
+      const absorbedContainers = containerIdIn.get(absorbed) ?? {};
+      Object.assign(containerIdIn.get(into)!, absorbedContainers);
       Object.assign(issueTitleIn.get(into)!, issueTitleIn.get(absorbed));
+      // A move is an edit for absorbed locations too.
+      for (const [slug, c] of Object.entries(absorbedContainers)) {
+        if (c !== home && !into.editedIn.includes(slug)) into.editedIn.push(slug);
+      }
     }
   );
   // Place each merged issue where the headline (primary-first) location keeps it.
