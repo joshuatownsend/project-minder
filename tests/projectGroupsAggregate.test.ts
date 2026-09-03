@@ -458,6 +458,31 @@ describe("aggregateGroup — BOARD.md", () => {
     expect(agg.divergences).toEqual([]);
   });
 
+  it("reconciles through a title alias: a shared id renamed in one checkout still matches an independent backfill", () => {
+    const THIRD = "E:\\dev\\bamcli";
+    // A (primary) and B share i-1; B renamed it. C backfilled the same item as i-9 under B's title.
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", board: board([], [issue({ id: "i-1", title: "Old" })]) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-10T00:00:00Z", board: board([], [issue({ id: "i-1", title: "New" })]) });
+    const c = member({ slug: "c", path: THIRD, lastActivity: "2026-08-01T00:00:00Z", board: board([], [issue({ id: "i-9", title: "New" })]) });
+    const agg = aggregateGroup([c, b, a]);
+    expect(agg.board?.total).toBe(1);
+    expect(agg.board?.inbox[0]).toMatchObject({ id: "i-1", title: "Old", presentIn: ["a", "b", "c"], editedIn: ["b", "c"] });
+    expect(agg.divergences).toEqual([
+      { file: "BOARD.md", kind: "differs", locations: ["a", "b", "c"], detail: "1 board item edited differently between locations (title, priority, labels, detail, or container)" },
+    ]);
+  });
+
+  it("attributes edits per location when absorbing an accumulator that spans several", () => {
+    const THIRD = "E:\\dev\\bamcli";
+    // A (primary) has i-1 high. B and C share i-9: B low, C high. C matches A's headline, so only B is edited.
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", board: board([], [issue({ id: "i-1", title: "Task", priority: "high" })]) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-10T00:00:00Z", board: board([], [issue({ id: "i-9", title: "Task", priority: "low" })]) });
+    const c = member({ slug: "c", path: THIRD, lastActivity: "2026-08-01T00:00:00Z", board: board([], [issue({ id: "i-9", title: "Task", priority: "high" })]) });
+    const agg = aggregateGroup([a, b, c]);
+    expect(agg.board?.total).toBe(1);
+    expect(agg.board?.inbox[0]).toMatchObject({ id: "i-1", priority: "high", presentIn: ["a", "b", "c"], editedIn: ["b"] });
+  });
+
   it("reconciliation never merges two same-titled items that share a checkout", () => {
     const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", board: board([], [issue({ id: "i-1", title: "Dup" }), issue({ title: "Dup" })]) });
     const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", board: board([], [issue({ title: "Dup" })]) });

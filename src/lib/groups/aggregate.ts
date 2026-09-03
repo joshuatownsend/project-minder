@@ -817,48 +817,70 @@ function renumber<T extends { order: number }>(items: T[]): T[] {
  * After the keyed merge, match items that are the same thing under different
  * identities: a stable id in one checkout and no id in another (one checkout
  * has been through `boardWriter`, the other is a legacy `BOARD.md`), or two
- * different random ids for the same item (independent backfills). Candidates
- * share a bucket (normalized title, plus container title for issues) and
- * must be present in DISJOINT locations — two same-titled items in one
- * checkout are two items and never merge. Approximate by design, like the
- * title fallback itself (plan Risk #3). The survivor keeps its headline copy,
- * takes a stable id if only the absorbed item had one, and inherits the
- * absorbed item's presence, status, and edit bookkeeping.
+ * different random ids for the same item (independent backfills).
+ *
+ * Candidates are matched on ALIASES — every bucket key any location gives the
+ * item (its title in each location; for issues, container title plus title).
+ * So when A and B share an id but one renamed it, and C backfilled the same
+ * item independently under the new title, B's title is the link. Candidates
+ * must be present in DISJOINT locations: two same-titled items in one checkout
+ * are two items and never merge. Approximate by design, like the title
+ * fallback itself (plan Risk #3).
+ *
+ * The survivor keeps its headline copy and takes a stable id if only the
+ * absorbed item had one. Edit attribution is per location: each absorbed
+ * location's own fingerprint is compared to the survivor's headline, so a
+ * location that matches the survivor is never listed as edited just because
+ * the accumulator it travelled in had a different headline.
  */
 function reconcileUnmatched<T extends { id: string; presentIn: string[]; statusIn: Record<string, BoardStatus>; editedIn: string[] }>(
   items: T[],
-  bucketOf: (t: T) => string,
-  fingerprint: (t: T) => string,
+  aliasesOf: (t: T) => string[],
+  fpIn: Map<T, Record<string, string>>,
   onAbsorb: (absorbed: T, into: T) => void
 ): T[] {
-  const buckets = new Map<string, T[]>();
-  for (const it of items) {
-    const b = bucketOf(it);
-    const list = buckets.get(b);
-    if (list) list.push(it);
-    else buckets.set(b, [it]);
-  }
+  const index = new Map<string, T[]>();
+  const indexItem = (it: T) => {
+    for (const k of new Set(aliasesOf(it))) {
+      const list = index.get(k);
+      if (!list) index.set(k, [it]);
+      else if (!list.includes(it)) list.push(it);
+    }
+  };
+  for (const it of items) indexItem(it);
+  const pos = new Map(items.map((it, i) => [it, i] as const));
   const absorbed = new Set<T>();
-  for (const list of buckets.values()) {
-    for (let i = 0; i < list.length; i++) {
-      const a = list[i];
-      if (absorbed.has(a)) continue;
-      for (let j = i + 1; j < list.length; j++) {
-        const b = list[j];
-        if (absorbed.has(b)) continue;
+  for (const a of items) {
+    if (absorbed.has(a)) continue;
+    // Absorbing grows a's aliases (the absorbed item's titles), which can
+    // unlock further matches — loop until a pass absorbs nothing.
+    for (;;) {
+      const candidates = new Set<T>();
+      for (const k of new Set(aliasesOf(a))) {
+        for (const b of index.get(k) ?? []) {
+          if (b !== a && !absorbed.has(b) && pos.get(b)! > pos.get(a)!) candidates.add(b);
+        }
+      }
+      let merged = false;
+      for (const b of [...candidates].sort((x, y) => pos.get(x)! - pos.get(y)!)) {
         if (b.presentIn.some((slug) => a.presentIn.includes(slug))) continue;
-        const fpA = fingerprint(a);
-        const fpB = fingerprint(b);
+        const aFp = fpIn.get(a)!;
+        const bFp = fpIn.get(b)!;
+        const headline = aFp[a.presentIn[0]];
         for (const slug of b.presentIn) {
           a.presentIn.push(slug);
           a.statusIn[slug] = b.statusIn[slug];
-          if (fpB !== fpA && !a.editedIn.includes(slug)) a.editedIn.push(slug);
+          aFp[slug] = bFp[slug];
+          if (bFp[slug] !== headline && !a.editedIn.includes(slug)) a.editedIn.push(slug);
         }
-        for (const slug of b.editedIn) if (!a.editedIn.includes(slug)) a.editedIn.push(slug);
         if (!a.id && b.id) a.id = b.id;
         absorbed.add(b);
         onAbsorb(b, a);
+        indexItem(a);
+        merged = true;
+        break;
       }
+      if (!merged) break;
     }
   }
   return items.filter((it) => !absorbed.has(it));
@@ -871,26 +893,35 @@ function aggregateBoard(
   const have = withFile(ordered, "BOARD.md", (m) => m.board, divergences);
   if (have.length === 0) return undefined;
 
+  const epicTitleIn = new Map<AggregatedBoardEpic, Record<string, string>>();
+  const epicFpIn = new Map<AggregatedBoardEpic, Record<string, string>>();
   const epics = mergeKeyed(
     have,
     (m) => m.board?.epics,
     boardKey,
-    (e, slug): AggregatedBoardEpic => ({
-      id: e.id,
-      title: normText(e.title),
-      status: e.status,
-      priority: e.priority,
-      labels: [...e.labels].sort(compareCodepoint),
-      description: e.description,
-      order: 0,
-      issues: [],
-      presentIn: [slug],
-      statusIn: { [slug]: e.status },
-      editedIn: [],
-    }),
+    (e, slug): AggregatedBoardEpic => {
+      const built: AggregatedBoardEpic = {
+        id: e.id,
+        title: normText(e.title),
+        status: e.status,
+        priority: e.priority,
+        labels: [...e.labels].sort(compareCodepoint),
+        description: e.description,
+        order: 0,
+        issues: [],
+        presentIn: [slug],
+        statusIn: { [slug]: e.status },
+        editedIn: [],
+      };
+      epicTitleIn.set(built, { [slug]: normText(e.title) });
+      epicFpIn.set(built, { [slug]: epicFingerprint(e) });
+      return built;
+    },
     (acc, e, slug) => {
       acc.presentIn.push(slug);
       acc.statusIn[slug] = e.status;
+      epicTitleIn.get(acc)![slug] = normText(e.title);
+      epicFpIn.get(acc)![slug] = epicFingerprint(e);
       if (epicFingerprint(e) !== epicFingerprint(acc)) acc.editedIn.push(slug);
     }
   );
@@ -903,9 +934,15 @@ function aggregateBoard(
   const seenEpics = new Map<string, number>();
   for (const e of epics) epicByKey.set(occurrenceKey(boardKey(e), seenEpics), e);
   const finalEpics = renumber(
-    reconcileUnmatched(epics, (e) => normText(e.title), epicFingerprint, (absorbed, into) => {
-      for (const [k, v] of epicByKey) if (v === absorbed) epicByKey.set(k, into);
-    })
+    reconcileUnmatched(
+      epics,
+      (e) => Object.values(epicTitleIn.get(e) ?? {}),
+      epicFpIn,
+      (absorbed, into) => {
+        Object.assign(epicTitleIn.get(into)!, epicTitleIn.get(absorbed));
+        for (const [k, v] of epicByKey) if (v === absorbed) epicByKey.set(k, into);
+      }
+    )
   );
 
   // Issues: a stable id dedupes ACROSS containers — an issue moved from an
@@ -928,6 +965,8 @@ function aggregateBoard(
     placedBy.set(m.slug, list);
   }
   const containerTitleIn = new Map<AggregatedBoardIssue, Record<string, string>>();
+  const issueTitleIn = new Map<AggregatedBoardIssue, Record<string, string>>();
+  const issueFpIn = new Map<AggregatedBoardIssue, Record<string, string>>();
   const homeTitle = (it: AggregatedBoardIssue): string => containerTitleIn.get(it)?.[it.presentIn[0]] ?? "inbox";
   const merged = mergeKeyed(
     have,
@@ -937,23 +976,31 @@ function aggregateBoard(
       const built = buildIssue(p.issue, slug);
       built.containerIn[slug] = p.container;
       containerTitleIn.set(built, { [slug]: p.containerTitle });
+      issueTitleIn.set(built, { [slug]: normText(p.issue.title) });
+      issueFpIn.set(built, { [slug]: issueFingerprint(p.issue) });
       return built;
     },
     (acc, p, slug) => {
       foldIssue(acc, p.issue, slug);
       acc.containerIn[slug] = p.container;
       containerTitleIn.get(acc)![slug] = p.containerTitle;
+      issueTitleIn.get(acc)![slug] = normText(p.issue.title);
+      issueFpIn.get(acc)![slug] = issueFingerprint(p.issue);
       if (p.containerTitle !== homeTitle(acc) && !acc.editedIn.includes(slug)) acc.editedIn.push(slug);
     }
   );
   const allIssues = reconcileUnmatched(
     merged,
-    (it) => `${homeTitle(it)}|${normText(it.title)}`,
-    issueFingerprint,
+    (it) => {
+      const containers = containerTitleIn.get(it) ?? {};
+      const titles = issueTitleIn.get(it) ?? {};
+      return it.presentIn.map((slug) => `${containers[slug] ?? "inbox"}|${titles[slug] ?? ""}`);
+    },
+    issueFpIn,
     (absorbed, into) => {
-      const titles = containerTitleIn.get(into)!;
       for (const [slug, c] of Object.entries(absorbed.containerIn)) into.containerIn[slug] = c;
-      for (const [slug, t] of Object.entries(containerTitleIn.get(absorbed) ?? {})) titles[slug] = t;
+      Object.assign(containerTitleIn.get(into)!, containerTitleIn.get(absorbed));
+      Object.assign(issueTitleIn.get(into)!, issueTitleIn.get(absorbed));
     }
   );
   // Place each merged issue where the headline (primary-first) location keeps it.
