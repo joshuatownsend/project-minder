@@ -5,6 +5,7 @@ import { invalidateCatalogCache } from "@/lib/indexer/catalog";
 import { invalidateAgentsRouteCache } from "@/app/api/agents/route";
 import { invalidateSkillsRouteCache } from "@/app/api/skills/route";
 import { invalidateClaudeConfigRouteCache } from "@/app/api/claude-config/route";
+import { invalidateEnvironmentsRouteCache } from "@/app/api/environments/route";
 import { invalidateUserConfigCache } from "@/lib/userConfigCache";
 import { invalidateLiveStatusCache } from "@/lib/liveStatus";
 import { invalidateClaudeAgentsCache } from "@/lib/claudeAgentsCli";
@@ -29,6 +30,7 @@ export async function POST() {
   invalidateAgentsRouteCache();
   invalidateSkillsRouteCache();
   invalidateClaudeConfigRouteCache();
+  invalidateEnvironmentsRouteCache();
   invalidateUserConfigCache();
   // Wave-T1.1: clear the live-status payload and inner `claude agents --json`
   // caches so manual rescan doesn't keep serving stale process listings for

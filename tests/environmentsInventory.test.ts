@@ -1,0 +1,112 @@
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { promises as fs } from "fs";
+import os from "os";
+import path from "path";
+import { environmentHomeKey, readHomeInventory } from "@/lib/environments/inventory";
+import { normalizePathKey } from "@/lib/platform";
+import { resolveUsageHomeKey } from "@/lib/usage/projectMatch";
+
+let tmp: string;
+let home: string;
+
+async function write(rel: string, content: string) {
+  const full = path.join(tmp, rel);
+  await fs.mkdir(path.dirname(full), { recursive: true });
+  await fs.writeFile(full, content, "utf-8");
+}
+
+beforeAll(async () => {
+  tmp = await fs.mkdtemp(path.join(os.tmpdir(), "minder-env-"));
+  home = path.join(tmp, ".claude");
+  await write(".claude/agents/reviewer.md", "---\nname: Reviewer\n---\nbody");
+  await write(".claude/agents/nested/planner.md", "no frontmatter");
+  await write(".claude/agents/.hidden.md", "---\nname: hidden\n---");
+  await write(".claude/agents/notes.txt", "ignored");
+  await write(".claude/skills/pr-resolve/SKILL.md", "---\nname: PR Resolve\n---");
+  await write(".claude/skills/not-a-skill/README.md", "no SKILL.md here");
+  await write(".claude/skills/standalone.md", "---\nname: Standalone\n---");
+  await write(".claude/skills-disabled/legacy/SKILL.md", "");
+  await write(
+    ".claude/plugins/installed_plugins.json",
+    JSON.stringify({
+      plugins: {
+        "github@official": [
+          { version: "1.2.0", installPath: "/home/me/.claude/plugins/github" },
+          { version: "1.10.0", installPath: "/home/me/.claude/plugins/github-new" },
+        ],
+        "@scope/tool@community": [{ installPath: "/x" }],
+        "empty@m": [],
+      },
+    })
+  );
+  await write(
+    ".claude/settings.json",
+    JSON.stringify({ mcpServers: { "from-settings": { command: "x", env: { KEY: "secret" } } } })
+  );
+  await write(".claude.json", JSON.stringify({ mcpServers: { "from-claude-json": {}, "from-settings": {} } }));
+});
+
+afterAll(async () => {
+  await fs.rm(tmp, { recursive: true, force: true });
+});
+
+describe("readHomeInventory", () => {
+  it("lists agents recursively with frontmatter names, skipping dotfiles and non-markdown", async () => {
+    const inv = await readHomeInventory(home, true);
+    expect(inv.agents).toEqual([
+      { slug: "nested/planner", name: undefined },
+      { slug: "reviewer", name: "Reviewer" },
+    ]);
+  });
+
+  it("lists bundled and standalone skills, marking the disabled root", async () => {
+    const inv = await readHomeInventory(home, true);
+    expect(inv.skills).toEqual([
+      { slug: "legacy", name: undefined, disabled: true },
+      { slug: "pr-resolve", name: "PR Resolve", disabled: false },
+      { slug: "standalone", name: "Standalone", disabled: false },
+    ]);
+  });
+
+  it("reads plugins from the registry only, highest version wins, scoped names intact", async () => {
+    const inv = await readHomeInventory(home, true);
+    expect(inv.plugins).toEqual([
+      { id: "@scope/tool@community", name: "@scope/tool", marketplace: "community", version: undefined },
+      { id: "github@official", name: "github", marketplace: "official", version: "1.10.0" },
+    ]);
+  });
+
+  it("emits MCP server names from both sources, deduplicated, and never their config", async () => {
+    const inv = await readHomeInventory(home, true);
+    expect(inv.mcpServers).toEqual(["from-claude-json", "from-settings"]);
+    expect(JSON.stringify(inv)).not.toContain("secret");
+  });
+
+  it("keys the home the way the scanner keys usageHomeKey", async () => {
+    const inv = await readHomeInventory(home, true);
+    expect(inv.key).toBe(normalizePathKey(home));
+    expect(inv.primary).toBe(true);
+  });
+
+  it("returns empty lists for a home that does not exist", async () => {
+    const inv = await readHomeInventory(path.join(tmp, "missing", ".claude"), false);
+    expect(inv).toMatchObject({ agents: [], skills: [], plugins: [], mcpServers: [], primary: false });
+  });
+});
+
+describe("home key join", () => {
+  it("a mapped WSL project's usageHomeKey equals the inventory key of its home", () => {
+    // Pure: no filesystem call touches a `\\wsl.localhost\` path here (that
+    // would auto-start the distro — the never-wake rule).
+    const wslHome = "\\\\wsl.localhost\\Ubuntu\\home\\me\\.claude";
+    const projectPath = "\\\\wsl.localhost\\Ubuntu\\home\\me\\dev\\foo";
+    const usageKey = resolveUsageHomeKey(
+      projectPath,
+      [{ from: "/home/me", to: "\\\\wsl.localhost\\Ubuntu\\home\\me" }],
+      [wslHome]
+    );
+    expect(usageKey).toBeDefined();
+    expect(environmentHomeKey(wslHome)).toBe(usageKey);
+    expect(environmentHomeKey("\\\\wsl$\\Ubuntu\\home\\me\\.claude")).toBe(usageKey);
+  });
+});
