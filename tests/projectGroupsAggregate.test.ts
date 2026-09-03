@@ -410,6 +410,61 @@ describe("aggregateGroup — BOARD.md", () => {
     expect(agg.divergences).toEqual([]);
   });
 
+  it("a legacy checkout without ids matches a backfilled one, item for item", () => {
+    const a = member({
+      slug: "a",
+      path: WIN,
+      lastActivity: "2026-08-20T00:00:00Z",
+      board: board([epic({ id: "e-1", title: "Epic", issues: [issue({ id: "i-1", title: "Do it", status: "doing" })] })], [issue({ id: "i-2", title: "Loose end" })]),
+    });
+    const b = member({
+      slug: "b",
+      path: OTHER,
+      lastActivity: "2026-08-01T00:00:00Z",
+      board: board([epic({ title: "Epic", issues: [issue({ title: "Do it", status: "done" })] })], [issue({ title: "Loose end" })]),
+    });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.board?.total).toBe(3);
+    expect(agg.board?.epics).toHaveLength(1);
+    expect(agg.board?.epics[0]).toMatchObject({ id: "e-1", presentIn: ["a", "b"], editedIn: [] });
+    const merged = agg.board!.epics[0].issues[0];
+    // Same container by title, so no spurious "moved" edit; status still diverges.
+    expect(merged).toMatchObject({ id: "i-1", presentIn: ["a", "b"], editedIn: [], statusIn: { a: "doing", b: "done" } });
+    expect(agg.board?.inbox[0]).toMatchObject({ id: "i-2", presentIn: ["a", "b"] });
+    expect(agg.divergences).toEqual([
+      { file: "BOARD.md", kind: "differs", locations: ["a", "b"], detail: "1 board item with a different status between locations" },
+    ]);
+  });
+
+  it("the survivor takes the stable id when only the other checkout had one", () => {
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", board: board([], [issue({ title: "Loose end" })]) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", board: board([], [issue({ id: "i-7", title: "Loose end" })]) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.board?.inbox).toHaveLength(1);
+    expect(agg.board?.inbox[0]).toMatchObject({ id: "i-7", presentIn: ["a", "b"] });
+    expect(agg.divergences).toEqual([]);
+  });
+
+  it("two checkouts backfilled independently with different ids still match", () => {
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", board: board([epic({ id: "e-1", title: "Epic", issues: [issue({ id: "i-1", title: "Do it" })] })], []) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", board: board([epic({ id: "e-9", title: "Epic", issues: [issue({ id: "i-9", title: "Do it" })] })], []) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.board?.total).toBe(2);
+    expect(agg.board?.epics[0]).toMatchObject({ id: "e-1", presentIn: ["a", "b"] });
+    expect(agg.board?.epics[0].issues[0]).toMatchObject({ id: "i-1", presentIn: ["a", "b"], editedIn: [] });
+    expect(agg.divergences).toEqual([]);
+  });
+
+  it("reconciliation never merges two same-titled items that share a checkout", () => {
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", board: board([], [issue({ id: "i-1", title: "Dup" }), issue({ title: "Dup" })]) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", board: board([], [issue({ title: "Dup" })]) });
+    const agg = aggregateGroup([a, b]);
+    // b's un-keyed "Dup" folds into ONE of a's two, never both; a keeps two items.
+    expect(agg.board?.inbox).toHaveLength(2);
+    expect(agg.board?.inbox.filter((i) => i.presentIn.includes("a"))).toHaveLength(2);
+    expect(agg.board?.inbox.filter((i) => i.presentIn.includes("b"))).toHaveLength(1);
+  });
+
   it("renumbers order after dedupe", () => {
     const a = member({ slug: "a", path: WIN, board: board([], [issue({ id: "i-1", title: "x", order: 7 }), issue({ id: "i-2", title: "y", order: 9 })]) });
     const b = member({ slug: "b", path: OTHER, board: board([], [issue({ id: "i-2", title: "y", order: 0 }), issue({ id: "i-3", title: "z", order: 1 })]) });

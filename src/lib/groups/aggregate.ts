@@ -813,6 +813,57 @@ function renumber<T extends { order: number }>(items: T[]): T[] {
   return items;
 }
 
+/**
+ * After the keyed merge, match items that are the same thing under different
+ * identities: a stable id in one checkout and no id in another (one checkout
+ * has been through `boardWriter`, the other is a legacy `BOARD.md`), or two
+ * different random ids for the same item (independent backfills). Candidates
+ * share a bucket (normalized title, plus container title for issues) and
+ * must be present in DISJOINT locations — two same-titled items in one
+ * checkout are two items and never merge. Approximate by design, like the
+ * title fallback itself (plan Risk #3). The survivor keeps its headline copy,
+ * takes a stable id if only the absorbed item had one, and inherits the
+ * absorbed item's presence, status, and edit bookkeeping.
+ */
+function reconcileUnmatched<T extends { id: string; presentIn: string[]; statusIn: Record<string, BoardStatus>; editedIn: string[] }>(
+  items: T[],
+  bucketOf: (t: T) => string,
+  fingerprint: (t: T) => string,
+  onAbsorb: (absorbed: T, into: T) => void
+): T[] {
+  const buckets = new Map<string, T[]>();
+  for (const it of items) {
+    const b = bucketOf(it);
+    const list = buckets.get(b);
+    if (list) list.push(it);
+    else buckets.set(b, [it]);
+  }
+  const absorbed = new Set<T>();
+  for (const list of buckets.values()) {
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i];
+      if (absorbed.has(a)) continue;
+      for (let j = i + 1; j < list.length; j++) {
+        const b = list[j];
+        if (absorbed.has(b)) continue;
+        if (b.presentIn.some((slug) => a.presentIn.includes(slug))) continue;
+        const fpA = fingerprint(a);
+        const fpB = fingerprint(b);
+        for (const slug of b.presentIn) {
+          a.presentIn.push(slug);
+          a.statusIn[slug] = b.statusIn[slug];
+          if (fpB !== fpA && !a.editedIn.includes(slug)) a.editedIn.push(slug);
+        }
+        for (const slug of b.editedIn) if (!a.editedIn.includes(slug)) a.editedIn.push(slug);
+        if (!a.id && b.id) a.id = b.id;
+        absorbed.add(b);
+        onAbsorb(b, a);
+      }
+    }
+  }
+  return items.filter((it) => !absorbed.has(it));
+}
+
 function aggregateBoard(
   ordered: readonly AggregatableProject[],
   divergences: Divergence[]
@@ -820,8 +871,6 @@ function aggregateBoard(
   const have = withFile(ordered, "BOARD.md", (m) => m.board, divergences);
   if (have.length === 0) return undefined;
 
-  // Epics carry their members' issue lists so issues can be merged inside the
-  // merged epic (container-scoped), not by the location-bound `epicId`.
   const epics = mergeKeyed(
     have,
     (m) => m.board?.epics,
@@ -845,49 +894,69 @@ function aggregateBoard(
       if (epicFingerprint(e) !== epicFingerprint(acc)) acc.editedIn.push(slug);
     }
   );
-  const finalEpics = renumber(epics);
+  // Member-specific container keys (`id:e-1#0` in a backfilled checkout,
+  // `t:epic#0` in a legacy one) resolve to the merged epic through this map.
+  // `epics` is in first-insertion order, so counting occurrences reproduces
+  // the `base#n` keys mergeKeyed assigned; an absorbed epic's keys are
+  // redirected to its survivor.
+  const epicByKey = new Map<string, AggregatedBoardEpic>();
+  const seenEpics = new Map<string, number>();
+  for (const e of epics) epicByKey.set(occurrenceKey(boardKey(e), seenEpics), e);
+  const finalEpics = renumber(
+    reconcileUnmatched(epics, (e) => normText(e.title), epicFingerprint, (absorbed, into) => {
+      for (const [k, v] of epicByKey) if (v === absorbed) epicByKey.set(k, into);
+    })
+  );
 
   // Issues: a stable id dedupes ACROSS containers — an issue moved from an
   // epic to the Inbox in one checkout is still one issue, and the move is an
   // edit. Only the title fallback stays container-scoped. Each member's
-  // issues are flattened with the merge key of the container they sit in.
-  type Placed = { issue: BoardIssue; container: string };
+  // issues are flattened with the merge key of the container they sit in,
+  // plus the container's TITLE, which is what "same container" means across
+  // checkouts whose epics carry different identities.
+  type Placed = { issue: BoardIssue; container: string; containerTitle: string };
   const placedBy = new Map<string, Placed[]>();
   for (const m of have) {
     const list: Placed[] = [];
-    // Container identity carries the epic's occurrence index, exactly as
-    // mergeKeyed scopes the epics themselves — two un-backfilled epics with
-    // the same title stay two containers.
     const seen = new Map<string, number>();
     for (const e of m.board?.epics ?? []) {
       const container = occurrenceKey(boardKey(e), seen);
-      for (const i of e.issues) list.push({ issue: i, container });
+      const containerTitle = normText(e.title);
+      for (const i of e.issues) list.push({ issue: i, container, containerTitle });
     }
-    for (const i of m.board?.inbox ?? []) list.push({ issue: i, container: "inbox" });
+    for (const i of m.board?.inbox ?? []) list.push({ issue: i, container: "inbox", containerTitle: "inbox" });
     placedBy.set(m.slug, list);
   }
-  const allIssues = mergeKeyed(
+  const containerTitleIn = new Map<AggregatedBoardIssue, Record<string, string>>();
+  const homeTitle = (it: AggregatedBoardIssue): string => containerTitleIn.get(it)?.[it.presentIn[0]] ?? "inbox";
+  const merged = mergeKeyed(
     have,
     (m) => placedBy.get(m.slug),
     (p) => (p.issue.id ? `id:${p.issue.id}` : `${p.container}|t:${normText(p.issue.title)}`),
     (p, slug): AggregatedBoardIssue => {
       const built = buildIssue(p.issue, slug);
       built.containerIn[slug] = p.container;
+      containerTitleIn.set(built, { [slug]: p.containerTitle });
       return built;
     },
     (acc, p, slug) => {
       foldIssue(acc, p.issue, slug);
       acc.containerIn[slug] = p.container;
-      const home = acc.containerIn[acc.presentIn[0]];
-      if (p.container !== home && !acc.editedIn.includes(slug)) acc.editedIn.push(slug);
+      containerTitleIn.get(acc)![slug] = p.containerTitle;
+      if (p.containerTitle !== homeTitle(acc) && !acc.editedIn.includes(slug)) acc.editedIn.push(slug);
+    }
+  );
+  const allIssues = reconcileUnmatched(
+    merged,
+    (it) => `${homeTitle(it)}|${normText(it.title)}`,
+    issueFingerprint,
+    (absorbed, into) => {
+      const titles = containerTitleIn.get(into)!;
+      for (const [slug, c] of Object.entries(absorbed.containerIn)) into.containerIn[slug] = c;
+      for (const [slug, t] of Object.entries(containerTitleIn.get(absorbed) ?? {})) titles[slug] = t;
     }
   );
   // Place each merged issue where the headline (primary-first) location keeps it.
-  // finalEpics is in first-insertion order, so counting occurrences here
-  // reproduces the same `base#n` keys mergeKeyed assigned.
-  const epicByKey = new Map<string, AggregatedBoardEpic>();
-  const seenEpics = new Map<string, number>();
-  for (const e of finalEpics) epicByKey.set(occurrenceKey(boardKey(e), seenEpics), e);
   const inbox: AggregatedBoardIssue[] = [];
   for (const it of allIssues) {
     const home = it.containerIn[it.presentIn[0]];
