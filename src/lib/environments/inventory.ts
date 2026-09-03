@@ -32,12 +32,31 @@ import type { EnvAgent, EnvPlugin, EnvSkill, EnvironmentHome, EnvironmentsPayloa
 
 const MD = /\.md$/i;
 
-async function readDir(dir: string) {
+/**
+ * Directory entries classified through `stat` (which follows links) rather
+ * than the Dirent flags: a skill or agent installed by symlinking a directory
+ * into `skills/` reports `isDirectory() === false` on its Dirent, and the
+ * catalog's `walkSkillsRoot` accepts that layout, so this reader must too or
+ * the Environments tab reports the skill missing from that home (Codex on
+ * #554). A dangling link classifies as neither and is skipped.
+ */
+async function readDir(dir: string): Promise<{ name: string; isDirectory: boolean; isFile: boolean }[]> {
+  let names: string[];
   try {
-    return await fs.readdir(dir, { withFileTypes: true });
+    names = await fs.readdir(dir);
   } catch {
     return [];
   }
+  const out: { name: string; isDirectory: boolean; isFile: boolean }[] = [];
+  for (const name of names) {
+    try {
+      const st = await fs.stat(path.join(dir, name));
+      out.push({ name, isDirectory: st.isDirectory(), isFile: st.isFile() });
+    } catch {
+      // dangling symlink or a race with deletion — not an entry
+    }
+  }
+  return out;
 }
 
 async function readJson(file: string): Promise<Record<string, unknown> | null> {
@@ -68,9 +87,9 @@ async function readAgents(home: string): Promise<EnvAgent[]> {
     for (const entry of await readDir(dir)) {
       if (entry.name.startsWith(".")) continue;
       const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
+      if (entry.isDirectory) {
         await walk(full, `${prefix}${entry.name}/`);
-      } else if (MD.test(entry.name)) {
+      } else if (entry.isFile && MD.test(entry.name)) {
         out.push({ slug: `${prefix}${entry.name.replace(MD, "")}`, name: await frontmatterName(full) });
       }
     }
@@ -89,7 +108,7 @@ async function readSkillsRoot(root: string, disabled: boolean): Promise<EnvSkill
   for (const entry of await readDir(root)) {
     if (entry.name.startsWith(".")) continue;
     const full = path.join(root, entry.name);
-    if (entry.isDirectory()) {
+    if (entry.isDirectory) {
       const skillMd = path.join(full, "SKILL.md");
       try {
         await fs.access(skillMd);
@@ -97,7 +116,7 @@ async function readSkillsRoot(root: string, disabled: boolean): Promise<EnvSkill
         continue;
       }
       out.push({ slug: entry.name, name: await frontmatterName(skillMd), disabled });
-    } else if (MD.test(entry.name)) {
+    } else if (entry.isFile && MD.test(entry.name)) {
       out.push({ slug: entry.name.replace(MD, ""), name: await frontmatterName(full), disabled });
     }
   }

@@ -7,7 +7,7 @@ vi.mock("fs", () => ({
 }));
 
 import { promises as fs } from "fs";
-import { loadInstalledPlugins } from "@/lib/indexer/walkPlugins";
+import { loadInstalledPlugins, compareSemver } from "@/lib/indexer/walkPlugins";
 
 const mockReadFile = vi.mocked(fs.readFile);
 
@@ -200,5 +200,30 @@ describe("loadInstalledPlugins", () => {
     expect(result).toHaveLength(1);
     // Should not throw; picks one deterministically
     expect(result[0].version).toBeTruthy();
+  });
+});
+
+describe("compareSemver", () => {
+  const desc = (vs: string[]) => [...vs].sort((a, b) => compareSemver(b, a));
+
+  it("orders pre-release identifiers numerically, not lexically", () => {
+    expect(desc(["1.2.3-beta.2", "1.2.3-beta.10", "1.2.3-beta.9"])).toEqual([
+      "1.2.3-beta.10",
+      "1.2.3-beta.9",
+      "1.2.3-beta.2",
+    ]);
+  });
+
+  it("ranks stable above any pre-release, and a longer identifier list above its prefix", () => {
+    expect(desc(["1.2.3-rc.1", "1.2.3", "1.2.3-rc", "1.2.3-alpha"])).toEqual([
+      "1.2.3",
+      "1.2.3-rc.1",
+      "1.2.3-rc",
+      "1.2.3-alpha",
+    ]);
+  });
+
+  it("puts numeric identifiers below alphanumeric ones at the same position (semver §11)", () => {
+    expect(compareSemver("1.0.0-1", "1.0.0-alpha")).toBeLessThan(0);
   });
 });

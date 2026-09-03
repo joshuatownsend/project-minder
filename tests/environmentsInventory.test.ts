@@ -8,6 +8,7 @@ import { resolveUsageHomeKey } from "@/lib/usage/projectMatch";
 
 let tmp: string;
 let home: string;
+let linked = false;
 
 async function write(rel: string, content: string) {
   const full = path.join(tmp, rel);
@@ -26,6 +27,16 @@ beforeAll(async () => {
   await write(".claude/skills/not-a-skill/README.md", "no SKILL.md here");
   await write(".claude/skills/standalone.md", "---\nname: Standalone\n---");
   await write(".claude/skills-disabled/legacy/SKILL.md", "");
+  // A skill installed by linking a directory into skills/. A junction needs no
+  // privilege on Windows and is a symlink on POSIX; skip silently where even
+  // that is refused so the rest of the suite still runs.
+  await write("elsewhere/linked-skill/SKILL.md", "---\nname: Linked\n---");
+  try {
+    await fs.symlink(path.join(tmp, "elsewhere", "linked-skill"), path.join(home, "skills", "linked-skill"), "junction");
+    linked = true;
+  } catch {
+    linked = false;
+  }
   await write(
     ".claude/plugins/installed_plugins.json",
     JSON.stringify({
@@ -35,6 +46,7 @@ beforeAll(async () => {
           { version: "1.10.0", installPath: "/home/me/.claude/plugins/github-new" },
         ],
         "pre@m": [{ version: "2.0.0-beta.1" }, { version: "2.0.0" }, { version: "1.9.9" }],
+        "rc@m": [{ version: "3.0.0-beta.2" }, { version: "3.0.0-beta.10" }],
         "@scope/tool@community": [{ installPath: "/x" }],
         "empty@m": [],
       },
@@ -62,11 +74,17 @@ describe("readHomeInventory", () => {
 
   it("lists bundled and standalone skills, marking the disabled root", async () => {
     const inv = await readHomeInventory(home, true);
-    expect(inv.skills).toEqual([
+    expect(inv.skills.filter((s) => s.slug !== "linked-skill")).toEqual([
       { slug: "legacy", name: undefined, disabled: true },
       { slug: "pr-resolve", name: "PR Resolve", disabled: false },
       { slug: "standalone", name: "Standalone", disabled: false },
     ]);
+  });
+
+  it("follows a directory link in skills/ like the catalog walker does", async () => {
+    if (!linked) return; // link creation refused on this machine
+    const inv = await readHomeInventory(home, true);
+    expect(inv.skills.find((s) => s.slug === "linked-skill")).toEqual({ slug: "linked-skill", name: "Linked", disabled: false });
   });
 
   it("reads plugins from the registry only, highest version wins, scoped names intact", async () => {
@@ -76,6 +94,8 @@ describe("readHomeInventory", () => {
       { id: "github@official", name: "github", marketplace: "official", version: "1.10.0" },
       // Stable beats pre-release at equal numbers, like loadInstalledPlugins.
       { id: "pre@m", name: "pre", marketplace: "m", version: "2.0.0" },
+      // Pre-release identifiers compare numerically: beta.10 > beta.2.
+      { id: "rc@m", name: "rc", marketplace: "m", version: "3.0.0-beta.10" },
     ]);
   });
 

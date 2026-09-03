@@ -29,6 +29,13 @@ function parseSemverParts(v: string): [number, number, number] {
   return [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)];
 }
 
+/** Dot-separated pre-release identifiers after the numeric core, or `null`
+ *  for a stable version (or anything without a `-` suffix). */
+function prereleaseIds(v: string): string[] | null {
+  const m = v.match(/^\d+\.\d+\.\d+-([^+]+)/);
+  return m ? m[1].split(".") : null;
+}
+
 /** Ascending semver order; stable beats pre-release at equal numbers. Shared
  *  with the environments inventory so "highest installed version" means the
  *  same thing on both surfaces. */
@@ -39,9 +46,30 @@ export function compareSemver(a: string, b: string): number {
   if (amin !== bmin) return amin - bmin;
   if (apatch !== bpatch) return apatch - bpatch;
   // Stable beats pre-release: "1.2.3" > "1.2.3-beta"
-  const aPrerelease = /^\d+\.\d+\.\d+-./.test(a);
-  const bPrerelease = /^\d+\.\d+\.\d+-./.test(b);
-  if (aPrerelease !== bPrerelease) return aPrerelease ? -1 : 1;
+  const aPre = prereleaseIds(a);
+  const bPre = prereleaseIds(b);
+  if ((aPre === null) !== (bPre === null)) return aPre === null ? 1 : -1;
+  // Both pre-releases: compare identifiers per semver §11 — numeric ones
+  // numerically ("beta.10" > "beta.2"), otherwise lexically, and a longer
+  // list wins when every shared identifier is equal ("beta.1" > "beta").
+  if (aPre !== null && bPre !== null) {
+    const n = Math.min(aPre.length, bPre.length);
+    for (let i = 0; i < n; i++) {
+      const x = aPre[i];
+      const y = bPre[i];
+      const xNum = /^\d+$/.test(x);
+      const yNum = /^\d+$/.test(y);
+      if (xNum && yNum) {
+        const d = parseInt(x, 10) - parseInt(y, 10);
+        if (d !== 0) return d;
+      } else if (xNum !== yNum) {
+        return xNum ? -1 : 1;
+      } else if (x !== y) {
+        return x < y ? -1 : 1;
+      }
+    }
+    if (aPre.length !== bPre.length) return aPre.length - bPre.length;
+  }
   return a.localeCompare(b);
 }
 
