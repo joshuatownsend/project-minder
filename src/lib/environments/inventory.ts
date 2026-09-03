@@ -4,6 +4,7 @@ import path from "path";
 import { partitionClaudeHomes, getPrimaryClaudeHome, homeDedupeKey } from "@/lib/claudeHome";
 import { normalizePathKey } from "@/lib/platform";
 import { parseFrontmatter } from "@/lib/indexer/parseFrontmatter";
+import { compareSemver } from "@/lib/indexer/walkPlugins";
 import type { MinderConfig } from "@/lib/types";
 import type { EnvAgent, EnvPlugin, EnvSkill, EnvironmentHome, EnvironmentsPayload } from "./diff";
 
@@ -114,8 +115,8 @@ async function readSkills(home: string): Promise<EnvSkill[]> {
 /**
  * Installed plugins from the registry file alone — never the install paths,
  * which are absolute in the home's own filesystem (see module header).
- * Highest version wins when a key carries several installs, matching
- * `loadInstalledPlugins`.
+ * Highest version wins when a key carries several installs, using the same
+ * `compareSemver` as `loadInstalledPlugins` so the two surfaces agree.
  */
 async function readPlugins(home: string): Promise<EnvPlugin[]> {
   const doc = await readJson(path.join(home, "plugins", "installed_plugins.json"));
@@ -130,20 +131,10 @@ async function readPlugins(home: string): Promise<EnvPlugin[]> {
     const versions = installs
       .map((i) => (i && typeof i === "object" ? (i as { version?: unknown }).version : undefined))
       .filter((v): v is string => typeof v === "string")
-      .sort(compareSemverDesc);
+      .sort((a, b) => compareSemver(b, a));
     out.push({ id, name, marketplace, version: versions[0] });
   }
   return out.sort((a, b) => a.id.localeCompare(b.id));
-}
-
-function compareSemverDesc(a: string, b: string): number {
-  const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
-  const pb = b.split(".").map((n) => parseInt(n, 10) || 0);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const d = (pb[i] ?? 0) - (pa[i] ?? 0);
-    if (d !== 0) return d;
-  }
-  return 0;
 }
 
 /**

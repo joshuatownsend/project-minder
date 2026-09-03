@@ -34,6 +34,7 @@ beforeAll(async () => {
           { version: "1.2.0", installPath: "/home/me/.claude/plugins/github" },
           { version: "1.10.0", installPath: "/home/me/.claude/plugins/github-new" },
         ],
+        "pre@m": [{ version: "2.0.0-beta.1" }, { version: "2.0.0" }, { version: "1.9.9" }],
         "@scope/tool@community": [{ installPath: "/x" }],
         "empty@m": [],
       },
@@ -73,6 +74,8 @@ describe("readHomeInventory", () => {
     expect(inv.plugins).toEqual([
       { id: "@scope/tool@community", name: "@scope/tool", marketplace: "community", version: undefined },
       { id: "github@official", name: "github", marketplace: "official", version: "1.10.0" },
+      // Stable beats pre-release at equal numbers, like loadInstalledPlugins.
+      { id: "pre@m", name: "pre", marketplace: "m", version: "2.0.0" },
     ]);
   });
 

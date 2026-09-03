@@ -709,9 +709,22 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
  */
 function GroupChip({ group }: { group: { slug: string; memberCount: number } }) {
   const router = useRouter();
+  const go = (e: React.SyntheticEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    router.push(`/group/${group.slug}`);
+  };
+  // A span with role="link", not a <button>: the card is already an <a>, and
+  // interactive content inside an anchor is invalid HTML (same pattern as the
+  // CI chip above).
   return (
-    <button
-      onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(`/group/${group.slug}`); }}
+    <span
+      role="link"
+      tabIndex={0}
+      onClick={go}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") go(e);
+      }}
       title={`${pluralize(group.memberCount, "location")} — open the group view`}
       aria-label={`Open group view: ${pluralize(group.memberCount, "location")}`}
       style={{
@@ -721,12 +734,10 @@ function GroupChip({ group }: { group: { slug: string; memberCount: number } }) 
         background: "var(--info-bg)",
         padding: "1px 5px",
         borderRadius: "3px",
-        border: "none",
         cursor: "pointer",
-        lineHeight: "inherit",
       }}
     >
       {group.memberCount} loc
-    </button>
+    </span>
   );
 }

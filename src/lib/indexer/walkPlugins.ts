@@ -29,7 +29,10 @@ function parseSemverParts(v: string): [number, number, number] {
   return [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)];
 }
 
-function compareSemver(a: string, b: string): number {
+/** Ascending semver order; stable beats pre-release at equal numbers. Shared
+ *  with the environments inventory so "highest installed version" means the
+ *  same thing on both surfaces. */
+export function compareSemver(a: string, b: string): number {
   const [amaj, amin, apatch] = parseSemverParts(a);
   const [bmaj, bmin, bpatch] = parseSemverParts(b);
   if (amaj !== bmaj) return amaj - bmaj;
