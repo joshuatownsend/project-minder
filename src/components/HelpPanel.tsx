@@ -10,6 +10,7 @@ const slugTitles: Record<HelpSlug, string> = {
   "getting-started": "Getting Started",
   "search-and-filter": "Search, Filter & Sort",
   "project-details": "Project Details",
+  "project-groups": "Project Groups",
   "dev-servers": "Dev Servers",
   ports: "Ports",
   "project-status": "Project Status",

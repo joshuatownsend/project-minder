@@ -147,7 +147,8 @@ export function CostsTab({ usageSlug, usageHomeKey }: { usageSlug: string; usage
   );
 }
 
-function SectionHeader({ label }: { label: string }) {
+/** Shared with the group Costs tab (`groups/GroupCostsTab.tsx`). */
+export function SectionHeader({ label }: { label: string }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "10px" }}>
       <span style={{
@@ -162,7 +163,8 @@ function SectionHeader({ label }: { label: string }) {
   );
 }
 
-function CostList({ rows, total, currency, fxRate }: {
+/** Shared with the group Costs tab (`groups/GroupCostsTab.tsx`). */
+export function CostList({ rows, total, currency, fxRate }: {
   rows: { key: string; label: string; cost: number; sub?: string }[];
   total: number; currency: string; fxRate: number;
 }) {

@@ -107,6 +107,13 @@ interface ProjectCardProps {
   efficiencyGrade?: EfficiencyGrade;
   efficiencyTrend?: GradeTrend;
   githubActivity?: GithubActivity;
+  /**
+   * Set when this checkout belongs to a project group (the same repo scanned
+   * in more than one location). Renders an `N locations` chip linking to
+   * `/group/<slug>`; absent for single-location projects, which must render
+   * exactly as before groups existed.
+   */
+  group?: { slug: string; memberCount: number };
 }
 
 // Trend arrow shown next to the efficiency grade (item 4b). Only the
@@ -139,7 +146,7 @@ const GRADE_STYLE: Record<string, { color: string; bg: string; border: string }>
   F: { color: "var(--status-error-text)",  bg: "var(--status-error-bg)",  border: "var(--status-error-border)"  },
 };
 
-export function ProjectCard({ project, onArchive, compact = false, pinned = false, onTogglePin, efficiencyGrade, efficiencyTrend, githubActivity }: ProjectCardProps) {
+export function ProjectCard({ project, onArchive, compact = false, pinned = false, onTogglePin, efficiencyGrade, efficiencyTrend, githubActivity, group }: ProjectCardProps) {
   const [devPort, setDevPort] = useState(project.devPort);
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [swarmComposerOpen, setSwarmComposerOpen] = useState(false);
@@ -276,6 +283,7 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
                 <GradeTrendArrow trend={efficiencyTrend} />
               </span>
             )}
+            {group && <GroupChip group={group} />}
             <StatusBadge status={project.status} />
             {onTogglePin && (
               <button
@@ -609,6 +617,7 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
                   wt {worktreeCount}
                 </span>
               )}
+              {group && <GroupChip group={group} />}
               {project.agentCount != null && project.agentCount > 0 && (
                 <span
                   title={pluralize(project.agentCount, "agent")}
@@ -689,5 +698,35 @@ export function ProjectCard({ project, onArchive, compact = false, pinned = fals
         </div>
       </div>
     </Link>
+  );
+}
+
+/**
+ * `N locations` chip for a checkout that belongs to a project group. Same
+ * tokens as the `wt` worktree chip beside it (both say "this repo exists in
+ * more than one place"); navigates with `router.push` because the card is
+ * already an `<a>` and a nested anchor is invalid HTML (see the CI chip).
+ */
+function GroupChip({ group }: { group: { slug: string; memberCount: number } }) {
+  const router = useRouter();
+  return (
+    <button
+      onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(`/group/${group.slug}`); }}
+      title={`${pluralize(group.memberCount, "location")} — open the group view`}
+      aria-label={`Open group view: ${pluralize(group.memberCount, "location")}`}
+      style={{
+        fontSize: "0.68rem",
+        fontFamily: "var(--font-mono)",
+        color: "var(--info)",
+        background: "var(--info-bg)",
+        padding: "1px 5px",
+        borderRadius: "3px",
+        border: "none",
+        cursor: "pointer",
+        lineHeight: "inherit",
+      }}
+    >
+      {group.memberCount} loc
+    </button>
   );
 }
