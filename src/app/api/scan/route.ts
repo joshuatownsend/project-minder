@@ -12,6 +12,8 @@ import { runMcpSecurityScan } from "@/lib/scanner/mcp-security";
 import { clearWslCache } from "@/lib/wsl";
 import { gitStatusCache } from "@/lib/gitStatusCache";
 import { githubActivityCache } from "@/lib/githubActivityCache";
+import { readConfig } from "@/lib/config";
+import { withGroups } from "@/lib/groups/withGroups";
 
 export async function POST() {
   invalidateCache();
@@ -39,5 +41,7 @@ export async function POST() {
     runMcpSecurityScan("scan").catch(() => null),
   ]);
   setCachedScan(result);
-  return NextResponse.json(result);
+  // Same shape as GET /api/projects: the client replaces its ScanResult with
+  // this response, so groups must ride along or a manual rescan drops them.
+  return NextResponse.json(withGroups(result, await readConfig()));
 }
