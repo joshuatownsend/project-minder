@@ -47,6 +47,45 @@ const MUTED: React.CSSProperties = {
   color: "var(--text-muted)",
 };
 
+/** Locations whose indented detail lines differ from the headline copy. */
+function detailsEditedIn(
+  presentIn: readonly string[],
+  headline: readonly string[],
+  detailsIn: Record<string, readonly string[]>
+): string[] {
+  const head = headline.join("\n");
+  return presentIn.filter((slug) => (detailsIn[slug] ?? []).join("\n") !== head);
+}
+
+/**
+ * The other locations' detail lines, shown under the headline copy so an
+ * alternative command or URL is never dropped (the aggregate keeps every
+ * copy in `detailsIn`; this is where they become visible).
+ */
+function AltDetails({
+  editedIn,
+  detailsIn,
+  labels,
+}: {
+  editedIn: readonly string[];
+  detailsIn: Record<string, readonly string[]>;
+  labels: Labels;
+}) {
+  if (editedIn.length === 0) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }}>
+      {editedIn.map((slug) => (
+        <div key={slug} style={{ display: "flex", gap: "6px", alignItems: "flex-start" }}>
+          <span style={{ ...MUTED, color: "var(--accent)", flexShrink: 0 }}>{labels[slug] ?? slug}:</span>
+          <pre style={{ ...MUTED, whiteSpace: "pre-wrap", margin: 0, color: "var(--text-secondary)" }}>
+            {(detailsIn[slug] ?? []).join("\n") || "(no details)"}
+          </pre>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Checkbox({ checked }: { checked: boolean }) {
   return (
     <span
@@ -230,32 +269,37 @@ export function GroupManualStepsTab({
             </span>
           </Heading>
           {entry.note && <div style={{ ...MUTED, marginBottom: "6px" }}>{entry.note}</div>}
-          {entry.steps.map((step, j) => (
-            <div key={`${step.text}#${j}`} style={{ ...ROW, opacity: step.completed ? 0.6 : 1 }}>
-              <Checkbox checked={step.completed} />
-              <span style={{ flex: 1 }}>
-                <span style={{ textDecoration: step.completed ? "line-through" : "none" }}>{step.text}</span>
-                {step.details.length > 0 && (
-                  <pre
-                    style={{
-                      ...MUTED,
-                      whiteSpace: "pre-wrap",
-                      margin: "4px 0 0",
-                      color: "var(--text-secondary)",
-                    }}
-                  >
-                    {step.details.join("\n")}
-                  </pre>
-                )}
-              </span>
-              <PresenceChips
-                presentIn={step.presentIn}
-                completedIn={step.completedIn}
-                memberSlugs={memberSlugs}
-                labels={labels}
-              />
-            </div>
-          ))}
+          {entry.steps.map((step, j) => {
+            const editedIn = detailsEditedIn(step.presentIn, step.details, step.detailsIn);
+            return (
+              <div key={`${step.text}#${j}`} style={{ ...ROW, opacity: step.completed ? 0.6 : 1 }}>
+                <Checkbox checked={step.completed} />
+                <span style={{ flex: 1 }}>
+                  <span style={{ textDecoration: step.completed ? "line-through" : "none" }}>{step.text}</span>
+                  {step.details.length > 0 && (
+                    <pre
+                      style={{
+                        ...MUTED,
+                        whiteSpace: "pre-wrap",
+                        margin: "4px 0 0",
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      {step.details.join("\n")}
+                    </pre>
+                  )}
+                  <AltDetails editedIn={editedIn} detailsIn={step.detailsIn} labels={labels} />
+                </span>
+                <PresenceChips
+                  presentIn={step.presentIn}
+                  completedIn={step.completedIn}
+                  editedIn={editedIn}
+                  memberSlugs={memberSlugs}
+                  labels={labels}
+                />
+              </div>
+            );
+          })}
         </div>
       ))}
     </div>
@@ -294,25 +338,30 @@ export function GroupOpsTab({ operations, memberSlugs, labels }: { operations: A
               <MarkdownRenderer content={section.body} />
             </div>
           )}
-          {section.items.map((item, j) => (
-            <div key={`${item.text}#${j}`} style={{ ...ROW, opacity: item.done ? 0.6 : 1 }}>
-              <Checkbox checked={item.done} />
-              <span style={{ flex: 1 }}>
-                <span style={{ textDecoration: item.done ? "line-through" : "none" }}>{item.text}</span>
-                {item.details.length > 0 && (
-                  <pre style={{ ...MUTED, whiteSpace: "pre-wrap", margin: "4px 0 0", color: "var(--text-secondary)" }}>
-                    {item.details.join("\n")}
-                  </pre>
-                )}
-              </span>
-              <PresenceChips
-                presentIn={item.presentIn}
-                completedIn={item.doneIn}
-                memberSlugs={memberSlugs}
-                labels={labels}
-              />
-            </div>
-          ))}
+          {section.items.map((item, j) => {
+            const editedIn = detailsEditedIn(item.presentIn, item.details, item.detailsIn);
+            return (
+              <div key={`${item.text}#${j}`} style={{ ...ROW, opacity: item.done ? 0.6 : 1 }}>
+                <Checkbox checked={item.done} />
+                <span style={{ flex: 1 }}>
+                  <span style={{ textDecoration: item.done ? "line-through" : "none" }}>{item.text}</span>
+                  {item.details.length > 0 && (
+                    <pre style={{ ...MUTED, whiteSpace: "pre-wrap", margin: "4px 0 0", color: "var(--text-secondary)" }}>
+                      {item.details.join("\n")}
+                    </pre>
+                  )}
+                  <AltDetails editedIn={editedIn} detailsIn={item.detailsIn} labels={labels} />
+                </span>
+                <PresenceChips
+                  presentIn={item.presentIn}
+                  completedIn={item.doneIn}
+                  editedIn={editedIn}
+                  memberSlugs={memberSlugs}
+                  labels={labels}
+                />
+              </div>
+            );
+          })}
         </div>
       ))}
     </div>

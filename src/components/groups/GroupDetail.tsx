@@ -75,8 +75,12 @@ export function GroupDetail({
     return out;
   }, [aggregate, demo]);
 
-  const initialTab = (searchParams.get("tab") ?? "overview") as TabKey;
-  const [activeTab, setActiveTab] = useState<TabKey>(initialTab);
+  // Validate the deep-linked tab at init, not only in the effect below, so an
+  // unknown or hidden `?tab=` never paints an empty panel for a frame.
+  const [activeTab, setActiveTab] = useState<TabKey>(() => {
+    const requested = searchParams.get("tab") as TabKey | null;
+    return requested && tabs.some((t) => t.key === requested) ? requested : "overview";
+  });
 
   const handleTabChange = useCallback(
     (tab: TabKey) => {

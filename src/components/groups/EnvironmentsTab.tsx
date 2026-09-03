@@ -29,7 +29,7 @@ const KIND_LABEL: Record<EnvKind, string> = {
 export function EnvironmentsTab({ members, labels }: { members: readonly ProjectData[]; labels: Labels }) {
   const { data, loading, error } = useEnvironments();
 
-  const { homes, columns, unmapped } = useMemo(() => {
+  const { homes, columns, unmapped, unavailable } = useMemo(() => {
     const homes: EnvironmentHome[] = [];
     const columns = new Map<string, string[]>();
     const unmapped: string[] = [];
@@ -45,7 +45,12 @@ export function EnvironmentsTab({ members, labels }: { members: readonly Project
       }
       columns.get(home.key)!.push(labels[m.slug] ?? m.slug);
     }
-    return { homes, columns, unmapped };
+    // Only the unreadable homes THIS group lives under. The payload covers
+    // every configured home, and a stopped distro that owns none of these
+    // members is not a gap in this comparison (Codex on #554).
+    const memberKeys = new Set(members.map((m) => m.usageHomeKey).filter((k): k is string => k !== undefined));
+    const unavailable = (data?.unavailable ?? []).filter((u) => memberKeys.has(u.key));
+    return { homes, columns, unmapped, unavailable };
   }, [data, members, labels]);
 
   const diff = useMemo(() => diffEnvironments(homes), [homes]);
@@ -73,7 +78,7 @@ export function EnvironmentsTab({ members, labels }: { members: readonly Project
             {labels[slug] ?? slug}: home unavailable
           </DivergenceChip>
         ))}
-        {data.unavailable.map((u) => (
+        {unavailable.map((u) => (
           <DivergenceChip key={u.path} title={u.path}>
             {u.distro ? `WSL ${u.distro}` : u.path}: {u.reason}
           </DivergenceChip>

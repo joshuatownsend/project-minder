@@ -55,6 +55,9 @@ export interface EnvironmentHome {
 }
 
 export interface UnavailableEnvironmentHome {
+  /** Same key scheme as `EnvironmentHome.key`, so a client can match it to a
+   *  member's `usageHomeKey` and show only the homes THIS group lives under. */
+  key: string;
   path: string;
   distro?: string;
   /** `checkWslRoot`'s verdict — `wsl-stopped`, `wsl-distro-not-found`, … */

@@ -205,6 +205,11 @@ export async function loadEnvironments(config: MinderConfig): Promise<Environmen
   );
   return {
     homes,
-    unavailable: unavailable.map((u) => ({ path: u.path, distro: u.distro, reason: u.reason })),
+    unavailable: unavailable.map((u) => ({
+      key: environmentHomeKey(u.path),
+      path: u.path,
+      distro: u.distro,
+      reason: u.reason,
+    })),
   };
 }
