@@ -15,7 +15,7 @@
  */
 
 const WSL_UNC = /^[\\/]{2}(wsl\.localhost|wsl\$)[\\/]([^\\/]+)/i;
-const UNC = /^[\\/]{2}([^\\/]+)/;
+const UNC = /^[\\/]{2}([^\\/]+)[\\/]+([^\\/]+)/;
 const DRIVE = /^([A-Za-z]):/;
 
 /** Split a path into its display segments, dropping empty ones. */
@@ -24,14 +24,17 @@ function segments(p: string): string[] {
 }
 
 /**
- * Coarse label: the drive letter, WSL distro, UNC host, or root. Two members
- * on different drives or in different distros are told apart by this alone.
+ * Coarse label: the drive letter, WSL distro, UNC host + share, or root. Two
+ * members on different drives, distros, or shares are told apart by this
+ * alone. The share is part of the UNC root because `candidates()` treats the
+ * first two UNC segments as covered — a host-only label would leave
+ * `\\nas\a\repo` and `\\nas\b\repo` indistinguishable (Codex on #554).
  */
 export function locationRootLabel(path: string): string {
   const wsl = WSL_UNC.exec(path);
   if (wsl) return `WSL ${wsl[2]}`;
   const unc = UNC.exec(path);
-  if (unc) return `\\\\${unc[1]}`;
+  if (unc) return `\\\\${unc[1]}\\${unc[2]}`;
   const drive = DRIVE.exec(path);
   if (drive) return `${drive[1].toUpperCase()}:`;
   return "/";

@@ -7,7 +7,7 @@ describe("locationRootLabel", () => {
     expect(locationRootLabel("d:/dev/foo")).toBe("D:");
     expect(locationRootLabel("\\\\wsl.localhost\\Ubuntu\\home\\me\\dev\\foo")).toBe("WSL Ubuntu");
     expect(locationRootLabel("//wsl$/Debian/home/me/foo")).toBe("WSL Debian");
-    expect(locationRootLabel("\\\\nas\\share\\foo")).toBe("\\\\nas");
+    expect(locationRootLabel("\\\\nas\\share\\foo")).toBe("\\\\nas\\share");
     expect(locationRootLabel("/home/me/dev/foo")).toBe("/");
   });
 });
@@ -48,6 +48,13 @@ describe("locationLabels", () => {
       "\\\\wsl.localhost\\Ubuntu\\srv\\foo",
     ]);
     expect([...labels.values()]).toEqual(["WSL Ubuntu:/home", "WSL Ubuntu:/srv"]);
+  });
+
+  it("tells two shares on one UNC host apart, and refines within a share", () => {
+    const shares = locationLabels(["\\\\nas\\share-a\\repo", "\\\\nas\\share-b\\repo"]);
+    expect([...shares.values()]).toEqual(["\\\\nas\\share-a", "\\\\nas\\share-b"]);
+    const within = locationLabels(["\\\\nas\\share\\a\\repo", "\\\\nas\\share\\b\\repo"]);
+    expect([...within.values()]).toEqual(["\\\\nas\\share\\a", "\\\\nas\\share\\b"]);
   });
 
   it("keys on the raw path and preserves input order", () => {
