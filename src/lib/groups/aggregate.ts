@@ -539,6 +539,15 @@ function normText(text: string): string {
 }
 
 /**
+ * Per-line `normText` for newline-joined fields (issue `detail`, epic
+ * `description`): line structure is content, so collapsing newlines would hide
+ * a real edit, while trailing space and blank lines still are not one.
+ */
+function normLines(text: string): string {
+  return text.split(/\r?\n/).map(normText).filter(Boolean).join("\n");
+}
+
+/**
  * Merge one collection per member into a deduplicated list.
  *
  * Keys are made unique *within* a member by occurrence index, so two
@@ -771,7 +780,7 @@ function issueFingerprint(i: {
     normText(i.title),
     i.priority ?? null,
     [...i.labels].sort(compareCodepoint),
-    i.detail === undefined ? null : normText(i.detail),
+    i.detail === undefined ? null : normLines(i.detail),
     i.worktree ?? null,
     i.sessionId ?? null,
   ]);
@@ -787,7 +796,7 @@ function epicFingerprint(e: {
     normText(e.title),
     e.priority ?? null,
     [...e.labels].sort(compareCodepoint),
-    e.description === undefined ? null : normText(e.description),
+    e.description === undefined ? null : normLines(e.description),
   ]);
 }
 

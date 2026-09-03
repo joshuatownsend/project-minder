@@ -363,6 +363,18 @@ describe("aggregateGroup — BOARD.md", () => {
     ]);
   });
 
+  it("line structure in a detail or description is content, not whitespace", () => {
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", board: board([epic({ id: "e-1", title: "E", description: "one\ntwo" })], [issue({ id: "i-1", title: "x", detail: "run a\nthen b" })]) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", board: board([epic({ id: "e-1", title: "E", description: "one two" })], [issue({ id: "i-1", title: "x", detail: "run a then b" })]) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.board?.epics[0].editedIn).toEqual(["b"]);
+    expect(agg.board?.inbox[0].editedIn).toEqual(["b"]);
+    // Trailing whitespace and blank lines are still not edits.
+    const c = member({ slug: "c", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", board: board([], [issue({ id: "i-1", title: "x", detail: " run a \n\nthen b " })]) });
+    const a2 = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", board: board([], [issue({ id: "i-1", title: "x", detail: "run a\nthen b" })]) });
+    expect(aggregateGroup([a2, c]).board?.inbox[0].editedIn).toEqual([]);
+  });
+
   it("label order and whitespace are not edits", () => {
     const a = member({ slug: "a", path: WIN, board: board([], [issue({ id: "i-1", title: "Same  title", labels: ["x", "y"] })]) });
     const b = member({ slug: "b", path: OTHER, board: board([], [issue({ id: "i-1", title: "Same title", labels: ["y", "x"] })]) });
