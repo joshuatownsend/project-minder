@@ -1159,7 +1159,7 @@ function toStep(s: { text: string; completed: boolean; details: string[] }, slug
   return {
     text: normText(s.text),
     completed: s.completed,
-    details: [...s.details],
+    details: s.details.map(normText),
     presentIn: [slug],
     completedIn: s.completed ? [slug] : [],
     detailsIn: { [slug]: [...s.details] },
@@ -1265,7 +1265,7 @@ function toOpsItem(i: { text: string; done: boolean; details: string[] }, slug: 
   return {
     text: normText(i.text),
     done: i.done,
-    details: [...i.details],
+    details: i.details.map(normText),
     presentIn: [slug],
     doneIn: i.done ? [slug] : [],
     detailsIn: { [slug]: [...i.details] },
