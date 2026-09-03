@@ -96,9 +96,13 @@ function demoInsights(nowMs: number, slug: string, path: string): InsightsInfo {
   return {
     total: entries.length,
     entries: entries.map((e, i) => ({
-      id: `${slug}-insight-${i}`,
+      // Repo-borne, like the real marker ids the parser persists in
+      // INSIGHTS.md: two checkouts of one repo carry the SAME ids, which is
+      // what lets the group page deduplicate them. Keyed on the entry, not
+      // the slug.
+      id: `insight-${i}`,
       content: e.content,
-      sessionId: `demo-sess-${slug}-${i}`,
+      sessionId: `demo-sess-${i}`,
       date: iso(nowMs, e.offset),
       project: slug,
       projectPath: path,

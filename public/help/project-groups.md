@@ -13,7 +13,7 @@ A project with a single checkout is never a group. Nothing about its card or det
 
 ## On the dashboard
 
-Each member card carries a **`N loc`** chip next to the worktree chip. Click it to open the group page. Member cards otherwise render exactly as before — they keep their own pins, live-session status, and dev-server controls, which is why the dashboard does not collapse members into a single group card.
+In the full and compact card views, each member card carries a **`N loc`** chip next to the worktree chip. Click it to open the group page. (The sparkline list view has no chip.) Member cards otherwise render exactly as before — they keep their own pins, live-session status, and dev-server controls, which is why the dashboard does not collapse members into a single group card.
 
 ## The group page
 
@@ -39,7 +39,7 @@ The merged, deduplicated view of each repo-borne file. Identical items across ch
 |---|---|
 | `only in C:` / `not in WSL Ubuntu` | The item exists in some locations but not others. |
 | `done in C:` | Checked off in some locations, still open in others. |
-| `C:: doing` `WSL Ubuntu: done` | A board item whose status differs per location. |
+| `C: → doing` `WSL Ubuntu → done` | A board item whose status differs per location. |
 | `edited in D:` | Same item (same id) but a different title, detail, priority, or content. |
 
 Location labels are the shortest path prefix that tells the members apart: a drive letter or WSL distro when that is enough, the parent directory when two members share a drive.

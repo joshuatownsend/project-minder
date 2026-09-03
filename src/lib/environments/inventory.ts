@@ -17,7 +17,7 @@ import type { EnvAgent, EnvPlugin, EnvSkill, EnvironmentHome, EnvironmentsPayloa
  * registry's own filesystem, which for a WSL home is a Linux path that is
  * meaningless from Windows. Teaching the catalog a home dimension is a real
  * change (a `home` parameter through `loadCatalog`, the walkers, the route
- * caches, and a `homeKey` on every entry); tracked as a follow-up issue. This
+ * caches, and a `homeKey` on every entry); tracked as #553. This
  * reader answers the narrower question the Environments tab asks — what is
  * installed WHERE — without descending into any plugin, and so needs nothing
  * but the home directory itself.
