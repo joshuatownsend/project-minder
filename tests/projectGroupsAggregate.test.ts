@@ -368,6 +368,9 @@ describe("aggregateGroup — BOARD.md", () => {
     const b = member({ slug: "b", path: OTHER, board: board([], [issue({ id: "i-1", title: "Same title", labels: ["y", "x"] })]) });
     const agg = aggregateGroup([a, b]);
     expect(agg.board?.inbox[0].editedIn).toEqual([]);
+    // Headline fields carry the normalized form the identity uses, so output
+    // does not jitter when the primary flips.
+    expect(agg.board?.inbox[0]).toMatchObject({ title: "Same title", labels: ["x", "y"] });
     expect(agg.divergences).toEqual([]);
   });
 

@@ -785,10 +785,10 @@ function epicFingerprint(e: {
 function buildIssue(i: BoardIssue, slug: string): AggregatedBoardIssue {
   return {
     id: i.id,
-    title: i.title,
+    title: normText(i.title),
     status: i.status,
     priority: i.priority,
-    labels: [...i.labels],
+    labels: [...i.labels].sort(compareCodepoint),
     worktree: i.worktree,
     sessionId: i.sessionId,
     detail: i.detail,
@@ -877,10 +877,10 @@ function aggregateBoard(
     boardKey,
     (e, slug): AggregatedBoardEpic => ({
       id: e.id,
-      title: e.title,
+      title: normText(e.title),
       status: e.status,
       priority: e.priority,
-      labels: [...e.labels],
+      labels: [...e.labels].sort(compareCodepoint),
       description: e.description,
       order: 0,
       issues: [],
@@ -1024,7 +1024,7 @@ function aggregateManualSteps(
     (e, slug): EntryAcc => ({
       date: e.date,
       featureSlug: e.featureSlug,
-      title: e.title,
+      title: normText(e.title),
       note: e.note,
       steps: [],
       presentIn: [slug],
@@ -1135,7 +1135,7 @@ function aggregateOperations(
     (s) => `${s.key}|${normText(s.heading)}`,
     (s, slug): SectionAcc => ({
       key: s.key,
-      heading: s.heading,
+      heading: normText(s.heading),
       body: s.body,
       items: [],
       presentIn: [slug],
