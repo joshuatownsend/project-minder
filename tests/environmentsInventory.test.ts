@@ -120,6 +120,16 @@ describe("readHomeInventory", () => {
     expect(inv.primary).toBe(true);
   });
 
+  it("rejects array-shaped plugins and mcpServers instead of emitting indices", async () => {
+    const bad = path.join(tmp, "bad", ".claude");
+    await write("bad/.claude/plugins/installed_plugins.json", JSON.stringify({ plugins: [{ version: "1.0.0" }] }));
+    await write("bad/.claude/settings.json", JSON.stringify({ mcpServers: ["a", "b"] }));
+    await write("bad/.claude.json", JSON.stringify({ mcpServers: ["c"] }));
+    const inv = await readHomeInventory(bad, false);
+    expect(inv.plugins).toEqual([]);
+    expect(inv.mcpServers).toEqual([]);
+  });
+
   it("returns empty lists for a home that does not exist", async () => {
     const inv = await readHomeInventory(path.join(tmp, "missing", ".claude"), false);
     expect(inv).toMatchObject({ agents: [], skills: [], plugins: [], mcpServers: [], primary: false });

@@ -59,12 +59,15 @@ async function readDir(dir: string): Promise<{ name: string; isDirectory: boolea
   return out;
 }
 
+/** A JSON object, not an array: `Object.keys([...])` would yield indices as names. */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
 async function readJson(file: string): Promise<Record<string, unknown> | null> {
   try {
     const parsed: unknown = JSON.parse(await fs.readFile(file, "utf-8"));
-    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
+    return isPlainObject(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -159,9 +162,9 @@ async function readSkills(home: string): Promise<EnvSkill[]> {
 async function readPlugins(home: string): Promise<EnvPlugin[]> {
   const doc = await readJson(path.join(home, "plugins", "installed_plugins.json"));
   const plugins = doc?.plugins;
-  if (plugins === null || typeof plugins !== "object") return [];
+  if (!isPlainObject(plugins)) return [];
   const out: EnvPlugin[] = [];
-  for (const [id, installs] of Object.entries(plugins as Record<string, unknown>)) {
+  for (const [id, installs] of Object.entries(plugins)) {
     if (!Array.isArray(installs) || installs.length === 0) continue;
     const lastAt = id.lastIndexOf("@");
     const name = lastAt > 0 ? id.slice(0, lastAt) : id;
@@ -188,8 +191,8 @@ async function readMcpServerNames(home: string): Promise<string[]> {
   const names = new Set<string>();
   for (const doc of [settings, claudeJson]) {
     const servers = doc?.mcpServers;
-    if (servers !== null && typeof servers === "object") {
-      for (const name of Object.keys(servers as object)) names.add(name);
+    if (isPlainObject(servers)) {
+      for (const name of Object.keys(servers)) names.add(name);
     }
   }
   return [...names].sort((a, b) => a.localeCompare(b));
