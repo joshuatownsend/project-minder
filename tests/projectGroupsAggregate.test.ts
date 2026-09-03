@@ -1,0 +1,801 @@
+import { describe, it, expect } from "vitest";
+import {
+  aggregateGroup,
+  groupUsageKeys,
+  ratio,
+  type AggregatableProject,
+} from "@/lib/groups/aggregate";
+import { deriveProjectGroups } from "@/lib/groups/derive";
+import type { TodoItem, InsightEntry, ManualStepEntry } from "@/lib/types/checklist";
+import type { BoardEpic, BoardIssue } from "@/lib/types/board";
+import type { OpsRunbookSection } from "@/lib/types/ops";
+
+// ── Fixtures ─────────────────────────────────────────────────────────────────
+// Small `Partial<T>` builders with spread overrides — the opsSummary.test.ts
+// pattern. `member()` builds the read-set, never a whole ProjectData.
+
+const WIN = "C:\\dev\\bamcli";
+const OTHER = "D:\\dev\\bamcli";
+// Members sort by RAW path codepoint order, matching deriveProjectGroups, so a
+// UNC path (leading backslash, 0x5C) lands AFTER a drive letter (`C`, 0x43).
+// Used only where a UNC path matters.
+const WSL = "\\\\wsl.localhost\\Ubuntu-26.04\\home\\josh\\printing-press\\library\\bamcli";
+
+function member(over: Partial<AggregatableProject> & { slug: string; path: string }): AggregatableProject {
+  return {
+    name: "bamcli",
+    status: "active",
+    usageSlug: "dev-bamcli",
+    scannedAt: "2026-09-01T00:00:00.000Z",
+    git: { branch: "main", isDirty: false, uncommittedCount: 0, remoteUrl: "https://github.com/joshuatownsend/bamcli" },
+    ...over,
+  };
+}
+
+function todo(text: string, completed = false, lineNumber = 1): TodoItem {
+  return { text, completed, lineNumber };
+}
+
+function todos(items: TodoItem[]) {
+  const completed = items.filter((i) => i.completed).length;
+  return { items, total: items.length, completed, pending: items.length - completed };
+}
+
+function insight(id: string, over: Partial<InsightEntry> = {}): InsightEntry {
+  return { id, content: `insight ${id}`, sessionId: "s1", date: "2026-08-01T00:00:00Z", project: "bamcli", projectPath: WIN, ...over };
+}
+
+function insights(entries: InsightEntry[]) {
+  return { entries, total: entries.length };
+}
+
+function issue(over: Partial<BoardIssue> & { title: string }): BoardIssue {
+  return { id: "", status: "todo", labels: [], line: 1, order: 0, ...over };
+}
+
+function epic(over: Partial<BoardEpic> & { title: string }): BoardEpic {
+  return { id: "", status: "todo", labels: [], line: 1, order: 0, issues: [], ...over };
+}
+
+function board(epics: BoardEpic[], inbox: BoardIssue[]) {
+  return { epics, inbox, total: epics.length + epics.reduce((n, e) => n + e.issues.length, 0) + inbox.length };
+}
+
+function entry(over: Partial<ManualStepEntry> & { title: string }): ManualStepEntry {
+  return { date: "2026-07-19 14:30", featureSlug: "signing", steps: [], ...over };
+}
+
+function step(text: string, completed = false, lineNumber = 1) {
+  return { text, completed, details: [], lineNumber };
+}
+
+function manualSteps(entries: ManualStepEntry[]) {
+  const all = entries.flatMap((e) => e.steps);
+  const completedSteps = all.filter((s) => s.completed).length;
+  return { entries, totalSteps: all.length, completedSteps, pendingSteps: all.length - completedSteps };
+}
+
+function section(over: Partial<OpsRunbookSection> & { heading: string }): OpsRunbookSection {
+  return { key: "backups", body: "", items: [], line: 1, ...over };
+}
+
+function opsItem(text: string, done = false) {
+  return { text, done, details: [], lineNumber: 1 };
+}
+
+function operations(sections: OpsRunbookSection[]) {
+  const all = sections.flatMap((s) => s.items);
+  return { sections, totalItems: all.length, pendingItems: all.filter((i) => !i.done).length };
+}
+
+// ── Group of one ─────────────────────────────────────────────────────────────
+
+describe("aggregateGroup — group of one", () => {
+  it("reports its own counts with no divergences", () => {
+    const m = member({
+      slug: "bamcli",
+      path: WIN,
+      todos: todos([todo("a"), todo("b", true)]),
+      insights: insights([insight("aaa"), insight("bbb")]),
+      claude: { sessionCount: 4, lastSessionDate: "2026-08-30T00:00:00Z" },
+    });
+    const agg = aggregateGroup([m]);
+    expect(agg.memberCount).toBe(1);
+    expect(agg.primary).toBe("bamcli");
+    expect(agg.partial).toBe(false);
+    expect(agg.divergences).toEqual([]);
+    expect(agg.todos).toMatchObject({ total: 2, completed: 1, pending: 1 });
+    expect(agg.insights?.total).toBe(2);
+    expect(agg.activity.sessionCount).toBe(4);
+    expect(agg.locations).toHaveLength(1);
+  });
+
+  it("throws on an empty member list", () => {
+    expect(() => aggregateGroup([])).toThrow(/at least one member/);
+  });
+});
+
+// ── Repo-borne: dedupe, never double-count ──────────────────────────────────
+
+describe("aggregateGroup — repo-borne dedupe", () => {
+  it("identical TODO.md in two checkouts counts once, not twice", () => {
+    const items = [todo("write tests"), todo("ship it", true)];
+    const a = member({ slug: "bamcli", path: WIN, todos: todos(items) });
+    const b = member({ slug: "bamcli-library", path: OTHER, todos: todos(items.map((i) => ({ ...i, lineNumber: 99 }))) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.todos).toMatchObject({ total: 2, completed: 1, pending: 1 });
+    expect(agg.todos?.items.map((i) => i.presentIn)).toEqual([
+      ["bamcli", "bamcli-library"],
+      ["bamcli", "bamcli-library"],
+    ]);
+    expect(agg.divergences).toEqual([]);
+  });
+
+  it("recomputes counts from the merged set, not by summing member totals", () => {
+    // Member totals are deliberately wrong to prove they are never read.
+    const a = member({ slug: "a", path: WIN, todos: { items: [todo("x")], total: 50, completed: 50, pending: 0 } });
+    const b = member({ slug: "b", path: OTHER, todos: { items: [todo("x"), todo("y")], total: 50, completed: 50, pending: 0 } });
+    expect(aggregateGroup([a, b]).todos).toMatchObject({ total: 2, completed: 0, pending: 2 });
+  });
+
+  it("keeps two genuinely identical items within one checkout as two items", () => {
+    const a = member({ slug: "a", path: WIN, todos: todos([todo("fix flake"), todo("fix flake")]) });
+    const b = member({ slug: "b", path: OTHER, todos: todos([todo("fix flake"), todo("fix flake")]) });
+    expect(aggregateGroup([a, b]).todos?.total).toBe(2);
+  });
+
+  it("normalizes whitespace when keying items", () => {
+    const a = member({ slug: "a", path: WIN, todos: todos([todo("  fix   the   thing ")]) });
+    const b = member({ slug: "b", path: OTHER, todos: todos([todo("fix the thing")]) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.todos?.total).toBe(1);
+    // The headline text is the normalized form, not whichever raw whitespace the primary had.
+    expect(agg.todos?.items[0].text).toBe("fix the thing");
+  });
+
+  it("an insight edited under the same persisted id is flagged, not silently overridden", () => {
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", insights: insights([insight("111", { content: "original" })]) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", insights: insights([insight("111", { content: "reworded" })]) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.insights?.entries[0]).toMatchObject({ content: "original", presentIn: ["a", "b"], editedIn: ["b"] });
+    expect(agg.divergences).toEqual([
+      { file: "INSIGHTS.md", kind: "differs", locations: ["a", "b"], detail: "1 insight edited differently between locations" },
+    ]);
+  });
+
+  it("dedupes insights by id and drops the location-bound project path", () => {
+    const a = member({ slug: "a", path: WIN, insights: insights([insight("111"), insight("222")]) });
+    const b = member({ slug: "b", path: OTHER, insights: insights([insight("111", { projectPath: OTHER })]) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.insights?.total).toBe(2);
+    expect(agg.insights?.entries[0]).not.toHaveProperty("projectPath");
+    expect(agg.insights?.entries.find((e) => e.id === "222")?.presentIn).toEqual(["a"]);
+  });
+});
+
+// ── Repo-borne: divergence is surfaced, not resolved ────────────────────────
+
+describe("aggregateGroup — divergence", () => {
+  it("flags a file missing from one checkout", () => {
+    const a = member({ slug: "a", path: WIN, todos: todos([todo("x")]) });
+    const b = member({ slug: "b", path: OTHER });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.divergences).toEqual([
+      { file: "TODO.md", kind: "missing", locations: ["b"], detail: "TODO.md has no content in 1 of 2 locations (absent or empty)" },
+    ]);
+    expect(agg.todos?.total).toBe(1);
+  });
+
+  it("shows the primary's tick as the headline and records who ticked what", () => {
+    const a = member({ slug: "old", path: WIN, lastActivity: "2026-08-01T00:00:00Z", todos: todos([todo("x", true)]) });
+    const b = member({ slug: "fresh", path: OTHER, lastActivity: "2026-08-20T00:00:00Z", todos: todos([todo("x", false)]) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.primary).toBe("fresh");
+    const item = agg.todos!.items[0];
+    expect(item.completed).toBe(false);
+    expect(item.completedIn).toEqual(["old"]);
+    expect(item.presentIn).toEqual(["fresh", "old"]);
+    expect(agg.todos).toMatchObject({ completed: 0, pending: 1 });
+    expect(agg.divergences).toEqual([
+      { file: "TODO.md", kind: "differs", locations: ["fresh", "old"], detail: "1 item ticked differently between locations" },
+    ]);
+  });
+
+  it("flags items present in only some checkouts", () => {
+    const a = member({ slug: "a", path: WIN, todos: todos([todo("shared"), todo("only-a")]) });
+    const b = member({ slug: "b", path: OTHER, todos: todos([todo("shared")]) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.divergences).toEqual([
+      { file: "TODO.md", kind: "differs", locations: ["b"], detail: "1 item not present in every location" },
+    ]);
+  });
+
+  it("MANUAL_STEPS.md: same checklist, different boxes ticked", () => {
+    const a = member({
+      slug: "a",
+      path: WIN,
+      manualSteps: manualSteps([entry({ title: "Keys", steps: [step("gen key", true), step("back it up", false)] })]),
+    });
+    const b = member({
+      slug: "b",
+      path: OTHER,
+      manualSteps: manualSteps([entry({ title: "Keys", steps: [step("gen key", true), step("back it up", true)] })]),
+    });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.manualSteps?.entries).toHaveLength(1);
+    expect(agg.manualSteps?.entries[0].steps.map((s) => s.completedIn)).toEqual([["a", "b"], ["b"]]);
+    expect(agg.manualSteps).toMatchObject({ totalSteps: 2, completedSteps: 1, pendingSteps: 1 });
+    expect(agg.divergences).toEqual([
+      { file: "MANUAL_STEPS.md", kind: "differs", locations: ["a", "b"], detail: "1 step ticked differently between locations" },
+    ]);
+  });
+
+  it("MANUAL_STEPS.md: an entry archived in one checkout only", () => {
+    const shared = entry({ title: "Keys", steps: [step("gen key", true)] });
+    const a = member({ slug: "a", path: WIN, manualSteps: manualSteps([shared, entry({ title: "Old", featureSlug: "old", steps: [step("x")] })]) });
+    const b = member({ slug: "b", path: OTHER, manualSteps: manualSteps([shared]) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.manualSteps?.entries.map((e) => e.presentIn)).toEqual([["a", "b"], ["a"]]);
+    expect(agg.divergences).toEqual([
+      { file: "MANUAL_STEPS.md", kind: "differs", locations: ["b"], detail: "1 entry not present in every location" },
+    ]);
+  });
+
+  it("MANUAL_STEPS.md: same step text, different detail lines", () => {
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", manualSteps: manualSteps([entry({ title: "Keys", steps: [{ ...step("gen key"), details: ["tauri signer generate"] }] })]) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", manualSteps: manualSteps([entry({ title: "Keys", steps: [{ ...step("gen key"), details: ["tauri signer generate -w ~/.tauri/minder.key"] }] })]) });
+    const agg = aggregateGroup([a, b]);
+    const merged = agg.manualSteps!.entries[0].steps[0];
+    expect(merged.details).toEqual(["tauri signer generate"]);
+    expect(merged.detailsIn).toEqual({ a: ["tauri signer generate"], b: ["tauri signer generate -w ~/.tauri/minder.key"] });
+    expect(agg.manualSteps?.totalSteps).toBe(1);
+    expect(agg.divergences).toEqual([
+      { file: "MANUAL_STEPS.md", kind: "differs", locations: ["a", "b"], detail: "1 step with different details between locations" },
+    ]);
+  });
+
+  it("MANUAL_STEPS.md: an archive note present in one checkout only", () => {
+    const steps = [step("gen key", true)];
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", manualSteps: manualSteps([entry({ title: "Keys", steps })]) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", manualSteps: manualSteps([entry({ title: "Keys", note: "archived 2026-09-01 — done", steps })]) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.manualSteps?.entries[0]).toMatchObject({ note: undefined, noteIn: { b: "archived 2026-09-01 — done" } });
+    expect(agg.divergences).toEqual([
+      { file: "MANUAL_STEPS.md", kind: "differs", locations: ["a", "b"], detail: "1 entry with a different note between locations" },
+    ]);
+  });
+
+  it("reports scalar facts that differ, with the primary's value as headline", () => {
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", framework: "Next.js", frameworkVersion: "16.3.1" });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", framework: "Next.js", frameworkVersion: "16.2.12" });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.facts.framework).toEqual({ value: "Next.js", valueIn: [{ slug: "a", value: "Next.js" }, { slug: "b", value: "Next.js" }], diverged: false });
+    expect(agg.facts.frameworkVersion.value).toBe("16.3.1");
+    expect(agg.facts.frameworkVersion.diverged).toBe(true);
+    expect(agg.divergences).toEqual([
+      { file: "package.json", kind: "differs", locations: ["a", "b"], detail: "frameworkVersion differs between locations: 16.2.12 vs 16.3.1" },
+    ]);
+  });
+
+  it("a fact defined in one location and absent in another is a divergence, not agreement", () => {
+    const a = member({ slug: "a", path: WIN, framework: "Next.js", frameworkVersion: "16.3.1" });
+    const b = member({ slug: "b", path: OTHER, framework: "Next.js" });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.facts.framework.diverged).toBe(false);
+    expect(agg.facts.frameworkVersion).toEqual({ value: "16.3.1", valueIn: [{ slug: "a", value: "16.3.1" }], diverged: true });
+    expect(agg.divergences).toEqual([
+      { file: "package.json", kind: "missing", locations: ["b"], detail: "frameworkVersion is missing in 1 of 2 locations" },
+    ]);
+  });
+
+  it("a fact absent everywhere is not a divergence", () => {
+    const agg = aggregateGroup([member({ slug: "a", path: WIN }), member({ slug: "b", path: OTHER })]);
+    expect(agg.facts.claudeMdSummary).toEqual({ value: undefined, valueIn: [], diverged: false });
+    expect(agg.divergences).toEqual([]);
+  });
+});
+
+// ── BOARD.md ─────────────────────────────────────────────────────────────────
+
+describe("aggregateGroup — BOARD.md", () => {
+  it("dedupes by surrogate id and records per-location status", () => {
+    const a = member({
+      slug: "a",
+      path: WIN,
+      lastActivity: "2026-08-20T00:00:00Z",
+      board: board([epic({ id: "e-1", title: "Epic", issues: [issue({ id: "i-1", title: "Do it", status: "doing" })] })], [issue({ id: "i-2", title: "Inbox thing" })]),
+    });
+    const b = member({
+      slug: "b",
+      path: OTHER,
+      lastActivity: "2026-08-01T00:00:00Z",
+      board: board([epic({ id: "e-1", title: "Epic", issues: [issue({ id: "i-1", title: "Do it", status: "done" })] })], [issue({ id: "i-2", title: "Inbox thing" })]),
+    });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.board?.total).toBe(3);
+    const merged = agg.board!.epics[0].issues[0];
+    expect(merged.status).toBe("doing");
+    expect(merged.statusIn).toEqual({ a: "doing", b: "done" });
+    expect(agg.divergences).toEqual([
+      { file: "BOARD.md", kind: "differs", locations: ["a", "b"], detail: "1 board item with a different status between locations" },
+    ]);
+  });
+
+  it("falls back to the title when ids are not backfilled, scoped to the container", () => {
+    // Same title in the inbox and inside an epic must NOT collapse.
+    const a = member({
+      slug: "a",
+      path: WIN,
+      board: board([epic({ title: "Epic", issues: [issue({ title: "Same" })] })], [issue({ title: "Same" })]),
+    });
+    const b = member({
+      slug: "b",
+      path: OTHER,
+      board: board([epic({ title: "Epic", issues: [issue({ title: "Same" })] })], [issue({ title: "Same" })]),
+    });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.board?.epics).toHaveLength(1);
+    expect(agg.board?.epics[0].issues).toHaveLength(1);
+    expect(agg.board?.inbox).toHaveLength(1);
+    expect(agg.board?.total).toBe(3);
+    expect(agg.divergences).toEqual([]);
+  });
+
+  it("flags a stable-id item whose non-status fields were edited in one checkout", () => {
+    const a = member({
+      slug: "a",
+      path: WIN,
+      lastActivity: "2026-08-20T00:00:00Z",
+      board: board([epic({ id: "e-1", title: "Epic", description: "v1", issues: [] })], [issue({ id: "i-1", title: "Old title", priority: "low", labels: ["x"] })]),
+    });
+    const b = member({
+      slug: "b",
+      path: OTHER,
+      lastActivity: "2026-08-01T00:00:00Z",
+      board: board([epic({ id: "e-1", title: "Epic", description: "v2", issues: [] })], [issue({ id: "i-1", title: "New title", priority: "high", labels: ["x"] })]),
+    });
+    const agg = aggregateGroup([a, b]);
+    // Headline is the primary's copy; the other location is recorded as edited.
+    expect(agg.board?.inbox[0]).toMatchObject({ title: "Old title", priority: "low", presentIn: ["a", "b"], editedIn: ["b"] });
+    expect(agg.board?.epics[0]).toMatchObject({ description: "v1", editedIn: ["b"] });
+    expect(agg.divergences).toEqual([
+      { file: "BOARD.md", kind: "differs", locations: ["a", "b"], detail: "2 board items edited differently between locations (title, priority, labels, detail, or container)" },
+    ]);
+  });
+
+  it("line structure in a detail or description is content, not whitespace", () => {
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", board: board([epic({ id: "e-1", title: "E", description: "one\ntwo" })], [issue({ id: "i-1", title: "x", detail: "run a\nthen b" })]) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", board: board([epic({ id: "e-1", title: "E", description: "one two" })], [issue({ id: "i-1", title: "x", detail: "run a then b" })]) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.board?.epics[0].editedIn).toEqual(["b"]);
+    expect(agg.board?.inbox[0].editedIn).toEqual(["b"]);
+    // Trailing whitespace and blank lines are still not edits.
+    const c = member({ slug: "c", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", board: board([], [issue({ id: "i-1", title: "x", detail: " run a \n\nthen b " })]) });
+    const a2 = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", board: board([], [issue({ id: "i-1", title: "x", detail: "run a\nthen b" })]) });
+    expect(aggregateGroup([a2, c]).board?.inbox[0].editedIn).toEqual([]);
+  });
+
+  it("label order and whitespace are not edits", () => {
+    const a = member({ slug: "a", path: WIN, board: board([], [issue({ id: "i-1", title: "Same  title", labels: ["x", "y"] })]) });
+    const b = member({ slug: "b", path: OTHER, board: board([], [issue({ id: "i-1", title: "Same title", labels: ["y", "x"] })]) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.board?.inbox[0].editedIn).toEqual([]);
+    // Headline fields carry the normalized form the identity uses, so output
+    // does not jitter when the primary flips.
+    expect(agg.board?.inbox[0]).toMatchObject({ title: "Same title", labels: ["x", "y"] });
+    expect(agg.divergences).toEqual([]);
+  });
+
+  it("a stable id moved between an epic and the Inbox in one checkout is still one issue", () => {
+    const a = member({
+      slug: "a",
+      path: WIN,
+      lastActivity: "2026-08-20T00:00:00Z",
+      board: board([epic({ id: "e-1", title: "Epic", issues: [issue({ id: "i-1", title: "Moved" })] })], []),
+    });
+    const b = member({
+      slug: "b",
+      path: OTHER,
+      lastActivity: "2026-08-01T00:00:00Z",
+      board: board([epic({ id: "e-1", title: "Epic", issues: [] })], [issue({ id: "i-1", title: "Moved" })]),
+    });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.board?.total).toBe(2);
+    expect(agg.board?.inbox).toEqual([]);
+    const merged = agg.board!.epics[0].issues[0];
+    expect(merged).toMatchObject({ id: "i-1", presentIn: ["a", "b"], editedIn: ["b"], containerIn: { a: "id:e-1#0", b: "inbox" } });
+    expect(agg.divergences).toEqual([
+      { file: "BOARD.md", kind: "differs", locations: ["a", "b"], detail: "1 board item edited differently between locations (title, priority, labels, detail, or container)" },
+    ]);
+  });
+
+  it("two un-backfilled epics with the same title keep their own issues", () => {
+    const a = member({
+      slug: "a",
+      path: WIN,
+      board: board([
+        epic({ title: "Cleanup", issues: [issue({ title: "first" })] }),
+        epic({ title: "Cleanup", issues: [issue({ title: "second" })] }),
+      ], []),
+    });
+    const agg = aggregateGroup([a]);
+    expect(agg.board?.epics).toHaveLength(2);
+    expect(agg.board?.epics.map((e) => e.issues.map((i) => i.title))).toEqual([["first"], ["second"]]);
+    expect(agg.board?.total).toBe(4);
+    expect(agg.divergences).toEqual([]);
+  });
+
+  it("a legacy checkout without ids matches a backfilled one, item for item", () => {
+    const a = member({
+      slug: "a",
+      path: WIN,
+      lastActivity: "2026-08-20T00:00:00Z",
+      board: board([epic({ id: "e-1", title: "Epic", issues: [issue({ id: "i-1", title: "Do it", status: "doing" })] })], [issue({ id: "i-2", title: "Loose end" })]),
+    });
+    const b = member({
+      slug: "b",
+      path: OTHER,
+      lastActivity: "2026-08-01T00:00:00Z",
+      board: board([epic({ title: "Epic", issues: [issue({ title: "Do it", status: "done" })] })], [issue({ title: "Loose end" })]),
+    });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.board?.total).toBe(3);
+    expect(agg.board?.epics).toHaveLength(1);
+    expect(agg.board?.epics[0]).toMatchObject({ id: "e-1", presentIn: ["a", "b"], editedIn: [] });
+    const merged = agg.board!.epics[0].issues[0];
+    // Same container by title, so no spurious "moved" edit; status still diverges.
+    expect(merged).toMatchObject({ id: "i-1", presentIn: ["a", "b"], editedIn: [], statusIn: { a: "doing", b: "done" } });
+    expect(agg.board?.inbox[0]).toMatchObject({ id: "i-2", presentIn: ["a", "b"] });
+    expect(agg.divergences).toEqual([
+      { file: "BOARD.md", kind: "differs", locations: ["a", "b"], detail: "1 board item with a different status between locations" },
+    ]);
+  });
+
+  it("the survivor takes the stable id when only the other checkout had one", () => {
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", board: board([], [issue({ title: "Loose end" })]) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", board: board([], [issue({ id: "i-7", title: "Loose end" })]) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.board?.inbox).toHaveLength(1);
+    expect(agg.board?.inbox[0]).toMatchObject({ id: "i-7", presentIn: ["a", "b"] });
+    expect(agg.divergences).toEqual([]);
+  });
+
+  it("two checkouts backfilled independently with different ids still match", () => {
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", board: board([epic({ id: "e-1", title: "Epic", issues: [issue({ id: "i-1", title: "Do it" })] })], []) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", board: board([epic({ id: "e-9", title: "Epic", issues: [issue({ id: "i-9", title: "Do it" })] })], []) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.board?.total).toBe(2);
+    expect(agg.board?.epics[0]).toMatchObject({ id: "e-1", presentIn: ["a", "b"] });
+    expect(agg.board?.epics[0].issues[0]).toMatchObject({ id: "i-1", presentIn: ["a", "b"], editedIn: [] });
+    expect(agg.divergences).toEqual([]);
+  });
+
+  it("reconciles through a title alias: a shared id renamed in one checkout still matches an independent backfill", () => {
+    const THIRD = "E:\\dev\\bamcli";
+    // A (primary) and B share i-1; B renamed it. C backfilled the same item as i-9 under B's title.
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", board: board([], [issue({ id: "i-1", title: "Old" })]) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-10T00:00:00Z", board: board([], [issue({ id: "i-1", title: "New" })]) });
+    const c = member({ slug: "c", path: THIRD, lastActivity: "2026-08-01T00:00:00Z", board: board([], [issue({ id: "i-9", title: "New" })]) });
+    const agg = aggregateGroup([c, b, a]);
+    expect(agg.board?.total).toBe(1);
+    expect(agg.board?.inbox[0]).toMatchObject({ id: "i-1", title: "Old", presentIn: ["a", "b", "c"], editedIn: ["b", "c"] });
+    expect(agg.divergences).toEqual([
+      { file: "BOARD.md", kind: "differs", locations: ["a", "b", "c"], detail: "1 board item edited differently between locations (title, priority, labels, detail, or container)" },
+    ]);
+  });
+
+  it("attributes edits per location when absorbing an accumulator that spans several", () => {
+    const THIRD = "E:\\dev\\bamcli";
+    // A (primary) has i-1 high. B and C share i-9: B low, C high. C matches A's headline, so only B is edited.
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", board: board([], [issue({ id: "i-1", title: "Task", priority: "high" })]) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-10T00:00:00Z", board: board([], [issue({ id: "i-9", title: "Task", priority: "low" })]) });
+    const c = member({ slug: "c", path: THIRD, lastActivity: "2026-08-01T00:00:00Z", board: board([], [issue({ id: "i-9", title: "Task", priority: "high" })]) });
+    const agg = aggregateGroup([a, b, c]);
+    expect(agg.board?.total).toBe(1);
+    expect(agg.board?.inbox[0]).toMatchObject({ id: "i-1", priority: "high", presentIn: ["a", "b", "c"], editedIn: ["b"] });
+  });
+
+  it("renaming an epic does not mark its unchanged issues as moved", () => {
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", board: board([epic({ id: "e-1", title: "Old", issues: [issue({ id: "i-1", title: "Child" })] })], []) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", board: board([epic({ id: "e-1", title: "New", issues: [issue({ id: "i-1", title: "Child" })] })], []) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.board?.epics[0]).toMatchObject({ title: "Old", editedIn: ["b"] });
+    expect(agg.board?.epics[0].issues[0]).toMatchObject({ id: "i-1", editedIn: [] });
+    expect(agg.divergences).toEqual([
+      { file: "BOARD.md", kind: "differs", locations: ["a", "b"], detail: "1 board item edited differently between locations (title, priority, labels, detail, or container)" },
+    ]);
+  });
+
+  it("moving an issue between two same-titled epics is a move", () => {
+    const a = member({
+      slug: "a",
+      path: WIN,
+      lastActivity: "2026-08-20T00:00:00Z",
+      board: board([epic({ title: "Cleanup", issues: [issue({ id: "i-1", title: "Child" })] }), epic({ title: "Cleanup", issues: [] })], []),
+    });
+    const b = member({
+      slug: "b",
+      path: OTHER,
+      lastActivity: "2026-08-01T00:00:00Z",
+      board: board([epic({ title: "Cleanup", issues: [] }), epic({ title: "Cleanup", issues: [issue({ id: "i-1", title: "Child" })] })], []),
+    });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.board?.epics).toHaveLength(2);
+    expect(agg.board?.epics[0].issues[0]).toMatchObject({ id: "i-1", presentIn: ["a", "b"], editedIn: ["b"] });
+    expect(agg.board?.epics[1].issues).toEqual([]);
+  });
+
+  it("reconciliation never merges two same-titled items that share a checkout", () => {
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", board: board([], [issue({ id: "i-1", title: "Dup" }), issue({ title: "Dup" })]) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", board: board([], [issue({ title: "Dup" })]) });
+    const agg = aggregateGroup([a, b]);
+    // b's un-keyed "Dup" folds into ONE of a's two, never both; a keeps two items.
+    expect(agg.board?.inbox).toHaveLength(2);
+    expect(agg.board?.inbox.filter((i) => i.presentIn.includes("a"))).toHaveLength(2);
+    expect(agg.board?.inbox.filter((i) => i.presentIn.includes("b"))).toHaveLength(1);
+  });
+
+  it("renumbers order after dedupe", () => {
+    const a = member({ slug: "a", path: WIN, board: board([], [issue({ id: "i-1", title: "x", order: 7 }), issue({ id: "i-2", title: "y", order: 9 })]) });
+    const b = member({ slug: "b", path: OTHER, board: board([], [issue({ id: "i-2", title: "y", order: 0 }), issue({ id: "i-3", title: "z", order: 1 })]) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.board?.inbox.map((i) => [i.id, i.order])).toEqual([["i-1", 0], ["i-2", 1], ["i-3", 2]]);
+  });
+});
+
+// ── OPERATIONS.md ────────────────────────────────────────────────────────────
+
+describe("aggregateGroup — OPERATIONS.md", () => {
+  it("keeps every checkout's runbook item details and flags when they differ", () => {
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", operations: operations([section({ heading: "Restore", items: [{ ...opsItem("restore db"), details: ["pg_restore -d app dump.sql"] }] })]) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", operations: operations([section({ heading: "Restore", items: [{ ...opsItem("restore db"), details: ["pg_restore -d app -j 4 dump.sql"] }] })]) });
+    const agg = aggregateGroup([a, b]);
+    const merged = agg.operations!.sections[0].items[0];
+    expect(merged.detailsIn).toEqual({ a: ["pg_restore -d app dump.sql"], b: ["pg_restore -d app -j 4 dump.sql"] });
+    expect(agg.divergences).toEqual([
+      { file: "OPERATIONS.md", kind: "differs", locations: ["a", "b"], detail: "1 runbook item with different details between locations" },
+    ]);
+  });
+
+  it("identical details are not a divergence", () => {
+    const a = member({ slug: "a", path: WIN, operations: operations([section({ heading: "Restore", items: [{ ...opsItem("restore db"), details: ["  pg_restore  x "] }] })]) });
+    const b = member({ slug: "b", path: OTHER, operations: operations([section({ heading: "Restore", items: [{ ...opsItem("restore db"), details: ["pg_restore x"] }] })]) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.divergences).toEqual([]);
+    // Headline details are normalized; per-location details stay verbatim.
+    expect(agg.operations?.sections[0].items[0].details).toEqual(["pg_restore x"]);
+    expect(agg.operations?.sections[0].items[0].detailsIn).toEqual({ a: ["  pg_restore  x "], b: ["pg_restore x"] });
+  });
+
+  it("keeps every checkout's section prose and flags when it differs", () => {
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-08-20T00:00:00Z", operations: operations([section({ heading: "Restore", body: "run restore.sh", items: [] })]) });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-08-01T00:00:00Z", operations: operations([section({ heading: "Restore", body: "run restore.sh --from s3", items: [] })]) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.operations?.sections[0]).toMatchObject({ body: "run restore.sh", bodyIn: { a: "run restore.sh", b: "run restore.sh --from s3" } });
+    expect(agg.divergences).toEqual([
+      { file: "OPERATIONS.md", kind: "differs", locations: ["a", "b"], detail: "1 section with different prose between locations" },
+    ]);
+  });
+
+  it("merges sections by key+heading and recomputes pending items", () => {
+    const a = member({ slug: "a", path: WIN, operations: operations([section({ heading: "Backups", items: [opsItem("nightly", true), opsItem("offsite")] })]) });
+    const b = member({ slug: "b", path: OTHER, operations: operations([section({ heading: "Backups", items: [opsItem("nightly", true), opsItem("offsite")] }), section({ key: "oncall", heading: "On-call", items: [opsItem("rota")] })]) });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.operations).toMatchObject({ totalItems: 3, pendingItems: 2 });
+    expect(agg.operations?.sections.map((s) => s.presentIn)).toEqual([["a", "b"], ["b"]]);
+    expect(agg.divergences).toEqual([
+      { file: "OPERATIONS.md", kind: "differs", locations: ["a"], detail: "1 section not present in every location" },
+    ]);
+  });
+});
+
+// ── Activity: sum and max ────────────────────────────────────────────────────
+
+describe("aggregateGroup — activity", () => {
+  it("sums session counts and carries mostRecent from the newest session's location", () => {
+    const a = member({
+      slug: "a",
+      path: WIN,
+      lastActivity: "2026-08-10T00:00:00Z",
+      claude: { sessionCount: 3, lastSessionDate: "2026-08-10T00:00:00Z", mostRecentSessionId: "s-a", lastPromptPreview: "old" },
+    });
+    const b = member({
+      slug: "b",
+      path: OTHER,
+      lastActivity: "2026-08-25T00:00:00Z",
+      claude: { sessionCount: 100, lastSessionDate: "2026-08-25T00:00:00Z", mostRecentSessionId: "s-b", lastPromptPreview: "new", mostRecentSessionStatus: "idle" },
+    });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.activity.sessionCount).toBe(103);
+    expect(agg.activity.lastSessionDate).toBe("2026-08-25T00:00:00Z");
+    expect(agg.activity.lastActivity).toBe("2026-08-25T00:00:00Z");
+    expect(agg.activity.mostRecent).toEqual({ slug: "b", sessionId: "s-b", status: "idle", promptPreview: "new" });
+    expect(agg.activity.perLocation).toEqual([
+      { slug: "a", sessionCount: 3, lastSessionDate: "2026-08-10T00:00:00Z" },
+      { slug: "b", sessionCount: 100, lastSessionDate: "2026-08-25T00:00:00Z" },
+    ]);
+  });
+
+  it("a member with no Claude data contributes zero, not undefined", () => {
+    const a = member({ slug: "a", path: WIN, claude: { sessionCount: 2 } });
+    const b = member({ slug: "b", path: OTHER });
+    expect(aggregateGroup([a, b]).activity.sessionCount).toBe(2);
+  });
+});
+
+// ── Derived rates ────────────────────────────────────────────────────────────
+
+describe("ratio", () => {
+  it("recomputes over summed numerator and denominator, never averages the rates", () => {
+    // 1/3 one-shot in a small location, 90/100 in a big one.
+    const naiveAverage = (1 / 3 + 90 / 100) / 2;
+    const recomputed = ratio(1 + 90, 3 + 100);
+    expect(recomputed).toBeCloseTo(91 / 103);
+    expect(recomputed).not.toBeCloseTo(naiveAverage, 2);
+  });
+
+  it("is undefined on an empty denominator", () => {
+    expect(ratio(0, 0)).toBeUndefined();
+    expect(ratio(5, 0)).toBeUndefined();
+  });
+});
+
+// ── Location-bound: never merged ─────────────────────────────────────────────
+
+describe("aggregateGroup — locations", () => {
+  it("keeps each checkout's branch, dirty state, port, and worktrees separate", () => {
+    const a = member({
+      slug: "a",
+      path: WIN,
+      status: "active",
+      devPort: 3000,
+      git: { branch: "main", isDirty: true, uncommittedCount: 4 },
+      worktrees: [{ branch: "feat/x", worktreePath: "C:\\dev\\bamcli--claude-worktrees-x" }],
+    });
+    const b = member({
+      slug: "b",
+      path: OTHER,
+      status: "paused",
+      git: { branch: "release", isDirty: false, uncommittedCount: 0, unknown: true },
+    });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.locations.map((l) => [l.slug, l.branch, l.isDirty, l.uncommittedCount, l.gitUnknown, l.status, l.devPort])).toEqual([
+      ["a", "main", true, 4, false, "active", 3000],
+      ["b", "release", false, 0, true, "paused", undefined],
+    ]);
+    expect(agg.locations[0].worktrees).toEqual([{ branch: "feat/x", worktreePath: "C:\\dev\\bamcli--claude-worktrees-x" }]);
+    expect(agg.locations[1].worktrees).toEqual([]);
+    // Nothing on the aggregate claims a single branch.
+    expect(agg).not.toHaveProperty("branch");
+  });
+
+  it("marks members under a skipped root stale and the aggregate partial, regardless of separator style", () => {
+    const a = member({ slug: "a", path: WIN });
+    const b = member({ slug: "b", path: WSL });
+    const agg = aggregateGroup([a, b], {
+      skippedRootPaths: ["//wsl.localhost/Ubuntu-26.04/home/josh/printing-press/library/"],
+    });
+    expect(agg.locations.map((l) => [l.slug, l.stale])).toEqual([["a", false], ["b", true]]);
+    expect(agg.partial).toBe(true);
+  });
+
+  it("keeps case on POSIX paths but folds it on Windows-shaped paths", () => {
+    const posix = member({ slug: "p", path: "/home/me/foo" });
+    expect(aggregateGroup([posix], { skippedRootPaths: ["/home/me/Foo"] }).locations[0].stale).toBe(false);
+    expect(aggregateGroup([posix], { skippedRootPaths: ["/home/me"] }).locations[0].stale).toBe(true);
+    // A UNC (WSL) root differing only in case must still mark the member stale —
+    // the separator collapse must not hide the UNC prefix from the shape test.
+    const unc = member({ slug: "u", path: "\\\\wsl.localhost\\Ubuntu-26.04\\home\\Josh\\dev\\foo" });
+    expect(aggregateGroup([unc], { skippedRootPaths: ["//wsl.localhost/ubuntu-26.04/home/josh/dev"] }).locations[0].stale).toBe(true);
+    // The legacy `\\wsl$` host is the same tree as `\\wsl.localhost`, in either direction.
+    const legacy = member({ slug: "l", path: "\\\\wsl$\\Ubuntu-26.04\\home\\josh\\dev\\foo" });
+    expect(aggregateGroup([legacy], { skippedRootPaths: ["\\\\wsl.localhost\\Ubuntu-26.04\\home\\josh\\dev"] }).locations[0].stale).toBe(true);
+    expect(aggregateGroup([unc], { skippedRootPaths: ["\\\\wsl$\\Ubuntu-26.04\\home\\josh\\dev"] }).locations[0].stale).toBe(true);
+    const win = member({ slug: "w", path: "C:\\Dev\\Foo" });
+    expect(aggregateGroup([win], { skippedRootPaths: ["c:/dev"] }).locations[0].stale).toBe(true);
+  });
+
+  it("does not treat a sibling root with a shared prefix as skipped", () => {
+    const a = member({ slug: "a", path: "C:\\dev\\bamcli" });
+    const agg = aggregateGroup([a], { skippedRootPaths: ["C:\\dev\\bam"] });
+    expect(agg.locations[0].stale).toBe(false);
+    expect(agg.partial).toBe(false);
+  });
+});
+
+// ── Primary rule and order independence ──────────────────────────────────────
+
+describe("aggregateGroup — primary and determinism", () => {
+  it("picks the most recently active member as primary, ties to path order", () => {
+    const a = member({ slug: "a", path: "D:\\dev\\x", lastActivity: "2026-08-10T00:00:00Z" });
+    const b = member({ slug: "b", path: "C:\\dev\\x", lastActivity: "2026-08-10T00:00:00Z" });
+    expect(aggregateGroup([a, b]).primary).toBe("b");
+    const c = member({ slug: "c", path: "E:\\dev\\x", lastActivity: "2026-08-11T00:00:00Z" });
+    expect(aggregateGroup([a, b, c]).primary).toBe("c");
+  });
+
+  it("compares timestamps as instants, so an offset-bearing later time wins", () => {
+    // 10:00-07:00 is 17:00Z — later than 16:30Z, though lexically smaller.
+    const a = member({ slug: "a", path: WIN, lastActivity: "2026-09-02T10:00:00-07:00", claude: { sessionCount: 1, lastSessionDate: "2026-09-02T10:00:00-07:00" } });
+    const b = member({ slug: "b", path: OTHER, lastActivity: "2026-09-02T16:30:00Z", claude: { sessionCount: 1, lastSessionDate: "2026-09-02T16:30:00Z" } });
+    const agg = aggregateGroup([a, b]);
+    expect(agg.primary).toBe("a");
+    expect(agg.activity.lastSessionDate).toBe("2026-09-02T10:00:00-07:00");
+    expect(agg.activity.lastActivity).toBe("2026-09-02T10:00:00-07:00");
+    expect(agg.activity.mostRecent?.slug).toBe("a");
+  });
+
+  it("a valid timestamp always beats a malformed one", () => {
+    const good = member({ slug: "good", path: OTHER, lastActivity: "2026-01-01T00:00:00Z", claude: { sessionCount: 1, lastSessionDate: "2026-01-01T00:00:00Z" } });
+    const bad = member({ slug: "bad", path: WIN, lastActivity: "not-a-date-zzz", claude: { sessionCount: 1, lastSessionDate: "zzz" } });
+    const agg = aggregateGroup([bad, good]);
+    expect(agg.primary).toBe("good");
+    expect(agg.activity.lastSessionDate).toBe("2026-01-01T00:00:00Z");
+    expect(agg.activity.lastActivity).toBe("2026-01-01T00:00:00Z");
+  });
+
+  it("produces identical output regardless of input order", () => {
+    const a = member({
+      slug: "a",
+      path: WIN,
+      lastActivity: "2026-08-20T00:00:00Z",
+      todos: todos([todo("x", true), todo("only-a")]),
+      insights: insights([insight("111")]),
+      board: board([epic({ id: "e-1", title: "E", issues: [issue({ id: "i-1", title: "I", status: "doing" })] })], []),
+      claude: { sessionCount: 5, lastSessionDate: "2026-08-20T00:00:00Z" },
+    });
+    const b = member({
+      slug: "b",
+      path: OTHER,
+      lastActivity: "2026-08-01T00:00:00Z",
+      todos: todos([todo("x", false), todo("only-b")]),
+      insights: insights([insight("111"), insight("222")]),
+      board: board([epic({ id: "e-1", title: "E", issues: [issue({ id: "i-1", title: "I", status: "done" })] })], []),
+      claude: { sessionCount: 7, lastSessionDate: "2026-08-01T00:00:00Z" },
+    });
+    expect(aggregateGroup([b, a])).toEqual(aggregateGroup([a, b]));
+  });
+});
+
+// ── Usage keys ───────────────────────────────────────────────────────────────
+
+describe("aggregateGroup — alignment with deriveProjectGroups", () => {
+  it("lists locations in the same order deriveProjectGroups lists members", () => {
+    const win = member({ slug: "bamcli", path: WIN });
+    const wsl = member({ slug: "bamcli-library", path: WSL });
+    const [group] = deriveProjectGroups([wsl, win]);
+    const agg = aggregateGroup([wsl, win]);
+    expect(agg.locations.map((l) => l.path)).toEqual(group.members.map((m) => m.path));
+  });
+});
+
+describe("groupUsageKeys", () => {
+  it("collapses two local drives that share a usageSlug", () => {
+    const c = member({ slug: "c", path: "C:\\dev\\foo", usageSlug: "dev-foo" });
+    const d = member({ slug: "d", path: "D:\\dev\\foo", usageSlug: "dev-foo" });
+    expect(groupUsageKeys([d, c])).toEqual([{ usageSlug: "dev-foo", exact: false }]);
+  });
+
+  it("keeps pinned homes distinct when their slugs differ", () => {
+    const c = member({ slug: "c", path: "C:\\dev\\foo", usageSlug: "dev-foo" });
+    const w = member({ slug: "w", path: WSL, usageSlug: "printing-press-library-foo", usageHomeKey: "wsl:Ubuntu-26.04" });
+    expect(groupUsageKeys([w, c])).toEqual([
+      { usageSlug: "dev-foo", exact: false },
+      { usageSlug: "printing-press-library-foo", usageHomeKey: "wsl:Ubuntu-26.04", exact: true },
+    ]);
+  });
+
+  it("an unpinned member's key absorbs a pinned member with the same slug — the unpinned query already spans every home", () => {
+    const c = member({ slug: "c", path: "C:\\home\\josh\\dev\\foo", usageSlug: "home-josh-dev-foo" });
+    const w = member({ slug: "w", path: WSL, usageSlug: "home-josh-dev-foo", usageHomeKey: "wsl:Ubuntu-26.04" });
+    expect(groupUsageKeys([w, c])).toEqual([{ usageSlug: "home-josh-dev-foo", exact: false }]);
+    expect(groupUsageKeys([c, w])).toEqual([{ usageSlug: "home-josh-dev-foo", exact: false }]);
+    expect(aggregateGroup([w, c]).usageKeys).toHaveLength(1);
+  });
+
+  it("two pinned homes with the same slug and no unpinned member stay separate", () => {
+    const w1 = member({ slug: "w1", path: WSL, usageSlug: "dev-foo", usageHomeKey: "wsl:Ubuntu-26.04" });
+    const w2 = member({ slug: "w2", path: "\\\\wsl.localhost\\Debian\\home\\josh\\dev\\foo", usageSlug: "dev-foo", usageHomeKey: "wsl:Debian" });
+    expect(groupUsageKeys([w1, w2])).toHaveLength(2);
+  });
+});

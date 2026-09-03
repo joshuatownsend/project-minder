@@ -1,5 +1,17 @@
 # Insights
 
+<!-- insight:af815b9ddddb | session:0d853dc1-d967-43c9-be8f-ac36c6255a9b | 2026-09-02T01:48:22.785Z -->
+## ★ Insight
+The three failures were `Hook timed out in 10000ms` from `installIsolatedState`, a vitest `beforeEach` limit, not an assertion. That distinction is what made a retry the right call instead of a `--no-verify`, which the project rules forbid. A load-induced flake in a doc-only commit is still worth noting: the isolated-state setup is sensitive enough that a busy box can fail the hook.
+
+---
+
+<!-- insight:225cb73ae0e7 | session:0d853dc1-d967-43c9-be8f-ac36c6255a9b | 2026-09-02T01:18:22.863Z -->
+## ★ Insight
+Half of MANUAL_STEPS.md was stale because it records intent, not state. Each entry I could verify had a machine-checkable signal (a secret in `gh secret list`, a ruleset rule, rows in the index). Entries that lack such a signal, like the login test, are the ones that stay unresolvable from a session.
+
+---
+
 <!-- insight:d11f810981e5 | session:64c8838e-b596-439f-812e-3b837ea4ce67 | 2026-08-19T13:16:21.989Z -->
 ## ★ Insight
 - Same corpus, one variable: **1,799 / 4,472 write-class edits before (40.2%) → 4,470 / 4,472 after (99.96%)**. The 40.2% reproduces the issue's measured figure exactly, on a corpus that has since grown from 4,164 to 4,472 blocks.

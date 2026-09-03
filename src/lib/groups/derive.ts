@@ -64,11 +64,11 @@ export function deriveProjectGroups(
   const groups: ProjectGroup[] = [];
   for (const [key, members] of byKey) {
     if (members.length < 2) continue;
-    members.sort((a, b) => compare(a.path, b.path));
+    members.sort((a, b) => compareCodepoint(a.path, b.path));
     groups.push({ key, slug: "", name: repoFromKey(key), members });
   }
 
-  groups.sort((a, b) => compare(a.key, b.key));
+  groups.sort((a, b) => compareCodepoint(a.key, b.key));
   assignGroupSlugs(groups);
   return groups;
 }
@@ -88,7 +88,7 @@ function normalizePathKey(value: string): string {
 }
 
 /** Codepoint compare — deliberately not `localeCompare`, matching the scanner's slug ordering. */
-function compare(a: string, b: string): number {
+export function compareCodepoint(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
