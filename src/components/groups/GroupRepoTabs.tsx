@@ -211,13 +211,15 @@ export function GroupBoardTab({ board, memberSlugs, labels }: { board: Aggregate
       {board.inbox.length > 0 && (
         <>
           <Heading>Inbox</Heading>
-          {board.inbox.map((issue) => (
-            <IssueRow key={issue.id} issue={issue} memberSlugs={memberSlugs} labels={labels} />
+          {board.inbox.map((issue, i) => (
+            // Legacy BOARD.md rows without writer-backfilled markers have an
+            // empty id; fall back to position like BoardTab does.
+            <IssueRow key={issue.id || `inbox-${i}`} issue={issue} memberSlugs={memberSlugs} labels={labels} />
           ))}
         </>
       )}
-      {board.epics.map((epic) => (
-        <div key={epic.id}>
+      {board.epics.map((epic, ei) => (
+        <div key={epic.id || `epic-${ei}`}>
           <Heading>
             <span style={{ display: "inline-flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
               <StatusChip status={epic.status} />
@@ -235,8 +237,8 @@ export function GroupBoardTab({ board, memberSlugs, labels }: { board: Aggregate
             </span>
           </Heading>
           {epic.description && <div style={{ ...MUTED, marginBottom: "6px" }}>{epic.description}</div>}
-          {epic.issues.map((issue) => (
-            <IssueRow key={issue.id} issue={issue} memberSlugs={memberSlugs} labels={labels} />
+          {epic.issues.map((issue, i) => (
+            <IssueRow key={issue.id || `${epic.id || `epic-${ei}`}-${i}`} issue={issue} memberSlugs={memberSlugs} labels={labels} />
           ))}
         </div>
       ))}
@@ -256,7 +258,12 @@ export function GroupManualStepsTab({
         <span>{manualSteps.completedSteps} done</span>
         <span>{manualSteps.totalSteps} steps (deduplicated)</span>
       </Summary>
-      {manualSteps.entries.map((entry, i) => (
+      {manualSteps.entries.map((entry, i) => {
+        // Entry-level notes are per location too (`noteIn`); a location whose
+        // note differs from the headline — including one that has a note
+        // when the primary has none — is flagged and its note shown.
+        const noteEditedIn = entry.presentIn.filter((slug) => (entry.noteIn[slug] ?? "") !== (entry.note ?? ""));
+        return (
         <div key={`${entry.date}|${entry.featureSlug}|${entry.title}#${i}`}>
           <Heading>
             <span style={{ display: "inline-flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
@@ -265,10 +272,15 @@ export function GroupManualStepsTab({
                 {entry.title}
               </span>
               <span>{entry.featureSlug}</span>
-              <PresenceChips presentIn={entry.presentIn} memberSlugs={memberSlugs} labels={labels} />
+              <PresenceChips presentIn={entry.presentIn} editedIn={noteEditedIn} memberSlugs={memberSlugs} labels={labels} />
             </span>
           </Heading>
           {entry.note && <div style={{ ...MUTED, marginBottom: "6px" }}>{entry.note}</div>}
+          <AltDetails
+            editedIn={noteEditedIn}
+            detailsIn={Object.fromEntries(noteEditedIn.map((slug) => [slug, entry.noteIn[slug] ? [entry.noteIn[slug]] : []]))}
+            labels={labels}
+          />
           {entry.steps.map((step, j) => {
             const editedIn = detailsEditedIn(step.presentIn, step.details, step.detailsIn);
             return (
@@ -301,7 +313,8 @@ export function GroupManualStepsTab({
             );
           })}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

@@ -23,6 +23,11 @@ beforeAll(async () => {
   await write(".claude/agents/nested/planner.md", "no frontmatter");
   await write(".claude/agents/.hidden.md", "---\nname: hidden\n---");
   await write(".claude/agents/notes.txt", "ignored");
+  // The sibling ~/.agents/agents layout: one new agent, one colliding slug
+  // (the .claude copy must win), and a tree deeper than the walker's cap.
+  await write(".agents/agents/installed-only.md", "---\nname: Installed\n---");
+  await write(".agents/agents/reviewer.md", "---\nname: Shadowed\n---");
+  await write(".agents/agents/a/b/c/d/e/f/g/too-deep.md", "");
   await write(".claude/skills/pr-resolve/SKILL.md", "---\nname: PR Resolve\n---");
   await write(".claude/skills/not-a-skill/README.md", "no SKILL.md here");
   await write(".claude/skills/standalone.md", "---\nname: Standalone\n---");
@@ -67,9 +72,13 @@ describe("readHomeInventory", () => {
   it("lists agents recursively with frontmatter names, skipping dotfiles and non-markdown", async () => {
     const inv = await readHomeInventory(home, true);
     expect(inv.agents).toEqual([
+      { slug: "installed-only", name: "Installed" },
       { slug: "nested/planner", name: undefined },
+      // Present in both roots: the .claude copy wins, like loadCatalog.
       { slug: "reviewer", name: "Reviewer" },
     ]);
+    // 7 levels down is past the depth cap.
+    expect(inv.agents.some((a) => a.slug.endsWith("too-deep"))).toBe(false);
   });
 
   it("lists bundled and standalone skills, marking the disabled root", async () => {

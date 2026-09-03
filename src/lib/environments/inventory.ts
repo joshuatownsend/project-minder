@@ -79,23 +79,42 @@ async function frontmatterName(file: string): Promise<string | undefined> {
   }
 }
 
-/** `*.md` files under `<home>/agents`, recursively; slug is the relative path sans `.md`. */
-async function readAgents(home: string): Promise<EnvAgent[]> {
-  const root = path.join(home, "agents");
+/** Same cap as the catalog's agent walker: `readDir` follows links, so an
+ *  unbounded recursion could loop through a link cycle or wander far outside
+ *  the root (Copilot on #554). */
+const MAX_AGENT_DEPTH = 6;
+
+/** `*.md` files under one agents root, recursively; slug is the relative path sans `.md`. */
+async function readAgentsRoot(root: string): Promise<EnvAgent[]> {
   const out: EnvAgent[] = [];
-  async function walk(dir: string, prefix: string) {
+  async function walk(dir: string, prefix: string, depth: number) {
+    if (depth > MAX_AGENT_DEPTH) return;
     for (const entry of await readDir(dir)) {
       if (entry.name.startsWith(".")) continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory) {
-        await walk(full, `${prefix}${entry.name}/`);
+        await walk(full, `${prefix}${entry.name}/`, depth + 1);
       } else if (entry.isFile && MD.test(entry.name)) {
         out.push({ slug: `${prefix}${entry.name.replace(MD, "")}`, name: await frontmatterName(full) });
       }
     }
   }
-  await walk(root, "");
-  return out.sort((a, b) => a.slug.localeCompare(b.slug));
+  await walk(root, "", 0);
+  return out;
+}
+
+/**
+ * Both agent layouts the catalog accepts: `<home>/agents` and the sibling
+ * `~/.agents/agents` beside the `.claude` directory (`walkInstalledAgents`).
+ * On a slug collision the `.claude` copy wins, as in `loadCatalog`.
+ */
+async function readAgents(home: string): Promise<EnvAgent[]> {
+  const [claude, installed] = await Promise.all([
+    readAgentsRoot(path.join(home, "agents")),
+    readAgentsRoot(path.join(path.dirname(home), ".agents", "agents")),
+  ]);
+  const seen = new Set(claude.map((a) => a.slug));
+  return [...claude, ...installed.filter((a) => !seen.has(a.slug))].sort((a, b) => a.slug.localeCompare(b.slug));
 }
 
 /**
