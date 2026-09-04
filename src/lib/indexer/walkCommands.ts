@@ -183,13 +183,15 @@ export async function walkUserCommands(ctx?: ProvenanceContext): Promise<Command
 }
 
 export async function walkPluginCommands(
-  installedPlugins: { pluginName: string; installPath: string }[],
+  installedPlugins: { pluginName: string; installPath: string; installPathUnresolved?: boolean }[],
   ctx?: ProvenanceContext
 ): Promise<CommandEntry[]> {
   const all: CommandEntry[] = [];
 
   await Promise.all(
-    installedPlugins.map(async ({ pluginName, installPath }) => {
+    installedPlugins.map(async ({ pluginName, installPath, installPathUnresolved }) => {
+      // See walkPluginAgents: an unresolved foreign path must not be walked.
+      if (installPathUnresolved) return;
       const commandsDir = path.join(installPath, "commands");
       try {
         await fs.access(commandsDir);

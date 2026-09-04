@@ -213,7 +213,12 @@ export async function walkPluginAgents(ctx: ProvenanceContext): Promise<AgentEnt
   const all: AgentEntry[] = [];
 
   await Promise.all(
-    ctx.installedPlugins.map(async ({ pluginName, installPath }) => {
+    ctx.installedPlugins.map(async ({ pluginName, installPath, installPathUnresolved }) => {
+      // An unresolved path is a foreign home's own path, not a local one. On
+      // Windows `path.join("/home/me/x", "agents")` still ROOTS on the current
+      // drive, so an unrelated `C:\home\me\x` would be walked into this
+      // home's catalog (Codex on #555). Skip, never rely on non-existence.
+      if (installPathUnresolved) return;
       const agentsDir = path.join(installPath, "agents");
       try {
         await fs.access(agentsDir);

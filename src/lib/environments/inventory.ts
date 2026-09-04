@@ -8,7 +8,7 @@ import {
   scopeMappingsToHome,
 } from "@/lib/claudeHome";
 import { normalizePathKey } from "@/lib/platform";
-import { compareSemver, resolvePluginInstallPath } from "@/lib/indexer/walkPlugins";
+import { resolvePluginInstallPath, selectPluginInstall } from "@/lib/indexer/walkPlugins";
 import type { MinderConfig, PathMapping } from "@/lib/types";
 import type { EnvPlugin, EnvironmentHome, EnvironmentsPayload } from "./diff";
 
@@ -50,13 +50,15 @@ async function readJson(file: string): Promise<Record<string, unknown> | null> {
 }
 
 /**
- * Installed plugins from the registry file alone. Highest version wins when
- * a key carries several installs, using the same `compareSemver` as
- * `loadInstalledPlugins` so the two surfaces agree. A registry entry is
- * listed whether or not its `installPath` resolves — `unresolved` records
- * that its contents cannot be read from here (same rule as the catalog's
- * `resolvePluginInstallPath`), which is a fact about THIS machine's view of
- * the home, not about the install.
+ * Installed plugins from the registry file alone. When a key carries several
+ * installs, the SAME record the catalog reads wins (`selectPluginInstall`,
+ * highest semver), and both `version` and `unresolved` come from that one
+ * record — the catalog walks only that install, so readability judged over
+ * any other record would call a plugin readable while its catalog column is
+ * empty (Copilot + Codex on #555). A registry entry is listed whether or not
+ * its `installPath` resolves — `unresolved` records that its contents cannot
+ * be read from here (the catalog's `resolvePluginInstallPath` rule), which is
+ * a fact about THIS machine's view of the home, not about the install.
  */
 async function readPlugins(
   home: string,
@@ -71,17 +73,17 @@ async function readPlugins(
     const lastAt = id.lastIndexOf("@");
     const name = lastAt > 0 ? id.slice(0, lastAt) : id;
     const marketplace = lastAt > 0 ? id.slice(lastAt + 1) : "";
-    const records = installs.filter((i): i is Record<string, unknown> => isPlainObject(i));
-    const versions = records
-      .map((i) => i.version)
-      .filter((v): v is string => typeof v === "string")
-      .sort((a, b) => compareSemver(b, a));
-    // Unresolved when at least one install path exists and none can be opened
-    // from here; an entry with no install path at all has nothing to resolve.
-    const installPaths = records.map((i) => i.installPath).filter((p): p is string => typeof p === "string");
+    const records = installs
+      .filter((i): i is Record<string, unknown> => isPlainObject(i))
+      .map((i) => ({
+        version: typeof i.version === "string" ? i.version : undefined,
+        installPath: typeof i.installPath === "string" ? i.installPath : undefined,
+      }));
+    const winner = selectPluginInstall(records);
+    // An entry with no install path at all has nothing to resolve.
     const unresolved =
-      installPaths.length > 0 && installPaths.every((p) => resolvePluginInstallPath(p, resolve).unresolved);
-    out.push({ id, name, marketplace, version: versions[0], ...(unresolved ? { unresolved: true } : {}) });
+      winner?.installPath !== undefined && resolvePluginInstallPath(winner.installPath, resolve).unresolved;
+    out.push({ id, name, marketplace, version: winner?.version, ...(unresolved ? { unresolved: true } : {}) });
   }
   return out.sort((a, b) => a.id.localeCompare(b.id));
 }

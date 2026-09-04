@@ -107,7 +107,7 @@ export async function loadSkillsResponse(
   const cacheKey = `${source ?? ""}|${projectSlug ?? ""}|${q ?? ""}|${home ?? ""}`;
   const cached = getRouteCache(cacheKey);
   if (cached) {
-    skillUpdateCache.enqueue(buildUpdateItems(cached.data));
+    if (cached.home.primary) skillUpdateCache.enqueue(buildUpdateItems(cached.data));
     return { data: cached.data, backend: cached.backend, home: cached.home, unresolvedPlugins: cached.unresolvedPlugins };
   }
 
@@ -211,7 +211,12 @@ export async function loadSkillsResponse(
 
   const backend = skillUsage?.meta.backend ?? "file";
   setRouteCache(cacheKey, { data: result, backend, home: catalog.home, unresolvedPlugins: catalog.unresolvedPlugins });
-  skillUpdateCache.enqueue(buildUpdateItems(result));
+  // The update checker is process-global and keyed by entry id, which is not
+  // home-qualified: a foreign home's copy of the same plugin or lockfile skill
+  // would overwrite the primary home's SHA/hash and the main Agents/Skills
+  // views would show whichever home was fetched last (Codex on #555). Only
+  // this machine's catalog feeds it.
+  if (catalog.home.primary) skillUpdateCache.enqueue(buildUpdateItems(result));
 
   return { data: result, backend, home: catalog.home, unresolvedPlugins: catalog.unresolvedPlugins };
 }

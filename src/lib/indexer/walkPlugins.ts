@@ -138,6 +138,19 @@ export async function resolvePluginSkillsRoots(installPath: string): Promise<str
 }
 
 /**
+ * The install record the catalog reads for a registry key when several are
+ * recorded: the highest semver (`compareSemver`). Exported so the Environments
+ * inventory judges readability from the SAME record whose contents the
+ * catalog walks — deriving `version` from one record and `unresolved` from
+ * all of them let the tab call a plugin readable while its column was empty
+ * (Copilot + Codex on #555).
+ */
+export function selectPluginInstall<T extends { version?: string }>(installs: readonly T[]): T | undefined {
+  if (installs.length === 0) return undefined;
+  return [...installs].sort((a, b) => compareSemver(b.version ?? "", a.version ?? ""))[0];
+}
+
+/**
  * Turn a registry `installPath` into a path this machine can open.
  *
  * The registry is written by the Claude Code that owns the home, in that
@@ -200,11 +213,8 @@ export async function loadInstalledPlugins(
         const marketplace = lastAt > 0 ? key.slice(lastAt + 1) : "";
 
         // Pick the highest semver when multiple installs exist for the same key.
-        const sorted = [...installs].sort((a, b) =>
-          compareSemver(b.version ?? "", a.version ?? "")
-        );
-        const install = sorted[0];
-        if (!install.installPath) return;
+        const install = selectPluginInstall(installs);
+        if (!install?.installPath) return;
 
         const { installPath, unresolved } = resolvePluginInstallPath(install.installPath, home);
         if (seen.has(installPath)) return;

@@ -35,6 +35,11 @@ beforeAll(async () => {
         "rc@m": [{ version: "3.0.0-beta.2" }, { version: "3.0.0-beta.10" }],
         "@scope/tool@community": [{ installPath: "/x" }],
         "empty@m": [],
+        // Highest version's path is unmapped, an older install's is mapped.
+        "split@m": [
+          { version: "2.0.0", installPath: "/opt/split" },
+          { version: "1.0.0", installPath: "/home/me/.claude/plugins/split" },
+        ],
       },
     })
   );
@@ -59,6 +64,7 @@ describe("readHomeInventory", () => {
       { id: "pre@m", name: "pre", marketplace: "m", version: "2.0.0" },
       // Pre-release identifiers compare numerically: beta.10 > beta.2.
       { id: "rc@m", name: "rc", marketplace: "m", version: "3.0.0-beta.10" },
+      { id: "split@m", name: "split", marketplace: "m", version: "2.0.0" },
     ]);
   });
 
@@ -87,6 +93,17 @@ describe("readHomeInventory", () => {
     // `/x` is outside the mapping and stays unreadable on a Windows host.
     const tool = inv.plugins.find((p) => p.id === "@scope/tool@community")!;
     expect(tool.unresolved).toBe(process.platform === "win32" ? true : undefined);
+  });
+
+  it("judges readability from the install the catalog reads — the highest version — not from any record", async () => {
+    // `split@m`: 2.0.0 lives at an unmapped `/opt/split`, 1.0.0 under the
+    // mapped `/home/me`. The catalog walks 2.0.0 only, so the tab must say
+    // unreadable even though an older install would have been reachable
+    // (Copilot + Codex on #555).
+    const inv = await readHomeInventory(home, false, [{ from: "/home/me", to: path.join(tmp, "mapped") }]);
+    const split = inv.plugins.find((p) => p.id === "split@m")!;
+    expect(split.version).toBe("2.0.0");
+    expect(split.unresolved).toBe(process.platform === "win32" ? true : undefined);
   });
 
   it("emits MCP server names from both sources, deduplicated, and never their config", async () => {

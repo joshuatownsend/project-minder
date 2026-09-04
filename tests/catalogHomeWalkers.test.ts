@@ -3,7 +3,8 @@ import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
 import { walkUserAgents, walkInstalledAgents, walkProjectAgents } from "@/lib/indexer/walkAgents";
-import { walkUserSkills } from "@/lib/indexer/walkSkills";
+import { walkUserSkills, walkPluginSkills } from "@/lib/indexer/walkSkills";
+import { walkPluginAgents } from "@/lib/indexer/walkAgents";
 import { mergeUserAgents } from "@/lib/indexer/catalog";
 import { normalizePathKey } from "@/lib/platform";
 import type { ProvenanceContext } from "@/lib/indexer/types";
@@ -53,6 +54,10 @@ beforeAll(async () => {
     linked = false;
   }
   await write("repo/.claude/agents/local.md", "---\nname: Local\n---");
+  // A directory that EXISTS locally, standing in for the unrelated tree an
+  // unmapped foreign path would root on (`C:\\home\\me\\x` for `/home/me/x`).
+  await write("stray/agents/ghost.md", "---\nname: Ghost\n---");
+  await write("stray/skills/ghost/SKILL.md", "---\nname: Ghost\n---");
 });
 
 afterAll(async () => {
@@ -120,6 +125,26 @@ describe("walkUserSkills(ctx, home)", () => {
     if (!linked) return; // link creation refused on this machine
     const skills = await walkUserSkills(ctxFor(home), home);
     expect(skills.find((s) => s.slug === "linked-skill")?.name).toBe("Linked");
+  });
+});
+
+describe("unresolved plugin installs", () => {
+  it("are skipped by the plugin walks even when the path happens to exist locally", async () => {
+    // Codex on #555: an unmapped POSIX path kept as `\home\me\x` roots on the
+    // current drive on Windows, so relying on non-existence would let an
+    // unrelated local directory contribute to a foreign home's catalog.
+    const ctx: ProvenanceContext = {
+      ...ctxFor(home),
+      installedPlugins: [
+        { pluginName: "ghost", installPath: path.join(tmp, "stray"), marketplace: "m", installPathUnresolved: true },
+      ],
+    };
+    expect(await walkPluginAgents(ctx)).toEqual([]);
+    expect(await walkPluginSkills(ctx)).toEqual([]);
+    // The same install, resolved, is walked — proving the guard is the flag.
+    const ok: ProvenanceContext = { ...ctx, installedPlugins: [{ ...ctx.installedPlugins[0], installPathUnresolved: undefined }] };
+    expect((await walkPluginAgents(ok)).map((a) => a.slug)).toEqual(["ghost"]);
+    expect((await walkPluginSkills(ok)).map((s) => s.slug)).toEqual(["ghost"]);
   });
 });
 

@@ -244,7 +244,9 @@ export async function walkPluginSkills(ctx: ProvenanceContext): Promise<SkillEnt
   const all: Array<{ entry: SkillEntry; installPath: string }> = [];
 
   await Promise.all(
-    ctx.installedPlugins.map(async ({ pluginName, installPath }) => {
+    ctx.installedPlugins.map(async ({ pluginName, installPath, installPathUnresolved }) => {
+      // See walkPluginAgents: an unresolved foreign path must not be walked.
+      if (installPathUnresolved) return;
       const roots = await resolvePluginSkillsRoots(installPath);
       for (const skillsDir of roots) {
         try {
