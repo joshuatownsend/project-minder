@@ -5,6 +5,7 @@ import {
   filterSessions,
   getEnabledAdapters,
 } from "@/lib/server/queries/sessions";
+import { normalizeHomeKey } from "@/lib/homeKey";
 
 // Cache slot + filter live in `@/lib/server/queries/sessions` so the RSC
 // prefetch (PR 3) shares the exact same cache and filter chain — see that
@@ -21,6 +22,13 @@ export async function GET(request: NextRequest) {
   // item3: optional ticket-URL filter, same exact-URL contract as `pr`.
   // The chip stitches the full canonical URL we surface in `tickets[].url`.
   const ticketFilter = request.nextUrl.searchParams.get("ticket");
+  // Optional Claude-home filter: the member's `usageHomeKey`, so a location
+  // lists only the sessions its own home recorded (two WSL distros with the
+  // same Linux layout share a `projectName`).
+  // Normalized once here (trailing separator dropped) so `home=…/` and
+  // `home=…` share an ETag as well as a result set.
+  const rawHome = request.nextUrl.searchParams.get("home");
+  const homeFilter = rawHome ? normalizeHomeKey(rawHome) : null;
 
   // Refresh the in-route cache when stale. The façade itself layers DB and
   // file-parse caches under it, so a refresh that finds no JSONL changes is
@@ -46,7 +54,7 @@ export async function GET(request: NextRequest) {
   const etag = computeETag({
     salt: "sessions-v1",
     maxMtimeMs: Math.max(cache.maxSessionMs, cache.cachedAt),
-    parts: [project ?? "", source ?? "", prFilter ?? "", ticketFilter ?? "", cache.result.sessions.length, [...enabledAdapters].sort().join(",")],
+    parts: [project ?? "", source ?? "", prFilter ?? "", ticketFilter ?? "", homeFilter ?? "", cache.result.sessions.length, [...enabledAdapters].sort().join(",")],
   });
 
   const notModified = ifNoneMatch(request, etag);
@@ -58,6 +66,7 @@ export async function GET(request: NextRequest) {
     source,
     pr: prFilter,
     ticket: ticketFilter,
+    home: homeFilter,
   });
 
   // jsonWithETag returns a NextResponse; layer the backend header on top so

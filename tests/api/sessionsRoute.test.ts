@@ -61,12 +61,13 @@ describe("GET /api/sessions", () => {
     vi.mocked(filterSessions).mockReturnValue(fakeSessions);
   });
 
-  it("forwards project/source/pr/ticket query params to filterSessions", async () => {
+  it("forwards project/source/pr/ticket/home query params to filterSessions", async () => {
     const req = makeRequest({
       project: "my-app",
       source: "claude",
       pr: "https://github.com/o/r/pull/1",
       ticket: "https://tracker/T-1",
+      home: "//wsl.localhost/ubuntu/home/me/.claude",
     });
 
     const res = await GET(req);
@@ -80,6 +81,7 @@ describe("GET /api/sessions", () => {
         source: "claude",
         pr: "https://github.com/o/r/pull/1",
         ticket: "https://tracker/T-1",
+        home: "//wsl.localhost/ubuntu/home/me/.claude",
       })
     );
     expect(res.headers.get("X-Minder-Backend")).toBe("file");

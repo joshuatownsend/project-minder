@@ -8,6 +8,8 @@ import { readConfig } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
 import { demoMode } from "@/lib/demo/demoMode";
 import { checkWslRoot, parseWslUncPath } from "@/lib/wsl";
+import { groupForProject } from "@/lib/groups/forProject";
+import type { ProjectResponse } from "@/lib/types";
 
 export async function GET(
   _request: NextRequest,
@@ -27,11 +29,24 @@ export async function GET(
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
 
+  // The group this project belongs to, derived exactly as `withGroups` does
+  // for the list route (same scan, same opt-out list), so the member page's
+  // link agrees with the dashboard chip. Computed above the demo return: the
+  // demo scan seeds a group too. Spread onto a NEW object rather than assigned
+  // to the cached project — `project.git` below is already mutated in place,
+  // and a second in-place attachment would leave `group` on the shared cache.
+  const config = await readConfig();
+  const group = groupForProject(result.projects, project.slug, {
+    ungroupedPaths: config.ungroupedPaths,
+  });
+  const respond = (p: typeof project): NextResponse =>
+    NextResponse.json({ ...p, ...(group ? { group } : {}) } satisfies ProjectResponse);
+
   // Demo project: fake C:\dev path — return the synthetic ProjectData as-is
   // (live git/github checks would overwrite its dirty count with unknown/0 and
   // poison the cached scan). The activity strips are served by their own guards.
   if (await demoMode()) {
-    return NextResponse.json(project);
+    return respond(project);
   }
 
   // Never-wake preflight: a carried-forward project under a stopped WSL
@@ -61,13 +76,12 @@ export async function GET(
   // never appears. Mirror the list route: flag-gated, git-tracked only, carry
   // the scanned remote, skip if a fresh cache entry already exists.
   if (project.git && githubActivityCache.get(project.slug) == null) {
-    const flags = (await readConfig()).featureFlags;
-    if (getFlag(flags, "githubActivity")) {
+    if (getFlag(config.featureFlags, "githubActivity")) {
       githubActivityCache.enqueue([
         { slug: project.slug, path: project.path, remoteUrl: project.git.remoteUrl },
       ]);
     }
   }
 
-  return NextResponse.json(project);
+  return respond(project);
 }

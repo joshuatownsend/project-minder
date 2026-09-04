@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
-import { decodeDirName } from "../platform";
+import { decodeDirName, sessionFileHomeKey } from "../platform";
 import {
   ClaudeUsageStats,
   SessionRecap,
@@ -820,6 +820,12 @@ async function scanSessionFileRaw(
       workMode: sessionWorkMode,
       isWorktree: isWorktreeEncodedDir(projectDirName),
       source: "claude",
+      // Same stamp `projectSessionSummary` gives the DB path and the adapter
+      // path: this direct Claude builder is the one summary producer that does
+      // not go through the shared projection, and without it the file backend
+      // (`MINDER_USE_DB=0`, or the first-reconcile fallback) answered `&home=`
+      // with nothing for every mapped project (Codex on #556).
+      homeKey: sessionFileHomeKey(filePath) ?? undefined,
       prs,
       tickets,
       // A1: empty collections collapse to `undefined` so "no permission-mode

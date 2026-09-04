@@ -13,7 +13,7 @@ A project with a single checkout is never a group. Nothing about its card or det
 
 ## On the dashboard
 
-In the full and compact card views, each member card carries a **`N loc`** chip next to the worktree chip. Click it to open the group page. (The sparkline list view has no chip.) Member cards otherwise render exactly as before — they keep their own pins, live-session status, and dev-server controls, which is why the dashboard does not collapse members into a single group card.
+In the full and compact card views, each member card carries a **`N loc`** chip next to the worktree chip. Click it to open the group page. (The sparkline list view has no chip.) A member's own detail page (`/project/<slug>`) shows the same chip, with the repo name, in its header, so a page reached by URL or from a session also leads back to the group. Member cards otherwise render exactly as before — they keep their own pins, live-session status, and dev-server controls, which is why the dashboard does not collapse members into a single group card.
 
 ## The group page
 
@@ -58,7 +58,7 @@ The cache-hit rate is pooled from the summed tokens, never averaged across locat
 
 ### Sessions
 
-Session counts per location from the scan, then each location's own session list. Hidden in demo mode and when no member has sessions.
+Session counts per location from the scan, then each location's own session list. A location whose sessions were recorded by a specific Claude home (a mapped WSL checkout) lists only that home's sessions, so two distros that share a Linux path layout do not show each other's; a local, unpinned location lists every home, as its Costs do. Hidden in demo mode and when no member has sessions.
 
 ### Environments
 

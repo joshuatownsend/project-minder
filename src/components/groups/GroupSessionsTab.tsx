@@ -12,8 +12,10 @@ import { LocationChip, type Labels } from "./PresenceChips";
  * Sessions across the group: the summed count is the headline, then one
  * session list per location. `activity.perLocation` (from the aggregate,
  * no fetch) supplies the counts; the lists come from `ProjectSessions`,
- * which is keyed on the member's `usageDirName` — a field the aggregate
- * deliberately does not carry, so it is read off the full `ProjectData`.
+ * which is keyed on the member's `usageDirName` and `usageHomeKey` — fields
+ * the aggregate deliberately does not carry, so they are read off the full
+ * `ProjectData`. The home key is what splits two locations that share a
+ * Linux path layout in different WSL distros (Codex on #554).
  */
 export function GroupSessionsTab({
   activity,
@@ -54,7 +56,7 @@ export function GroupSessionsTab({
               {m.path}
             </Link>
           </div>
-          <ProjectSessions usageDirName={m.usageDirName} />
+          <ProjectSessions usageDirName={m.usageDirName} usageHomeKey={m.usageHomeKey} />
         </section>
       ))}
     </div>

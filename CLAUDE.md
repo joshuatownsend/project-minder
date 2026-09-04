@@ -98,7 +98,7 @@ This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm
 
 ### API Routes (`src/app/api/`)
 - `GET /api/projects` — all scanned projects (uses cache)
-- `GET /api/projects/[slug]` — single project
+- `GET /api/projects/[slug]` — single project (`ProjectResponse`: `ProjectData` plus `group?: {slug, name, memberCount}` when it belongs to a group)
 - `POST /api/scan` — force rescan (invalidates cache)
 - `GET/PUT /api/config` — read/update statuses and hidden list
 - `GET /api/dev-server` — list all managed dev servers
@@ -119,7 +119,7 @@ This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm
 - `GET /api/stats` — aggregated portfolio stats + Claude Code usage analytics
 - `GET /api/usage` — token usage report (`?period=today|week|month|all`, `?project=slug`)
 - `GET /api/usage/export` — CSV/JSON export (`?format=csv|json`, same period/project params)
-- `GET /api/sessions` — all session summaries (2-min cache, `?project=slug` filter)
+- `GET /api/sessions` — all session summaries (2-min cache, `?project=slug` filter, `&home=<usageHomeKey>` restricts to one Claude home by `SessionSummary.homeKey`)
 - `GET /api/sessions/[sessionId]` — full session detail (timeline, file ops, subagents)
 - `GET /api/agents` — catalog of all agents (user/plugin/project sources) joined with usage stats; `?source=user|plugin|project`, `?project=slug`, `?q=search`, `?home=<usageHomeKey>` walks another configured Claude home (`&scope=home` skips the per-project walk; usage joined for the primary home only; 404 unknown key, 503 home unreadable this cycle; `X-Minder-Unresolved-Plugins` names plugins whose `installPath` no mapping reaches). Home resolution: `src/lib/indexer/homes.ts`
 - `GET /api/agents/[id]` — single agent entry with full body text + usage stats (`?home=` as above)

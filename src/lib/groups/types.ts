@@ -51,3 +51,15 @@ export interface ProjectGroup {
   /** Members, ordered by path for stable output. Always length >= 2. */
   members: ProjectGroupMember[];
 }
+
+/**
+ * A group as seen from one of its members: enough to render a link back to
+ * `/group/<slug>` from the member's own page, without the member list.
+ * Attached by `GET /api/projects/[slug]` (see `ProjectResponse`).
+ */
+export interface ProjectGroupRef {
+  slug: string;
+  name: string;
+  /** Always >= 2 — a group of one is never emitted. */
+  memberCount: number;
+}

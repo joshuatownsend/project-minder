@@ -1,4 +1,4 @@
-import { decodeDirName } from "@/lib/platform";
+import { decodeDirName, sessionFileHomeKey } from "@/lib/platform";
 import { isWorktreeFilePath, isWorktreeEncodedDir } from "@/lib/scanner/worktreeCheck";
 import { projectSlugFromDirName, canonicalizeDirName } from "./projectIdentity";
 import type { SessionSummary } from "@/lib/types";
@@ -112,6 +112,7 @@ export type ProjectedSessionFields = Pick<
   | "subagentCount"
   | "searchableText"
   | "isWorktree"
+  | "homeKey"
 >;
 
 export function projectSessionSummary(
@@ -127,6 +128,12 @@ export function projectSessionSummary(
   return {
     sessionId: input.sessionId,
     source: input.source,
+    // Same rule ingest applies when it writes `sessions.home_key`: Claude
+    // transcripts only (an adapter file has no Claude home to name), keyed by
+    // the path prefix above `/projects/`, which is `normalizePathKey(home)`
+    // — the join key the scanner puts on `ProjectData.usageHomeKey`.
+    homeKey:
+      input.source === "claude" ? (sessionFileHomeKey(input.filePath) ?? undefined) : undefined,
     projectPath: decodeDirName(canonicalDirName),
     // A stored slug is authoritative; deriving it is the degenerate branch for
     // a row whose `project_slug` is NULL, which the schema permits and a

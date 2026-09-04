@@ -6,6 +6,7 @@ import { demoMode } from "@/lib/demo/demoMode";
 import type { SessionSummary } from "@/lib/types";
 import { queryKeys } from "@/lib/queryKeys";
 import { jsonClone } from "@/lib/server/prefetch";
+import { sameHomeKey } from "@/lib/homeKey";
 
 /**
  * Shared session-list loader + filter, used by BOTH `/api/sessions` (the client
@@ -72,6 +73,14 @@ export interface SessionFilterOpts {
   source?: string | null;
   pr?: string | null;
   ticket?: string | null;
+  /**
+   * Restrict to sessions read from one Claude home (`SessionSummary.homeKey`).
+   * Compared with `sameHomeKey` — the two keys are equal up to a trailing
+   * path separator, which a configured home may carry and a session's
+   * file-derived key never does. A session with no home key (adapter
+   * sources) never matches a home filter.
+   */
+  home?: string | null;
 }
 
 /** Apply the same filter chain `/api/sessions` applies, in the same order. */
@@ -94,6 +103,12 @@ export function filterSessions(
   }
   if (opts.ticket) {
     results = results.filter((s) => s.tickets?.some((t) => t.url === opts.ticket));
+  }
+  if (opts.home) {
+    // `sameHomeKey`, not `===`: a configured home written with a trailing
+    // separator keys the project with it and the session without (#556).
+    const home = opts.home;
+    results = results.filter((s) => sameHomeKey(s.homeKey, home));
   }
   return results;
 }

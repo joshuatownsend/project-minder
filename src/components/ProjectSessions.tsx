@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import { sameHomeKey } from "@/lib/homeKey";
 import { SessionSummary } from "@/lib/types";
 import { StatCard } from "./stats/StatCard";
 import { BarChart } from "./stats/BarChart";
@@ -74,7 +75,20 @@ function sessionLabel(session: SessionSummary): { primary: string; secondary?: s
   return { primary: "Untitled session", isRecap: false, isPlaceholder: true };
 }
 
-export function ProjectSessions({ usageDirName }: { usageDirName: string }) {
+export function ProjectSessions({
+  usageDirName,
+  usageHomeKey,
+}: {
+  usageDirName: string;
+  /**
+   * The member's Claude home (`ProjectData.usageHomeKey`), when pinned. Two
+   * checkouts with the same Linux layout in different WSL distros share a
+   * `usageDirName`, so the dir name alone lists both locations' sessions on
+   * each; the home key is what makes the list this location's own. Unpinned
+   * (local) projects pass nothing and list every home, as `CostsTab` does.
+   */
+  usageHomeKey?: string;
+}) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   // T2.2: in-page filter set by clicking a PR chip on a session row.
@@ -115,14 +129,19 @@ export function ProjectSessions({ usageDirName }: { usageDirName: string }) {
     //
     // Query param narrows the payload via the API's substring fallback; the
     // filter below is what makes it exact.
-    fetch(`/api/sessions?project=${encodeURIComponent(usageDirName)}`)
+    const home = usageHomeKey ? `&home=${encodeURIComponent(usageHomeKey)}` : "";
+    fetch(`/api/sessions?project=${encodeURIComponent(usageDirName)}${home}`)
       .then((res) => res.json())
       .then((all: SessionSummary[]) => {
-        setSessions(all.filter((s) => s.projectName === usageDirName));
+        setSessions(
+          all.filter(
+            (s) => s.projectName === usageDirName && (!usageHomeKey || sameHomeKey(s.homeKey, usageHomeKey))
+          )
+        );
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [usageDirName]);
+  }, [usageDirName, usageHomeKey]);
 
   const stats = useMemo(() => {
     if (sessions.length === 0) return null;

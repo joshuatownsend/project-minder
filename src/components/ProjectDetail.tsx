@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ProjectData, ProjectStatus, TodoInfo } from "@/lib/types";
+import { ProjectStatus, TodoInfo, ProjectResponse } from "@/lib/types";
 import { StatusSelector } from "./StatusBadge";
 import { TodoList, AddTodoForm } from "./TodoList";
 import { DevServerControl } from "./DevServerControl";
@@ -18,6 +18,7 @@ import { OpsPanel } from "./OpsPanel";
 import { deriveOpsSummary, hasOps } from "@/lib/ops/summary";
 import { ArchivedDisclosure } from "./ArchivedDisclosure";
 import { ProjectSessions } from "./ProjectSessions";
+import type { ProjectGroupRef } from "@/lib/groups/types";
 import { GitStatusCompact } from "./GitStatus";
 import { MarkdownContent } from "./MarkdownContent";
 import { MemoryTab } from "./MemoryTab";
@@ -56,6 +57,7 @@ import {
   Globe,
   Database,
   Network,
+  Layers,
 } from "lucide-react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
@@ -65,7 +67,8 @@ import { formatDistanceToNow } from "date-fns";
 type TabKey = "overview" | "context" | "todos" | "sessions" | "costs" | "timecard" | "manual-steps" | "insights" | "board" | "ops" | "memory" | "planning" | "agents" | "skills" | "efficiency" | "hot-files" | "errors" | "patterns" | "config" | "config-history" | "config-lint";
 
 interface ProjectDetailProps {
-  project: ProjectData;
+  /** `ProjectData` plus the optional `group` the single-project route attaches. */
+  project: ProjectResponse;
   onStatusChange: (status: ProjectStatus) => void;
 }
 
@@ -361,6 +364,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
             {project.name}
           </h1>
           <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0, flexWrap: "wrap" }}>
+            {project.group && <GroupLink group={project.group} />}
             <StatusSelector status={project.status} onSelect={onStatusChange} />
             <div style={{ display: "flex", gap: "4px" }}>
               {actionBtn("VS Code", <ExternalLink style={{ width: "10px", height: "10px" }} />, openInVSCode)}
@@ -668,7 +672,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
 
           {/* ── SESSIONS ──────────────────────────────────────────────── */}
           {activeTab === "sessions" && (
-            <ProjectSessions usageDirName={project.usageDirName} />
+            <ProjectSessions usageDirName={project.usageDirName} usageHomeKey={project.usageHomeKey} />
           )}
 
           {/* ── MANUAL STEPS ──────────────────────────────────────────── */}
@@ -773,5 +777,36 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The way back from a member page to its group. The dashboard card's `N loc`
+ * chip was the only route to `/group/<slug>` before this; a member page
+ * reached by URL or from a session had no sign it belonged to a group.
+ * A real `<Link>`, unlike the card chip: the header is not inside an anchor.
+ */
+function GroupLink({ group }: { group: ProjectGroupRef }) {
+  return (
+    <Link
+      href={`/group/${group.slug}`}
+      title={`${group.name} is checked out in ${group.memberCount} locations — open the group view`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "4px",
+        fontSize: "0.68rem",
+        fontFamily: "var(--font-mono)",
+        color: "var(--info)",
+        background: "var(--info-bg)",
+        padding: "2px 7px",
+        borderRadius: "3px",
+        textDecoration: "none",
+        whiteSpace: "nowrap",
+      }}
+    >
+      <Layers style={{ width: "10px", height: "10px" }} />
+      {group.memberCount} loc · {group.name}
+    </Link>
   );
 }

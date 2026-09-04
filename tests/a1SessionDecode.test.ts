@@ -215,3 +215,20 @@ describe("A1 session decode — legacy transcript", () => {
     expect(s!.hookRuns).toBeUndefined();
   });
 });
+
+describe("file-parse Claude summaries carry homeKey (#556)", () => {
+  it("stamps normalizePathKey of the home the transcript was read from", async () => {
+    // The direct Claude builder in `scanSessionFileRaw` does not go through
+    // `projectSessionSummary`; without its own stamp the file backend answered
+    // `/api/sessions?home=` with nothing for every mapped project (Codex on #556).
+    await writeSession("C--dev-demo", "sess-home", [
+      user("2026-08-01T10:00:01Z", "hello"),
+      assistant("2026-08-01T10:00:02Z", "high"),
+    ]);
+    const { scanAllSessions } = await import("@/lib/scanner/claudeConversations");
+    const { normalizePathKey } = await import("@/lib/platform");
+    const s = (await scanAllSessions()).find((x) => x.sessionId === "sess-home");
+    expect(s).toBeDefined();
+    expect(s!.homeKey).toBe(normalizePathKey(path.join(tmpHome, ".claude")));
+  });
+});

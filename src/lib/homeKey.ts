@@ -1,0 +1,25 @@
+/**
+ * Compare two Claude-home keys as the same home.
+ *
+ * Both sides are `normalizePathKey` of a configured home, but they can reach a
+ * comparison by different routes: `resolveUsageHomeKey` keys a project from
+ * the configured string as written — trailing `/` or `\` included — while
+ * `sessionFileHomeKey` derives a session's key from a file path under
+ * `<home>/projects/…`, which never carries one. A strict `===` between the
+ * two silently dropped every session of a mapped project whose `claudeHomes`
+ * entry ended in a separator (Codex on #556). Import-free so the client
+ * (`ProjectSessions`) can use it too.
+ */
+export function normalizeHomeKey(key: string): string {
+  // A loop, not `/[\\/]+$/`: the value comes off the query string, and CodeQL
+  // flags that pattern as polynomial on a long run of separators
+  // (js/polynomial-redos on #556). Linear, and reads the same.
+  let end = key.length;
+  while (end > 0 && (key[end - 1] === "/" || key[end - 1] === "\\")) end--;
+  return key.slice(0, end);
+}
+
+export function sameHomeKey(a: string | undefined, b: string | undefined): boolean {
+  if (a === undefined || b === undefined) return false;
+  return normalizeHomeKey(a) === normalizeHomeKey(b);
+}

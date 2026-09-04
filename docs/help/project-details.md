@@ -10,6 +10,7 @@ At the top you'll find:
 - **Project name** and full file path
 - **Tech stack badges** — detected framework, ORM, styling, etc.
 - **Status selector** — click **Active**, **Paused**, or **Archived** to change the project's status
+- **Group chip** — `N loc · <repo>`, shown only when this checkout is one of several scanned locations of the same repository; opens the group page (see *Project Groups*)
 - **Quick actions:**
   - **VS Code** — opens the project folder in Visual Studio Code
   - **Terminal** — opens Windows Terminal in the project directory

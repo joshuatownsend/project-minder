@@ -11,7 +11,7 @@ import type {
   LspConfigInfo,
 } from "./claudeConfig";
 import type { CiCdInfo } from "./cicd";
-import type { ProjectGroup } from "@/lib/groups/types";
+import type { ProjectGroup, ProjectGroupRef } from "@/lib/groups/types";
 
 export interface ProjectData {
   slug: string;
@@ -243,3 +243,12 @@ export interface ScanResult {
    *  it is a pure reshape of `projects`. */
   groups?: ProjectGroup[];
 }
+
+/**
+ * The body of `GET /api/projects/[slug]`: the scanned project plus the group
+ * it belongs to, when it belongs to one. `group` is a response-time
+ * attachment (like the live git dirty count), not a scanner field — the
+ * scan cache never carries it, and `ProjectData` consumers elsewhere are
+ * unaffected.
+ */
+export type ProjectResponse = ProjectData & { group?: ProjectGroupRef };
