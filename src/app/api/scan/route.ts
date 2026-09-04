@@ -5,6 +5,7 @@ import { invalidateCatalogCache } from "@/lib/indexer/catalog";
 import { invalidateAgentsRouteCache } from "@/app/api/agents/route";
 import { invalidateSkillsRouteCache } from "@/app/api/skills/route";
 import { invalidateClaudeConfigRouteCache } from "@/app/api/claude-config/route";
+import { invalidateEnvironmentsRouteCache } from "@/app/api/environments/route";
 import { invalidateUserConfigCache } from "@/lib/userConfigCache";
 import { invalidateLiveStatusCache } from "@/lib/liveStatus";
 import { invalidateClaudeAgentsCache } from "@/lib/claudeAgentsCli";
@@ -12,6 +13,8 @@ import { runMcpSecurityScan } from "@/lib/scanner/mcp-security";
 import { clearWslCache } from "@/lib/wsl";
 import { gitStatusCache } from "@/lib/gitStatusCache";
 import { githubActivityCache } from "@/lib/githubActivityCache";
+import { readConfig } from "@/lib/config";
+import { withGroups } from "@/lib/groups/withGroups";
 
 export async function POST() {
   invalidateCache();
@@ -27,6 +30,7 @@ export async function POST() {
   invalidateAgentsRouteCache();
   invalidateSkillsRouteCache();
   invalidateClaudeConfigRouteCache();
+  invalidateEnvironmentsRouteCache();
   invalidateUserConfigCache();
   // Wave-T1.1: clear the live-status payload and inner `claude agents --json`
   // caches so manual rescan doesn't keep serving stale process listings for
@@ -39,5 +43,7 @@ export async function POST() {
     runMcpSecurityScan("scan").catch(() => null),
   ]);
   setCachedScan(result);
-  return NextResponse.json(result);
+  // Same shape as GET /api/projects: the client replaces its ScanResult with
+  // this response, so groups must ride along or a manual rescan drops them.
+  return NextResponse.json(withGroups(result, await readConfig()));
 }

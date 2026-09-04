@@ -69,7 +69,7 @@ export type AggregatableProject = Pick<
 
 export interface AggregateGroupOptions {
   /**
-   * Dev roots the scanner skipped this pass (`ScanResult.skippedRoots[].path`).
+   * Dev roots the scanner skipped this pass (`ScanResult.skippedRoots[].root`).
    * A member under a skipped root is a carried-forward copy from an earlier
    * scan, so it is flagged `stale` and the whole aggregate `partial` — a sum
    * that silently includes a stopped WSL distro's last-known numbers must

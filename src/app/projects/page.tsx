@@ -49,6 +49,7 @@ export default function ProjectsPage() {
         efficiencyGrades={grades}
         efficiencyTrends={trends}
         githubActivity={githubActivity}
+        groups={data?.groups}
       />
     </div>
   );

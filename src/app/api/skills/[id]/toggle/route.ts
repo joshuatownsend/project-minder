@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { loadCatalog, invalidateCatalogCache } from "@/lib/indexer/catalog";
 import { invalidateSkillsRouteCache } from "@/app/api/skills/route";
+import { invalidateEnvironmentsRouteCache } from "@/app/api/environments/route";
 import { toggleUserSkill, skillSubjectPath, ToggleError } from "@/lib/skillToggle";
 
 export async function POST(
@@ -42,6 +43,10 @@ export async function POST(
     // Invalidate both caches so the next request reflects the move
     invalidateCatalogCache();
     invalidateSkillsRouteCache();
+    // The group page's Environments tab reads skill active/disabled state
+    // from its own 2-minute cache; a toggle moves the directory, so that
+    // cache is stale too (Codex on #554).
+    invalidateEnvironmentsRouteCache();
 
     return NextResponse.json({ ok: true, disabled: !enabled, newPath });
   } catch (e) {

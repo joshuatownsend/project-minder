@@ -4,32 +4,9 @@ import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { enqueueProjectCaches } from "@/lib/projectCacheEnqueue";
 import { readConfig } from "@/lib/config";
 import { demoMode } from "@/lib/demo/demoMode";
-import { deriveProjectGroups } from "@/lib/groups/derive";
-import type { MinderConfig } from "@/lib/types/config";
-import type { ScanResult } from "@/lib/types/project";
+import { withGroups } from "@/lib/groups/withGroups";
 
 let scanInProgress: Promise<void> | null = null;
-
-/**
- * Attach derived groups to a scan result.
- *
- * Spreads onto a new object rather than mutating the cached `ScanResult` —
- * the cache is shared across requests, and `enqueueProjectCaches` already
- * mutates `p.git` in place; a second in-place mutation would compound that.
- * Grouping is a pure reshape, so recomputing per response is cheap and always
- * reflects the current opt-out list without an extra cache to invalidate.
- */
-function withGroups(result: ScanResult, config: MinderConfig): ScanResult {
-  const groups = deriveProjectGroups(result.projects, {
-    ungroupedPaths: config.ungroupedPaths,
-  });
-  // Omit the key entirely when nothing grouped, rather than sending `[]`.
-  // `ScanResult.groups` is optional, and the point of never emitting a group
-  // of one is that a user with no multi-location repos sees byte-for-byte the
-  // response they saw before this feature existed. An always-present `[]`
-  // would undercut that. (Raised by Copilot review on #340.)
-  return groups.length > 0 ? { ...result, groups } : result;
-}
 
 export async function GET() {
   const config = await readConfig();

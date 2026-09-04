@@ -67,6 +67,11 @@ const WEIGHTS: { slug: string; weight: number }[] = [
   { slug: "beacon-mobile", weight: 9 },
   { slug: "synth-playground", weight: 6 },
   { slug: "archive-legacy-dash", weight: 4 },
+  // The second aurora-commerce checkout (project group demo). It MUST be a
+  // known slug here: an unknown `?project=` falls back to the whole
+  // portfolio, which would make the group Costs tab add Aurora's report to
+  // an all-projects report (Codex on #554).
+  { slug: "aurora-commerce-2", weight: 3 },
 ];
 const WEIGHT_OF = new Map(WEIGHTS.map((w) => [w.slug, w.weight]));
 const TOTAL_WEIGHT = WEIGHTS.reduce((s, w) => s + w.weight, 0);

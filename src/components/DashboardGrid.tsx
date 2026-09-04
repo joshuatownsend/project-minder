@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { ProjectData, ProjectStatus, GithubActivity } from "@/lib/types";
+import type { ProjectGroup } from "@/lib/groups/types";
 import { useLiveSessionStatus } from "@/hooks/useLiveSessionStatus";
 import { ProjectCard } from "./ProjectCard";
 import { SparklineList } from "./SparklineList";
@@ -42,6 +43,8 @@ interface DashboardGridProps {
   efficiencyGrades?: Record<string, EfficiencyGrade>;
   efficiencyTrends?: Record<string, GradeTrend>;
   githubActivity?: Record<string, GithubActivity>;
+  /** Project groups from the scan (`ScanResult.groups`); absent when nothing grouped. */
+  groups?: ProjectGroup[];
 }
 
 const NEXT_VIEW: Record<ViewMode, ViewMode> = { full: "compact", compact: "list", list: "full" };
@@ -76,6 +79,7 @@ export function DashboardGrid({
   efficiencyGrades,
   efficiencyTrends,
   githubActivity,
+  groups,
 }: DashboardGridProps) {
   const [search, setSearch]               = useState("");
   const [statusFilter, setStatusFilter]   = useState<ProjectStatus | "all">("all");
@@ -258,6 +262,17 @@ export function DashboardGrid({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
+
+  // Member slug → its group, for the `N loc` chip. Groups are never emitted
+  // for a single checkout, so a project with no entry renders exactly as it
+  // did before groups existed.
+  const groupOf = useMemo(() => {
+    const map = new Map<string, { slug: string; memberCount: number }>();
+    for (const g of groups ?? []) {
+      for (const m of g.members) map.set(m.slug, { slug: g.slug, memberCount: g.members.length });
+    }
+    return map;
+  }, [groups]);
 
   const overlaidProjects = useMemo(() => filtered.map((project) => {
     const liveKey = project.path.replace(/[:\\/]/g, "-");
@@ -548,6 +563,7 @@ export function DashboardGrid({
               efficiencyGrade={efficiencyGrades?.[project.slug]}
               efficiencyTrend={efficiencyTrends?.[project.slug]}
               githubActivity={githubActivity?.[project.slug]}
+              group={groupOf.get(project.slug)}
             />
           ))}
           {filtered.length === 0 && (

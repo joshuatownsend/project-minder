@@ -22,6 +22,7 @@ export const queryKeys = {
     detail: (sessionId: string) => ["sessions", "detail", sessionId] as const,
   },
   stats: () => ["stats"] as const,
+  environments: () => ["environments"] as const,
   usage: (period: string, project?: string, home?: string) =>
     ["usage", period, project ?? null, home ?? null] as const,
   // Thresholds are part of the key: the same period over the same bytes

@@ -96,9 +96,13 @@ function demoInsights(nowMs: number, slug: string, path: string): InsightsInfo {
   return {
     total: entries.length,
     entries: entries.map((e, i) => ({
-      id: `${slug}-insight-${i}`,
+      // Repo-borne, like the real marker ids the parser persists in
+      // INSIGHTS.md: two checkouts of one repo carry the SAME ids, which is
+      // what lets the group page deduplicate them. Keyed on the entry, not
+      // the slug.
+      id: `insight-${i}`,
       content: e.content,
-      sessionId: `demo-sess-${slug}-${i}`,
+      sessionId: `demo-sess-${i}`,
       date: iso(nowMs, e.offset),
       project: slug,
       projectPath: path,
@@ -310,6 +314,32 @@ const SEEDS: Seed[] = [
     auditScore: 88,
     remoteUrl: "https://github.com/acme/aurora-commerce.git",
     rich: true,
+  },
+  {
+    // A second checkout of aurora-commerce: same remote, so the two form a
+    // project group (`/group/aurora-commerce`) and the dashboard shows the
+    // `2 loc` chip. Deliberately thinner and older than the first — a
+    // different framework version, a lower CLAUDE.md score, no board or
+    // runbook — so the group page has divergences to render. The slug
+    // mirrors what the real scanner assigns to a second same-named checkout.
+    slug: "aurora-commerce-2",
+    name: "aurora-commerce",
+    status: "active",
+    framework: "Next.js",
+    frameworkVersion: "15.5.0",
+    dependencies: ["next", "react", "drizzle-orm", "stripe", "@tanstack/react-query", "tailwindcss"],
+    externalServices: ["Stripe", "Neon"],
+    devPort: 3001,
+    branch: "main",
+    uncommittedCount: 0,
+    lastCommitMessage: "chore: sync from main before the webhook branch",
+    commitOffset: 9 * DAY,
+    sessionCount: 6,
+    sessionOffset: 8 * DAY,
+    auditScore: 71,
+    remoteUrl: "https://github.com/acme/aurora-commerce.git",
+    todos: true,
+    insights: true,
   },
   {
     slug: "pulse-analytics",

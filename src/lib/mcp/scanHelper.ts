@@ -1,5 +1,7 @@
 import { scanAllProjects } from "@/lib/scanner";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
+import { readConfig } from "@/lib/config";
+import { withGroups } from "@/lib/groups/withGroups";
 import type { ScanResult } from "@/lib/types";
 
 // Single-flight wrapper around `scanAllProjects()` for MCP tools. Without
@@ -10,6 +12,10 @@ import type { ScanResult } from "@/lib/types";
 const g = globalThis as unknown as { __minderMcpScanInFlight?: Promise<ScanResult> };
 
 export async function getCachedOrFreshScan(): Promise<ScanResult> {
+  return withGroups(await rawScan(), await readConfig());
+}
+
+async function rawScan(): Promise<ScanResult> {
   const cached = getCachedScan();
   if (cached) return cached;
   if (g.__minderMcpScanInFlight) return g.__minderMcpScanInFlight;
