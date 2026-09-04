@@ -57,6 +57,14 @@ describe("filterSessions home", () => {
     expect(out.map((s) => s.sessionId)).toEqual(["u"]);
   });
 
+  it("matches a project key written with a trailing separator to the session's separator-free key", () => {
+    // A `claudeHomes` entry written with a trailing separator keys the project WITH the
+    // trailing separator; `sessionFileHomeKey` never carries one (Codex on #556).
+    expect(filterSessions([inUbuntu], { enabledAdapters, home: UBUNTU + "/" }).map((s) => s.sessionId)).toEqual(["u"]);
+    expect(filterSessions([inUbuntu], { enabledAdapters, home: UBUNTU + "\\" }).map((s) => s.sessionId)).toEqual(["u"]);
+    expect(filterSessions([inUbuntu], { enabledAdapters, home: DEBIAN + "/" })).toEqual([]);
+  });
+
   it("never matches a session without a home key (adapter sources)", () => {
     expect(filterSessions([unkeyed], { enabledAdapters, home: UBUNTU })).toEqual([]);
   });

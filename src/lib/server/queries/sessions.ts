@@ -6,6 +6,7 @@ import { demoMode } from "@/lib/demo/demoMode";
 import type { SessionSummary } from "@/lib/types";
 import { queryKeys } from "@/lib/queryKeys";
 import { jsonClone } from "@/lib/server/prefetch";
+import { sameHomeKey } from "@/lib/homeKey";
 
 /**
  * Shared session-list loader + filter, used by BOTH `/api/sessions` (the client
@@ -102,7 +103,10 @@ export function filterSessions(
     results = results.filter((s) => s.tickets?.some((t) => t.url === opts.ticket));
   }
   if (opts.home) {
-    results = results.filter((s) => s.homeKey === opts.home);
+    // `sameHomeKey`, not `===`: a configured home written with a trailing
+    // separator keys the project with it and the session without (#556).
+    const home = opts.home;
+    results = results.filter((s) => sameHomeKey(s.homeKey, home));
   }
   return results;
 }

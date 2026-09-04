@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import { sameHomeKey } from "@/lib/homeKey";
 import { SessionSummary } from "@/lib/types";
 import { StatCard } from "./stats/StatCard";
 import { BarChart } from "./stats/BarChart";
@@ -134,7 +135,7 @@ export function ProjectSessions({
       .then((all: SessionSummary[]) => {
         setSessions(
           all.filter(
-            (s) => s.projectName === usageDirName && (!usageHomeKey || s.homeKey === usageHomeKey)
+            (s) => s.projectName === usageDirName && (!usageHomeKey || sameHomeKey(s.homeKey, usageHomeKey))
           )
         );
         setLoading(false);
