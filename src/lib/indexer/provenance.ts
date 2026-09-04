@@ -12,17 +12,25 @@ export function resolveProvenance(opts: {
   isSymlink?: boolean;
   realPath?: string;
   pluginName?: string;
+  /**
+   * The providing plugin's marketplace. Two marketplaces can ship one plugin
+   * name, and a lookup by name alone hands both the record found first
+   * (Codex on #555); the plugin walks pass it from the registry record.
+   */
+  marketplace?: string;
   projectSlug?: string;
   ctx: ProvenanceContext;
 }): Provenance {
-  const { source, entryKind, slug, isSymlink, realPath, pluginName, projectSlug, ctx } = opts;
+  const { source, entryKind, slug, isSymlink, realPath, pluginName, marketplace, projectSlug, ctx } = opts;
 
   if (source === "project" && projectSlug) {
     return { kind: "project-local", projectSlug };
   }
 
   if (source === "plugin" && pluginName) {
-    const plugin = ctx.installedPlugins.find((p) => p.pluginName === pluginName);
+    const plugin = ctx.installedPlugins.find(
+      (p) => p.pluginName === pluginName && (marketplace === undefined || p.marketplace === marketplace)
+    );
     if (plugin) {
       return {
         kind: "marketplace-plugin",

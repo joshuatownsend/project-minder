@@ -13,6 +13,7 @@ function makeSkillEntry(
   layout: "bundled" | "standalone",
   opts: {
     pluginName?: string;
+    marketplace?: string;
     projectSlug?: string;
     category?: string;
     mtime: Date;
@@ -74,6 +75,7 @@ function makeSkillEntry(
     isSymlink: opts.isSymlink,
     realPath: opts.realPath,
     pluginName: opts.pluginName,
+    marketplace: opts.marketplace,
     projectSlug: opts.projectSlug,
     ctx: opts.ctx,
   });
@@ -117,7 +119,7 @@ function makeSkillEntry(
 async function walkSkillsRoot(
   root: string,
   source: CatalogSource,
-  opts: { pluginName?: string; projectSlug?: string; ctx: ProvenanceContext; disabled?: boolean }
+  opts: { pluginName?: string; marketplace?: string; projectSlug?: string; ctx: ProvenanceContext; disabled?: boolean }
 ): Promise<SkillEntry[]> {
   let entries;
   try {
@@ -244,7 +246,7 @@ export async function walkPluginSkills(ctx: ProvenanceContext): Promise<SkillEnt
   const all: Array<{ entry: SkillEntry; installPath: string }> = [];
 
   await Promise.all(
-    ctx.installedPlugins.map(async ({ pluginName, installPath, installPathUnresolved }) => {
+    ctx.installedPlugins.map(async ({ pluginName, marketplace, installPath, installPathUnresolved }) => {
       // See walkPluginAgents: an unresolved foreign path must not be walked.
       if (installPathUnresolved) return;
       const roots = await resolvePluginSkillsRoots(installPath);
@@ -268,6 +270,7 @@ export async function walkPluginSkills(ctx: ProvenanceContext): Promise<SkillEnt
           all.push({
             entry: makeSkillEntry(rootSkillMd, text, "plugin", "bundled", {
               pluginName,
+              marketplace,
               ctx,
               mtime: stat.mtime,
               ctime: stat.ctime,
@@ -278,7 +281,7 @@ export async function walkPluginSkills(ctx: ProvenanceContext): Promise<SkillEnt
         } catch {
           // Ordinary directory-of-skills layout.
         }
-        for (const entry of await walkSkillsRoot(skillsDir, "plugin", { pluginName, ctx })) {
+        for (const entry of await walkSkillsRoot(skillsDir, "plugin", { pluginName, marketplace, ctx })) {
           all.push({ entry, installPath });
         }
       }

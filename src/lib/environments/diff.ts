@@ -35,6 +35,13 @@ export interface EnvAgent {
    * same plugin name from two marketplaces is two plugins.
    */
   pluginId?: string;
+  /**
+   * The catalog entry id — home-independent, and already qualified where two
+   * files share a slug (nested agents, a standalone `foo.md` beside a bundled
+   * `foo/SKILL.md`, two plugin skill roots). The row identity when present;
+   * `slug` is the fallback for inventories built without one.
+   */
+  identity?: string;
 }
 
 export interface EnvSkill {
@@ -46,6 +53,8 @@ export interface EnvSkill {
   pluginName?: string;
   /** Registry key of the providing plugin — see `EnvAgent.pluginId`. */
   pluginId?: string;
+  /** Catalog entry id — see `EnvAgent.identity`. */
+  identity?: string;
   /** Lives under `skills-disabled/` rather than `skills/`. */
   disabled: boolean;
 }
@@ -148,15 +157,25 @@ interface Presence {
  * the row identity carries the provider: a home that has one and a home that
  * has the other must not read as agreeing.
  */
-function providedId(item: { slug: string; source: "user" | "plugin"; pluginName?: string; pluginId?: string }): string {
-  if (item.source !== "plugin") return `user:${item.slug}`;
+function providedId(item: {
+  slug: string;
+  source: "user" | "plugin";
+  pluginName?: string;
+  pluginId?: string;
+  identity?: string;
+}): string {
+  // The catalog id when the inventory carries one: it is what keeps two
+  // same-slug files apart within a home, and it is home-independent, so the
+  // same file in two homes still lands on one row (Codex on #555).
+  const what = item.identity ?? item.slug;
+  if (item.source !== "plugin") return `user:${what}`;
   // The registry key (`name@marketplace`) when provenance supplies it: the
   // same plugin name from two marketplaces is two plugins, and their
   // same-named agents must not read as one row (Codex on #555). The bare
   // name is the fallback for an entry without marketplace provenance; the
   // placeholder keeps an unexpected gap from producing an empty `plugin::x`
   // segment that could collide across plugins (Copilot on #555).
-  return `plugin:${item.pluginId ?? item.pluginName ?? UNKNOWN_PLUGIN}:${item.slug}`;
+  return `plugin:${item.pluginId ?? item.pluginName ?? UNKNOWN_PLUGIN}:${what}`;
 }
 
 const UNKNOWN_PLUGIN = "unknown-plugin";

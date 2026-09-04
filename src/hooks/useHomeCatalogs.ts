@@ -74,6 +74,7 @@ function toEnvAgent(e: AgentEntry): EnvAgent {
     source: e.source === "plugin" ? "plugin" : "user",
     pluginName: e.pluginName,
     pluginId: pluginIdOf(e),
+    identity: e.id,
   };
 }
 
@@ -85,6 +86,7 @@ function toEnvSkill(e: SkillEntry): EnvSkill {
     source: e.source === "plugin" ? "plugin" : "user",
     pluginName: e.pluginName,
     pluginId: pluginIdOf(e),
+    identity: e.id,
     disabled: e.disabled === true,
   };
 }

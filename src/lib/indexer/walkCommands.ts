@@ -14,6 +14,7 @@ function makeCommandEntry(
   source: CommandSource,
   opts: {
     pluginName?: string;
+    marketplace?: string;
     projectSlug?: string;
     category?: string;
     relPath: string;
@@ -49,6 +50,7 @@ function makeCommandEntry(
         isSymlink: opts.isSymlink,
         realPath: opts.realPath,
         pluginName: opts.pluginName,
+        marketplace: opts.marketplace,
         projectSlug: opts.projectSlug,
         ctx: opts.ctx,
       })
@@ -83,6 +85,7 @@ async function readCommand(
   source: CommandSource,
   opts: {
     pluginName?: string;
+    marketplace?: string;
     projectSlug?: string;
     category?: string;
     relPath: string;
@@ -110,7 +113,7 @@ async function walkDir(
   dir: string,
   root: string,
   source: CommandSource,
-  opts: { pluginName?: string; projectSlug?: string; ctx?: ProvenanceContext },
+  opts: { pluginName?: string; marketplace?: string; projectSlug?: string; ctx?: ProvenanceContext },
   depth = 0
 ): Promise<CommandEntry[]> {
   if (depth > 4) return [];
@@ -183,13 +186,13 @@ export async function walkUserCommands(ctx?: ProvenanceContext): Promise<Command
 }
 
 export async function walkPluginCommands(
-  installedPlugins: { pluginName: string; installPath: string; installPathUnresolved?: boolean }[],
+  installedPlugins: { pluginName: string; marketplace?: string; installPath: string; installPathUnresolved?: boolean }[],
   ctx?: ProvenanceContext
 ): Promise<CommandEntry[]> {
   const all: CommandEntry[] = [];
 
   await Promise.all(
-    installedPlugins.map(async ({ pluginName, installPath, installPathUnresolved }) => {
+    installedPlugins.map(async ({ pluginName, marketplace, installPath, installPathUnresolved }) => {
       // See walkPluginAgents: an unresolved foreign path must not be walked.
       if (installPathUnresolved) return;
       const commandsDir = path.join(installPath, "commands");
@@ -198,7 +201,7 @@ export async function walkPluginCommands(
       } catch {
         return;
       }
-      const entries = await walkDir(commandsDir, commandsDir, "plugin", { pluginName, ctx });
+      const entries = await walkDir(commandsDir, commandsDir, "plugin", { pluginName, marketplace, ctx });
       all.push(...entries);
     })
   );

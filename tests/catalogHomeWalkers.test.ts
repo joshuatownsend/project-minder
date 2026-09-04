@@ -157,6 +157,24 @@ describe("unresolved plugin installs", () => {
   });
 });
 
+describe("plugin provenance", () => {
+  it("resolves by plugin name AND marketplace, so two marketplaces' copies keep their own records", async () => {
+    // Both records share the name; only the marketplace tells them apart. A
+    // lookup by name alone handed both walks the first record (Codex on #555).
+    const shared = { installPath: path.join(tmp, "stray"), version: "1.0.0" };
+    const ctx: ProvenanceContext = {
+      ...ctxFor(home),
+      installedPlugins: [
+        { pluginName: "ghost", marketplace: "official", ...shared, gitCommitSha: "aaa" },
+        { pluginName: "ghost", marketplace: "community", ...shared, gitCommitSha: "bbb" },
+      ],
+    };
+    const agents = await walkPluginAgents(ctx);
+    const shas = agents.map((a) => (a.provenance.kind === "marketplace-plugin" ? `${a.provenance.marketplace}:${a.provenance.gitCommitSha}` : "?")).sort();
+    expect(shas).toEqual(["community:bbb", "official:aaa"]);
+  });
+});
+
 describe("project entries", () => {
   it("carry no homeKey — they are repo-borne", async () => {
     const agents = await walkProjectAgents(path.join(tmp, "repo"), "repo", ctxFor(home));

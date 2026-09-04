@@ -11,6 +11,7 @@ function makeAgentEntry(
   source: CatalogSource,
   opts: {
     pluginName?: string;
+    marketplace?: string;
     projectSlug?: string;
     category?: string;
     relPath?: string;
@@ -48,6 +49,7 @@ function makeAgentEntry(
     isSymlink: opts.isSymlink,
     realPath: opts.realPath,
     pluginName: opts.pluginName,
+    marketplace: opts.marketplace,
     projectSlug: opts.projectSlug,
     ctx: opts.ctx,
   });
@@ -88,6 +90,7 @@ async function readAgent(
   source: CatalogSource,
   opts: {
     pluginName?: string;
+    marketplace?: string;
     projectSlug?: string;
     category?: string;
     relPath?: string;
@@ -115,7 +118,7 @@ async function walkDir(
   dir: string,
   root: string,
   source: CatalogSource,
-  opts: { pluginName?: string; projectSlug?: string; ctx: ProvenanceContext },
+  opts: { pluginName?: string; marketplace?: string; projectSlug?: string; ctx: ProvenanceContext },
   depth = 0
 ): Promise<AgentEntry[]> {
   if (depth > 4) return [];
@@ -214,7 +217,7 @@ export async function walkPluginAgents(ctx: ProvenanceContext): Promise<AgentEnt
   const all: AgentEntry[] = [];
 
   await Promise.all(
-    ctx.installedPlugins.map(async ({ pluginName, installPath, installPathUnresolved }) => {
+    ctx.installedPlugins.map(async ({ pluginName, marketplace, installPath, installPathUnresolved }) => {
       // An unresolved path is a foreign home's own path, not a local one. On
       // Windows `path.join("/home/me/x", "agents")` still ROOTS on the current
       // drive, so an unrelated `C:\home\me\x` would be walked into this
@@ -226,7 +229,7 @@ export async function walkPluginAgents(ctx: ProvenanceContext): Promise<AgentEnt
       } catch {
         return;
       }
-      const entries = await walkDir(agentsDir, agentsDir, "plugin", { pluginName, ctx });
+      const entries = await walkDir(agentsDir, agentsDir, "plugin", { pluginName, marketplace, ctx });
       all.push(...entries);
     })
   );

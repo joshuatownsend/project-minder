@@ -95,6 +95,23 @@ describe("diffEnvironments", () => {
     expect(rows.every((r) => r.pluginName === "review-kit")).toBe(true);
   });
 
+  it("keys rows on the catalog id when present, so two same-slug files stay two rows", () => {
+    // A standalone `foo.md` beside a bundled `foo/SKILL.md` in one home; the
+    // other home has only the bundled one. Slug alone would fold the pair.
+    const a = home("a", {
+      skills: [
+        { slug: "foo", source: "user", disabled: false, identity: "skill:user:user:foo" },
+        { slug: "foo", source: "user", disabled: false, identity: "skill:user:user:bundled:foo" },
+      ],
+    });
+    const b = home("b", { skills: [{ slug: "foo", source: "user", disabled: false, identity: "skill:user:user:bundled:foo" }] });
+    const rows = diffEnvironments([a, b]).kinds.find((k) => k.kind === "skill")!.rows;
+    expect(rows.map((r) => [r.id, r.uniform]).sort()).toEqual([
+      ["user:skill:user:user:bundled:foo", true],
+      ["user:skill:user:user:foo", false],
+    ]);
+  });
+
   it("carries the first description any home declares onto the row", () => {
     const d = diffEnvironments([WSL, WIN]); // WSL first: its reviewer has no description
     const reviewer = d.kinds.find((k) => k.kind === "agent")!.rows.find((r) => r.id === "user:reviewer")!;
