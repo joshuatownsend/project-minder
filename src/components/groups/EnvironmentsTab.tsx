@@ -94,7 +94,8 @@ export function EnvironmentsTab({ members, labels }: { members: readonly Project
 
   const unresolvedByHome = compared.map((h) => ({
     home: h,
-    plugins: h.plugins.filter((p) => p.unresolved).map((p) => p.name),
+    // Registry keys, not names: `github@official` and `github@community` are different plugins.
+    plugins: h.plugins.filter((p) => p.unresolved).map((p) => p.id),
   })).filter((x) => x.plugins.length > 0);
 
   return (

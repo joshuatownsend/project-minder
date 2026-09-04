@@ -120,6 +120,13 @@ interface CatalogEntryBase {
 
 export interface AgentEntry extends CatalogEntryBase {
   kind: "agent";
+  /**
+   * Path relative to the agents root, without `.md` (`review/worker`). The
+   * identity within a root — `slug` is only the file stem, so two nested
+   * agents `review/worker.md` and `build/worker.md` share it. Set by the
+   * directory walk; absent only on entries built without a root.
+   */
+  relPath?: string;
   model?: string;
   tools?: string[];
   color?: string;
@@ -176,8 +183,9 @@ export interface CatalogResult {
   /**
    * Installed plugins whose registry `installPath` no path mapping could
    * rewrite into a path this machine can open, so nothing under them was
-   * walked (see `InstalledPlugin.installPathUnresolved`). Always empty for
-   * the primary home.
+   * walked (see `InstalledPlugin.installPathUnresolved`), as registry keys
+   * (`name@marketplace` — the same id the environments inventory uses).
+   * Always empty for the primary home.
    */
   unresolvedPlugins: string[];
 }

@@ -37,6 +37,8 @@ beforeAll(async () => {
   home = path.join(tmp, ".claude");
   await write(".claude/agents/reviewer.md", "---\nname: Reviewer\ndescription: Reviews diffs\n---\nbody");
   await write(".claude/agents/nested/planner.md", "no frontmatter");
+  await write(".claude/agents/review/worker.md", "");
+  await write(".claude/agents/build/worker.md", "");
   await write(".claude/agents/.hidden.md", "---\nname: hidden\n---");
   await write(".claude/agents/notes.txt", "ignored");
   await write(".agents/agents/installed-only.md", "---\nname: Installed\n---");
@@ -70,7 +72,14 @@ describe("walkUserAgents(ctx, home)", () => {
     expect(agents.map((a) => [a.slug, a.name, a.description]).sort()).toEqual([
       ["planner", "planner", undefined],
       ["reviewer", "Reviewer", "Reviews diffs"],
+      ["worker", "worker", undefined],
+      ["worker", "worker", undefined],
     ]);
+  });
+
+  it("keeps nested agents apart by relative path, since the slug is only the stem", async () => {
+    const agents = await walkUserAgents(ctxFor(home), home);
+    expect(agents.map((a) => a.relPath).sort()).toEqual(["build/worker", "nested/planner", "review/worker", "reviewer"]);
   });
 
   it("stamps the context's homeKey on every user entry", async () => {
@@ -102,7 +111,7 @@ describe("walkInstalledAgents(ctx, home)", () => {
       await walkInstalledAgents(ctxFor(home), home)
     );
     expect(merged.filter((a) => a.slug === "reviewer").map((a) => a.name).sort()).toEqual(["Reviewer", "Shadowed"]);
-    expect(merged.map((a) => a.slug).sort()).toEqual(["installed-only", "planner", "reviewer", "reviewer"]);
+    expect(merged.map((a) => a.slug).sort()).toEqual(["installed-only", "planner", "reviewer", "reviewer", "worker", "worker"]);
   });
 });
 

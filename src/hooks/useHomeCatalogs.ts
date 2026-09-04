@@ -60,7 +60,9 @@ async function fetchRows<E>(kind: "agents" | "skills", home: string, signal: Abo
 
 function toEnvAgent(e: AgentEntry): EnvAgent {
   return {
-    slug: e.slug,
+    // The relative path, not the file stem: nested `review/worker.md` and
+    // `build/worker.md` are two agents and must be two rows (Codex on #555).
+    slug: e.relPath ?? e.slug,
     name: e.name !== e.slug ? e.name : undefined,
     description: e.description,
     source: e.source === "plugin" ? "plugin" : "user",

@@ -67,6 +67,7 @@ function makeAgentEntry(
     frontmatter: fm,
     mtime: opts.mtime.toISOString(),
     ctime: opts.ctime.toISOString(),
+    relPath: opts.relPath,
     model: typeof fm.model === "string" ? fm.model : undefined,
     tools,
     color: typeof fm.color === "string" ? fm.color : undefined,

@@ -142,7 +142,12 @@ export async function loadCatalog(opts: LoadCatalogOptions = {}): Promise<Catalo
     agents,
     skills,
     home: { key: home.key, path: home.path, primary: home.primary },
-    unresolvedPlugins: ctx.installedPlugins.filter((p) => p.installPathUnresolved).map((p) => p.pluginName),
+    // Registry keys (`name@marketplace`), not bare names: two marketplaces can
+    // ship the same plugin name, and the key is what `EnvPlugin.id` uses
+    // (Copilot on #555).
+    unresolvedPlugins: ctx.installedPlugins
+      .filter((p) => p.installPathUnresolved)
+      .map((p) => `${p.pluginName}@${p.marketplace}`),
   };
   if (!includeProjects || hadProjectScan) {
     setCache(key, result);

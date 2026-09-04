@@ -1,6 +1,7 @@
 import "server-only";
 import type { QueryClient } from "@tanstack/react-query";
 import { loadCatalog } from "@/lib/indexer/catalog";
+import { resolveCatalogHome } from "@/lib/indexer/homes";
 import { buildAgentAliasMap } from "@/lib/indexer/canonicalize";
 import { getAgentUsage } from "@/lib/data";
 import { getCachedScan } from "@/lib/cache";
@@ -116,6 +117,11 @@ export async function loadAgentsResponse(
   }
   const q = query?.toLowerCase() ?? null;
   const cacheKey = `${source ?? ""}|${projectSlug ?? ""}|${q ?? ""}|${home ?? ""}`;
+  // A foreign home is re-resolved BEFORE the cache is consulted: its distro
+  // can stop between requests, and a cached 200 would otherwise stand in
+  // for the promised 503 until the TTL lapsed (Codex on #555). The primary
+  // home short-circuits inside `resolveCatalogHome` at no cost.
+  if (home) await resolveCatalogHome(home);
   const cached = getRouteCache(cacheKey);
   if (cached) {
     if (cached.home.primary) skillUpdateCache.enqueue(buildUpdateItems(cached.data));
