@@ -61,7 +61,7 @@ describe("GET /api/agents/[id]", () => {
 
   it("returns the entry, full body text, joined usage, and backend header", async () => {
     const entry = makeAgent();
-    vi.mocked(loadCatalog).mockResolvedValue({ agents: [entry], skills: [] });
+    vi.mocked(loadCatalog).mockResolvedValue({ agents: [entry], skills: [], home: { key: "c:/users/me/.claude", path: "C:/Users/me/.claude", primary: true }, unresolvedPlugins: [] });
     vi.mocked(fsMock.readFile).mockResolvedValue("# code-reviewer\n\nFull body text.");
     vi.mocked(getAgentUsage).mockResolvedValue({
       stats: [{ name: "code-reviewer", invocations: 5, projects: {}, sessions: [] }],
@@ -82,7 +82,7 @@ describe("GET /api/agents/[id]", () => {
   });
 
   it("returns 404 for an id not present in the catalog", async () => {
-    vi.mocked(loadCatalog).mockResolvedValue({ agents: [], skills: [] });
+    vi.mocked(loadCatalog).mockResolvedValue({ agents: [], skills: [], home: { key: "c:/users/me/.claude", path: "C:/Users/me/.claude", primary: true }, unresolvedPlugins: [] });
 
     const res = await GET(req("nonexistent"), {
       params: Promise.resolve({ id: "nonexistent" }),
@@ -96,7 +96,7 @@ describe("GET /api/agents/[id]", () => {
 
   it("falls back to an empty body string when the file read fails", async () => {
     const entry = makeAgent({ id: "user:missing-file" });
-    vi.mocked(loadCatalog).mockResolvedValue({ agents: [entry], skills: [] });
+    vi.mocked(loadCatalog).mockResolvedValue({ agents: [entry], skills: [], home: { key: "c:/users/me/.claude", path: "C:/Users/me/.claude", primary: true }, unresolvedPlugins: [] });
     vi.mocked(fsMock.readFile).mockRejectedValue(new Error("ENOENT"));
     vi.mocked(getAgentUsage).mockResolvedValue({
       stats: [],

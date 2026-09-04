@@ -7,7 +7,7 @@ vi.mock("fs", () => ({
 }));
 
 import { promises as fs } from "fs";
-import { loadInstalledPlugins, compareSemver } from "@/lib/indexer/walkPlugins";
+import { loadInstalledPlugins, compareSemver, resolvePluginInstallPath } from "@/lib/indexer/walkPlugins";
 
 const mockReadFile = vi.mocked(fs.readFile);
 
@@ -225,5 +225,53 @@ describe("compareSemver", () => {
 
   it("puts numeric identifiers below alphanumeric ones at the same position (semver §11)", () => {
     expect(compareSemver("1.0.0-1", "1.0.0-alpha")).toBeLessThan(0);
+  });
+});
+
+describe("resolvePluginInstallPath (#553)", () => {
+  const ubuntu = { primary: false, mappings: [{ from: "/home/me", to: "\\\\wsl.localhost\\Ubuntu\\home\\me" }] };
+
+  it("only normalizes for the primary home", () => {
+    const r = resolvePluginInstallPath("/home/me/.claude/plugins/x", { primary: true, mappings: [] });
+    expect(r.unresolved).toBe(false);
+  });
+
+  it("rewrites a foreign home's registry path through its mappings", () => {
+    const r = resolvePluginInstallPath("/home/me/.claude/plugins/x", ubuntu);
+    expect(r.unresolved).toBe(false);
+    expect(r.installPath.replace(/\\/g, "/")).toBe("//wsl.localhost/Ubuntu/home/me/.claude/plugins/x");
+  });
+
+  it("flags a path no mapping covers when it cannot be local on this host", () => {
+    const r = resolvePluginInstallPath("/opt/plugins/x", ubuntu);
+    expect(r.unresolved).toBe(process.platform === "win32");
+  });
+});
+
+describe("loadInstalledPlugins(home) (#553)", () => {
+  it("reads the given home's registry and marks plugins whose path did not map", async () => {
+    let registryRead: string | undefined;
+    mockReadFile.mockImplementation(async (p: unknown) => {
+      const filePath = p as string;
+      if (filePath.endsWith("installed_plugins.json")) {
+        registryRead = filePath;
+        return makePluginsFile({
+          "mapped@m": [{ version: "1.0.0", installPath: "/home/me/.claude/plugins/mapped" }],
+          "stray@m": [{ version: "1.0.0", installPath: "/opt/stray" }],
+        });
+      }
+      throw NO_PLUGIN_JSON;
+    });
+    const home = {
+      path: "\\\\wsl.localhost\\Ubuntu\\home\\me\\.claude",
+      primary: false,
+      mappings: [{ from: "/home/me", to: "\\\\wsl.localhost\\Ubuntu\\home\\me" }],
+    };
+    const plugins = await loadInstalledPlugins(home);
+    expect(registryRead?.replace(/\\/g, "/")).toBe("//wsl.localhost/Ubuntu/home/me/.claude/plugins/installed_plugins.json");
+    const byName = Object.fromEntries(plugins.map((p) => [p.pluginName, p]));
+    expect(byName.mapped.installPathUnresolved).toBeUndefined();
+    expect(byName.mapped.installPath.replace(/\\/g, "/")).toBe("//wsl.localhost/Ubuntu/home/me/.claude/plugins/mapped");
+    if (process.platform === "win32") expect(byName.stray.installPathUnresolved).toBe(true);
   });
 });

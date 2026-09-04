@@ -9,7 +9,7 @@ import { skillUpdateCache, type QueueItem } from "@/lib/skillUpdateCache";
 import { getDb } from "@/lib/db/connection";
 import { withProjectedContextCost } from "@/lib/usage/tokenEstimate";
 import type { SkillStats } from "@/lib/usage/types";
-import type { SkillEntry } from "@/lib/indexer/types";
+import type { SkillEntry, CatalogResult } from "@/lib/indexer/types";
 import { queryKeys } from "@/lib/queryKeys";
 import { jsonClone } from "@/lib/server/prefetch";
 import { demoMode } from "@/lib/demo/demoMode";
@@ -35,6 +35,8 @@ export interface SkillRow {
 interface CacheSlot {
   data: SkillRow[];
   backend: "db" | "file";
+  home: CatalogResult["home"];
+  unresolvedPlugins: string[];
   cachedAt: number;
 }
 
@@ -51,11 +53,11 @@ function getRouteCache(key: string): CacheSlot | null {
   return null;
 }
 
-function setRouteCache(key: string, data: SkillRow[], backend: "db" | "file") {
+function setRouteCache(key: string, slot: Omit<CacheSlot, "cachedAt">) {
   if (!globalForSkills.__skillsRouteCache) {
     globalForSkills.__skillsRouteCache = new Map();
   }
-  globalForSkills.__skillsRouteCache.set(key, { data, backend, cachedAt: Date.now() });
+  globalForSkills.__skillsRouteCache.set(key, { ...slot, cachedAt: Date.now() });
 }
 
 export function invalidateSkillsRouteCache() {
@@ -79,6 +81,10 @@ function buildUpdateItems(rows: SkillRow[]): QueueItem[] {
 export interface SkillsResponse {
   data: SkillRow[];
   backend: "db" | "file";
+  /** The Claude home the catalog half was walked for. Absent in demo mode. */
+  home?: CatalogResult["home"];
+  /** Plugins in that home whose contents could not be read from here (see `CatalogResult`). */
+  unresolvedPlugins: string[];
 }
 
 /** The full `/api/skills` GET body, filter-parameterized. */
@@ -86,24 +92,28 @@ export async function loadSkillsResponse(
   source: string | null,
   projectSlug: string | null,
   query: string | null,
+  home: string | null = null,
 ): Promise<SkillsResponse> {
   if (await demoMode()) {
-    return { data: filterDemoCatalogRows(demoSkills(Date.now()), source, projectSlug, query), backend: "file" };
+    return {
+      data: filterDemoCatalogRows(demoSkills(Date.now()), source, projectSlug, query),
+      backend: "file",
+      unresolvedPlugins: [],
+    };
   }
   const q = query?.toLowerCase() ?? null;
-  const cacheKey = `${source ?? ""}|${projectSlug ?? ""}|${q ?? ""}`;
+  const cacheKey = `${source ?? ""}|${projectSlug ?? ""}|${q ?? ""}|${home ?? ""}`;
   const cached = getRouteCache(cacheKey);
   if (cached) {
     skillUpdateCache.enqueue(buildUpdateItems(cached.data));
-    return { data: cached.data, backend: cached.backend };
+    return { data: cached.data, backend: cached.backend, home: cached.home, unresolvedPlugins: cached.unresolvedPlugins };
   }
 
-  const [catalog, skillUsage] = await Promise.all([
-    loadCatalog({ includeProjects: true }),
-    getSkillUsage(),
-  ]);
+  // Usage joins for the primary home only — see `loadAgentsResponse`.
+  const catalog = await loadCatalog({ includeProjects: true, home });
+  const skillUsage = catalog.home.primary ? await getSkillUsage() : null;
 
-  const statsArr = skillUsage.stats;
+  const statsArr = skillUsage?.stats ?? [];
   const aliasMap = buildSkillAliasMap(catalog.skills);
   const rows: SkillRow[] = [];
   const matchedNames = new Set<string>();
@@ -165,9 +175,11 @@ export async function loadSkillsResponse(
     });
   }
 
-  // Augment with invocation-source breakdown from DB when available.
+  // Augment with invocation-source breakdown from DB when available. Primary
+  // home only, like the usage join: the counts are keyed by skill name with
+  // no home dimension.
   try {
-    const db = await getDb();
+    const db = catalog.home.primary ? await getDb() : null;
     if (db) {
       type InvRow = { skill_name: string; invocation_source: string; cnt: number };
       const invRows = db.prepare(
@@ -195,10 +207,11 @@ export async function loadSkillsResponse(
     // DB schema not ready (e.g. empty/new DB) — skip invocation-source augmentation
   }
 
-  setRouteCache(cacheKey, result, skillUsage.meta.backend);
+  const backend = skillUsage?.meta.backend ?? "file";
+  setRouteCache(cacheKey, { data: result, backend, home: catalog.home, unresolvedPlugins: catalog.unresolvedPlugins });
   skillUpdateCache.enqueue(buildUpdateItems(result));
 
-  return { data: result, backend: skillUsage.meta.backend };
+  return { data: result, backend, home: catalog.home, unresolvedPlugins: catalog.unresolvedPlugins };
 }
 
 /** Prefetch the default (unfiltered) skills catalog (`["skills",null,null,null]`). */

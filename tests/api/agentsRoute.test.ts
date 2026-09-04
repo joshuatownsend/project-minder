@@ -21,6 +21,7 @@ vi.mock("@/lib/server/queries/agents", () => ({
 }));
 
 import { loadAgentsResponse } from "@/lib/server/queries/agents";
+import { CatalogHomeError } from "@/lib/indexer/homes";
 import { GET } from "@/app/api/agents/route";
 
 function makeRequest(params: Record<string, string> = {}): NextRequest {
@@ -40,12 +41,13 @@ describe("GET /api/agents", () => {
         ReturnType<typeof loadAgentsResponse>
       >["data"],
       backend: "file",
+      unresolvedPlugins: [],
     });
 
     const res = await GET(makeRequest({ source: "user", project: "my-app", q: "review" }));
 
     expect(res.status).toBe(200);
-    expect(loadAgentsResponse).toHaveBeenCalledWith("user", "my-app", "review");
+    expect(loadAgentsResponse).toHaveBeenCalledWith("user", "my-app", "review", null);
     expect(res.headers.get("X-Minder-Backend")).toBe("file");
     // The route unwraps { data, backend } and returns `data` as the body directly.
     const body = await res.json();
@@ -53,20 +55,47 @@ describe("GET /api/agents", () => {
   });
 
   it("passes null for absent query params", async () => {
-    vi.mocked(loadAgentsResponse).mockResolvedValue({ data: [], backend: "db" });
+    vi.mocked(loadAgentsResponse).mockResolvedValue({ data: [], backend: "db", unresolvedPlugins: [] });
 
     await GET(makeRequest({}));
 
-    expect(loadAgentsResponse).toHaveBeenCalledWith(null, null, null);
+    expect(loadAgentsResponse).toHaveBeenCalledWith(null, null, null, null);
   });
 
   it("returns an empty data array when the catalog is empty", async () => {
-    vi.mocked(loadAgentsResponse).mockResolvedValue({ data: [], backend: "file" });
+    vi.mocked(loadAgentsResponse).mockResolvedValue({ data: [], backend: "file", unresolvedPlugins: [] });
 
     const res = await GET(makeRequest());
 
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toEqual([]);
+  });
+  it("forwards ?home= as the fourth argument and surfaces unresolved plugins in a header (#553)", async () => {
+    vi.mocked(loadAgentsResponse).mockResolvedValue({
+      data: [],
+      backend: "file",
+      home: { key: "//wsl.localhost/ubuntu/home/me/.claude", path: "\\\\wsl.localhost\\Ubuntu\\home\\me\\.claude", primary: false },
+      unresolvedPlugins: ["github", "my plugin"],
+    });
+
+    const res = await GET(makeRequest({ home: "//wsl.localhost/ubuntu/home/me/.claude" }));
+
+    expect(loadAgentsResponse).toHaveBeenCalledWith(null, null, null, "//wsl.localhost/ubuntu/home/me/.claude");
+    expect(res.headers.get("X-Minder-Unresolved-Plugins")).toBe("github,my%20plugin");
+  });
+
+  it("answers a home the catalog cannot walk with its status and reason, never a 500", async () => {
+    vi.mocked(loadAgentsResponse).mockRejectedValueOnce(
+      new CatalogHomeError("unavailable", "//wsl.localhost/debian/home/me/.claude", { reason: "wsl-stopped", distro: "Debian" })
+    );
+    const down = await GET(makeRequest({ home: "//wsl.localhost/debian/home/me/.claude" }));
+    expect(down.status).toBe(503);
+    expect(await down.json()).toMatchObject({ problem: "unavailable", reason: "wsl-stopped", distro: "Debian" });
+
+    vi.mocked(loadAgentsResponse).mockRejectedValueOnce(new CatalogHomeError("unknown", "nope"));
+    const missing = await GET(makeRequest({ home: "nope" }));
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toMatchObject({ problem: "unknown", home: "nope" });
   });
 });

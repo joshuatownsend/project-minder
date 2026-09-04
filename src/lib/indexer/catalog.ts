@@ -1,6 +1,7 @@
 import { walkUserAgents, walkInstalledAgents, walkPluginAgents, walkProjectAgents } from "./walkAgents";
 import { walkUserSkills, walkPluginSkills, walkProjectSkills } from "./walkSkills";
 import { loadProvenanceContext } from "./provenance";
+import { resolveCatalogHome, type CatalogHome } from "./homes";
 import { getCachedScan } from "@/lib/cache";
 import { readConfig } from "@/lib/config";
 import { checkWslRoot, parseWslUncPath } from "@/lib/wsl";
@@ -8,67 +9,86 @@ import type { AgentEntry, CatalogResult, SkillEntry } from "./types";
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
+/**
+ * One slot per (home, includeProjects). Before the home dimension (#553)
+ * there were exactly two slots; now the primary home still owns two and each
+ * other home asked for owns two more. `invalidateCatalogCache` clears them
+ * all — a toggle, template apply, or rescan invalidates every home's view
+ * rather than reasoning about which one it touched.
+ */
 const globalForCatalog = globalThis as unknown as {
-  __catalogCache?: {
-    withProjects: { data: CatalogResult; cachedAt: number } | null;
-    withoutProjects: { data: CatalogResult; cachedAt: number } | null;
-  };
+  __catalogCache?: Map<string, { data: CatalogResult; cachedAt: number }>;
 };
 
-function getCache(includeProjects: boolean) {
-  if (!globalForCatalog.__catalogCache) return null;
-  const slot = includeProjects
-    ? globalForCatalog.__catalogCache.withProjects
-    : globalForCatalog.__catalogCache.withoutProjects;
+function cacheKey(homeKey: string, includeProjects: boolean): string {
+  return `${includeProjects ? "p" : "u"}|${homeKey}`;
+}
+
+function getCache(key: string): CatalogResult | null {
+  const slot = globalForCatalog.__catalogCache?.get(key);
   if (!slot) return null;
   if (Date.now() - slot.cachedAt < CACHE_TTL_MS) return slot.data;
   return null;
 }
 
-function setCache(includeProjects: boolean, data: CatalogResult) {
-  if (!globalForCatalog.__catalogCache) {
-    globalForCatalog.__catalogCache = { withProjects: null, withoutProjects: null };
-  }
-  const slot = { data, cachedAt: Date.now() };
-  if (includeProjects) {
-    globalForCatalog.__catalogCache.withProjects = slot;
-  } else {
-    globalForCatalog.__catalogCache.withoutProjects = slot;
-  }
+function setCache(key: string, data: CatalogResult) {
+  if (!globalForCatalog.__catalogCache) globalForCatalog.__catalogCache = new Map();
+  globalForCatalog.__catalogCache.set(key, { data, cachedAt: Date.now() });
 }
 
 export function invalidateCatalogCache() {
-  globalForCatalog.__catalogCache = { withProjects: null, withoutProjects: null };
+  globalForCatalog.__catalogCache = new Map();
 }
 
-export async function loadCatalog(
-  opts: { includeProjects?: boolean } = {}
-): Promise<CatalogResult> {
-  const includeProjects = opts.includeProjects ?? false;
-  const cached = getCache(includeProjects);
-  if (cached) return cached;
-
-  // Load provenance context once — shared across all walks
-  const ctx = await loadProvenanceContext();
-
-  const [claudeAgents, installedAgents, pluginAgents, userSkills, pluginSkills] = await Promise.all([
-    walkUserAgents(ctx),
-    walkInstalledAgents(ctx),
-    walkPluginAgents(ctx),
-    walkUserSkills(ctx),
-    walkPluginSkills(ctx),
-  ]);
-
-  // Deduplicate: ~/.claude/agents/ symlink entries win over the same file in ~/.agents/agents/.
-  // Symlinked entries already carry realPath; direct ~/.agents/agents/ entries use filePath as
-  // the real path. Whichever appears first in claudeAgents claims the slot.
+/**
+ * Deduplicate the two user-agent roots: `~/.claude/agents/` symlink entries
+ * win over the same file in `~/.agents/agents/`. Symlinked entries already
+ * carry realPath; direct `~/.agents/agents/` entries use filePath as the real
+ * path. Whichever appears first in `claudeAgents` claims the slot.
+ */
+export function mergeUserAgents(claudeAgents: AgentEntry[], installedAgents: AgentEntry[]): AgentEntry[] {
   const seenPaths = new Set<string>(claudeAgents.map((e) => e.realPath ?? e.filePath));
-  const mergedUserAgents = [
+  return [
     ...claudeAgents,
     ...installedAgents.filter((e) => !seenPaths.has(e.realPath ?? e.filePath)),
   ];
+}
 
-  const agents: AgentEntry[] = [...mergedUserAgents, ...pluginAgents];
+export interface LoadCatalogOptions {
+  includeProjects?: boolean;
+  /**
+   * Which Claude home's user and plugin entries to walk, by key
+   * (`normalizePathKey` of the configured home — a project's
+   * `usageHomeKey`). Omit for this machine's own `~/.claude`, which is what
+   * every caller got before #553 and what the no-argument form still returns
+   * byte-for-byte. See `src/lib/indexer/homes.ts` for why one home per call
+   * is the shape, and for the never-wake rule the resolution obeys.
+   *
+   * @throws CatalogHomeError when the key names no configured home, or one
+   *   that cannot be read this cycle.
+   */
+  home?: string | null;
+}
+
+export async function loadCatalog(opts: LoadCatalogOptions = {}): Promise<CatalogResult> {
+  const includeProjects = opts.includeProjects ?? false;
+  const home: CatalogHome = await resolveCatalogHome(opts.home);
+  const key = cacheKey(home.key, includeProjects);
+  const cached = getCache(key);
+  if (cached) return cached;
+
+  // Load provenance context once — shared across all walks
+  const ctx = await loadProvenanceContext(home);
+
+  const [claudeAgents, installedAgents, pluginAgents, userSkills, pluginSkills] = await Promise.all([
+    walkUserAgents(ctx, home.path),
+    walkInstalledAgents(ctx, home.path),
+    walkPluginAgents(ctx),
+    walkUserSkills(ctx, home.path),
+    walkPluginSkills(ctx),
+  ]);
+
+  const agents: AgentEntry[] = [...mergeUserAgents(claudeAgents, installedAgents), ...pluginAgents];
   const skills: SkillEntry[] = [...userSkills, ...pluginSkills];
 
   let hadProjectScan = false;
@@ -118,9 +138,14 @@ export async function loadCatalog(
     }
   }
 
-  const result: CatalogResult = { agents, skills };
+  const result: CatalogResult = {
+    agents,
+    skills,
+    home: { key: home.key, path: home.path, primary: home.primary },
+    unresolvedPlugins: ctx.installedPlugins.filter((p) => p.installPathUnresolved).map((p) => p.pluginName),
+  };
   if (!includeProjects || hadProjectScan) {
-    setCache(includeProjects, result);
+    setCache(key, result);
   }
   return result;
 }

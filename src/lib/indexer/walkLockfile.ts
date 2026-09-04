@@ -8,8 +8,14 @@ interface LockfileFile {
   skills?: Record<string, LockfileEntry>;
 }
 
-export async function loadLockfile(): Promise<Map<string, LockfileEntry>> {
-  const lockPath = path.join(os.homedir(), ".agents", ".skill-lock.json");
+/**
+ * The skills lockfile beside a Claude home: `~/.agents/.skill-lock.json`, i.e.
+ * the `.agents` sibling of the `.claude` directory. `home` is the `.claude`
+ * path; defaults to this machine's.
+ */
+export async function loadLockfile(home?: string): Promise<Map<string, LockfileEntry>> {
+  const base = home ? path.dirname(home) : os.homedir();
+  const lockPath = path.join(base, ".agents", ".skill-lock.json");
   try {
     const raw = await fs.readFile(lockPath, "utf-8");
     const data = JSON.parse(raw) as LockfileFile;

@@ -2,8 +2,15 @@
 
 import { useMemo } from "react";
 import { useEnvironments } from "@/hooks/useEnvironments";
+import { useHomeCatalogs } from "@/hooks/useHomeCatalogs";
 import { Skeleton } from "@/components/ui/skeleton";
-import { diffEnvironments, homeForLocation, type EnvKind, type EnvironmentHome } from "@/lib/environments/diff";
+import {
+  diffEnvironments,
+  homeForLocation,
+  type EnvKind,
+  type EnvironmentHome,
+  type EnvironmentInventory,
+} from "@/lib/environments/diff";
 import type { ProjectData } from "@/lib/types";
 import { DivergenceChip, LocationChip, type Labels } from "./PresenceChips";
 
@@ -16,15 +23,18 @@ const KIND_LABEL: Record<EnvKind, string> = {
 
 /**
  * Environment-borne state compared across the Claude homes the group's
- * locations live under: user agents, skills, installed plugins, MCP server
- * names. Repo-borne `.claude/` catalogs are the same files in every checkout
- * and are covered by the repo-borne tabs' divergence flags; this tab is
- * about what differs per MACHINE.
+ * locations live under: user and plugin-provided agents and skills (from the
+ * catalog, per home — #553), installed plugins, MCP server names. Repo-borne
+ * `.claude/` catalogs are the same files in every checkout and are covered
+ * by the repo-borne tabs' divergence flags; this tab is about what differs
+ * per MACHINE.
  *
  * Each location joins to a home by `usageHomeKey` (a mapped WSL checkout)
  * or, when unpinned, to the primary home. Homes that could not be read this
  * cycle are listed, not hidden — a stopped WSL distro's home is exactly the
- * one whose absence explains a behaviour difference.
+ * one whose absence explains a behaviour difference. A home whose catalog
+ * could not be read is excluded from the comparison and said so, rather
+ * than compared as empty and shown differing on every row.
  */
 export function EnvironmentsTab({ members, labels }: { members: readonly ProjectData[]; labels: Labels }) {
   const { data, loading, error } = useEnvironments();
@@ -53,12 +63,39 @@ export function EnvironmentsTab({ members, labels }: { members: readonly Project
     return { homes, columns, unmapped, unavailable };
   }, [data, members, labels]);
 
-  const diff = useMemo(() => diffEnvironments(homes), [homes]);
+  const homeKeys = useMemo(() => homes.map((h) => h.key), [homes]);
+  const catalogs = useHomeCatalogs(homeKeys);
+
+  const { compared, catalogErrors, catalogsLoading } = useMemo(() => {
+    const compared: EnvironmentInventory[] = [];
+    const catalogErrors: { home: EnvironmentHome; error: string }[] = [];
+    let catalogsLoading = false;
+    for (const h of homes) {
+      const state = catalogs.get(h.key);
+      if (!state || state.loading) {
+        catalogsLoading = true;
+        continue;
+      }
+      if (state.error !== undefined || !state.catalog) {
+        catalogErrors.push({ home: h, error: state.error ?? "catalog unavailable" });
+        continue;
+      }
+      compared.push({ ...h, agents: state.catalog.agents, skills: state.catalog.skills });
+    }
+    return { compared, catalogErrors, catalogsLoading };
+  }, [homes, catalogs]);
+
+  const diff = useMemo(() => diffEnvironments(compared), [compared]);
 
   if (loading && !data) return <Skeleton className="h-40" />;
   if (error || !data) {
     return <Empty>Could not load the Claude home inventory.</Empty>;
   }
+
+  const unresolvedByHome = compared.map((h) => ({
+    home: h,
+    plugins: h.plugins.filter((p) => p.unresolved).map((p) => p.name),
+  })).filter((x) => x.plugins.length > 0);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
@@ -83,18 +120,37 @@ export function EnvironmentsTab({ members, labels }: { members: readonly Project
             {u.distro ? `WSL ${u.distro}` : u.path}: {u.reason}
           </DivergenceChip>
         ))}
+        {catalogErrors.map(({ home, error }) => (
+          <DivergenceChip key={home.key} title={`${home.path}: the agents/skills catalog for this home could not be read (${error}); it is left out of the comparison`}>
+            {columns.get(home.key)!.join(" + ")}: catalog unavailable
+          </DivergenceChip>
+        ))}
       </div>
+
+      {unresolvedByHome.map(({ home, plugins }) => (
+        <p key={home.key} style={{ fontSize: "0.72rem", color: "var(--text-muted)", fontFamily: "var(--font-body)", margin: 0 }}>
+          {columns.get(home.key)!.join(" + ")}: {plugins.length === 1 ? "one plugin's" : `${plugins.length} plugins'`} contents cannot be
+          read from this machine ({plugins.join(", ")}) — the registry records install paths in that home&apos;s own filesystem,
+          and no path mapping in Settings covers them. Their agents and skills are missing from that column, not uninstalled.
+        </p>
+      ))}
 
       {homes.length === 0 ? (
         <Empty>No readable Claude home matched this group&apos;s locations.</Empty>
+      ) : catalogsLoading && compared.length < homes.length - catalogErrors.length ? (
+        <Skeleton className="h-40" />
+      ) : compared.length === 0 ? (
+        <Empty>No home&apos;s catalog could be read, so there is nothing to compare.</Empty>
       ) : (
         <>
-          {homes.length === 1 && (
+          {compared.length === 1 && (
             <p style={{ fontSize: "0.72rem", color: "var(--text-muted)", fontFamily: "var(--font-body)", margin: 0 }}>
-              Every location shares one Claude home, so there is nothing to diff — this is that home&apos;s inventory.
+              {homes.length === 1
+                ? "Every location shares one Claude home, so there is nothing to diff — this is that home's inventory."
+                : "Only one home's catalog could be read, so there is nothing to diff — this is that home's inventory."}
             </p>
           )}
-          {homes.length > 1 && (
+          {compared.length > 1 && (
             <p style={{ fontSize: "0.72rem", color: diff.divergent > 0 ? "var(--accent)" : "var(--text-muted)", fontFamily: "var(--font-body)", margin: 0 }}>
               {diff.divergent === 0
                 ? "The compared homes have identical inventories."
@@ -127,11 +183,11 @@ export function EnvironmentsTab({ members, labels }: { members: readonly Project
               ) : (
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "0.74rem", fontFamily: "var(--font-mono)" }}>
-                    {homes.length > 1 && (
+                    {compared.length > 1 && (
                       <thead>
                         <tr>
                           <th style={TH} />
-                          {homes.map((h) => (
+                          {compared.map((h) => (
                             <th key={h.key} style={TH} title={h.path}>
                               {columns.get(h.key)!.join(" + ")}
                             </th>
@@ -142,16 +198,28 @@ export function EnvironmentsTab({ members, labels }: { members: readonly Project
                     <tbody>
                       {k.rows.map((r) => (
                         <tr key={r.id} style={{ borderTop: "1px solid var(--border-subtle)" }}>
-                          <td style={{ ...TD, color: r.uniform ? "var(--text-secondary)" : "var(--text-primary)" }} title={r.id}>
-                            {r.label}
-                            {!r.uniform && homes.length > 1 && (
-                              <span style={{ marginLeft: "6px" }}>
-                                <DivergenceChip>differs</DivergenceChip>
-                              </span>
+                          <td style={{ ...TD, color: r.uniform ? "var(--text-secondary)" : "var(--text-primary)", whiteSpace: "normal" }} title={r.id}>
+                            <span style={{ whiteSpace: "nowrap" }}>
+                              {r.label}
+                              {r.pluginName !== undefined && (
+                                <span style={{ marginLeft: "6px", fontSize: "0.62rem", color: "var(--text-muted)" }} title={`Provided by the ${r.pluginName} plugin`}>
+                                  {r.pluginName}
+                                </span>
+                              )}
+                              {!r.uniform && compared.length > 1 && (
+                                <span style={{ marginLeft: "6px" }}>
+                                  <DivergenceChip>differs</DivergenceChip>
+                                </span>
+                              )}
+                            </span>
+                            {r.description && (
+                              <div style={{ fontSize: "0.66rem", fontFamily: "var(--font-body)", color: "var(--text-muted)", marginTop: "2px", maxWidth: "48ch" }}>
+                                {r.description}
+                              </div>
                             )}
                           </td>
-                          {homes.length > 1 &&
-                            homes.map((h) => {
+                          {compared.length > 1 &&
+                            compared.map((h) => {
                               const present = r.presentIn.includes(h.key);
                               const detail = r.detailIn[h.key];
                               return (
@@ -167,8 +235,8 @@ export function EnvironmentsTab({ members, labels }: { members: readonly Project
                                 </td>
                               );
                             })}
-                          {homes.length === 1 && (
-                            <td style={{ ...TD, textAlign: "right", color: "var(--text-muted)" }}>{r.detailIn[homes[0].key] ?? ""}</td>
+                          {compared.length === 1 && (
+                            <td style={{ ...TD, textAlign: "right", color: "var(--text-muted)" }}>{r.detailIn[compared[0].key] ?? ""}</td>
                           )}
                         </tr>
                       ))}

@@ -1,5 +1,6 @@
 import path from "path";
 import type { Provenance, ProvenanceContext } from "./types";
+import type { CatalogHome } from "./homes";
 import { loadInstalledPlugins } from "./walkPlugins";
 import { loadLockfile } from "./walkLockfile";
 import { loadKnownMarketplaces } from "./marketplaces";
@@ -67,11 +68,21 @@ export function resolveProvenance(opts: {
   return { kind: "user-local" };
 }
 
-export async function loadProvenanceContext(): Promise<ProvenanceContext> {
+/**
+ * Provenance inputs for one Claude home: its plugin registry, the skills
+ * lockfile beside it, and its known marketplaces. No argument means this
+ * machine's `~/.claude`, exactly as before the home dimension (#553).
+ */
+export async function loadProvenanceContext(home?: CatalogHome): Promise<ProvenanceContext> {
   const [installedPlugins, lockfile, marketplaceRepo] = await Promise.all([
-    loadInstalledPlugins(),
-    loadLockfile(),
-    loadKnownMarketplaces(),
+    loadInstalledPlugins(home),
+    loadLockfile(home?.path),
+    loadKnownMarketplaces(home?.path),
   ]);
-  return { installedPlugins, lockfile, marketplaceRepo };
+  return {
+    installedPlugins,
+    lockfile,
+    marketplaceRepo,
+    ...(home ? { homeKey: home.key } : {}),
+  };
 }

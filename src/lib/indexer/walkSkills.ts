@@ -1,9 +1,9 @@
 import { promises as fs } from "fs";
 import path from "path";
-import os from "os";
 import { parseFrontmatter, coerceFrontmatterBoolean } from "./parseFrontmatter";
 import { resolveProvenance } from "./provenance";
 import { resolvePluginSkillsRoots } from "./walkPlugins";
+import { getPrimaryClaudeHome } from "@/lib/claudeHome";
 import type { SkillEntry, CatalogSource, ProvenanceContext } from "./types";
 
 function makeSkillEntry(
@@ -104,6 +104,8 @@ function makeSkillEntry(
     argumentHint:
       typeof fm["argument-hint"] === "string" ? fm["argument-hint"] : undefined,
     provenance,
+    // Home-borne entries only (see makeAgentEntry).
+    ...(source !== "project" && opts.ctx.homeKey ? { homeKey: opts.ctx.homeKey } : {}),
     isSymlink: opts.isSymlink,
     realPath: opts.realPath,
     parseWarnings: warnings.length > 0 ? warnings : undefined,
@@ -218,9 +220,16 @@ async function walkSkillsRoot(
   return results;
 }
 
-export async function walkUserSkills(ctx: ProvenanceContext): Promise<SkillEntry[]> {
-  const activeRoot = path.join(os.homedir(), ".claude", "skills");
-  const disabledRoot = path.join(os.homedir(), ".claude", "skills-disabled");
+/**
+ * `<home>/skills` and `<home>/skills-disabled`. `home` defaults to this
+ * machine's `.claude`, so pre-#553 callers are unchanged.
+ */
+export async function walkUserSkills(
+  ctx: ProvenanceContext,
+  home: string = getPrimaryClaudeHome()
+): Promise<SkillEntry[]> {
+  const activeRoot = path.join(home, "skills");
+  const disabledRoot = path.join(home, "skills-disabled");
   const [active, disabled] = await Promise.all([
     walkSkillsRoot(activeRoot, "user", { ctx }),
     walkSkillsRoot(disabledRoot, "user", { ctx, disabled: true }),

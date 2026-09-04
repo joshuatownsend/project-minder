@@ -51,7 +51,7 @@ beforeEach(() => {
   mockReadFile.mockRejectedValue(new Error("ENOENT") as never);
   mockReaddir.mockResolvedValue([]);
   mockScanMcp.mockResolvedValue({ servers: [] });
-  mockLoadCatalog.mockResolvedValue({ agents: [], skills: [] });
+  mockLoadCatalog.mockResolvedValue({ agents: [], skills: [], home: { key: "c:/users/me/.claude", path: "C:/Users/me/.claude", primary: true }, unresolvedPlugins: [] });
 });
 
 describe("computeContextBudget", () => {
@@ -87,7 +87,7 @@ describe("computeContextBudget", () => {
       asSkill({ source: "project", projectSlug: "myproj" }),
       asSkill({ source: "project", projectSlug: "other" }),
     ] as Parameters<typeof mockLoadCatalog.mockResolvedValue>[0]["skills"];
-    mockLoadCatalog.mockResolvedValue({ agents: [], skills });
+    mockLoadCatalog.mockResolvedValue({ agents: [], skills, home: { key: "c:/users/me/.claude", path: "C:/Users/me/.claude", primary: true }, unresolvedPlugins: [] });
     const result = await computeContextBudget("C:\\dev\\myproj", "myproj");
     expect(result.skillCount).toBe(4);
     expect(result.skillTokens).toBe(4 * SKILL_TOKENS_EACH);
@@ -122,7 +122,7 @@ describe("computeContextBudget", () => {
     });
     const skills = [asSkill({ source: "user" }), asSkill({ source: "plugin" })] as
       Parameters<typeof mockLoadCatalog.mockResolvedValue>[0]["skills"];
-    mockLoadCatalog.mockResolvedValue({ agents: [], skills });
+    mockLoadCatalog.mockResolvedValue({ agents: [], skills, home: { key: "c:/users/me/.claude", path: "C:/Users/me/.claude", primary: true }, unresolvedPlugins: [] });
     const claudeMd = "x".repeat(800);
     mockReadFile.mockImplementation(async (p: unknown) => {
       const f = String(p);

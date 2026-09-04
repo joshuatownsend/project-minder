@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { loadCatalog, invalidateCatalogCache } from "@/lib/indexer/catalog";
+import { CatalogHomeError } from "@/lib/indexer/homes";
 import { getAgentUsage, getSkillUsage } from "@/lib/data";
 import { withProjectedContextCost } from "@/lib/usage/tokenEstimate";
 import type { AgentEntry, SkillEntry } from "@/lib/indexer/types";
@@ -20,6 +21,26 @@ function matchesQuery(entry: AgentEntry | SkillEntry, q: string): boolean {
     (entry.description ?? "").toLowerCase().includes(needle) ||
     entry.bodyExcerpt.toLowerCase().includes(needle)
   );
+}
+
+const HomeSchema = z
+  .string()
+  .min(1)
+  .optional()
+  .describe(
+    "Claude home to read, by key — a project's `usageHomeKey` (normalized home path). " +
+      "Omit for this machine's ~/.claude. Usage stats are joined for the primary home only. " +
+      "A home inside a stopped WSL distro is refused, never started."
+  );
+
+/** `CatalogHomeError` → MCP error result; anything else keeps propagating. */
+async function withHome<T>(fn: () => Promise<T>): Promise<T | ReturnType<typeof errorResult>> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof CatalogHomeError) return errorResult(err.message);
+    throw err;
+  }
 }
 
 function filterCatalog<T extends AgentEntry | SkillEntry>(
@@ -53,16 +74,18 @@ export function registerCatalogTools(server: McpServer): void {
           .boolean()
           .default(true)
           .describe("Also include project-local agents (default true)"),
+        home: HomeSchema,
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ source, project, q, includeProjects }) => {
-      const { agents } = await loadCatalog({ includeProjects });
-      const filtered = filterCatalog(agents, { source, project, q }).map((a) =>
-        withProjectedContextCost(a),
-      );
-      return jsonResult({ total: filtered.length, agents: filtered });
-    }
+    async ({ source, project, q, includeProjects, home }) =>
+      withHome(async () => {
+        const { agents, home: walked, unresolvedPlugins } = await loadCatalog({ includeProjects, home });
+        const filtered = filterCatalog(agents, { source, project, q }).map((a) =>
+          withProjectedContextCost(a),
+        );
+        return jsonResult({ total: filtered.length, home: walked, unresolvedPlugins, agents: filtered });
+      })
   );
 
   server.registerTool(
@@ -72,23 +95,25 @@ export function registerCatalogTools(server: McpServer): void {
       description:
         "Returns the full AgentEntry (body excerpt, frontmatter, provenance, file path) plus " +
         "cross-project invocation stats (per-project invocation count, total cost, last used).",
-      inputSchema: { id: z.string().min(1).describe("Agent id (path-based stable identifier)") },
+      inputSchema: { id: z.string().min(1).describe("Agent id (path-based stable identifier)"), home: HomeSchema },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ id }) => {
-      const { agents } = await loadCatalog({ includeProjects: true });
-      const agent = agents.find((a) => a.id === id);
-      if (!agent) {
-        return errorResult(`No agent with id '${id}'. Try 'list-agents' first.`);
-      }
+    async ({ id, home }) =>
+      withHome(async () => {
+        const catalog = await loadCatalog({ includeProjects: true, home });
+        const agent = catalog.agents.find((a) => a.id === id);
+        if (!agent) {
+          return errorResult(`No agent with id '${id}'. Try 'list-agents' first.`);
+        }
 
-      const { stats } = await getAgentUsage("all");
-      const usage = stats.find(
-        (s) => s.name.toLowerCase() === agent.name.toLowerCase() || s.name === agent.slug
-      );
+        // Usage is not split by home; only the primary home's numbers are its own.
+        const stats = catalog.home.primary ? (await getAgentUsage("all")).stats : [];
+        const usage = stats.find(
+          (s) => s.name.toLowerCase() === agent.name.toLowerCase() || s.name === agent.slug
+        );
 
-      return jsonResult({ agent: withProjectedContextCost(agent), usage: usage ?? null });
-    }
+        return jsonResult({ agent: withProjectedContextCost(agent), usage: usage ?? null });
+      })
   );
 
   server.registerTool(
@@ -103,16 +128,18 @@ export function registerCatalogTools(server: McpServer): void {
         project: SlugSchema.optional(),
         q: z.string().min(1).optional(),
         includeProjects: z.boolean().default(true),
+        home: HomeSchema,
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ source, project, q, includeProjects }) => {
-      const { skills } = await loadCatalog({ includeProjects });
-      const filtered = filterCatalog(skills, { source, project, q }).map((s) =>
-        withProjectedContextCost(s),
-      );
-      return jsonResult({ total: filtered.length, skills: filtered });
-    }
+    async ({ source, project, q, includeProjects, home }) =>
+      withHome(async () => {
+        const { skills, home: walked, unresolvedPlugins } = await loadCatalog({ includeProjects, home });
+        const filtered = filterCatalog(skills, { source, project, q }).map((s) =>
+          withProjectedContextCost(s),
+        );
+        return jsonResult({ total: filtered.length, home: walked, unresolvedPlugins, skills: filtered });
+      })
   );
 
   server.registerTool(
@@ -122,23 +149,24 @@ export function registerCatalogTools(server: McpServer): void {
       description:
         "Returns the full SkillEntry plus invocation stats (per-project invocation count, " +
         "last-used date) across all sessions.",
-      inputSchema: { id: z.string().min(1).describe("Skill id (path-based stable identifier)") },
+      inputSchema: { id: z.string().min(1).describe("Skill id (path-based stable identifier)"), home: HomeSchema },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ id }) => {
-      const { skills } = await loadCatalog({ includeProjects: true });
-      const skill = skills.find((s) => s.id === id);
-      if (!skill) {
-        return errorResult(`No skill with id '${id}'. Try 'list-skills' first.`);
-      }
+    async ({ id, home }) =>
+      withHome(async () => {
+        const catalog = await loadCatalog({ includeProjects: true, home });
+        const skill = catalog.skills.find((s) => s.id === id);
+        if (!skill) {
+          return errorResult(`No skill with id '${id}'. Try 'list-skills' first.`);
+        }
 
-      const { stats } = await getSkillUsage("all");
-      const usage = stats.find(
-        (s) => s.name.toLowerCase() === skill.name.toLowerCase() || s.name === skill.slug
-      );
+        const stats = catalog.home.primary ? (await getSkillUsage("all")).stats : [];
+        const usage = stats.find(
+          (s) => s.name.toLowerCase() === skill.name.toLowerCase() || s.name === skill.slug
+        );
 
-      return jsonResult({ skill: withProjectedContextCost(skill), usage: usage ?? null });
-    }
+        return jsonResult({ skill: withProjectedContextCost(skill), usage: usage ?? null });
+      })
   );
 
   server.registerTool(

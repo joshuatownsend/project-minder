@@ -1,8 +1,8 @@
 import { promises as fs } from "fs";
 import path from "path";
-import os from "os";
 import { parseFrontmatter } from "./parseFrontmatter";
 import { resolveProvenance } from "./provenance";
+import { getPrimaryClaudeHome } from "@/lib/claudeHome";
 import type { AgentEntry, CatalogSource, ProvenanceContext } from "./types";
 
 function makeAgentEntry(
@@ -72,6 +72,9 @@ function makeAgentEntry(
     color: typeof fm.color === "string" ? fm.color : undefined,
     emoji: typeof fm.emoji === "string" ? fm.emoji : undefined,
     provenance,
+    // Home-borne entries only: a project's `.claude/agents` travels with the
+    // repo, so it has no home to be keyed by.
+    ...(source !== "project" && opts.ctx.homeKey ? { homeKey: opts.ctx.homeKey } : {}),
     isSymlink: opts.isSymlink,
     realPath: opts.realPath,
     parseWarnings: warnings.length > 0 ? warnings : undefined,
@@ -179,13 +182,25 @@ async function walkDir(
   return results;
 }
 
-export async function walkUserAgents(ctx: ProvenanceContext): Promise<AgentEntry[]> {
-  const root = path.join(os.homedir(), ".claude", "agents");
+/**
+ * `<home>/agents`. `home` is the `.claude` directory to walk; it defaults to
+ * this machine's, so callers that predate the home dimension (#553) are
+ * unchanged. Entries carry `ctx.homeKey` when the context names a home.
+ */
+export async function walkUserAgents(
+  ctx: ProvenanceContext,
+  home: string = getPrimaryClaudeHome()
+): Promise<AgentEntry[]> {
+  const root = path.join(home, "agents");
   return walkDir(root, root, "user", { ctx });
 }
 
-export async function walkInstalledAgents(ctx: ProvenanceContext): Promise<AgentEntry[]> {
-  const root = path.join(os.homedir(), ".agents", "agents");
+/** The sibling `~/.agents/agents` layout beside the `.claude` directory. */
+export async function walkInstalledAgents(
+  ctx: ProvenanceContext,
+  home: string = getPrimaryClaudeHome()
+): Promise<AgentEntry[]> {
+  const root = path.join(path.dirname(home), ".agents", "agents");
   try {
     await fs.access(root);
   } catch {

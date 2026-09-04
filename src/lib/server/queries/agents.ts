@@ -8,7 +8,7 @@ import { pathToUsageSlug } from "@/lib/usage/slug";
 import { skillUpdateCache, type QueueItem } from "@/lib/skillUpdateCache";
 import { withProjectedContextCost } from "@/lib/usage/tokenEstimate";
 import type { AgentStats } from "@/lib/usage/types";
-import type { AgentEntry } from "@/lib/indexer/types";
+import type { AgentEntry, CatalogResult } from "@/lib/indexer/types";
 import { queryKeys } from "@/lib/queryKeys";
 import { jsonClone } from "@/lib/server/prefetch";
 import { demoMode } from "@/lib/demo/demoMode";
@@ -35,6 +35,8 @@ export interface AgentRow {
 interface CacheSlot {
   data: AgentRow[];
   backend: "db" | "file";
+  home: CatalogResult["home"];
+  unresolvedPlugins: string[];
   cachedAt: number;
 }
 
@@ -51,11 +53,11 @@ function getRouteCache(key: string): CacheSlot | null {
   return null;
 }
 
-function setRouteCache(key: string, data: AgentRow[], backend: "db" | "file") {
+function setRouteCache(key: string, slot: Omit<CacheSlot, "cachedAt">) {
   if (!globalForAgents.__agentsRouteCache) {
     globalForAgents.__agentsRouteCache = new Map();
   }
-  globalForAgents.__agentsRouteCache.set(key, { data, backend, cachedAt: Date.now() });
+  globalForAgents.__agentsRouteCache.set(key, { ...slot, cachedAt: Date.now() });
 }
 
 export function invalidateAgentsRouteCache() {
@@ -79,31 +81,49 @@ function buildUpdateItems(rows: AgentRow[]): QueueItem[] {
 export interface AgentsResponse {
   data: AgentRow[];
   backend: "db" | "file";
+  /** The Claude home the catalog half was walked for. Absent in demo mode. */
+  home?: CatalogResult["home"];
+  /** Plugins in that home whose contents could not be read from here (see `CatalogResult`). */
+  unresolvedPlugins: string[];
 }
 
-/** The full `/api/agents` GET body, filter-parameterized. */
+/**
+ * The full `/api/agents` GET body, filter-parameterized.
+ *
+ * `home` selects another Claude home's catalog by key (#553). Usage stats are
+ * joined ONLY for the primary home: the invocation aggregates are not split
+ * by home, so attaching them to a WSL home's rows would report this
+ * machine's numbers under that home's names — a wrong number is worse than
+ * none. Rows for a non-primary home carry `entry` only, and the orphan
+ * `catalogMissing` rows (usage with no entry) are omitted for the same reason.
+ *
+ * @throws CatalogHomeError — see `loadCatalog`.
+ */
 export async function loadAgentsResponse(
   source: string | null,
   projectSlug: string | null,
   query: string | null,
+  home: string | null = null,
 ): Promise<AgentsResponse> {
   if (await demoMode()) {
-    return { data: filterDemoCatalogRows(demoAgents(Date.now()), source, projectSlug, query), backend: "file" };
+    return {
+      data: filterDemoCatalogRows(demoAgents(Date.now()), source, projectSlug, query),
+      backend: "file",
+      unresolvedPlugins: [],
+    };
   }
   const q = query?.toLowerCase() ?? null;
-  const cacheKey = `${source ?? ""}|${projectSlug ?? ""}|${q ?? ""}`;
+  const cacheKey = `${source ?? ""}|${projectSlug ?? ""}|${q ?? ""}|${home ?? ""}`;
   const cached = getRouteCache(cacheKey);
   if (cached) {
     skillUpdateCache.enqueue(buildUpdateItems(cached.data));
-    return { data: cached.data, backend: cached.backend };
+    return { data: cached.data, backend: cached.backend, home: cached.home, unresolvedPlugins: cached.unresolvedPlugins };
   }
 
-  const [catalog, agentUsage] = await Promise.all([
-    loadCatalog({ includeProjects: true }),
-    getAgentUsage(),
-  ]);
+  const catalog = await loadCatalog({ includeProjects: true, home });
+  const agentUsage = catalog.home.primary ? await getAgentUsage() : null;
 
-  const statsArr = agentUsage.stats;
+  const statsArr = agentUsage?.stats ?? [];
   const aliasMap = buildAgentAliasMap(catalog.agents);
   const rows: AgentRow[] = [];
   const matchedNames = new Set<string>();
@@ -168,10 +188,11 @@ export async function loadAgentsResponse(
     });
   }
 
-  setRouteCache(cacheKey, result, agentUsage.meta.backend);
+  const backend = agentUsage?.meta.backend ?? "file";
+  setRouteCache(cacheKey, { data: result, backend, home: catalog.home, unresolvedPlugins: catalog.unresolvedPlugins });
   skillUpdateCache.enqueue(buildUpdateItems(result));
 
-  return { data: result, backend: agentUsage.meta.backend };
+  return { data: result, backend, home: catalog.home, unresolvedPlugins: catalog.unresolvedPlugins };
 }
 
 /** Prefetch the default (unfiltered) agents catalog (`["agents",null,null,null]`). */

@@ -44,10 +44,12 @@ export const queryKeys = {
       responseMinutes, runCapMinutes, tailMinutes,
       timeZone, home ?? null,
     ] as const,
-  agents: (source?: string, project?: string, query?: string) =>
-    ["agents", source ?? null, project ?? null, query ?? null] as const,
-  skills: (source?: string, project?: string, query?: string) =>
-    ["skills", source ?? null, project ?? null, query ?? null] as const,
+  // `home` (#553) is appended ONLY when given, so the default keys — and the
+  // RSC prefetch entries that must match them byte-for-byte — are unchanged.
+  agents: (source?: string, project?: string, query?: string, home?: string) =>
+    ["agents", source ?? null, project ?? null, query ?? null, ...(home ? [home] : [])] as const,
+  skills: (source?: string, project?: string, query?: string, home?: string) =>
+    ["skills", source ?? null, project ?? null, query ?? null, ...(home ? [home] : [])] as const,
   insights: {
     all: (project?: string, query?: string) =>
       ["insights", "list", project ?? null, query ?? null] as const,
