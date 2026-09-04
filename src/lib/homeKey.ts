@@ -11,7 +11,12 @@
  * (`ProjectSessions`) can use it too.
  */
 export function normalizeHomeKey(key: string): string {
-  return key.replace(/[\\/]+$/, "");
+  // A loop, not `/[\\/]+$/`: the value comes off the query string, and CodeQL
+  // flags that pattern as polynomial on a long run of separators
+  // (js/polynomial-redos on #556). Linear, and reads the same.
+  let end = key.length;
+  while (end > 0 && (key[end - 1] === "/" || key[end - 1] === "\\")) end--;
+  return key.slice(0, end);
 }
 
 export function sameHomeKey(a: string | undefined, b: string | undefined): boolean {
