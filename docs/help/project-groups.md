@@ -62,10 +62,14 @@ Session counts per location from the scan, then each location's own session list
 
 ### Environments
 
-What differs per *machine* rather than per checkout: user agents, skills (including disabled ones), installed plugins with versions, and MCP server names, compared across the Claude homes the group's locations live under. A WSL-mapped location joins to its distro's home; an unmapped one joins to this machine's `~/.claude`.
+What differs per *machine* rather than per checkout: user and plugin-provided agents and skills (including disabled ones), installed plugins with versions, and MCP server names, compared across the Claude homes the group's locations live under. A WSL-mapped location joins to its distro's home; an unmapped one joins to this machine's `~/.claude`.
+
+Agents and skills are read from the catalog per home (the same catalog behind the Agents and Skills pages, asked for that home), so each row carries its description, and an entry a plugin ships is tagged with the plugin's name — a user-scope `reviewer` and a plugin's `reviewer` are different rows. Invocation counts are not shown here: they are not split by home.
 
 - Rows that differ sort first and carry a **differs** chip; a `✓` means present, `—` means absent, and a value in the cell (a version, `disabled`) is the detail that differs.
 - Homes that could not be read this cycle are listed with the reason rather than hidden — Minder never wakes a stopped WSL distro to read it.
+- A plugin whose files cannot be read from this machine shows `unreadable` in its cell, and a note names it: the registry inside a WSL home records install paths in that distro's own filesystem, so its agents and skills only appear once a **path mapping** in Settings covers them (the same `/home/<user>` → `\\wsl.localhost\<distro>\home\<user>` mapping sessions use). Missing from the column is not the same as uninstalled.
+- A home whose catalog could not be loaded is left out of the comparison and flagged, rather than compared as empty.
 - When every location shares one home there is nothing to diff; the tab shows that home's inventory.
 
 Only server *names* are read from MCP configs — never their commands or environment blocks.

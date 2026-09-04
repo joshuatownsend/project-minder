@@ -1,7 +1,9 @@
 import { promises as fs } from "fs";
 import path from "path";
-import os from "os";
 import type { InstalledPlugin } from "./types";
+import type { PathMapping } from "@/lib/types";
+import { mapForeignPath } from "@/lib/pathMapping";
+import { getPrimaryClaudeHome } from "@/lib/claudeHome";
 
 interface PluginsFile {
   version?: number;
@@ -135,10 +137,62 @@ export async function resolvePluginSkillsRoots(installPath: string): Promise<str
   return roots;
 }
 
-export async function loadInstalledPlugins(): Promise<InstalledPlugin[]> {
+export { pluginRegistryKey } from "./pluginKey";
+
+/**
+ * The install record the catalog reads for a registry key when several are
+ * recorded: the highest semver (`compareSemver`). Exported so the Environments
+ * inventory judges readability from the SAME record whose contents the
+ * catalog walks — deriving `version` from one record and `unresolved` from
+ * all of them let the tab call a plugin readable while its column was empty
+ * (Copilot + Codex on #555).
+ */
+export function selectPluginInstall<T extends { version?: string }>(installs: readonly T[]): T | undefined {
+  if (installs.length === 0) return undefined;
+  return [...installs].sort((a, b) => compareSemver(b.version ?? "", a.version ?? ""))[0];
+}
+
+/**
+ * Turn a registry `installPath` into a path this machine can open.
+ *
+ * The registry is written by the Claude Code that owns the home, in that
+ * environment's own path syntax: a WSL home records `/home/me/.claude/plugins/…`.
+ * For the primary home that is already local and is only normalized. For a
+ * foreign home it is rewritten through the home's path mappings (the same
+ * `from`→`to` seam `mapForeignPath` applies to session paths); a path no
+ * mapping covers is returned unchanged and flagged `unresolved`, so the
+ * caller can say so rather than silently walking nothing.
+ *
+ * "Unresolved" is judged by shape, not by probing: a POSIX-absolute path on a
+ * Windows host cannot be a local path. Probing would be the wrong tool anyway
+ * — `fs.access("/home/me/…")` on Windows resolves against the current drive
+ * and answers ENOENT for a reason that has nothing to do with mappings.
+ */
+export function resolvePluginInstallPath(
+  installPath: string,
+  home?: { primary: boolean; mappings: PathMapping[] }
+): { installPath: string; unresolved: boolean } {
+  if (!home || home.primary) return { installPath: path.normalize(installPath), unresolved: false };
+  const mapped = mapForeignPath(installPath, home.mappings);
+  if (mapped !== installPath) return { installPath: path.normalize(mapped), unresolved: false };
+  return { installPath: path.normalize(installPath), unresolved: isForeignShape(installPath) };
+}
+
+/** A path that cannot be local on this host: POSIX-absolute on Windows, drive-lettered elsewhere. */
+function isForeignShape(p: string): boolean {
+  return process.platform === "win32" ? p.startsWith("/") : /^[A-Za-z]:/.test(p);
+}
+
+/**
+ * The installed-plugin registry of one Claude home (`<home>/plugins/installed_plugins.json`).
+ * Defaults to this machine's `~/.claude`, which keeps every existing caller
+ * unchanged; pass a `CatalogHome` (`src/lib/indexer/homes.ts`) to read another.
+ */
+export async function loadInstalledPlugins(
+  home?: { path: string; primary: boolean; mappings: PathMapping[] }
+): Promise<InstalledPlugin[]> {
   const registryPath = path.join(
-    os.homedir(),
-    ".claude",
+    home?.path ?? getPrimaryClaudeHome(),
     "plugins",
     "installed_plugins.json"
   );
@@ -161,21 +215,19 @@ export async function loadInstalledPlugins(): Promise<InstalledPlugin[]> {
         const marketplace = lastAt > 0 ? key.slice(lastAt + 1) : "";
 
         // Pick the highest semver when multiple installs exist for the same key.
-        const sorted = [...installs].sort((a, b) =>
-          compareSemver(b.version ?? "", a.version ?? "")
-        );
-        const install = sorted[0];
-        if (!install.installPath) return;
+        const install = selectPluginInstall(installs);
+        if (!install?.installPath) return;
 
-        const installPath = path.normalize(install.installPath);
+        const { installPath, unresolved } = resolvePluginInstallPath(install.installPath, home);
         if (seen.has(installPath)) return;
         seen.add(installPath);
 
-        const pluginRepoUrl = await readPluginRepoUrl(installPath);
+        const pluginRepoUrl = unresolved ? undefined : await readPluginRepoUrl(installPath);
 
         results.push({
           pluginName,
           installPath,
+          ...(unresolved ? { installPathUnresolved: true } : {}),
           marketplace,
           scope: install.scope,
           version: install.version,

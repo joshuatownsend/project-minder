@@ -115,16 +115,16 @@ This project uses **pnpm** (pinned via the `packageManager` field; CI runs `pnpm
 - `POST /api/board/[slug]` — mutate `{action: "addIssue"|"addEpic"|"setStatus"|"editIssue"|"move"|"reorder"|"promoteTodo"|"promoteToTask", ...}` via the serializing `boardWriter`; invalidates the scan cache. `promoteToTask` bridges a `^i-` issue into a `~/.minder/tasks.db` task via `src/lib/tasks/boardDelegation.ts` (`promoteBoardIssueToTask`) and returns `{taskId, board}` (two-way lifecycle: issue → `doing` on promote, → `done` on task completion via `onTaskCompleteSyncBoard`)
 - `GET /api/git-status` — background git dirty status cache (polled by dashboard)
 - `GET /api/github-activity` — background GitHub activity cache (open PRs / CI / last push via `gh`, polled by dashboard)
-- `GET /api/environments` — per readable Claude home: user agents, skills, installed plugins, MCP server names (never configs); unreadable homes listed with reasons (never-wake). Drives the group page's Environments tab. Reader: `src/lib/environments/inventory.ts`; client-safe diff: `src/lib/environments/diff.ts`
+- `GET /api/environments` — per readable Claude home: installed plugins from the registry (with `unresolved` when no path mapping reaches their contents), MCP server names (never configs); unreadable homes listed with reasons (never-wake). Agents/skills per home come from `/api/agents?home=` / `/api/skills?home=` (#553). Drives the group page's Environments tab. Reader: `src/lib/environments/inventory.ts`; client-safe diff: `src/lib/environments/diff.ts`; per-home catalog hook: `src/hooks/useHomeCatalogs.ts`
 - `GET /api/stats` — aggregated portfolio stats + Claude Code usage analytics
 - `GET /api/usage` — token usage report (`?period=today|week|month|all`, `?project=slug`)
 - `GET /api/usage/export` — CSV/JSON export (`?format=csv|json`, same period/project params)
 - `GET /api/sessions` — all session summaries (2-min cache, `?project=slug` filter)
 - `GET /api/sessions/[sessionId]` — full session detail (timeline, file ops, subagents)
-- `GET /api/agents` — catalog of all agents (user/plugin/project sources) joined with usage stats; `?source=user|plugin|project`, `?project=slug`, `?q=search`
-- `GET /api/agents/[id]` — single agent entry with full body text + usage stats
-- `GET /api/skills` — catalog of all skills with usage stats; same query params
-- `GET /api/skills/[id]` — single skill entry with full body text + usage stats
+- `GET /api/agents` — catalog of all agents (user/plugin/project sources) joined with usage stats; `?source=user|plugin|project`, `?project=slug`, `?q=search`, `?home=<usageHomeKey>` walks another configured Claude home (`&scope=home` skips the per-project walk; usage joined for the primary home only; 404 unknown key, 503 home unreadable this cycle; `X-Minder-Unresolved-Plugins` names plugins whose `installPath` no mapping reaches). Home resolution: `src/lib/indexer/homes.ts`
+- `GET /api/agents/[id]` — single agent entry with full body text + usage stats (`?home=` as above)
+- `GET /api/skills` — catalog of all skills with usage stats; same query params (including `?home=`)
+- `GET /api/skills/[id]` — single skill entry with full body text + usage stats (`?home=` as above)
 - `GET/POST/DELETE /api/mcp` — Model Context Protocol server (Streamable HTTP transport, stateless). Lets Claude Desktop and Claude Code connect and query token usage, sessions, agents, skills, OTEL telemetry, manual steps, insights, git status, and portfolio stats. Server factory: `src/lib/mcp/server.ts`. Tools registered per-domain under `src/lib/mcp/tools/`; resources in `src/lib/mcp/resources.ts`. Tools call lib functions directly — no HTTP loopback. Board write tools (`src/lib/mcp/tools/board.ts`): `board_create_issue`, `board_log_finding`, `board_postpone`, `board_promote_to_task` — write the canonical `BOARD.md` via `boardWriter`/`boardDelegation` (enum-validated at the JSON-RPC boundary; errors via `errorResult`). DNS-rebinding protection pinned to `localhost:4100` / `127.0.0.1:4100`. See `docs/help/mcp-server.md` for the full surface and client setup.
 
 ### UI (`src/components/`)

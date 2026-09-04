@@ -9,8 +9,8 @@ interface KnownMarketplaceEntry {
 }
 
 // Returns Map<marketplaceName, "owner/repo">
-export async function loadKnownMarketplaces(): Promise<Map<string, string>> {
-  const p = path.join(os.homedir(), ".claude", "plugins", "known_marketplaces.json");
+export async function loadKnownMarketplaces(home?: string): Promise<Map<string, string>> {
+  const p = path.join(home ?? path.join(os.homedir(), ".claude"), "plugins", "known_marketplaces.json");
   try {
     const raw = await fs.readFile(p, "utf-8");
     const data = JSON.parse(raw) as Record<string, KnownMarketplaceEntry>;

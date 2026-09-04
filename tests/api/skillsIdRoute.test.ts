@@ -58,7 +58,7 @@ describe("GET /api/skills/[id]", () => {
 
   it("returns the entry, full body text, joined usage, and backend header", async () => {
     const entry = makeSkill();
-    vi.mocked(loadCatalog).mockResolvedValue({ agents: [], skills: [entry] });
+    vi.mocked(loadCatalog).mockResolvedValue({ agents: [], skills: [entry], home: { key: "c:/users/me/.claude", path: "C:/Users/me/.claude", primary: true }, unresolvedPlugins: [] });
     vi.mocked(fsMock.readFile).mockResolvedValue("# deploy-helper\n\nFull body text.");
     vi.mocked(getSkillUsage).mockResolvedValue({
       stats: [{ name: "deploy-helper", invocations: 3, projects: {}, sessions: [] }],
@@ -79,7 +79,7 @@ describe("GET /api/skills/[id]", () => {
   });
 
   it("returns 404 for an id not present in the catalog", async () => {
-    vi.mocked(loadCatalog).mockResolvedValue({ agents: [], skills: [] });
+    vi.mocked(loadCatalog).mockResolvedValue({ agents: [], skills: [], home: { key: "c:/users/me/.claude", path: "C:/Users/me/.claude", primary: true }, unresolvedPlugins: [] });
 
     const res = await GET(req("nonexistent"), {
       params: Promise.resolve({ id: "nonexistent" }),

@@ -1,6 +1,7 @@
 import "server-only";
 import type { QueryClient } from "@tanstack/react-query";
 import { loadCatalog } from "@/lib/indexer/catalog";
+import { resolveCatalogHome } from "@/lib/indexer/homes";
 import { buildSkillAliasMap } from "@/lib/indexer/canonicalize";
 import { getSkillUsage } from "@/lib/data";
 import { getCachedScan } from "@/lib/cache";
@@ -9,7 +10,7 @@ import { skillUpdateCache, type QueueItem } from "@/lib/skillUpdateCache";
 import { getDb } from "@/lib/db/connection";
 import { withProjectedContextCost } from "@/lib/usage/tokenEstimate";
 import type { SkillStats } from "@/lib/usage/types";
-import type { SkillEntry } from "@/lib/indexer/types";
+import type { SkillEntry, CatalogResult } from "@/lib/indexer/types";
 import { queryKeys } from "@/lib/queryKeys";
 import { jsonClone } from "@/lib/server/prefetch";
 import { demoMode } from "@/lib/demo/demoMode";
@@ -35,6 +36,8 @@ export interface SkillRow {
 interface CacheSlot {
   data: SkillRow[];
   backend: "db" | "file";
+  home: CatalogResult["home"];
+  unresolvedPlugins: string[];
   cachedAt: number;
 }
 
@@ -51,13 +54,15 @@ function getRouteCache(key: string): CacheSlot | null {
   return null;
 }
 
-function setRouteCache(key: string, data: SkillRow[], backend: "db" | "file") {
+function setRouteCache(key: string, slot: Omit<CacheSlot, "cachedAt">) {
   if (!globalForSkills.__skillsRouteCache) {
     globalForSkills.__skillsRouteCache = new Map();
   }
-  globalForSkills.__skillsRouteCache.set(key, { data, backend, cachedAt: Date.now() });
+  globalForSkills.__skillsRouteCache.set(key, { ...slot, cachedAt: Date.now() });
 }
 
+// `/api/config` resets this slot by name via `src/lib/server/catalogRouteCaches.ts`
+// rather than importing this module (DB isolation chain); keep the key in sync.
 export function invalidateSkillsRouteCache() {
   globalForSkills.__skillsRouteCache = new Map();
 }
@@ -79,6 +84,10 @@ function buildUpdateItems(rows: SkillRow[]): QueueItem[] {
 export interface SkillsResponse {
   data: SkillRow[];
   backend: "db" | "file";
+  /** The Claude home the catalog half was walked for. Absent in demo mode. */
+  home?: CatalogResult["home"];
+  /** Plugins in that home whose contents could not be read from here (see `CatalogResult`). */
+  unresolvedPlugins: string[];
 }
 
 /** The full `/api/skills` GET body, filter-parameterized. */
@@ -86,24 +95,42 @@ export async function loadSkillsResponse(
   source: string | null,
   projectSlug: string | null,
   query: string | null,
+  home: string | null = null,
+  /**
+   * `false` skips the per-project `.claude/` walks (`?scope=home`): the
+   * Environments tab discards project-scope entries, and with cold caches each
+   * home's fetch would otherwise traverse every scanned project (Codex on #555).
+   */
+  includeProjects = true,
 ): Promise<SkillsResponse> {
   if (await demoMode()) {
-    return { data: filterDemoCatalogRows(demoSkills(Date.now()), source, projectSlug, query), backend: "file" };
+    return {
+      data: filterDemoCatalogRows(demoSkills(Date.now()), source, projectSlug, query),
+      backend: "file",
+      unresolvedPlugins: [],
+    };
   }
   const q = query?.toLowerCase() ?? null;
-  const cacheKey = `${source ?? ""}|${projectSlug ?? ""}|${q ?? ""}`;
+  // A structured key, not delimiter concatenation: `q` is unrestricted text,
+  // so `q="|H"` for the primary home and `home=H` with no query would have
+  // collided on `|||H` and served each other's rows (Codex on #555).
+  const cacheKey = JSON.stringify([source, projectSlug, q, home, includeProjects]);
+  // A foreign home is re-resolved BEFORE the cache is consulted: its distro
+  // can stop between requests, and a cached 200 would otherwise stand in
+  // for the promised 503 until the TTL lapsed (Codex on #555). The primary
+  // home short-circuits inside `resolveCatalogHome` at no cost.
+  if (home) await resolveCatalogHome(home);
   const cached = getRouteCache(cacheKey);
   if (cached) {
-    skillUpdateCache.enqueue(buildUpdateItems(cached.data));
-    return { data: cached.data, backend: cached.backend };
+    if (cached.home.primary) skillUpdateCache.enqueue(buildUpdateItems(cached.data));
+    return { data: cached.data, backend: cached.backend, home: cached.home, unresolvedPlugins: cached.unresolvedPlugins };
   }
 
-  const [catalog, skillUsage] = await Promise.all([
-    loadCatalog({ includeProjects: true }),
-    getSkillUsage(),
-  ]);
+  // Usage joins for the primary home only — see `loadAgentsResponse`.
+  const catalog = await loadCatalog({ includeProjects, home });
+  const skillUsage = catalog.home.primary ? await getSkillUsage() : null;
 
-  const statsArr = skillUsage.stats;
+  const statsArr = skillUsage?.stats ?? [];
   const aliasMap = buildSkillAliasMap(catalog.skills);
   const rows: SkillRow[] = [];
   const matchedNames = new Set<string>();
@@ -165,9 +192,11 @@ export async function loadSkillsResponse(
     });
   }
 
-  // Augment with invocation-source breakdown from DB when available.
+  // Augment with invocation-source breakdown from DB when available. Primary
+  // home only, like the usage join: the counts are keyed by skill name with
+  // no home dimension.
   try {
-    const db = await getDb();
+    const db = catalog.home.primary ? await getDb() : null;
     if (db) {
       type InvRow = { skill_name: string; invocation_source: string; cnt: number };
       const invRows = db.prepare(
@@ -195,10 +224,16 @@ export async function loadSkillsResponse(
     // DB schema not ready (e.g. empty/new DB) — skip invocation-source augmentation
   }
 
-  setRouteCache(cacheKey, result, skillUsage.meta.backend);
-  skillUpdateCache.enqueue(buildUpdateItems(result));
+  const backend = skillUsage?.meta.backend ?? "file";
+  setRouteCache(cacheKey, { data: result, backend, home: catalog.home, unresolvedPlugins: catalog.unresolvedPlugins });
+  // The update checker is process-global and keyed by entry id, which is not
+  // home-qualified: a foreign home's copy of the same plugin or lockfile skill
+  // would overwrite the primary home's SHA/hash and the main Agents/Skills
+  // views would show whichever home was fetched last (Codex on #555). Only
+  // this machine's catalog feeds it.
+  if (catalog.home.primary) skillUpdateCache.enqueue(buildUpdateItems(result));
 
-  return { data: result, backend: skillUsage.meta.backend };
+  return { data: result, backend, home: catalog.home, unresolvedPlugins: catalog.unresolvedPlugins };
 }
 
 /** Prefetch the default (unfiltered) skills catalog (`["skills",null,null,null]`). */

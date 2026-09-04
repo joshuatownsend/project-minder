@@ -6,9 +6,13 @@ import { environmentHomeKey, readHomeInventory } from "@/lib/environments/invent
 import { normalizePathKey } from "@/lib/platform";
 import { resolveUsageHomeKey } from "@/lib/usage/projectMatch";
 
+/**
+ * Since #553 the inventory is the part of a home the catalog does not
+ * cover: plugins from the registry, MCP server names, and the join key. The
+ * agents/skills walks moved to the catalog (`tests/catalogHomeWalkers.test.ts`).
+ */
 let tmp: string;
 let home: string;
-let linked = false;
 
 async function write(rel: string, content: string) {
   const full = path.join(tmp, rel);
@@ -19,29 +23,6 @@ async function write(rel: string, content: string) {
 beforeAll(async () => {
   tmp = await fs.mkdtemp(path.join(os.tmpdir(), "minder-env-"));
   home = path.join(tmp, ".claude");
-  await write(".claude/agents/reviewer.md", "---\nname: Reviewer\n---\nbody");
-  await write(".claude/agents/nested/planner.md", "no frontmatter");
-  await write(".claude/agents/.hidden.md", "---\nname: hidden\n---");
-  await write(".claude/agents/notes.txt", "ignored");
-  // The sibling ~/.agents/agents layout: one new agent, one colliding slug
-  // (the .claude copy must win), and a tree deeper than the walker's cap.
-  await write(".agents/agents/installed-only.md", "---\nname: Installed\n---");
-  await write(".agents/agents/reviewer.md", "---\nname: Shadowed\n---");
-  await write(".agents/agents/a/b/c/d/e/f/g/too-deep.md", "");
-  await write(".claude/skills/pr-resolve/SKILL.md", "---\nname: PR Resolve\n---");
-  await write(".claude/skills/not-a-skill/README.md", "no SKILL.md here");
-  await write(".claude/skills/standalone.md", "---\nname: Standalone\n---");
-  await write(".claude/skills-disabled/legacy/SKILL.md", "");
-  // A skill installed by linking a directory into skills/. A junction needs no
-  // privilege on Windows and is a symlink on POSIX; skip silently where even
-  // that is refused so the rest of the suite still runs.
-  await write("elsewhere/linked-skill/SKILL.md", "---\nname: Linked\n---");
-  try {
-    await fs.symlink(path.join(tmp, "elsewhere", "linked-skill"), path.join(home, "skills", "linked-skill"), "junction");
-    linked = true;
-  } catch {
-    linked = false;
-  }
   await write(
     ".claude/plugins/installed_plugins.json",
     JSON.stringify({
@@ -54,6 +35,11 @@ beforeAll(async () => {
         "rc@m": [{ version: "3.0.0-beta.2" }, { version: "3.0.0-beta.10" }],
         "@scope/tool@community": [{ installPath: "/x" }],
         "empty@m": [],
+        // Highest version's path is unmapped, an older install's is mapped.
+        "split@m": [
+          { version: "2.0.0", installPath: "/opt/split" },
+          { version: "1.0.0", installPath: "/home/me/.claude/plugins/split" },
+        ],
       },
     })
   );
@@ -69,33 +55,6 @@ afterAll(async () => {
 });
 
 describe("readHomeInventory", () => {
-  it("lists agents recursively with frontmatter names, skipping dotfiles and non-markdown", async () => {
-    const inv = await readHomeInventory(home, true);
-    expect(inv.agents).toEqual([
-      { slug: "installed-only", name: "Installed" },
-      { slug: "nested/planner", name: undefined },
-      // Present in both roots: the .claude copy wins, like loadCatalog.
-      { slug: "reviewer", name: "Reviewer" },
-    ]);
-    // 7 levels down is past the depth cap.
-    expect(inv.agents.some((a) => a.slug.endsWith("too-deep"))).toBe(false);
-  });
-
-  it("lists bundled and standalone skills, marking the disabled root", async () => {
-    const inv = await readHomeInventory(home, true);
-    expect(inv.skills.filter((s) => s.slug !== "linked-skill")).toEqual([
-      { slug: "legacy", name: undefined, disabled: true },
-      { slug: "pr-resolve", name: "PR Resolve", disabled: false },
-      { slug: "standalone", name: "Standalone", disabled: false },
-    ]);
-  });
-
-  it("follows a directory link in skills/ like the catalog walker does", async () => {
-    if (!linked) return; // link creation refused on this machine
-    const inv = await readHomeInventory(home, true);
-    expect(inv.skills.find((s) => s.slug === "linked-skill")).toEqual({ slug: "linked-skill", name: "Linked", disabled: false });
-  });
-
   it("reads plugins from the registry only, highest version wins, scoped names intact", async () => {
     const inv = await readHomeInventory(home, true);
     expect(inv.plugins).toEqual([
@@ -105,7 +64,46 @@ describe("readHomeInventory", () => {
       { id: "pre@m", name: "pre", marketplace: "m", version: "2.0.0" },
       // Pre-release identifiers compare numerically: beta.10 > beta.2.
       { id: "rc@m", name: "rc", marketplace: "m", version: "3.0.0-beta.10" },
+      { id: "split@m", name: "split", marketplace: "m", version: "2.0.0" },
     ]);
+  });
+
+  it("never flags a primary home's plugins as unreadable", async () => {
+    const inv = await readHomeInventory(home, true);
+    expect(inv.plugins.some((p) => p.unresolved)).toBe(false);
+  });
+
+  it("flags a foreign home's plugins as unreadable when no mapping covers their install path", async () => {
+    // Same registry read as a non-primary home: the POSIX install paths are
+    // the home's own, and without a mapping this machine cannot open them.
+    const inv = await readHomeInventory(home, false);
+    const byId = Object.fromEntries(inv.plugins.map((p) => [p.id, p]));
+    if (process.platform === "win32") {
+      expect(byId["github@official"].unresolved).toBe(true);
+      expect(byId["@scope/tool@community"].unresolved).toBe(true);
+    }
+    // An entry with no install path at all has nothing to resolve.
+    expect(byId["pre@m"].unresolved).toBeUndefined();
+  });
+
+  it("does not flag them once a mapping rewrites the install path", async () => {
+    const inv = await readHomeInventory(home, false, [{ from: "/home/me", to: path.join(tmp, "mapped") }]);
+    const gh = inv.plugins.find((p) => p.id === "github@official")!;
+    expect(gh.unresolved).toBeUndefined();
+    // `/x` is outside the mapping and stays unreadable on a Windows host.
+    const tool = inv.plugins.find((p) => p.id === "@scope/tool@community")!;
+    expect(tool.unresolved).toBe(process.platform === "win32" ? true : undefined);
+  });
+
+  it("judges readability from the install the catalog reads — the highest version — not from any record", async () => {
+    // `split@m`: 2.0.0 lives at an unmapped `/opt/split`, 1.0.0 under the
+    // mapped `/home/me`. The catalog walks 2.0.0 only, so the tab must say
+    // unreadable even though an older install would have been reachable
+    // (Copilot + Codex on #555).
+    const inv = await readHomeInventory(home, false, [{ from: "/home/me", to: path.join(tmp, "mapped") }]);
+    const split = inv.plugins.find((p) => p.id === "split@m")!;
+    expect(split.version).toBe("2.0.0");
+    expect(split.unresolved).toBe(process.platform === "win32" ? true : undefined);
   });
 
   it("emits MCP server names from both sources, deduplicated, and never their config", async () => {
@@ -120,6 +118,12 @@ describe("readHomeInventory", () => {
     expect(inv.primary).toBe(true);
   });
 
+  it("carries no agents or skills — those come from the catalog per home", async () => {
+    const inv = await readHomeInventory(home, true);
+    expect("agents" in inv).toBe(false);
+    expect("skills" in inv).toBe(false);
+  });
+
   it("rejects array-shaped plugins and mcpServers instead of emitting indices", async () => {
     const bad = path.join(tmp, "bad", ".claude");
     await write("bad/.claude/plugins/installed_plugins.json", JSON.stringify({ plugins: [{ version: "1.0.0" }] }));
@@ -132,7 +136,7 @@ describe("readHomeInventory", () => {
 
   it("returns empty lists for a home that does not exist", async () => {
     const inv = await readHomeInventory(path.join(tmp, "missing", ".claude"), false);
-    expect(inv).toMatchObject({ agents: [], skills: [], plugins: [], mcpServers: [], primary: false });
+    expect(inv).toMatchObject({ plugins: [], mcpServers: [], primary: false });
   });
 });
 

@@ -6,6 +6,7 @@ import { buildAgentAliasMap } from "@/lib/indexer/canonicalize";
 import { parseUsagePeriod } from "@/lib/usage/period";
 import { withProjectedContextCost } from "@/lib/usage/tokenEstimate";
 import { demoMode } from "@/lib/demo/demoMode";
+import { catalogHomeErrorResponse } from "@/lib/server/catalogHomeHttp";
 import { demoAgentDetail } from "@/lib/demo/catalogs";
 
 export async function GET(
@@ -21,7 +22,16 @@ export async function GET(
     return NextResponse.json({ entry: detail.entry, bodyFull: detail.bodyFull, usage: detail.usage, period });
   }
 
-  const catalog = await loadCatalog({ includeProjects: true });
+  // `home`: resolve the id inside another Claude home's catalog (#553). Usage
+  // is joined for the primary home only — see `loadAgentsResponse`.
+  // `|| null`: an empty `?home=` is the absent parameter, not a distinct cache key (Copilot on #555).
+  const home = request.nextUrl.searchParams.get("home") || null;
+  let catalog;
+  try {
+    catalog = await loadCatalog({ includeProjects: true, home });
+  } catch (err) {
+    return catalogHomeErrorResponse(err);
+  }
   const entry = catalog.agents.find((a) => a.id === id);
 
   if (!entry) {
@@ -30,11 +40,11 @@ export async function GET(
 
   const [bodyText, agentUsage] = await Promise.all([
     fs.readFile(entry.filePath, "utf-8").catch(() => ""),
-    getAgentUsage(period),
+    catalog.home.primary ? getAgentUsage(period) : null,
   ]);
 
   const aliasMap = buildAgentAliasMap(catalog.agents);
-  const usage = agentUsage.stats.find(
+  const usage = agentUsage?.stats.find(
     (s) => aliasMap.get(s.name.toLowerCase()) === entry
   );
 
@@ -44,6 +54,6 @@ export async function GET(
     usage,
     period,
   });
-  response.headers.set("X-Minder-Backend", agentUsage.meta.backend);
+  response.headers.set("X-Minder-Backend", agentUsage?.meta.backend ?? "file");
   return response;
 }

@@ -1,6 +1,7 @@
 import "server-only";
 import type { QueryClient } from "@tanstack/react-query";
 import { loadCatalog } from "@/lib/indexer/catalog";
+import { resolveCatalogHome } from "@/lib/indexer/homes";
 import { buildAgentAliasMap } from "@/lib/indexer/canonicalize";
 import { getAgentUsage } from "@/lib/data";
 import { getCachedScan } from "@/lib/cache";
@@ -8,7 +9,7 @@ import { pathToUsageSlug } from "@/lib/usage/slug";
 import { skillUpdateCache, type QueueItem } from "@/lib/skillUpdateCache";
 import { withProjectedContextCost } from "@/lib/usage/tokenEstimate";
 import type { AgentStats } from "@/lib/usage/types";
-import type { AgentEntry } from "@/lib/indexer/types";
+import type { AgentEntry, CatalogResult } from "@/lib/indexer/types";
 import { queryKeys } from "@/lib/queryKeys";
 import { jsonClone } from "@/lib/server/prefetch";
 import { demoMode } from "@/lib/demo/demoMode";
@@ -35,6 +36,8 @@ export interface AgentRow {
 interface CacheSlot {
   data: AgentRow[];
   backend: "db" | "file";
+  home: CatalogResult["home"];
+  unresolvedPlugins: string[];
   cachedAt: number;
 }
 
@@ -51,13 +54,15 @@ function getRouteCache(key: string): CacheSlot | null {
   return null;
 }
 
-function setRouteCache(key: string, data: AgentRow[], backend: "db" | "file") {
+function setRouteCache(key: string, slot: Omit<CacheSlot, "cachedAt">) {
   if (!globalForAgents.__agentsRouteCache) {
     globalForAgents.__agentsRouteCache = new Map();
   }
-  globalForAgents.__agentsRouteCache.set(key, { data, backend, cachedAt: Date.now() });
+  globalForAgents.__agentsRouteCache.set(key, { ...slot, cachedAt: Date.now() });
 }
 
+// `/api/config` resets this slot by name via `src/lib/server/catalogRouteCaches.ts`
+// rather than importing this module (DB isolation chain); keep the key in sync.
 export function invalidateAgentsRouteCache() {
   globalForAgents.__agentsRouteCache = new Map();
 }
@@ -79,31 +84,63 @@ function buildUpdateItems(rows: AgentRow[]): QueueItem[] {
 export interface AgentsResponse {
   data: AgentRow[];
   backend: "db" | "file";
+  /** The Claude home the catalog half was walked for. Absent in demo mode. */
+  home?: CatalogResult["home"];
+  /** Plugins in that home whose contents could not be read from here (see `CatalogResult`). */
+  unresolvedPlugins: string[];
 }
 
-/** The full `/api/agents` GET body, filter-parameterized. */
+/**
+ * The full `/api/agents` GET body, filter-parameterized.
+ *
+ * `home` selects another Claude home's catalog by key (#553). Usage stats are
+ * joined ONLY for the primary home: the invocation aggregates are not split
+ * by home, so attaching them to a WSL home's rows would report this
+ * machine's numbers under that home's names — a wrong number is worse than
+ * none. Rows for a non-primary home carry `entry` only, and the orphan
+ * `catalogMissing` rows (usage with no entry) are omitted for the same reason.
+ *
+ * @throws CatalogHomeError — see `loadCatalog`.
+ */
 export async function loadAgentsResponse(
   source: string | null,
   projectSlug: string | null,
   query: string | null,
+  home: string | null = null,
+  /**
+   * `false` skips the per-project `.claude/` walks (`?scope=home`): the
+   * Environments tab discards project-scope entries, and with cold caches each
+   * home's fetch would otherwise traverse every scanned project (Codex on #555).
+   */
+  includeProjects = true,
 ): Promise<AgentsResponse> {
   if (await demoMode()) {
-    return { data: filterDemoCatalogRows(demoAgents(Date.now()), source, projectSlug, query), backend: "file" };
+    return {
+      data: filterDemoCatalogRows(demoAgents(Date.now()), source, projectSlug, query),
+      backend: "file",
+      unresolvedPlugins: [],
+    };
   }
   const q = query?.toLowerCase() ?? null;
-  const cacheKey = `${source ?? ""}|${projectSlug ?? ""}|${q ?? ""}`;
+  // A structured key, not delimiter concatenation: `q` is unrestricted text,
+  // so `q="|H"` for the primary home and `home=H` with no query would have
+  // collided on `|||H` and served each other's rows (Codex on #555).
+  const cacheKey = JSON.stringify([source, projectSlug, q, home, includeProjects]);
+  // A foreign home is re-resolved BEFORE the cache is consulted: its distro
+  // can stop between requests, and a cached 200 would otherwise stand in
+  // for the promised 503 until the TTL lapsed (Codex on #555). The primary
+  // home short-circuits inside `resolveCatalogHome` at no cost.
+  if (home) await resolveCatalogHome(home);
   const cached = getRouteCache(cacheKey);
   if (cached) {
-    skillUpdateCache.enqueue(buildUpdateItems(cached.data));
-    return { data: cached.data, backend: cached.backend };
+    if (cached.home.primary) skillUpdateCache.enqueue(buildUpdateItems(cached.data));
+    return { data: cached.data, backend: cached.backend, home: cached.home, unresolvedPlugins: cached.unresolvedPlugins };
   }
 
-  const [catalog, agentUsage] = await Promise.all([
-    loadCatalog({ includeProjects: true }),
-    getAgentUsage(),
-  ]);
+  const catalog = await loadCatalog({ includeProjects, home });
+  const agentUsage = catalog.home.primary ? await getAgentUsage() : null;
 
-  const statsArr = agentUsage.stats;
+  const statsArr = agentUsage?.stats ?? [];
   const aliasMap = buildAgentAliasMap(catalog.agents);
   const rows: AgentRow[] = [];
   const matchedNames = new Set<string>();
@@ -168,10 +205,16 @@ export async function loadAgentsResponse(
     });
   }
 
-  setRouteCache(cacheKey, result, agentUsage.meta.backend);
-  skillUpdateCache.enqueue(buildUpdateItems(result));
+  const backend = agentUsage?.meta.backend ?? "file";
+  setRouteCache(cacheKey, { data: result, backend, home: catalog.home, unresolvedPlugins: catalog.unresolvedPlugins });
+  // The update checker is process-global and keyed by entry id, which is not
+  // home-qualified: a foreign home's copy of the same plugin or lockfile skill
+  // would overwrite the primary home's SHA/hash and the main Agents/Skills
+  // views would show whichever home was fetched last (Codex on #555). Only
+  // this machine's catalog feeds it.
+  if (catalog.home.primary) skillUpdateCache.enqueue(buildUpdateItems(result));
 
-  return { data: result, backend: agentUsage.meta.backend };
+  return { data: result, backend, home: catalog.home, unresolvedPlugins: catalog.unresolvedPlugins };
 }
 
 /** Prefetch the default (unfiltered) agents catalog (`["agents",null,null,null]`). */

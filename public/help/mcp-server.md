@@ -64,8 +64,8 @@ The server registers ~39 tools and ~12 resources covering every major Project Mi
 
 | Tool | Returns |
 |---|---|
-| `list-agents` / `get-agent` | Agent catalog + invocation stats |
-| `list-skills` / `get-skill` | Skill catalog + invocation stats |
+| `list-agents` / `get-agent` | Agent catalog + invocation stats. Optional `home` (a project's `usageHomeKey`) reads another configured Claude home's catalog; usage is joined for this machine's home only, and a home inside a stopped WSL distro is refused, never started |
+| `list-skills` / `get-skill` | Skill catalog + invocation stats; same `home` option |
 | `get-agent-usage` / `get-skill-usage` | Cross-project invocation totals |
 | `list-manual-steps` | Pending steps across all projects |
 | `get-project-manual-steps` | Steps for one project |

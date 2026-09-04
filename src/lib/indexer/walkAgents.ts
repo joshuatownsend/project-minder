@@ -1,8 +1,8 @@
 import { promises as fs } from "fs";
 import path from "path";
-import os from "os";
 import { parseFrontmatter } from "./parseFrontmatter";
 import { resolveProvenance } from "./provenance";
+import { getPrimaryClaudeHome } from "@/lib/claudeHome";
 import type { AgentEntry, CatalogSource, ProvenanceContext } from "./types";
 
 function makeAgentEntry(
@@ -11,6 +11,7 @@ function makeAgentEntry(
   source: CatalogSource,
   opts: {
     pluginName?: string;
+    marketplace?: string;
     projectSlug?: string;
     category?: string;
     relPath?: string;
@@ -48,6 +49,7 @@ function makeAgentEntry(
     isSymlink: opts.isSymlink,
     realPath: opts.realPath,
     pluginName: opts.pluginName,
+    marketplace: opts.marketplace,
     projectSlug: opts.projectSlug,
     ctx: opts.ctx,
   });
@@ -67,11 +69,15 @@ function makeAgentEntry(
     frontmatter: fm,
     mtime: opts.mtime.toISOString(),
     ctime: opts.ctime.toISOString(),
+    relPath: opts.relPath,
     model: typeof fm.model === "string" ? fm.model : undefined,
     tools,
     color: typeof fm.color === "string" ? fm.color : undefined,
     emoji: typeof fm.emoji === "string" ? fm.emoji : undefined,
     provenance,
+    // Home-borne entries only: a project's `.claude/agents` travels with the
+    // repo, so it has no home to be keyed by.
+    ...(source !== "project" && opts.ctx.homeKey ? { homeKey: opts.ctx.homeKey } : {}),
     isSymlink: opts.isSymlink,
     realPath: opts.realPath,
     parseWarnings: warnings.length > 0 ? warnings : undefined,
@@ -84,6 +90,7 @@ async function readAgent(
   source: CatalogSource,
   opts: {
     pluginName?: string;
+    marketplace?: string;
     projectSlug?: string;
     category?: string;
     relPath?: string;
@@ -111,7 +118,7 @@ async function walkDir(
   dir: string,
   root: string,
   source: CatalogSource,
-  opts: { pluginName?: string; projectSlug?: string; ctx: ProvenanceContext },
+  opts: { pluginName?: string; marketplace?: string; projectSlug?: string; ctx: ProvenanceContext },
   depth = 0
 ): Promise<AgentEntry[]> {
   if (depth > 4) return [];
@@ -179,13 +186,25 @@ async function walkDir(
   return results;
 }
 
-export async function walkUserAgents(ctx: ProvenanceContext): Promise<AgentEntry[]> {
-  const root = path.join(os.homedir(), ".claude", "agents");
+/**
+ * `<home>/agents`. `home` is the `.claude` directory to walk; it defaults to
+ * this machine's, so callers that predate the home dimension (#553) are
+ * unchanged. Entries carry `ctx.homeKey` when the context names a home.
+ */
+export async function walkUserAgents(
+  ctx: ProvenanceContext,
+  home: string = getPrimaryClaudeHome()
+): Promise<AgentEntry[]> {
+  const root = path.join(home, "agents");
   return walkDir(root, root, "user", { ctx });
 }
 
-export async function walkInstalledAgents(ctx: ProvenanceContext): Promise<AgentEntry[]> {
-  const root = path.join(os.homedir(), ".agents", "agents");
+/** The sibling `~/.agents/agents` layout beside the `.claude` directory. */
+export async function walkInstalledAgents(
+  ctx: ProvenanceContext,
+  home: string = getPrimaryClaudeHome()
+): Promise<AgentEntry[]> {
+  const root = path.join(path.dirname(home), ".agents", "agents");
   try {
     await fs.access(root);
   } catch {
@@ -198,14 +217,19 @@ export async function walkPluginAgents(ctx: ProvenanceContext): Promise<AgentEnt
   const all: AgentEntry[] = [];
 
   await Promise.all(
-    ctx.installedPlugins.map(async ({ pluginName, installPath }) => {
+    ctx.installedPlugins.map(async ({ pluginName, marketplace, installPath, installPathUnresolved }) => {
+      // An unresolved path is a foreign home's own path, not a local one. On
+      // Windows `path.join("/home/me/x", "agents")` still ROOTS on the current
+      // drive, so an unrelated `C:\home\me\x` would be walked into this
+      // home's catalog (Codex on #555). Skip, never rely on non-existence.
+      if (installPathUnresolved) return;
       const agentsDir = path.join(installPath, "agents");
       try {
         await fs.access(agentsDir);
       } catch {
         return;
       }
-      const entries = await walkDir(agentsDir, agentsDir, "plugin", { pluginName, ctx });
+      const entries = await walkDir(agentsDir, agentsDir, "plugin", { pluginName, marketplace, ctx });
       all.push(...entries);
     })
   );

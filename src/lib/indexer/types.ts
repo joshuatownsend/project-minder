@@ -38,7 +38,20 @@ export interface LockfileEntry {
 
 export interface InstalledPlugin {
   pluginName: string;
+  /**
+   * Where the plugin's files are, AS THIS MACHINE CAN OPEN THEM. The registry
+   * records the path in the home's own filesystem; for a foreign (WSL) home
+   * it is rewritten through the home's path mappings (#553). When no mapping
+   * covers it the raw registry path is kept and `installPathUnresolved` set.
+   */
   installPath: string;
+  /**
+   * The registry path could not be mapped to a local path, so the plugin's
+   * agents, skills and commands cannot be read from here — the walk finds
+   * nothing under it. Only ever set for a non-primary home. Surfaced rather
+   * than swallowed so a catalog that is quietly short can say why.
+   */
+  installPathUnresolved?: boolean;
   marketplace: string;
   scope?: string;
   version?: string;
@@ -52,6 +65,13 @@ export interface ProvenanceContext {
   installedPlugins: InstalledPlugin[];
   lockfile: Map<string, LockfileEntry>;
   marketplaceRepo: Map<string, string>; // marketplace name → "owner/repo"
+  /**
+   * The Claude home this context was loaded for (`normalizePathKey(home)`),
+   * stamped onto every user- and plugin-scope entry the walkers make from
+   * it. Absent on contexts built by callers that predate the home dimension
+   * (tests, the template writers), which is the primary home implicitly.
+   */
+  homeKey?: string;
 }
 
 interface CatalogEntryBase {
@@ -69,6 +89,14 @@ interface CatalogEntryBase {
   mtime: string;
   ctime: string;
   provenance: Provenance;
+  /**
+   * The Claude home a user- or plugin-scope entry was read from:
+   * `normalizePathKey(home)`, equal to the scanner's `ProjectData.usageHomeKey`
+   * for a project under that home, so a group location joins to the
+   * entries its own home loads (#553). Project-scope entries are repo-borne
+   * and carry none.
+   */
+  homeKey?: string;
   isSymlink?: boolean;
   realPath?: string;
   parseWarnings?: string[];
@@ -92,6 +120,13 @@ interface CatalogEntryBase {
 
 export interface AgentEntry extends CatalogEntryBase {
   kind: "agent";
+  /**
+   * Path relative to the agents root, without `.md` (`review/worker`). The
+   * identity within a root — `slug` is only the file stem, so two nested
+   * agents `review/worker.md` and `build/worker.md` share it. Set by the
+   * directory walk; absent only on entries built without a root.
+   */
+  relPath?: string;
   model?: string;
   tools?: string[];
   color?: string;
@@ -143,4 +178,14 @@ export type CatalogEntry = AgentEntry | SkillEntry;
 export interface CatalogResult {
   agents: AgentEntry[];
   skills: SkillEntry[];
+  /** The home the user/plugin walks covered. `primary` when no `home` was asked for. */
+  home: { key: string; path: string; primary: boolean };
+  /**
+   * Installed plugins whose registry `installPath` no path mapping could
+   * rewrite into a path this machine can open, so nothing under them was
+   * walked (see `InstalledPlugin.installPathUnresolved`), as registry keys
+   * (`name@marketplace` — the same id the environments inventory uses).
+   * Always empty for the primary home.
+   */
+  unresolvedPlugins: string[];
 }

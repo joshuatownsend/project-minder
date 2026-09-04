@@ -3,6 +3,9 @@ import { readConfig, mutateConfig } from "@/lib/config";
 import { invalidateCache } from "@/lib/cache";
 import { forgetSweepFailuresUnder } from "@/lib/sweepFailures";
 import { invalidateClaudeConfigRouteCache } from "@/app/api/claude-config/route";
+import { invalidateEnvironmentsRouteCache } from "@/app/api/environments/route";
+import { invalidateCatalogCache } from "@/lib/indexer/catalog";
+import { invalidateCatalogRouteCaches } from "@/lib/server/catalogRouteCaches";
 import { disposeAllRouteCaches } from "@/lib/routeCache";
 import { setProjectStatus } from "@/lib/server/mutations/projectStatus";
 import { ProjectStatus, MinderConfig, FeatureFlagKey, PricingRule, ScheduleMode, SCHEDULE_MODES, SubscriptionTier } from "@/lib/types";
@@ -31,6 +34,15 @@ const VALID_SCHEDULE_MODES = SCHEDULE_MODES.map((m) => m.value);
 function invalidateAll() {
   invalidateCache();
   invalidateClaudeConfigRouteCache();
+  // The catalog and its route caches are keyed by Claude home (#553), and a
+  // non-primary home's view depends on `claudeHomes` and `pathMappings`: a
+  // mapping added in Settings is what turns an "unreadable" plugin readable.
+  // `/api/usage` re-keys on the same two fields; these caches have no such
+  // salt, so a config write clears them outright rather than serving a
+  // pre-mapping catalog for up to the 5-minute TTL.
+  invalidateCatalogCache();
+  invalidateCatalogRouteCaches();
+  invalidateEnvironmentsRouteCache();
   // Every route cache, not just the two named above — this is the
   // "feature-flag-flip hook" `disposeAllRouteCaches` was written for.
   //
