@@ -5,6 +5,7 @@ import {
   filterSessions,
   getEnabledAdapters,
 } from "@/lib/server/queries/sessions";
+import { normalizeHomeKey } from "@/lib/homeKey";
 
 // Cache slot + filter live in `@/lib/server/queries/sessions` so the RSC
 // prefetch (PR 3) shares the exact same cache and filter chain — see that
@@ -24,7 +25,10 @@ export async function GET(request: NextRequest) {
   // Optional Claude-home filter: the member's `usageHomeKey`, so a location
   // lists only the sessions its own home recorded (two WSL distros with the
   // same Linux layout share a `projectName`).
-  const homeFilter = request.nextUrl.searchParams.get("home");
+  // Normalized once here (trailing separator dropped) so `home=…/` and
+  // `home=…` share an ETag as well as a result set.
+  const rawHome = request.nextUrl.searchParams.get("home");
+  const homeFilter = rawHome ? normalizeHomeKey(rawHome) : null;
 
   // Refresh the in-route cache when stale. The façade itself layers DB and
   // file-parse caches under it, so a refresh that finds no JSONL changes is

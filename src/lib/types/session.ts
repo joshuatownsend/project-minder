@@ -135,8 +135,9 @@ export interface SessionSummary {
    * Which Claude home the transcript was read from: `normalizePathKey` of the
    * configured home, i.e. the same string the scanner stamps on
    * `ProjectData.usageHomeKey` and the usage parser on `UsageTurn.homeKey`,
-   * so a project location joins to its own sessions by equality (`&home=`
-   * on `/api/sessions`). Two checkouts with the same Linux layout in
+   * so a project location joins to its own sessions (`&home=` on
+   * `/api/sessions`, compared with `sameHomeKey`, which ignores a trailing
+   * path separator the configured home may carry). Two checkouts with the same Linux layout in
    * different WSL distros encode to the same `projectName`; this is what
    * tells their sessions apart. Undefined for adapter (non-Claude) sessions
    * and for transcripts outside any `projects/` directory.

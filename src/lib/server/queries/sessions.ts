@@ -75,8 +75,10 @@ export interface SessionFilterOpts {
   ticket?: string | null;
   /**
    * Restrict to sessions read from one Claude home (`SessionSummary.homeKey`).
-   * Strict equality, as `/api/usage?home=` is: a session with no home key
-   * (adapter sources) never matches a home filter.
+   * Compared with `sameHomeKey` — the two keys are equal up to a trailing
+   * path separator, which a configured home may carry and a session's
+   * file-derived key never does. A session with no home key (adapter
+   * sources) never matches a home filter.
    */
   home?: string | null;
 }
