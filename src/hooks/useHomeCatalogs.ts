@@ -3,6 +3,7 @@
 import { useQueries } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/queryKeys";
 import type { AgentEntry, SkillEntry } from "@/lib/indexer/types";
+import { pluginRegistryKey } from "@/lib/indexer/pluginKey";
 import type { EnvAgent, EnvSkill } from "@/lib/environments/diff";
 
 /**
@@ -39,7 +40,8 @@ interface CatalogRow<E> {
 }
 
 async function fetchRows<E>(kind: "agents" | "skills", home: string, signal: AbortSignal): Promise<E[]> {
-  const res = await fetch(`/api/${kind}?home=${encodeURIComponent(home)}`, { signal });
+  // `scope=home`: this hook drops project-scope entries, so the server need not walk every project for it.
+  const res = await fetch(`/api/${kind}?home=${encodeURIComponent(home)}&scope=home`, { signal });
   if (!res.ok) {
     let detail = `${res.status}`;
     try {
@@ -61,7 +63,7 @@ async function fetchRows<E>(kind: "agents" | "skills", home: string, signal: Abo
 /** `name@marketplace` from marketplace provenance; undefined for anything else. */
 function pluginIdOf(e: AgentEntry | SkillEntry): string | undefined {
   const p = e.provenance;
-  return p.kind === "marketplace-plugin" ? `${p.pluginName}@${p.marketplace}` : undefined;
+  return p.kind === "marketplace-plugin" ? pluginRegistryKey(p.pluginName, p.marketplace) : undefined;
 }
 
 function toEnvAgent(e: AgentEntry): EnvAgent {

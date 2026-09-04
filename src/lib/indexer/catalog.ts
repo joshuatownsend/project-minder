@@ -2,6 +2,7 @@ import { walkUserAgents, walkInstalledAgents, walkPluginAgents, walkProjectAgent
 import { walkUserSkills, walkPluginSkills, walkProjectSkills } from "./walkSkills";
 import { loadProvenanceContext } from "./provenance";
 import { resolveCatalogHome, type CatalogHome } from "./homes";
+import { pluginRegistryKey } from "./pluginKey";
 import { getCachedScan } from "@/lib/cache";
 import { readConfig } from "@/lib/config";
 import { checkWslRoot, parseWslUncPath } from "@/lib/wsl";
@@ -147,7 +148,7 @@ export async function loadCatalog(opts: LoadCatalogOptions = {}): Promise<Catalo
     // (Copilot on #555).
     unresolvedPlugins: ctx.installedPlugins
       .filter((p) => p.installPathUnresolved)
-      .map((p) => `${p.pluginName}@${p.marketplace}`),
+      .map((p) => pluginRegistryKey(p.pluginName, p.marketplace)),
   };
   if (!includeProjects || hadProjectScan) {
     setCache(key, result);

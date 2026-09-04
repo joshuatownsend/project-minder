@@ -107,6 +107,12 @@ export async function loadAgentsResponse(
   projectSlug: string | null,
   query: string | null,
   home: string | null = null,
+  /**
+   * `false` skips the per-project `.claude/` walks (`?scope=home`): the
+   * Environments tab discards project-scope entries, and with cold caches each
+   * home's fetch would otherwise traverse every scanned project (Codex on #555).
+   */
+  includeProjects = true,
 ): Promise<AgentsResponse> {
   if (await demoMode()) {
     return {
@@ -119,7 +125,7 @@ export async function loadAgentsResponse(
   // A structured key, not delimiter concatenation: `q` is unrestricted text,
   // so `q="|H"` for the primary home and `home=H` with no query would have
   // collided on `|||H` and served each other's rows (Codex on #555).
-  const cacheKey = JSON.stringify([source, projectSlug, q, home]);
+  const cacheKey = JSON.stringify([source, projectSlug, q, home, includeProjects]);
   // A foreign home is re-resolved BEFORE the cache is consulted: its distro
   // can stop between requests, and a cached 200 would otherwise stand in
   // for the promised 503 until the TTL lapsed (Codex on #555). The primary
@@ -131,7 +137,7 @@ export async function loadAgentsResponse(
     return { data: cached.data, backend: cached.backend, home: cached.home, unresolvedPlugins: cached.unresolvedPlugins };
   }
 
-  const catalog = await loadCatalog({ includeProjects: true, home });
+  const catalog = await loadCatalog({ includeProjects, home });
   const agentUsage = catalog.home.primary ? await getAgentUsage() : null;
 
   const statsArr = agentUsage?.stats ?? [];

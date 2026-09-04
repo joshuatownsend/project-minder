@@ -137,6 +137,8 @@ export async function resolvePluginSkillsRoots(installPath: string): Promise<str
   return roots;
 }
 
+export { pluginRegistryKey } from "./pluginKey";
+
 /**
  * The install record the catalog reads for a registry key when several are
  * recorded: the highest semver (`compareSemver`). Exported so the Environments

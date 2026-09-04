@@ -24,7 +24,8 @@ export async function GET(
 
   // `home`: resolve the id inside another Claude home's catalog (#553). Usage
   // is joined for the primary home only — see `loadSkillsResponse`.
-  const home = request.nextUrl.searchParams.get("home");
+  // `|| null`: an empty `?home=` is the absent parameter, not a distinct cache key (Copilot on #555).
+  const home = request.nextUrl.searchParams.get("home") || null;
   let catalog;
   try {
     catalog = await loadCatalog({ includeProjects: true, home });

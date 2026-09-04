@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { diffEnvironments, homeForLocation, type EnvironmentInventory } from "@/lib/environments/diff";
+import { pluginRegistryKey } from "@/lib/indexer/pluginKey";
 
 function home(key: string, over: Partial<EnvironmentInventory> = {}): EnvironmentInventory {
   return {
@@ -153,5 +154,13 @@ describe("homeForLocation", () => {
 
   it("is undefined when the pinned home was not read", () => {
     expect(homeForLocation(WSL.key, [WIN])).toBeUndefined();
+  });
+});
+
+describe("pluginRegistryKey", () => {
+  it("is name@marketplace, or the bare name when the registry key had no marketplace", () => {
+    expect(pluginRegistryKey("github", "official")).toBe("github@official");
+    expect(pluginRegistryKey("foo", "")).toBe("foo");
+    expect(pluginRegistryKey("foo", undefined)).toBe("foo");
   });
 });

@@ -47,7 +47,7 @@ describe("GET /api/skills", () => {
     const res = await GET(makeRequest({ source: "plugin", project: "my-app", q: "deploy" }));
 
     expect(res.status).toBe(200);
-    expect(loadSkillsResponse).toHaveBeenCalledWith("plugin", "my-app", "deploy", null);
+    expect(loadSkillsResponse).toHaveBeenCalledWith("plugin", "my-app", "deploy", null, true);
     expect(res.headers.get("X-Minder-Backend")).toBe("file");
     // The route unwraps { data, backend } and returns `data` as the body directly.
     const body = await res.json();
@@ -59,7 +59,7 @@ describe("GET /api/skills", () => {
 
     await GET(makeRequest({}));
 
-    expect(loadSkillsResponse).toHaveBeenCalledWith(null, null, null, null);
+    expect(loadSkillsResponse).toHaveBeenCalledWith(null, null, null, null, true);
   });
 
   it("returns an empty data array when the catalog is empty", async () => {
@@ -71,7 +71,7 @@ describe("GET /api/skills", () => {
     const body = await res.json();
     expect(body).toEqual([]);
   });
-  it("forwards ?home= as the fourth argument and surfaces unresolved plugins in a header (#553)", async () => {
+  it("forwards ?home= and ?scope=home and surfaces unresolved plugins in a header (#553)", async () => {
     vi.mocked(loadSkillsResponse).mockResolvedValue({
       data: [],
       backend: "file",
@@ -79,9 +79,10 @@ describe("GET /api/skills", () => {
       unresolvedPlugins: ["github", "my plugin"],
     });
 
-    const res = await GET(makeRequest({ home: "//wsl.localhost/ubuntu/home/me/.claude" }));
+    const res = await GET(makeRequest({ home: "//wsl.localhost/ubuntu/home/me/.claude", scope: "home" }));
 
-    expect(loadSkillsResponse).toHaveBeenCalledWith(null, null, null, "//wsl.localhost/ubuntu/home/me/.claude");
+    // `scope=home` → no project walk (fifth argument false).
+    expect(loadSkillsResponse).toHaveBeenCalledWith(null, null, null, "//wsl.localhost/ubuntu/home/me/.claude", false);
     expect(res.headers.get("X-Minder-Unresolved-Plugins")).toBe("github,my%20plugin");
   });
 

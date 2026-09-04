@@ -47,7 +47,7 @@ describe("GET /api/agents", () => {
     const res = await GET(makeRequest({ source: "user", project: "my-app", q: "review" }));
 
     expect(res.status).toBe(200);
-    expect(loadAgentsResponse).toHaveBeenCalledWith("user", "my-app", "review", null);
+    expect(loadAgentsResponse).toHaveBeenCalledWith("user", "my-app", "review", null, true);
     expect(res.headers.get("X-Minder-Backend")).toBe("file");
     // The route unwraps { data, backend } and returns `data` as the body directly.
     const body = await res.json();
@@ -59,7 +59,7 @@ describe("GET /api/agents", () => {
 
     await GET(makeRequest({}));
 
-    expect(loadAgentsResponse).toHaveBeenCalledWith(null, null, null, null);
+    expect(loadAgentsResponse).toHaveBeenCalledWith(null, null, null, null, true);
   });
 
   it("returns an empty data array when the catalog is empty", async () => {
@@ -71,7 +71,7 @@ describe("GET /api/agents", () => {
     const body = await res.json();
     expect(body).toEqual([]);
   });
-  it("forwards ?home= as the fourth argument and surfaces unresolved plugins in a header (#553)", async () => {
+  it("forwards ?home= and ?scope=home and surfaces unresolved plugins in a header (#553)", async () => {
     vi.mocked(loadAgentsResponse).mockResolvedValue({
       data: [],
       backend: "file",
@@ -79,9 +79,10 @@ describe("GET /api/agents", () => {
       unresolvedPlugins: ["github", "my plugin"],
     });
 
-    const res = await GET(makeRequest({ home: "//wsl.localhost/ubuntu/home/me/.claude" }));
+    const res = await GET(makeRequest({ home: "//wsl.localhost/ubuntu/home/me/.claude", scope: "home" }));
 
-    expect(loadAgentsResponse).toHaveBeenCalledWith(null, null, null, "//wsl.localhost/ubuntu/home/me/.claude");
+    // `scope=home` → no project walk (fifth argument false).
+    expect(loadAgentsResponse).toHaveBeenCalledWith(null, null, null, "//wsl.localhost/ubuntu/home/me/.claude", false);
     expect(res.headers.get("X-Minder-Unresolved-Plugins")).toBe("github,my%20plugin");
   });
 
