@@ -116,7 +116,10 @@ export async function loadAgentsResponse(
     };
   }
   const q = query?.toLowerCase() ?? null;
-  const cacheKey = `${source ?? ""}|${projectSlug ?? ""}|${q ?? ""}|${home ?? ""}`;
+  // A structured key, not delimiter concatenation: `q` is unrestricted text,
+  // so `q="|H"` for the primary home and `home=H` with no query would have
+  // collided on `|||H` and served each other's rows (Codex on #555).
+  const cacheKey = JSON.stringify([source, projectSlug, q, home]);
   // A foreign home is re-resolved BEFORE the cache is consulted: its distro
   // can stop between requests, and a cached 200 would otherwise stand in
   // for the promised 503 until the TTL lapsed (Codex on #555). The primary

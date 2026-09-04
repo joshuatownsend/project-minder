@@ -29,6 +29,12 @@ export interface EnvAgent {
   /** User-scope (`<home>/agents`) or provided by an installed plugin. */
   source: "user" | "plugin";
   pluginName?: string;
+  /**
+   * The providing plugin's registry key (`name@marketplace`), from the
+   * entry's provenance. The identity, where `pluginName` is the label: the
+   * same plugin name from two marketplaces is two plugins.
+   */
+  pluginId?: string;
 }
 
 export interface EnvSkill {
@@ -38,6 +44,8 @@ export interface EnvSkill {
   description?: string;
   source: "user" | "plugin";
   pluginName?: string;
+  /** Registry key of the providing plugin — see `EnvAgent.pluginId`. */
+  pluginId?: string;
   /** Lives under `skills-disabled/` rather than `skills/`. */
   disabled: boolean;
 }
@@ -140,9 +148,18 @@ interface Presence {
  * the row identity carries the provider: a home that has one and a home that
  * has the other must not read as agreeing.
  */
-function providedId(item: { slug: string; source: "user" | "plugin"; pluginName?: string }): string {
-  return item.source === "plugin" ? `plugin:${item.pluginName ?? ""}:${item.slug}` : `user:${item.slug}`;
+function providedId(item: { slug: string; source: "user" | "plugin"; pluginName?: string; pluginId?: string }): string {
+  if (item.source !== "plugin") return `user:${item.slug}`;
+  // The registry key (`name@marketplace`) when provenance supplies it: the
+  // same plugin name from two marketplaces is two plugins, and their
+  // same-named agents must not read as one row (Codex on #555). The bare
+  // name is the fallback for an entry without marketplace provenance; the
+  // placeholder keeps an unexpected gap from producing an empty `plugin::x`
+  // segment that could collide across plugins (Copilot on #555).
+  return `plugin:${item.pluginId ?? item.pluginName ?? UNKNOWN_PLUGIN}:${item.slug}`;
 }
+
+const UNKNOWN_PLUGIN = "unknown-plugin";
 
 function collect<T>(
   homes: readonly EnvironmentInventory[],
@@ -194,7 +211,9 @@ function collect<T>(
 export function diffEnvironments(homes: readonly EnvironmentInventory[]): EnvironmentsDiff {
   const provided = (t: { description?: string; pluginName?: string; source: "user" | "plugin" }) => ({
     description: t.description,
-    ...(t.source === "plugin" ? { pluginName: t.pluginName ?? "" } : {}),
+    // Omitted when unknown rather than coerced to "" — an empty string would
+    // render as a blank plugin tag.
+    ...(t.source === "plugin" && t.pluginName ? { pluginName: t.pluginName } : {}),
   });
   const kinds: EnvDiffKind[] = [
     {

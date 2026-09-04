@@ -58,6 +58,12 @@ async function fetchRows<E>(kind: "agents" | "skills", home: string, signal: Abo
   return rows.map((r) => r.entry).filter((e): e is E => e !== undefined);
 }
 
+/** `name@marketplace` from marketplace provenance; undefined for anything else. */
+function pluginIdOf(e: AgentEntry | SkillEntry): string | undefined {
+  const p = e.provenance;
+  return p.kind === "marketplace-plugin" ? `${p.pluginName}@${p.marketplace}` : undefined;
+}
+
 function toEnvAgent(e: AgentEntry): EnvAgent {
   return {
     // The relative path, not the file stem: nested `review/worker.md` and
@@ -67,6 +73,7 @@ function toEnvAgent(e: AgentEntry): EnvAgent {
     description: e.description,
     source: e.source === "plugin" ? "plugin" : "user",
     pluginName: e.pluginName,
+    pluginId: pluginIdOf(e),
   };
 }
 
@@ -77,6 +84,7 @@ function toEnvSkill(e: SkillEntry): EnvSkill {
     description: e.description,
     source: e.source === "plugin" ? "plugin" : "user",
     pluginName: e.pluginName,
+    pluginId: pluginIdOf(e),
     disabled: e.disabled === true,
   };
 }

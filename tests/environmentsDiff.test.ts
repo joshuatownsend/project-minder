@@ -83,6 +83,18 @@ describe("diffEnvironments", () => {
     expect(rows.find((r) => r.id.startsWith("user:"))!.pluginName).toBeUndefined();
   });
 
+  it("tells the same plugin name from two marketplaces apart by registry key", () => {
+    // `review-kit@official` and `review-kit@community` both ship `reviewer`;
+    // the registry treats them as different plugins and so must the diff.
+    const a = home("a", { agents: [{ slug: "reviewer", source: "plugin", pluginName: "review-kit", pluginId: "review-kit@official" }] });
+    const b = home("b", { agents: [{ slug: "reviewer", source: "plugin", pluginName: "review-kit", pluginId: "review-kit@community" }] });
+    const rows = diffEnvironments([a, b]).kinds.find((k) => k.kind === "agent")!.rows;
+    expect(rows.map((r) => r.id).sort()).toEqual(["plugin:review-kit@community:reviewer", "plugin:review-kit@official:reviewer"]);
+    expect(rows.every((r) => !r.uniform)).toBe(true);
+    // The label stays the plugin NAME; the key is identity, not display.
+    expect(rows.every((r) => r.pluginName === "review-kit")).toBe(true);
+  });
+
   it("carries the first description any home declares onto the row", () => {
     const d = diffEnvironments([WSL, WIN]); // WSL first: its reviewer has no description
     const reviewer = d.kinds.find((k) => k.kind === "agent")!.rows.find((r) => r.id === "user:reviewer")!;
