@@ -96,6 +96,11 @@ export function registerProjectTools(server: McpServer): void {
         hiddenCount: scan.hiddenCount,
         portConflicts: scan.portConflicts,
         scannedAt: scan.scannedAt,
+        // Project groups (one repo, several checkouts). Attached by
+        // withGroups() in the scan helper; `[]` here rather than an absent
+        // key because a tool response is a contract, not a byte-identical
+        // dashboard payload (Codex on #554).
+        groups: scan.groups ?? [],
       });
     }
   );

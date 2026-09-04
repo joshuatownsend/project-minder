@@ -327,7 +327,12 @@ export function GroupOpsTab({ operations, memberSlugs, labels }: { operations: A
         <span>{operations.totalItems} items (deduplicated)</span>
         <span>{operations.sections.length} sections</span>
       </Summary>
-      {operations.sections.map((section, i) => (
+      {operations.sections.map((section, i) => {
+        // Section prose is per location too (`bodyIn`); a location whose
+        // prose differs from the headline is flagged and its copy shown, so
+        // another checkout's operational instructions are never hidden.
+        const bodyEditedIn = section.presentIn.filter((s) => (section.bodyIn[s] ?? "") !== section.body);
+        return (
         <div key={`${section.key}|${section.heading}#${i}`}>
           <Heading>
             <span style={{ display: "inline-flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
@@ -335,15 +340,7 @@ export function GroupOpsTab({ operations, memberSlugs, labels }: { operations: A
                 {section.heading}
               </span>
               <span>{section.key}</span>
-              <PresenceChips presentIn={section.presentIn} memberSlugs={memberSlugs} labels={labels} />
-              {Object.keys(section.bodyIn).length > 1 && new Set(Object.values(section.bodyIn)).size > 1 && (
-                <PresenceChips
-                  presentIn={section.presentIn}
-                  editedIn={section.presentIn.filter((s) => section.bodyIn[s] !== section.body)}
-                  memberSlugs={section.presentIn}
-                  labels={labels}
-                />
-              )}
+              <PresenceChips presentIn={section.presentIn} editedIn={bodyEditedIn} memberSlugs={memberSlugs} labels={labels} />
             </span>
           </Heading>
           {section.body && (
@@ -351,6 +348,11 @@ export function GroupOpsTab({ operations, memberSlugs, labels }: { operations: A
               <MarkdownRenderer content={section.body} />
             </div>
           )}
+          <AltDetails
+            editedIn={bodyEditedIn}
+            detailsIn={Object.fromEntries(bodyEditedIn.map((s) => [s, section.bodyIn[s] ? [section.bodyIn[s]] : []]))}
+            labels={labels}
+          />
           {section.items.map((item, j) => {
             const editedIn = detailsEditedIn(item.presentIn, item.details, item.detailsIn);
             return (
@@ -376,7 +378,8 @@ export function GroupOpsTab({ operations, memberSlugs, labels }: { operations: A
             );
           })}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
