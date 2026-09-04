@@ -60,6 +60,8 @@ function setRouteCache(key: string, slot: Omit<CacheSlot, "cachedAt">) {
   globalForSkills.__skillsRouteCache.set(key, { ...slot, cachedAt: Date.now() });
 }
 
+// `/api/config` resets this slot by name via `src/lib/server/catalogRouteCaches.ts`
+// rather than importing this module (DB isolation chain); keep the key in sync.
 export function invalidateSkillsRouteCache() {
   globalForSkills.__skillsRouteCache = new Map();
 }

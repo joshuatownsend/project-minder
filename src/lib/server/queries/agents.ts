@@ -60,6 +60,8 @@ function setRouteCache(key: string, slot: Omit<CacheSlot, "cachedAt">) {
   globalForAgents.__agentsRouteCache.set(key, { ...slot, cachedAt: Date.now() });
 }
 
+// `/api/config` resets this slot by name via `src/lib/server/catalogRouteCaches.ts`
+// rather than importing this module (DB isolation chain); keep the key in sync.
 export function invalidateAgentsRouteCache() {
   globalForAgents.__agentsRouteCache = new Map();
 }
