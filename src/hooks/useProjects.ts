@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { ScanResult, ProjectData, ProjectStatus } from "@/lib/types";
+import { ScanResult, ProjectResponse, ProjectStatus } from "@/lib/types";
 import { useToast } from "@/components/ToastProvider";
 import { useServerActionsEnabled } from "@/components/ConfigProvider";
 import { setProjectStatusAction } from "@/lib/server/actions";
@@ -99,13 +99,13 @@ export function useProjects() {
  * (ProjectDetail crashed on `dockerPorts.length` before this gate existed).
  * Shared by `useProject`'s mount effect and its on-demand `refresh`.
  */
-async function fetchProject(slug: string): Promise<ProjectData | null> {
+async function fetchProject(slug: string): Promise<ProjectResponse | null> {
   const res = await fetch(`/api/projects/${slug}`);
-  return res.ok ? ((await res.json()) as ProjectData) : null;
+  return res.ok ? ((await res.json()) as ProjectResponse) : null;
 }
 
 export function useProject(slug: string) {
-  const [project, setProject] = useState<ProjectData | null>(null);
+  const [project, setProject] = useState<ProjectResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Re-fetch this project on demand (e.g. after a status change) without a full

@@ -22,6 +22,7 @@ import {
   type SessionSummaryProjectionInput,
 } from "@/lib/sessions/summaryProjection";
 import { projectSlugFromDirName, canonicalizeDirName, toSlug } from "@/lib/sessions/projectIdentity";
+import { normalizePathKey } from "@/lib/platform";
 
 function input(
   over: Partial<SessionSummaryProjectionInput> = {}
@@ -180,6 +181,47 @@ describe("projectSessionSummary (#496)", () => {
 
     it("is false when neither source carries a marker", () => {
       expect(projectSessionSummary(input()).isWorktree).toBe(false);
+    });
+  });
+
+  describe("homeKey joins to the scanner's usageHomeKey", () => {
+    // The pin: the key stamped here must equal `normalizePathKey(home)` for
+    // the home the transcript was read from, because that is what the
+    // scanner puts on `ProjectData.usageHomeKey` and what `&home=` compares.
+    it("is normalizePathKey of the home above /projects/, for a drive and a WSL home", () => {
+      expect(projectSessionSummary(input()).homeKey).toBe(normalizePathKey("C:\\Users\\u\\.claude"));
+      const wslHome = "\\\\wsl.localhost\\Ubuntu\\home\\me\\.claude";
+      const s = projectSessionSummary(
+        input({
+          filePath: `${wslHome}\\projects\\-home-me-dev-foo\\s-1.jsonl`,
+          projectDirName: "-home-me-dev-foo",
+        })
+      );
+      expect(s.homeKey).toBe(normalizePathKey(wslHome));
+    });
+
+    it("tells two distros with the same Linux layout apart", () => {
+      const at = (distro: string) =>
+        projectSessionSummary(
+          input({
+            filePath: `\\\\wsl.localhost\\${distro}\\home\\me\\.claude\\projects\\-home-me-dev-foo\\s-1.jsonl`,
+            projectDirName: "-home-me-dev-foo",
+          })
+        );
+      const ubuntu = at("Ubuntu");
+      const debian = at("Debian");
+      expect(ubuntu.projectName).toBe(debian.projectName);
+      expect(ubuntu.homeKey).not.toBe(debian.homeKey);
+    });
+
+    it("is undefined for an adapter transcript, which has no Claude home", () => {
+      const s = projectSessionSummary(
+        input({
+          source: "codex",
+          filePath: "C:\\Users\\u\\.codex\\projects\\x\\s-1.jsonl",
+        })
+      );
+      expect(s.homeKey).toBeUndefined();
     });
   });
 

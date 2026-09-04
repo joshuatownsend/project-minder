@@ -72,6 +72,12 @@ export interface SessionFilterOpts {
   source?: string | null;
   pr?: string | null;
   ticket?: string | null;
+  /**
+   * Restrict to sessions read from one Claude home (`SessionSummary.homeKey`).
+   * Strict equality, as `/api/usage?home=` is: a session with no home key
+   * (adapter sources) never matches a home filter.
+   */
+  home?: string | null;
 }
 
 /** Apply the same filter chain `/api/sessions` applies, in the same order. */
@@ -94,6 +100,9 @@ export function filterSessions(
   }
   if (opts.ticket) {
     results = results.filter((s) => s.tickets?.some((t) => t.url === opts.ticket));
+  }
+  if (opts.home) {
+    results = results.filter((s) => s.homeKey === opts.home);
   }
   return results;
 }
