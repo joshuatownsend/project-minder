@@ -736,8 +736,12 @@ export async function getUsage(
     return runFileUsage(period, project, source, home);
   }
   const t0 = Date.now();
+  // readonlySnapshot: the route path reads a consistent snapshot on an
+  // isolated connection and yields between queries, so a reconcile committing
+  // mid-report can't make totals and breakdowns disagree (#563) and the event
+  // loop / health probe stays responsive (#559).
   const report = await callDbLoader("getUsage", () =>
-    loadUsageReportFromSql(db, period, project, source, home)
+    loadUsageReportFromSql(db, period, project, source, home, { readonlySnapshot: true })
   );
   const t1 = Date.now();
   // The SQL source, not the default file sweep (#559): a SQL report must not

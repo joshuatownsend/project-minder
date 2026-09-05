@@ -33,7 +33,7 @@ import {
 } from "@/lib/usage/entrypoint";
 import { mcpServerKey } from "@/lib/usage/attribution";
 import { groupByBinary } from "@/lib/usage/shellParser";
-import { prepCached } from "@/lib/db/connection";
+import { prepCached, openReadonlyConnection } from "@/lib/db/connection";
 import { bucketByHourDay, toLocalDateStr } from "@/lib/usage/activityBuckets";
 import { computeStreaks } from "@/lib/usage/streaks";
 import { computeContributionCalendar } from "@/lib/usage/contributionCalendar";
@@ -267,12 +267,38 @@ interface FilterParams {
  * Build a UsageReport entirely from SQL aggregates. Single read-side
  * entry point for the SQL backend.
  */
+export interface LoadUsageOptions {
+  /**
+   * Run the seventeen aggregate queries against an isolated read-only
+   * connection inside one `BEGIN DEFERRED` snapshot, yielding to the event
+   * loop between them (#559/#563). This is what the production route uses:
+   *
+   *   - **Snapshot** — every aggregate sees one consistent view of the index,
+   *     so totals and breakdowns can't disagree even if a reconcile commits
+   *     while the report runs. On the shared handle the reads would each see
+   *     latest-committed, and a session inserted mid-report would land in the
+   *     project breakdown but not the total (Codex, PR #563).
+   *   - **Yielding** — the queries are synchronous and sum to seconds, so
+   *     without a yield the event loop (and `/api/health`) is blocked for the
+   *     whole report; a `setImmediate` between them caps the block at one
+   *     query. Yielding is safe ONLY on the isolated connection: on the shared
+   *     handle, holding a read transaction open across a yield would make a
+   *     concurrent OTEL `db.transaction()` throw.
+   *
+   * Off by default so direct callers (tests) read the `db` they pass,
+   * synchronously — one JS tick is already atomic. Falls back to that path
+   * when a read-only connection can't be opened.
+   */
+  readonlySnapshot?: boolean;
+}
+
 export async function loadUsageReportFromSql(
   db: DatabaseT.Database,
   period: string,
   project?: string,
   source?: string,
-  home?: string
+  home?: string,
+  opts?: LoadUsageOptions
 ): Promise<UsageReport> {
   const periodStart = periodStartIso(period);
   const filter: FilterParams = {
@@ -283,71 +309,137 @@ export async function loadUsageReportFromSql(
     home: home ?? null,
   };
 
-  // Every query below is synchronous (better-sqlite3), so this function used
-  // to hold the event loop for their sum — 47 s for `period=all` on a 252k-turn
-  // index, during which `/api/health` could not answer and the tray's 4 s
-  // probe reported the server down (#559). `timed` now yields to the event
-  // loop (one `setImmediate` turn) before each query, so a health probe or an
-  // OTEL post waits for at most one query rather than all seventeen. The
-  // per-query cost itself was cut two ways in the same change:
-  //
-  //   - `(@periodStart IS NULL OR t.ts >= @periodStart)` defeated the
-  //     `(role, ts)` index — SQLite cannot use a range constraint inside an OR
-  //     on a parameter — so every query scanned every assistant turn whatever
-  //     the period. `t.ts >= COALESCE(@periodStart, '')` is the same predicate
-  //     (no `ts` is NULL) with the index usable: `today` went from 47 s to 5 s.
-  //   - Queries that start from `tool_uses` gained `t.role = 'assistant'` (an
-  //     ingest invariant: tool uses live on assistant turns), which lets the
-  //     planner drive from the turns index instead of scanning `tool_uses`:
-  //     2.3 s → 0.16 s each.
-  //
-  // What remains for `all`/`1y` is the join itself over most of the corpus
-  // (~3 s per query, ~50 s total); that needs rollup tables or a query worker
-  // and is tracked separately. `MINDER_USAGE_PROFILE=1` prints one line per
-  // report with each query's wall time, sorted, for the next round.
-  const profile = process.env.MINDER_USAGE_PROFILE === "1";
-  const marks: Array<[string, number]> = [];
-  const timed = async <T>(name: string, run: () => T): Promise<T> => {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    if (!profile) return run();
-    const t = Date.now();
-    const out = run();
-    marks.push([name, Date.now() - t]);
-    return out;
-  };
+  // See LoadUsageOptions: an isolated read-only snapshot connection when asked
+  // (and openable), else the caller's handle read synchronously. `prepCached`
+  // falls through to a direct prepare for any non-primary connection, so the
+  // snapshot connection needs no special cache handling.
+  const snap = opts?.readonlySnapshot ? openReadonlyConnection() : null;
+  const conn = snap ?? db;
+  const yielding = snap !== null;
+  if (snap) snap.exec("BEGIN DEFERRED"); // pins the snapshot at the first read
 
-  const totals = await timed("totals", () => queryTotals(db, filter));
-  const bySource = await timed("bySource", () => queryBySource(db, filter));
-  const byModel = await timed("byModel", () => queryByModel(db, filter));
-  const byProject = await timed("byProject", () => queryByProject(db, filter));
-  const byCategory = await timed("byCategory", () => queryByCategory(db, filter));
-  const byEffort = await timed("byEffort", () => queryByEffort(db, filter));
-  const byEntrypoint = await timed("byEntrypoint", () => queryByEntrypoint(db, filter));
-  const bySkillCost = await timed("bySkillCost", () => queryBySkillCost(db, filter));
-  const byMcpCost = await timed("byMcpCost", () => queryByMcpCost(db, filter));
-  const daily = await timed("daily", () => queryDaily(db, filter));
-  const topTools = await timed("topTools", () => queryTopTools(db, filter));
-  const toolFlow = await timed("toolTransitions", () => queryToolTransitions(db, filter));
-  const mcpStats = await timed("mcpStats", () => queryMcpStats(db, filter));
-  const shellStats = await timed("shellStats", () => queryShellStats(db, filter));
-  const oneShot = await timed("oneShot", () => queryOneShot(db, filter));
-  const projectDetails = await timed("projectDetails", () => queryProjectDetails(db, filter));
-  const activityTurns = await timed("activityTurns", () => queryActivityTurns(db, filter));
-  const { byHourOfDay, byDayOfWeek, byHourDay } = bucketByHourDay(activityTurns);
-  const streak = computeStreaks(activityTurns);
-  const contributionCalendar = computeContributionCalendar(activityTurns);
+  try {
+    // The per-query cost was cut two ways alongside the yielding (#559):
+    //   - `(@periodStart IS NULL OR t.ts >= @periodStart)` defeated the
+    //     `(role, ts)` index; `t.ts >= COALESCE(@periodStart, '')` is the same
+    //     predicate (no `ts` is NULL) with the index usable — `today` 47 s → 5 s.
+    //   - `tool_uses` queries gained `t.role = 'assistant'` (an ingest
+    //     invariant) so the planner drives from the turns index: 2.3 s → 0.16 s.
+    // What remains for all/1y is the join over most of the corpus (~50 s),
+    // tracked as #562. `MINDER_USAGE_PROFILE=1` prints the per-query breakdown.
+    const profile = process.env.MINDER_USAGE_PROFILE === "1";
+    const marks: Array<[string, number]> = [];
+    const timed = async <T>(name: string, run: () => T): Promise<T> => {
+      if (yielding) await new Promise<void>((resolve) => setImmediate(resolve));
+      if (!profile) return run();
+      const t = Date.now();
+      const out = run();
+      marks.push([name, Date.now() - t]);
+      return out;
+    };
 
-  const subagent = await timed("subagent", () => querySubagentTotals(db, filter));
+    const totals = await timed("totals", () => queryTotals(conn, filter));
+    const bySource = await timed("bySource", () => queryBySource(conn, filter));
+    const byModel = await timed("byModel", () => queryByModel(conn, filter));
+    const byProject = await timed("byProject", () => queryByProject(conn, filter));
+    const byCategory = await timed("byCategory", () => queryByCategory(conn, filter));
+    const byEffort = await timed("byEffort", () => queryByEffort(conn, filter));
+    const byEntrypoint = await timed("byEntrypoint", () => queryByEntrypoint(conn, filter));
+    const bySkillCost = await timed("bySkillCost", () => queryBySkillCost(conn, filter));
+    const byMcpCost = await timed("byMcpCost", () => queryByMcpCost(conn, filter));
+    const daily = await timed("daily", () => queryDaily(conn, filter));
+    const topTools = await timed("topTools", () => queryTopTools(conn, filter));
+    const toolFlow = await timed("toolTransitions", () => queryToolTransitions(conn, filter));
+    const mcpStats = await timed("mcpStats", () => queryMcpStats(conn, filter));
+    const shellStats = await timed("shellStats", () => queryShellStats(conn, filter));
+    const oneShot = await timed("oneShot", () => queryOneShot(conn, filter));
+    const projectDetails = await timed("projectDetails", () => queryProjectDetails(conn, filter));
+    const activityTurns = await timed("activityTurns", () => queryActivityTurns(conn, filter));
+    const { byHourOfDay, byDayOfWeek, byHourDay } = bucketByHourDay(activityTurns);
+    const streak = computeStreaks(activityTurns);
+    const contributionCalendar = computeContributionCalendar(activityTurns);
 
-  if (profile) {
-    marks.sort((a, b) => b[1] - a[1]);
-    // eslint-disable-next-line no-console
-    console.log(
-      `[usage-profile] period=${period} project=${project ?? "-"} total=${marks.reduce((s, m) => s + m[1], 0)}ms ` +
-        marks.map(([n, ms]) => `${n}=${ms}`).join(" ")
-    );
+    const subagent = await timed("subagent", () => querySubagentTotals(conn, filter));
+
+    if (profile) {
+      marks.sort((a, b) => b[1] - a[1]);
+      // eslint-disable-next-line no-console
+      console.log(
+        `[usage-profile] period=${period} project=${project ?? "-"} total=${marks.reduce((s, m) => s + m[1], 0)}ms ` +
+          marks.map(([n, ms]) => `${n}=${ms}`).join(" ")
+      );
+    }
+
+    return buildUsageReport({
+      period,
+      totals,
+      bySource,
+      byModel,
+      byProject,
+      byCategory,
+      byEffort,
+      byEntrypoint,
+      bySkillCost,
+      byMcpCost,
+      daily,
+      topTools,
+      toolFlow,
+      mcpStats,
+      shellStats,
+      oneShot,
+      projectDetails,
+      byHourOfDay,
+      byDayOfWeek,
+      byHourDay,
+      streak,
+      contributionCalendar,
+      subagent,
+    });
+  } finally {
+    if (snap) {
+      try {
+        snap.exec("COMMIT"); // read-only: releases the snapshot
+      } catch {
+        /* nothing to commit */
+      }
+      snap.close();
+    }
   }
+}
 
+interface UsageReportParts {
+  period: string;
+  totals: TotalsRow;
+  bySource: SourceBreakdown[];
+  byModel: ModelCost[];
+  byProject: ProjectBreakdown[];
+  byCategory: CategoryBreakdown[];
+  byEffort: EffortBreakdown[];
+  byEntrypoint: EntrypointBreakdown[];
+  bySkillCost: SkillCost[];
+  byMcpCost: McpServerCost[];
+  daily: DailyBucket[];
+  topTools: [string, number][];
+  toolFlow: ReturnType<typeof queryToolTransitions>;
+  mcpStats: McpServerStats[];
+  shellStats: ReturnType<typeof queryShellStats>;
+  oneShot: ReturnType<typeof queryOneShot>;
+  projectDetails: ProjectDetail[];
+  byHourOfDay: ReturnType<typeof bucketByHourDay>["byHourOfDay"];
+  byDayOfWeek: ReturnType<typeof bucketByHourDay>["byDayOfWeek"];
+  byHourDay: ReturnType<typeof bucketByHourDay>["byHourDay"];
+  streak: ReturnType<typeof computeStreaks>;
+  contributionCalendar: ReturnType<typeof computeContributionCalendar>;
+  subagent: ReturnType<typeof querySubagentTotals>;
+}
+
+/**
+ * Assemble the UsageReport from the query results. Pure — extracted from
+ * `loadUsageReportFromSql` (#563) so the snapshot transaction can close before
+ * the (non-DB) assembly runs, and so the shape stays one place.
+ */
+function buildUsageReport(p: UsageReportParts): UsageReport {
+  const { totals } = p;
   const totalTokens =
     totals.input_tokens + totals.output_tokens + totals.cache_create_tokens + totals.cache_read_tokens;
   // A7: include cache-write tokens in the denominator (matches aggregator.ts).
@@ -356,7 +448,7 @@ export async function loadUsageReportFromSql(
   const cacheHitRate = cacheHitDenominator > 0 ? totals.cache_read_tokens / cacheHitDenominator : 0;
 
   return {
-    period,
+    period: p.period,
     totalCost: totals.cost_usd,
     totalTokens,
     totalSessions: totals.distinct_sessions,
@@ -368,30 +460,30 @@ export async function loadUsageReportFromSql(
       cacheWrite: totals.cache_create_tokens,
     },
     cacheHitRate,
-    oneShot,
-    daily,
-    byModel,
-    byProject,
-    byCategory,
-    byEffort,
-    byEntrypoint,
-    bySkillCost,
-    byMcpCost,
-    topTools,
-    toolTransitions: toolFlow.transitions,
-    toolSelfLoops: toolFlow.selfLoops,
-    shellStats,
-    mcpStats,
-    projectDetails,
+    oneShot: p.oneShot,
+    daily: p.daily,
+    byModel: p.byModel,
+    byProject: p.byProject,
+    byCategory: p.byCategory,
+    byEffort: p.byEffort,
+    byEntrypoint: p.byEntrypoint,
+    bySkillCost: p.bySkillCost,
+    byMcpCost: p.byMcpCost,
+    topTools: p.topTools,
+    toolTransitions: p.toolFlow.transitions,
+    toolSelfLoops: p.toolFlow.selfLoops,
+    shellStats: p.shellStats,
+    mcpStats: p.mcpStats,
+    projectDetails: p.projectDetails,
     generatedAt: new Date().toISOString(),
-    byHourOfDay,
-    byDayOfWeek,
-    byHourDay,
-    streak,
-    contributionCalendar,
-    bySource,
-    subagentCost: subagent.cost,
-    subagentTokens: subagent.tokens,
+    byHourOfDay: p.byHourOfDay,
+    byDayOfWeek: p.byDayOfWeek,
+    byHourDay: p.byHourDay,
+    streak: p.streak,
+    contributionCalendar: p.contributionCalendar,
+    bySource: p.bySource,
+    subagentCost: p.subagent.cost,
+    subagentTokens: p.subagent.tokens,
   };
 }
 
