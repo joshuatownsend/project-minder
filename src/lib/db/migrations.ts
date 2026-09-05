@@ -14,6 +14,7 @@ import { renameWithRetry } from "../atomicWrite";
 import { resolveServerRoot } from "../serverRoot";
 import { sessionFileHomeKey } from "../platform";
 import { pruneNotificationLog } from "./maintenance";
+import { serviceLog } from "@/lib/serviceLog";
 
 // Migration runner for the local SQLite index.
 //
@@ -1294,11 +1295,22 @@ async function quarantineCorruptDb(reason: string): Promise<string | null> {
   // relying on when the consequence is skipping an integrity check.
   clearCleanShutdownMarker(DB_PATH);
 
+  // Through the service log, so the event survives in `minder.log` with its
+  // trigger (#560: two quarantined 1–2 GB indexes on this machine left no
+  // trace beyond the file names, and a 30-minute rebuild each). `serviceLog`
+  // forwards to the host when this runs on the ingest worker's `initDb`.
+  const sizeBytes = dbFileSizeBytes();
   try {
     await renameWithRetry(DB_PATH, dest);
     await moveOrDeleteSiblings(dest);
-    // eslint-disable-next-line no-console
-    console.warn(`[db] Quarantined corrupt index to ${dest} (${reason}). Will rebuild.`);
+    serviceLog({
+      level: "error",
+      subsystem: "db",
+      msg: `quarantined corrupt index to ${dest}; will rebuild`,
+      reason,
+      dest,
+      sizeBytes,
+    });
     return dest;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
@@ -1308,11 +1320,15 @@ async function quarantineCorruptDb(reason: string): Promise<string | null> {
     try {
       await fs.rm(DB_PATH, { force: true, maxRetries: 10, retryDelay: 100 });
       await moveOrDeleteSiblings(null);
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[db] Could not preserve corrupt index (rename kept failing): ${(err as Error).message}. ` +
-          `Deleted instead so rebuild can proceed.`
-      );
+      serviceLog({
+        level: "error",
+        subsystem: "db",
+        msg:
+          `could not preserve corrupt index (rename kept failing: ${(err as Error).message}); ` +
+          `deleted instead so rebuild can proceed`,
+        reason,
+        sizeBytes,
+      });
       return null;
     } catch {
       throw err; // bubble the original symptom
