@@ -40,7 +40,19 @@ pub struct TrayConfig {
     /// `MINDER_SERVER_DIST` — dev override pointing directly at a
     /// `dist/minder-server` build. Takes precedence over the resource dir.
     pub server_dist_override: Option<PathBuf>,
+    /// `MINDER_TRAY_MAX_RSS_MB` — restart the spawned server when its
+    /// self-reported resident set (`/api/health` → `memory.rssMb`) exceeds
+    /// this many megabytes (#561). `0` disables the guard. Default
+    /// [`DEFAULT_MAX_RSS_MB`]; blank or unparsable values fall back to it.
+    pub max_rss_mb: u64,
 }
+
+/// Default ceiling for [`TrayConfig::max_rss_mb`]. An idle server sits near
+/// 1.5 GB with its usage file cache warm and peaks a little above 2 GB under
+/// heavy routes; the 2026-09-05 exhaustion was at 56 GB. 8 GB is far enough
+/// from the working range that it never fires on a healthy process and early
+/// enough that a runaway one is cycled long before the machine notices.
+pub const DEFAULT_MAX_RSS_MB: u64 = 8192;
 
 impl TrayConfig {
     /// Read config from the process environment. Never fails — every field has a
@@ -67,12 +79,15 @@ impl TrayConfig {
             .filter(|s| !s.trim().is_empty())
             .map(PathBuf::from);
 
+        let max_rss_mb = max_rss_mb_from(env::var("MINDER_TRAY_MAX_RSS_MB").ok().as_deref());
+
         TrayConfig {
             port,
             node_path,
             node_path_override,
             attach,
             server_dist_override,
+            max_rss_mb,
         }
     }
 
@@ -209,5 +224,33 @@ mod node_resolution_tests {
         } else {
             assert!(joined.ends_with("/node/bin/node"), "got {joined}");
         }
+    }
+}
+
+/// Parse `MINDER_TRAY_MAX_RSS_MB`. Pure so the fallbacks are testable: unset,
+/// blank, or unparsable → the default; an explicit `0` disables the guard.
+fn max_rss_mb_from(raw: Option<&str>) -> u64 {
+    raw.and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_MAX_RSS_MB)
+}
+
+#[cfg(test)]
+mod max_rss_tests {
+    use super::{max_rss_mb_from, DEFAULT_MAX_RSS_MB};
+
+    #[test]
+    fn unset_blank_or_garbage_fall_back_to_the_default() {
+        assert_eq!(max_rss_mb_from(None), DEFAULT_MAX_RSS_MB);
+        assert_eq!(max_rss_mb_from(Some("")), DEFAULT_MAX_RSS_MB);
+        assert_eq!(max_rss_mb_from(Some("  ")), DEFAULT_MAX_RSS_MB);
+        assert_eq!(max_rss_mb_from(Some("lots")), DEFAULT_MAX_RSS_MB);
+        assert_eq!(max_rss_mb_from(Some("-5")), DEFAULT_MAX_RSS_MB);
+    }
+
+    #[test]
+    fn explicit_values_are_honoured_including_zero_to_disable() {
+        assert_eq!(max_rss_mb_from(Some("4096")), 4096);
+        assert_eq!(max_rss_mb_from(Some(" 16384 ")), 16384);
+        assert_eq!(max_rss_mb_from(Some("0")), 0);
     }
 }

@@ -87,9 +87,27 @@ pub fn port_is_bound(port: u16) -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
 }
 
+/// One probe's worth of information: the classification every existing caller
+/// keys on, plus the server's self-reported resident set for the memory guard
+/// (#561). Kept as a separate struct so `probe()`'s return type — matched on
+/// by the supervisor's spawn/attach/crash decisions — did not have to change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Probe {
+    pub status: ServerStatus,
+    /// `memory.rssMb` from the health body. `None` when the body carried no
+    /// such field (an older server build), when it wasn't a number, or when
+    /// the probe did not get a Minder body at all.
+    pub rss_mb: Option<u64>,
+}
+
 /// Probe `GET /api/health` and classify the result. Never panics; a transport
 /// error yields `Unreachable` and an unparseable body yields `Foreign`.
 pub fn probe(port: u16) -> ServerStatus {
+    probe_detail(port).status
+}
+
+/// [`probe`] plus the memory reading, for the tray's poll loop.
+pub fn probe_detail(port: u16) -> Probe {
     let url = format!("http://{HOST}:{port}/api/health");
 
     // The probe presents its real Host (`127.0.0.1:<port>`, from the URL) — the
@@ -108,7 +126,12 @@ pub fn probe(port: u16) -> ServerStatus {
         // healthy Minder on the strength of a status it never sent.
         Ok(resp) => (resp.status(), resp),
         Err(ureq::Error::Status(code, resp)) => (code, resp),
-        Err(_) => return ServerStatus::Unreachable,
+        Err(_) => {
+            return Probe {
+                status: ServerStatus::Unreachable,
+                rss_mb: None,
+            }
+        }
     };
 
     // Reading the body is a second chance to fail, and the failure is still
@@ -120,9 +143,29 @@ pub fn probe(port: u16) -> ServerStatus {
     // exists to enforce. An unfinished read tells us nothing about ownership.
     let body = match body_or_unreachable(resp.into_string()) {
         Ok(body) => body,
-        Err(status) => return status,
+        Err(status) => {
+            return Probe {
+                status,
+                rss_mb: None,
+            }
+        }
     };
-    classify_body(code, body)
+    let rss_mb = rss_mb_of(&body);
+    let status = classify_body(code, body);
+    Probe {
+        status,
+        // A Foreign body can carry any JSON; only trust the number from a
+        // Minder-shaped answer.
+        rss_mb: if status.is_minder() { rss_mb } else { None },
+    }
+}
+
+/// Pull `memory.rssMb` out of a health body (#561). `None` for anything that
+/// isn't a non-negative number at that path — older servers without the
+/// field, or a non-JSON body. Pure so the shape contract is unit-tested.
+pub fn rss_mb_of(body: &str) -> Option<u64> {
+    let json: serde_json::Value = serde_json::from_str(body).ok()?;
+    json.get("memory")?.get("rssMb")?.as_u64()
 }
 
 /// Map a body-read result onto either its content or an inconclusive verdict.
@@ -254,6 +297,26 @@ mod tests {
             body_or_unreachable(body),
             Ok(r#"{"ok":true,"status":"ok"}"#.to_string())
         );
+    }
+
+    #[test]
+    fn rss_is_read_from_memory_rss_mb() {
+        let body = r#"{"ok":true,"status":"ok","memory":{"rssMb":1532,"heapTotalMb":900}}"#;
+        assert_eq!(rss_mb_of(body), Some(1532));
+    }
+
+    #[test]
+    fn rss_is_none_for_older_bodies_and_wrong_shapes() {
+        // A 1.13.0 server: no `memory` field at all. Must read as "unknown",
+        // never as 0 — the guard treats None as no evidence.
+        assert_eq!(
+            rss_mb_of(r#"{"ok":true,"status":"ok","version":"1.13.0"}"#),
+            None
+        );
+        assert_eq!(rss_mb_of(r#"{"memory":{"rssMb":"big"}}"#), None);
+        assert_eq!(rss_mb_of(r#"{"memory":{"rssMb":-1}}"#), None);
+        assert_eq!(rss_mb_of(r#"{"memory":null}"#), None);
+        assert_eq!(rss_mb_of("<html>nginx</html>"), None);
     }
 
     #[test]

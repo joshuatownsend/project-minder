@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tauri::{
     image::Image,
@@ -19,6 +19,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::config::TrayConfig;
 use crate::health::{self, ServerStatus};
+use crate::memory_guard::MemoryGuard;
 use crate::notify::{self, NotifyController};
 use crate::supervisor::Supervisor;
 
@@ -138,6 +139,7 @@ pub fn init<R: Runtime>(
     // no second thread just to keep a slow clock).
     spawn_poll_loop(
         cfg.port,
+        cfg.max_rss_mb,
         supervisor.clone(),
         status_item,
         tray,
@@ -306,6 +308,7 @@ fn recovered_checked_state<E>(fresh_read: Result<bool, E>) -> Option<bool> {
 
 fn spawn_poll_loop<R: Runtime>(
     port: u16,
+    max_rss_mb: u64,
     supervisor: Arc<Supervisor>,
     status_item: MenuItem<R>,
     tray: tauri::tray::TrayIcon<R>,
@@ -318,13 +321,39 @@ fn spawn_poll_loop<R: Runtime>(
         // Saturating so a machine left running for years can't wrap the counter
         // into a burst of checks.
         let mut tick: u64 = 0;
+        // Memory guard (#561): the same 15 s probe carries `memory.rssMb`, and
+        // this decides whether that number warrants a restart. Logged once so
+        // the tray log records which ceiling this session ran with.
+        let mut guard = MemoryGuard::new(max_rss_mb);
+        if guard.enabled() {
+            crate::supervisor::log(&format!(
+                "memory guard armed: restart above {} MB rss (MINDER_TRAY_MAX_RSS_MB)",
+                guard.max_rss_mb()
+            ));
+        } else {
+            crate::supervisor::log("memory guard disabled (MINDER_TRAY_MAX_RSS_MB=0)");
+        }
         loop {
-            let status = health::probe(port);
+            let probe = health::probe_detail(port);
+            let status = probe.status;
             let next = describe(status, port, &supervisor);
             if last.as_ref() != Some(&next) {
                 let _ = status_item.set_text(&next.0);
                 let _ = tray.set_tooltip(Some(&next.1));
                 last = Some(next);
+            }
+
+            // Only a process we spawned can be restarted (`restart()` is a
+            // no-op in attach mode), so don't consult the guard — and don't
+            // write a restart line — for a server that isn't ours.
+            if !supervisor.is_attached() && guard.observe(probe.rss_mb, Instant::now()) {
+                crate::supervisor::log(&format!(
+                    "memory guard: server rss {} MB exceeds {} MB — requesting graceful restart",
+                    probe.rss_mb.unwrap_or(0),
+                    guard.max_rss_mb()
+                ));
+                let sup = supervisor.clone();
+                thread::spawn(move || sup.restart());
             }
 
             // install: false — the periodic path only looks and toasts. See

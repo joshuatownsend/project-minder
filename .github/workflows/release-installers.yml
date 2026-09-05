@@ -21,11 +21,11 @@
 # (<resource_dir>/node/node.exe | node/bin/node) and the payload
 # (<resource_dir>/minder-server) from there exactly as before.
 #
-# Node pin: the bundled runtime AND the packaging Node are both 22.13.0. This is
+# Node pin: the bundled runtime AND the packaging Node are both 22.23.2. This is
 # load-bearing: package:standalone bundles better-sqlite3's prebuilt .node binary,
 # which is ABI-tied (NODE_MODULE_VERSION) to the Node major that RUNS the server.
 # Node 22 ships a better-sqlite3@12 prebuilt on every target OS (the same reason
-# ci.yml builds Windows on 22.13.0). Change NODE_VERSION here AND in
+# ci.yml builds Windows on 22.23.2). Change NODE_VERSION here AND in
 # scripts/fetch-node-runtime.mjs together.
 #
 # Bundles per OS: NSIS .exe (Windows x64), .dmg (macOS arm64 on macos-latest),
@@ -77,7 +77,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  NODE_VERSION: '22.13.0'
+  NODE_VERSION: '22.23.2'
 
 jobs:
   build:

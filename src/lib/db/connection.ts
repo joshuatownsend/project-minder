@@ -169,6 +169,30 @@ export async function getDb(): Promise<DatabaseT.Database | null> {
 }
 
 /**
+ * Open a short-lived, read-only connection to the index for a single
+ * consistent read (#563). WAL lets a reader open its own snapshot isolated
+ * from every writer — the ingest worker's separate process AND the
+ * main-thread OTEL/scan writers on the shared `getDb()` handle — so a long
+ * aggregate read can pin one snapshot with `BEGIN DEFERRED` and yield to the
+ * event loop between queries without seeing a write commit mid-report. The
+ * shared handle can't do this: holding a read transaction open across yields
+ * on it would make a concurrent OTEL `db.transaction()` throw. The caller
+ * MUST `close()` the returned handle. Returns null if the driver is absent or
+ * the open fails, so the caller can fall back to the shared handle.
+ */
+export function openReadonlyConnection(): DatabaseT.Database | null {
+  if (!Database) return null;
+  try {
+    const db = new Database(DB_PATH, { readonly: true });
+    db.pragma("busy_timeout = 5000");
+    db.pragma("mmap_size = 268435456");
+    return db;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * `true` when the better-sqlite3 native binary loaded successfully at
  * module init. Distinct from `isDbAvailable()`: this is "can we ever
  * open a DB on this platform?" while `isDbAvailable()` is "is one open

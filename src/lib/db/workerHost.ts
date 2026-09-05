@@ -1,6 +1,8 @@
 import "server-only";
 import path from "path";
 import { Worker } from "node:worker_threads";
+import { serviceLog, type LogEntry } from "@/lib/serviceLog";
+import type { IngestWatcherMode } from "@/lib/types/init";
 
 // Main-thread orchestrator for the ingest worker.
 //
@@ -90,6 +92,33 @@ interface WorkerHostState {
    */
   messageSubscribers: Set<MessageSubscriber>;
   readyTimeoutMs: number;
+  /**
+   * Last self-reported isolate memory from the worker (`memory` message,
+   * once a minute). The worker is its own V8 isolate, so the host cannot
+   * sample it; this is what `/api/health` and the hourly memory line show
+   * for it (#561). Null until the first report, reset on respawn.
+   */
+  memory: WorkerMemorySample | null;
+  /**
+   * Last watcher state the worker reported — the `started` ack carries the
+   * initial snapshot, `watcher-mode` messages carry later flips (a chokidar
+   * watcher that reached `ready` after the arming timeout, #558). This is
+   * how the health route can say "sweep-only" about a watcher running in
+   * another isolate.
+   */
+  watcher: WorkerWatcherSnapshot | null;
+}
+
+export interface WorkerMemorySample {
+  heapTotalMb: number;
+  heapUsedMb: number;
+  at: number;
+}
+
+export interface WorkerWatcherSnapshot {
+  watcherMode: IngestWatcherMode | null;
+  initialReconcileMs: number | null;
+  eventsHandled: number;
 }
 
 /**
@@ -137,6 +166,8 @@ function freshState(readyTimeoutMs: number, workerEntry: string): WorkerHostStat
     readyReject: null,
     messageSubscribers: new Set(),
     readyTimeoutMs,
+    memory: null,
+    watcher: null,
   };
 }
 
@@ -153,6 +184,10 @@ export interface WorkerHostStatus {
   lastMessageAt: number | null;
   crashesLastHour: number;
   workerEntry: string;
+  /** Worker isolate memory, last self-report (#561). Null: not running / not yet reported. */
+  memory: WorkerMemorySample | null;
+  /** Watcher state inside the worker, last report (#558). Null until `started` arrives. */
+  watcher: WorkerWatcherSnapshot | null;
 }
 
 export interface StartWorkerOptions {
@@ -402,6 +437,8 @@ export function getWorkerStatus(): WorkerHostStatus {
       lastMessageAt: null,
       crashesLastHour: 0,
       workerEntry: "",
+      memory: null,
+      watcher: null,
     };
   }
   return snapshot(state);
@@ -440,13 +477,106 @@ function snapshot(state: WorkerHostState): WorkerHostStatus {
     lastMessageAt: state.lastMessageAt,
     crashesLastHour: pruneCrashHistory(state),
     workerEntry: state.workerEntry,
+    memory: state.worker !== null ? state.memory : null,
+    watcher: state.worker !== null ? state.watcher : null,
   };
+}
+
+/**
+ * Fold a worker message into host state and, for the message kinds that
+ * exist to cross the isolate boundary, into the service log. Everything the
+ * worker `console.warn`s lands on the parent's stdout, which the tray drains
+ * and discards — so anything that must survive in `minder.log` arrives here
+ * as a message instead (#561, #558, #560). Pure over `state` so it is
+ * unit-testable without a worker thread.
+ */
+export function absorbWorkerMessage(
+  state: Pick<WorkerHostState, "memory" | "watcher">,
+  msg: unknown
+): void {
+  if (!msg || typeof msg !== "object") return;
+  const m = msg as Record<string, unknown>;
+  switch (m.type) {
+    case "memory": {
+      // Boundary input from another isolate: require FINITE numbers, not just
+      // `typeof === "number"` (Copilot, PR #563). NaN/Infinity would pass a
+      // typeof check and then JSON-serialize to `null` in /api/health.
+      if (isFiniteNumber(m.heapTotalMb) && isFiniteNumber(m.heapUsedMb)) {
+        state.memory = {
+          heapTotalMb: m.heapTotalMb,
+          heapUsedMb: m.heapUsedMb,
+          at: isFiniteNumber(m.at) ? m.at : Date.now(),
+        };
+      }
+      return;
+    }
+    case "started": {
+      const s = m.status as Record<string, unknown> | undefined;
+      if (s && typeof s === "object") state.watcher = watcherSnapshotOf(s);
+      return;
+    }
+    case "watcher-mode": {
+      const mode = m.mode;
+      if (mode === "chokidar" || mode === "arming" || mode === "sweep-only") {
+        state.watcher = { ...(state.watcher ?? { initialReconcileMs: null, eventsHandled: 0 }), watcherMode: mode };
+      }
+      return;
+    }
+    case "watcher-status": {
+      // Periodic live snapshot (#563): keeps initialReconcileMs and
+      // eventsHandled current, since the one-time `started` ack froze them at
+      // null/0 under deferInitialReconcile.
+      state.watcher = watcherSnapshotOf(m);
+      return;
+    }
+    case "initial-reconcile": {
+      // The reconcile finished; record its duration even if the next
+      // `watcher-status` tick hasn't landed yet (#563). Finite guard as above.
+      if (isFiniteNumber(m.ms) && state.watcher) {
+        state.watcher = { ...state.watcher, initialReconcileMs: m.ms };
+      }
+      return;
+    }
+    case "service-log": {
+      // The worker's `serviceLog` cannot write the file (its `active` flag is
+      // per-isolate), so it forwards the entry; stamp it so the reader can
+      // tell which thread spoke.
+      const entry = m.entry as LogEntry | undefined;
+      if (entry && typeof entry === "object" && typeof entry.msg === "string") {
+        serviceLog({ ...entry, thread: "ingest-worker" });
+      }
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+function watcherSnapshotOf(s: Record<string, unknown>): WorkerWatcherSnapshot {
+  const mode = s.watcherMode;
+  return {
+    watcherMode: mode === "chokidar" || mode === "arming" || mode === "sweep-only" ? mode : null,
+    initialReconcileMs: isFiniteNumber(s.initialReconcileMs) ? s.initialReconcileMs : null,
+    eventsHandled: isFiniteNumber(s.eventsHandled) ? s.eventsHandled : 0,
+  };
+}
+
+/** A real, finite number — rejects NaN/Infinity that pass `typeof === "number"` (#563). */
+function isFiniteNumber(x: unknown): x is number {
+  return typeof x === "number" && Number.isFinite(x);
 }
 
 function spawnAndAttach(state: WorkerHostState, entry: string): void {
   const worker = new Worker(entry, { stderr: false, stdout: false });
   state.worker = worker;
   state.startedAt = Date.now();
+  // A crash-respawn reuses this WorkerHostState, so the previous isolate's
+  // memory/watcher snapshots would otherwise be served for the freshly spawned
+  // worker until its first `memory`/`started` message arrives — `/api/health`
+  // reporting a dead isolate's heap and watcherMode (Copilot, PR #563). Clear
+  // them so the accessors report `null` (not stale) until the new worker speaks.
+  state.memory = null;
+  state.watcher = null;
 
   state.readyPromise = new Promise<void>((resolve, reject) => {
     state.readyResolve = resolve;
@@ -471,6 +601,7 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
 
   worker.on("message", (msg: unknown) => {
     state.lastMessageAt = Date.now();
+    absorbWorkerMessage(state, msg);
     if (msg && typeof msg === "object" && (msg as { type?: unknown }).type === "ready") {
       state.lastReadyAt = Date.now();
       if (state.readyTimeout) {
@@ -532,8 +663,17 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
 
     state.crashHistory.push(Date.now());
     const crashes = pruneCrashHistory(state);
-    // eslint-disable-next-line no-console
-    console.warn(`[ingest-worker] exited with code ${code}; scheduling respawn (${crashes} crashes in last hour)`);
+    // Through the service log, not bare console.warn: this runs on the main
+    // thread, and a crash/respawn is exactly the event that must be findable
+    // in `minder.log` after the fact (#561 — the 5-day exhaustion left no
+    // record of whether the worker had ever cycled).
+    serviceLog({
+      level: "warn",
+      subsystem: "ingest-worker",
+      msg: `exited with code ${code}; scheduling respawn (${crashes} crashes in last hour)`,
+      exitCode: code,
+      crashesLastHour: crashes,
+    });
 
     if (crashes >= MAX_RESPAWNS_PER_HOUR) {
       // Hand off to the in-process watcher rather than stopping dead.
@@ -550,11 +690,14 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
       // Cleared before invoking so a later crash of the handed-off state can't
       // fire it twice; `startIngestWatcher` is itself idempotent, so a double
       // call would be noisy rather than harmful, but once is the contract.
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[ingest-worker] crash budget exceeded (${crashes}/${MAX_RESPAWNS_PER_HOUR} in last hour); ` +
-          `giving up on the worker and falling back to the in-process watcher.`
-      );
+      serviceLog({
+        level: "error",
+        subsystem: "ingest-worker",
+        msg:
+          `crash budget exceeded (${crashes}/${MAX_RESPAWNS_PER_HOUR} in last hour); ` +
+          `giving up on the worker and falling back to the in-process watcher.`,
+        crashesLastHour: crashes,
+      });
       state.worker = null;
       const fail = state.onStartFailure;
       state.onStartFailure = null;
