@@ -325,9 +325,12 @@ export async function loadUsageReportFromSql(
   const snap = opts?.readonlySnapshot ? openReadonlyConnection() : null;
   const conn = snap ?? db;
   const yielding = snap !== null;
-  if (snap) snap.exec("BEGIN DEFERRED"); // pins the snapshot at the first read
 
   try {
+    if (snap) snap.exec("BEGIN DEFERRED"); // pins the snapshot at the first read
+    // Inside the try so the finally below always closes `snap` — a BEGIN that
+    // throws (transient SQLite error) would otherwise leak the handle (Copilot,
+    // PR #563).
     // The per-query cost was cut two ways alongside the yielding (#559):
     //   - `(@periodStart IS NULL OR t.ts >= @periodStart)` defeated the
     //     `(role, ts)` index; `t.ts >= COALESCE(@periodStart, '')` is the same
