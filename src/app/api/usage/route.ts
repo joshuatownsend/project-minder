@@ -71,7 +71,7 @@ export async function GET(request: NextRequest) {
 
   let slot: UsageCacheSlot;
   const cacheHit = cached !== undefined;
-  if (cached) {
+  if (cacheHit) {
     slot = cached;
   } else {
     // Coalesce identical in-flight misses (#563). Both the serial gate in
