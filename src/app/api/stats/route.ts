@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getStatsCacheMtimeMs } from "@/lib/scanner/claudeStats";
 import { computeETag, ifNoneMatch, jsonWithETag } from "@/lib/httpCache";
 import { getStatsInputs, buildStatsResponse } from "@/lib/server/queries/stats";
+import { logSlowRoute } from "@/lib/slowRouteLog";
 
 // Scan + claude-usage caches and the response assembly live in
 // `@/lib/server/queries/stats` so the RSC prefetch (PR 3) produces a
@@ -9,6 +10,7 @@ import { getStatsInputs, buildStatsResponse } from "@/lib/server/queries/stats";
 // watermark the inputs expose.
 
 export async function GET(request: NextRequest) {
+  const startedAt = Date.now();
   const inputs = await getStatsInputs();
 
   // ETag inputs:
@@ -31,9 +33,13 @@ export async function GET(request: NextRequest) {
   });
 
   const notModified = ifNoneMatch(request, etag);
-  if (notModified) return notModified;
+  if (notModified) {
+    logSlowRoute("/api/stats", startedAt, { backend: inputs.backend, notModified: true });
+    return notModified;
+  }
 
   const body = await buildStatsResponse(inputs);
+  logSlowRoute("/api/stats", startedAt, { backend: inputs.backend });
   const response = jsonWithETag(body, etag);
   response.headers.set("X-Minder-Backend", inputs.backend);
   return response;

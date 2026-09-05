@@ -153,6 +153,21 @@ GET /api/health
     "manualSteps": 2,
     "dispatcher": true,
     "disposers": 8
+  },
+  "memory": {
+    "rssMb": 1532,
+    "heapTotalMb": 900,
+    "heapUsedMb": 850,
+    "externalMb": 6,
+    "arrayBuffersMb": 1,
+    "worker": { "heapTotalMb": 40, "heapUsedMb": 22, "at": 1788630000000 }
+  },
+  "ingest": {
+    "mode": "worker",
+    "watcherMode": "chokidar",
+    "initialReconcileMs": 12400,
+    "eventsHandled": 318,
+    "crashesLastHour": 0
   }
 }
 ```
@@ -165,6 +180,8 @@ GET /api/health
 - `db` — database initialization state (`idle`, `in-flight`, `success`, `transient-failed`, or `permanent-failed`)
 - `bootstrap` — boot-time scan status: whether it ran and which subsystems it started
 - `watchers` — counts of active background watchers (git dirty status, GitHub activity, manual steps, task dispatcher, shutdown disposers)
+- `memory` — the process's resident set and V8 heap figures in megabytes, plus the ingest worker's last self-reported heap (`null` when no worker is running). `rssMb` is the number to watch: it is what the tray app's restart guard reads, and it is the figure that grows when memory is held outside the JavaScript heap.
+- `ingest` — which ingest pipeline is running (`worker`, `in-process`, or `off`) and how it hears about transcript changes. `watcherMode` is `chokidar` when file events are live, `arming` while chokidar is still finishing its initial scan (events already flow; the 30-second sweep covers the rest), and `sweep-only` when chokidar failed and only the sweep remains. `crashesLastHour` counts worker restarts.
 
 ## Service-Mode Logging
 
@@ -173,6 +190,16 @@ In service mode, structured logs are written to a rotating file at `~/.minder/lo
 - **Rotation:** When the log file reaches 5 MB, it rotates (up to 3 backups: `minder.log.1`, `.log.2`, `.log.3`).
 - **Levels:** `info`, `warn`, `error`.
 - **Subsystems:** `bootstrap`, `lifecycle`, `git`, `github`, `mcp`, `scan`, etc.
+
+Lines worth knowing about when something has gone wrong:
+
+- **`memory`** — one `memory sample` line per hour (and one at boot) with the same figures as `/api/health`'s `memory` block plus `uptimeSec`. It is `info` below 4 GB of resident set and `warn` above. Grep for `"subsystem":"memory"` to read a growth curve after the fact.
+- **`route`** — a `slow response` warning whenever `/api/usage` or `/api/stats` takes 5 seconds or more, with the period, project and backend it ran under. Fast responses write nothing.
+- **`ingest-worker`** — worker crashes, respawns and the crash-budget fallback to the in-process watcher.
+- **`ingest-watcher`** — chokidar arming past its ready timeout, reporting ready later, or failing over to sweep-only mode.
+- **`db`** — an `error` line every time the index is quarantined, carrying the trigger (`reason`), the quarantine path (`dest`) and the file size.
+
+Lines from the ingest worker thread carry `"thread":"ingest-worker"`. The worker cannot write the file itself, so it hands its entries to the main thread; before this, its warnings went to a console the tray discards.
 
 ## Graceful Shutdown
 
@@ -216,7 +243,11 @@ If commands like `git`, `gh`, or `node` are not found in log files, it usually m
 
 ### Database corruption after hard stop
 
-If `~/.minder/index.db` becomes corrupted after a hard kill, delete it — it will be rebuilt from your project files on the next startup. Session data lives separately in `~/.claude/projects/`, so no work is lost.
+If `~/.minder/index.db` becomes corrupted after a hard kill, the server quarantines it on the next open (renamed to `index.db.corrupt-<timestamp>` beside the original) and rebuilds from your transcripts. Session data lives separately in `~/.claude/projects/`, so no work is lost — but the rebuild of a large index takes tens of minutes of disk I/O, during which usage and session pages fall back to the slower file-parse path. Every quarantine is recorded in `~/.minder/logs/minder.log` as a `db` line with the triggering error, so you can tell a failed integrity check from a file that would not open at all.
+
+**Stop the server through the front door.** The graceful path (the tray's Quit or Restart, `pnpm service:stop`, or a `SIGTERM`) checkpoints the write-ahead log and closes the database before the process exits. Killing the process from Task Manager, `taskkill /F`, or `kill -9` while the ingest worker is mid-write is the documented way to produce a corrupt index — both quarantines seen on the machine that prompted this note followed forced kills. If the server is unresponsive and a forced kill is the only option, expect a rebuild afterwards.
+
+Recovering the quarantined file with `sqlite3 .recover` is possible by hand but not automated: the `sqlite3` command-line tool is not bundled with Project Minder, and a derived index is cheaper to rebuild than to repair.
 
 **How the integrity check is scheduled.** Opening the index runs `PRAGMA quick_check`, and that scan scales with the file's size — on a multi-gigabyte index read cold after a reboot it can take minutes. Because the SQLite driver is synchronous, the whole server is unresponsive for that entire window (including `/api/health`, which is what made the tray app report a still-booting server as an unresponsive foreign process).
 

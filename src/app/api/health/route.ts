@@ -10,7 +10,10 @@ import { githubActivityCache } from "@/lib/githubActivityCache";
 import { manualStepsWatcher } from "@/lib/manualStepsWatcher";
 import { isDispatcherRunning } from "@/lib/tasks/dispatcher";
 import { resolveServerRoot } from "@/lib/serverRoot";
-import type { HealthResponse } from "@/lib/types/init";
+import { sampleMemory } from "@/lib/memoryMonitor";
+import { getWorkerStatus } from "@/lib/db/workerHost";
+import { getWatcherStatus } from "@/lib/db/ingestWatcher";
+import type { HealthIngest, HealthResponse } from "@/lib/types/init";
 
 /**
  * GET /api/health — liveness + readiness probe.
@@ -30,9 +33,16 @@ import type { HealthResponse } from "@/lib/types/init";
  *   demoMode: boolean,
  *   db: InitStatus,           // probeInitStatus() — never initDb() directly
  *   bootstrap: { ran, subsystems },
- *   watchers: { gitStatus, githubActivity, manualSteps, dispatcher, disposers }
+ *   watchers: { gitStatus, githubActivity, manualSteps, dispatcher, disposers },
+ *   memory: { rssMb, heapTotalMb, heapUsedMb, externalMb, arrayBuffersMb, worker },  // #561
+ *   ingest: { mode, watcherMode, initialReconcileMs, eventsHandled, crashesLastHour } // #558
  * }
  * ```
+ *
+ * `memory` and `ingest` are in-memory reads too: `process.memoryUsage()` plus
+ * cached state the ingest worker last reported. The tray reads `memory.rssMb`
+ * for its restart-above-threshold guard, so this route is the one place that
+ * number must keep coming from.
  *
  * HTTP status preserves the original contract established in PR #148: 200 when
  * the DB state machine has reached `success`, 503 for every other state
@@ -76,6 +86,35 @@ function collectWatchers(): Record<string, number | boolean> {
   };
 }
 
+/**
+ * Which ingest pipeline is live and how it hears about JSONL changes (#558).
+ * All O(1) in-memory reads: the worker host caches what the worker last
+ * reported, and the in-process watcher exposes its own snapshot. `mode` is
+ * derived from what is actually running rather than from the env flags, so a
+ * worker that crashed out and handed off to the in-process watcher reports
+ * the truth.
+ */
+function collectIngest(): HealthIngest {
+  const worker = getWorkerStatus();
+  if (worker.running) {
+    return {
+      mode: "worker",
+      watcherMode: worker.watcher?.watcherMode ?? null,
+      initialReconcileMs: worker.watcher?.initialReconcileMs ?? null,
+      eventsHandled: worker.watcher?.eventsHandled ?? 0,
+      crashesLastHour: worker.crashesLastHour,
+    };
+  }
+  const inProcess = getWatcherStatus();
+  return {
+    mode: inProcess.running ? "in-process" : "off",
+    watcherMode: inProcess.running ? inProcess.watcherMode : null,
+    initialReconcileMs: inProcess.initialReconcileMs,
+    eventsHandled: inProcess.eventsHandled,
+    crashesLastHour: worker.crashesLastHour,
+  };
+}
+
 export async function GET(): Promise<NextResponse> {
   // Independent lookups — run concurrently; this route is polled every ~15s
   // by the Settings page (and by the tray app in C1) and must stay fast.
@@ -98,6 +137,8 @@ export async function GET(): Promise<NextResponse> {
     db: initStatus,
     bootstrap: getBootstrapStatus(),
     watchers: collectWatchers(),
+    memory: sampleMemory(),
+    ingest: collectIngest(),
   };
 
   return NextResponse.json(

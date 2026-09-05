@@ -52,4 +52,40 @@ export interface HealthResponse {
    */
   bootstrap: unknown;
   watchers: Record<string, number | boolean>;
+  /**
+   * Process memory (#561). `rssMb` is the number that matters: the 2026-09-05
+   * exhaustion was 56 GB of commit with a V8 heap capped at ~4 GB, so anything
+   * keyed on heap alone would never have fired. The tray reads `rssMb` for its
+   * restart-above-threshold guard; the hourly `memory` line in `minder.log`
+   * carries the same shape.
+   */
+  memory: HealthMemory;
+  /**
+   * Ingest pipeline mode (#558). `watcherMode` distinguishes a live chokidar
+   * watcher from the 30 s sweep fallback — previously indistinguishable from
+   * outside the process.
+   */
+  ingest: HealthIngest;
+}
+
+export interface HealthMemory {
+  rssMb: number;
+  heapTotalMb: number;
+  heapUsedMb: number;
+  externalMb: number;
+  arrayBuffersMb: number;
+  /** Ingest worker isolate, as last self-reported (null: no worker, or not yet reported). */
+  worker: { heapTotalMb: number; heapUsedMb: number; at: number } | null;
+}
+
+export type IngestWatcherMode = "chokidar" | "arming" | "sweep-only";
+
+export interface HealthIngest {
+  /** Which pipeline is running: worker thread, in-process watcher, or neither. */
+  mode: "worker" | "in-process" | "off";
+  /** Null until the pipeline has reported (worker mode: until `started` arrives). */
+  watcherMode: IngestWatcherMode | null;
+  initialReconcileMs: number | null;
+  eventsHandled: number;
+  crashesLastHour: number;
 }

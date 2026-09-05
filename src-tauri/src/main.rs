@@ -10,6 +10,7 @@
 
 mod config;
 mod health;
+mod memory_guard;
 mod notify;
 mod service_handoff;
 mod supervisor;

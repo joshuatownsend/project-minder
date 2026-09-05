@@ -140,7 +140,7 @@ describe.skipIf(!driverAvailable)("toolTransitions backend parity (#450)", () =>
 
     // (A) DB backend — through the real report builder, so the wiring at the
     // call site is covered too, not just the query in isolation.
-    const dbReport = fromDb.loadUsageReportFromSql(db, "all");
+    const dbReport = await fromDb.loadUsageReportFromSql(db, "all");
 
     // (B) File backend — the same input the aggregator feeds it.
     const bySession = await parser.parseAllSessions();
@@ -171,7 +171,7 @@ describe.skipIf(!driverAvailable)("toolTransitions backend parity (#450)", () =>
     const db = (await conn.getDb())!;
     await ingest.reconcileAllSessions(db, { projectsDir });
 
-    const { toolTransitions: trans, toolSelfLoops: loops } = fromDb.loadUsageReportFromSql(db, "all");
+    const { toolTransitions: trans, toolSelfLoops: loops } = await fromDb.loadUsageReportFromSql(db, "all");
     const t = (from: string, to: string) =>
       trans.find((x) => x.from === from && x.to === to)?.count ?? 0;
     const loop = (tool: string) => loops.find((x) => x.tool === tool)?.count ?? 0;
@@ -215,7 +215,7 @@ describe.skipIf(!driverAvailable)("toolTransitions backend parity (#450)", () =>
     const db = (await conn.getDb())!;
     await ingest.reconcileAllSessions(db, { projectsDir });
 
-    const dbReport = fromDb.loadUsageReportFromSql(db, "all");
+    const dbReport = await fromDb.loadUsageReportFromSql(db, "all");
     const bySession = await parser.parseAllSessions();
     const assistantTurns = [...bySession.values()]
       .flat()
@@ -244,7 +244,7 @@ describe.skipIf(!driverAvailable)("toolTransitions backend parity (#450)", () =>
     const db = (await conn.getDb())!;
     await ingest.reconcileAllSessions(db, { projectsDir });
 
-    const report = fromDb.loadUsageReportFromSql(db, "all", "no-such-project");
+    const report = await fromDb.loadUsageReportFromSql(db, "all", "no-such-project");
     expect(report.toolTransitions).toEqual([]);
     expect(report.toolSelfLoops).toEqual([]);
     conn.closeDb();

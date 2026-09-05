@@ -279,6 +279,57 @@ describe.skipIf(!driverAvailable)("ingestWatcher", () => {
     reloaded.conn.closeDb();
   });
 
+  it("keeps the watcher armed past the ready timeout and flips to chokidar when ready lands (#558)", { timeout: 15000 }, async () => {
+    // Regression for the packaged build's permanent sweep-only mode: a `ready`
+    // that arrives after the timeout used to close the watcher for good. With
+    // the sweep disabled, the only way the session below can reach the index
+    // is through a chokidar event — so ingestion here proves the watcher
+    // survived its own timeout.
+    const reloaded = await reloadModulesPointingAt(tmpHome);
+    const projectsDir = projectsDirOf(tmpHome);
+    const subDir = path.join(projectsDir, "C--dev-late");
+    await fs.mkdir(subDir, { recursive: true });
+    await fs.writeFile(path.join(subDir, "sentinel.txt"), "hi");
+
+    const modes: string[] = [];
+    const status = await reloaded.watcher.startIngestWatcher({
+      projectsDir,
+      bypassEnvFlag: true,
+      disableSweep: true,
+      usePolling: true,
+      awaitWriteFinishMs: 0,
+      debounceMs: 50,
+      // Far shorter than chokidar's polling scan, so the timeout wins the race.
+      readyTimeoutMs: 1,
+      onWatcherMode: (m) => modes.push(m),
+    });
+    expect(status.running).toBe(true);
+    expect(status.watcherMode).toBe("arming");
+
+    await waitFor(() => reloaded.watcher.getWatcherStatus().watcherMode === "chokidar", {
+      timeoutMs: 10000,
+      pollMs: 50,
+    });
+    expect(modes).toEqual(["arming", "chokidar"]);
+
+    const sessionFile = path.join(subDir, "late.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "after late ready"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "live"),
+    ]);
+    const db = (await reloaded.conn.getDb())!;
+    await waitFor(
+      () =>
+        (db
+          .prepare("SELECT COUNT(*) AS n FROM sessions WHERE session_id = 'late'")
+          .get() as { n: number }).n === 1,
+      { timeoutMs: 12000, pollMs: 100 }
+    );
+
+    await reloaded.watcher.stopIngestWatcher();
+    reloaded.conn.closeDb();
+  });
+
   it("startup error is handled (doesn't crash) and falls back to sweep-only", async () => {
     // Point the watcher at a path that doesn't exist. chokidar should
     // complete (with `ignoreInitial: true` it doesn't error on missing

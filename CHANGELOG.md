@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Memory telemetry** (#561). `/api/health` now carries a `memory` block (resident set, V8 heap, external and array-buffer sizes in MB, plus the ingest worker's last self-reported heap) and an `ingest` block (which pipeline is running and its `watcherMode`). The service log gains one `memory sample` line per hour, escalating to `warn` above 4 GB of resident set, so the next runaway process leaves a growth curve instead of a single figure at death.
+- **Tray memory guard** (#561). The tray app reads `memory.rssMb` from its 15-second health poll and requests the same graceful restart as the tray menu when it exceeds `MINDER_TRAY_MAX_RSS_MB` (default 8192; `0` disables), at most once every ten minutes. Attach mode is never restarted.
+- **Slow-route lines** (#559). `/api/usage` and `/api/stats` write a `route` warning to the service log when a response takes 5 seconds or more, with the period, project and backend.
+- **Worker events in the service log** (#561, #560). Ingest-worker crashes, respawns and the crash-budget fallback, chokidar arming/ready/fallback transitions, and every index quarantine (with its triggering error) are now recorded in `minder.log`. Entries raised inside the worker thread are forwarded to the main thread and stamped `thread: "ingest-worker"`; before this they went to a console the tray discards.
+
+### Changed
+
+- **Usage reports no longer re-parse the corpus** (#559). After a SQL-backed usage report, the portfolio-yield augmentation used to sweep every JSONL transcript regardless of period — measured at 54–111 s per `/api/usage` call on an 8.7k-transcript corpus, blocking the event loop and `/api/health` with it. It now reads session spans from the index's `sessions` table (about 80 ms warm), restricted to sessions with at least one primary assistant turn so the session set matches what the file sweep visited. Two small documented differences remain: a session's span starts at its first entry rather than its first assistant turn, and its cost is the ingest-time total including delegated spend.
+- **Ingest watcher survives a slow initial scan** (#558). A chokidar `ready` arriving after the 30-second timeout used to close the watcher and leave the process on the 30-second sweep for good — the packaged build's default state after any long initial reconcile, with no diagnostic surface. The watcher now stays armed (`watcherMode: "arming"`) and flips to `chokidar` whenever ready lands; only a chokidar error falls back to sweep-only.
+- **Bundled Node runtime** bumped from 22.13.0 to 22.23.2 (same ABI; twenty months of fixes and CVE patches). CI and the release workflows pin the same version.
+
+### Fixed
+
+- **Index quarantines after forced kills** (#560). Quarantine events now reach the service log with their reason and the file size, and the service-mode help states plainly that the tray's Quit/Restart and `pnpm service:stop` are the only stop paths that checkpoint the database first. Automated `.recover` remains out of scope: the `sqlite3` CLI is not bundled and a derived index is cheaper to rebuild.
+
 ## [1.14.0] - 2026-09-04
 
 *One repository, several checkouts. This release finishes Project Groups: a repo cloned into more than one scanned location — a Windows checkout and a WSL one, or two drives — gets its own `/group/<slug>` page that merges the repo-borne planning files and flags every line that differs between copies, sums cost across the checkouts without double-counting, splits sessions by the Claude home that recorded them, and compares what each home has installed. To make that last comparison honest, the catalog itself learned a Claude-home dimension: agents, skills, and plugins can now be read for any configured home by key, with the never-wake rule for stopped WSL distros enforced at the resolver rather than trusted downstream.*

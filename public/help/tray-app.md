@@ -56,10 +56,10 @@ To run the tray app from source during development:
    ```bash
    node scripts/fetch-node-runtime.mjs
    ```
-   This downloads Node 22.13.0 and places it at `dist/node/` — the tray uses this bundled runtime instead of your PATH node.
+   This downloads Node 22.23.2 and places it at `dist/node/` — the tray uses this bundled runtime instead of your PATH node.
 
 2. **Build the server payload:**
-   **Important:** The payload's `better-sqlite3` native binary is ABI-tied to your Node version. Ensure you're using Node 22.x (matching the bundled 22.13.0 runtime) by running `node --version` first. If your active Node differs, either switch to Node 22 before building, or set `MINDER_NODE_PATH` to point `pnpm tray:dev` to the same Node major you used for the build.
+   **Important:** The payload's `better-sqlite3` native binary is ABI-tied to your Node version. Ensure you're using Node 22.x (matching the bundled 22.23.2 runtime) by running `node --version` first. If your active Node differs, either switch to Node 22 before building, or set `MINDER_NODE_PATH` to point `pnpm tray:dev` to the same Node major you used for the build.
    ```bash
    pnpm build && pnpm package:standalone
    ```
@@ -147,6 +147,7 @@ The tray app respects these optional environment variables (most have sensible d
 | `MINDER_NODE_PATH` | bundled or `node` | Explicit path to the `node` binary. If unset, the tray uses the bundled Node runtime (preferred in packaged installs) or falls back to `node` on PATH (dev). An explicit override takes precedence over the bundled runtime. |
 | `MINDER_SERVER_DIST` | bundled `minder-server/` | Path to the `dist/minder-server/` directory (dev override). Takes precedence over the bundled payload. Used when you rebuild the server during development. |
 | `MINDER_STATE_DIR` | `~/.minder/` | Forwarded to the spawned sidecar (server) to relocate its config (.minder.json) and cache state away from the read-only bundled payload. **Database files `index.db` and `tasks.db` always stay in `~/.minder`** regardless of this variable (they hard-code `~/.minder` from `os.homedir()`). The tray's own notification state (cursor, mute flag) also stays in `~/.minder/tray-notify.json`, independent of this variable. |
+| `MINDER_TRAY_MAX_RSS_MB` | `8192` | Memory guard. Every 15-second health poll carries the server's resident set (`memory.rssMb`); when it exceeds this many megabytes the tray requests the same graceful restart as the "Restart server" menu item, at most once every ten minutes. Set to `0` to disable. Never fires in attach mode. |
 
 **Windows:** On Windows, set these in your user environment variables (System Properties → Environment Variables) or in a `.cmd` batch file that launches the app.
 
@@ -167,6 +168,14 @@ The tray app respects these optional environment variables (most have sensible d
 1. **Check the server log:** `~/.minder/logs/minder.log` will show any startup errors or crashes.
 2. **Check for port conflicts:** Run `netstat -ano | findstr :4100` (Windows), `lsof -i :4100` (macOS/Linux).
 3. **Try restarting:** Click the tray menu and select "Restart server" (if not in attach mode).
+
+### The server restarted on its own
+
+The tray restarts a server it spawned when the server's resident memory exceeds `MINDER_TRAY_MAX_RSS_MB` (8 GB by default). The tray's console output records `memory guard: server rss N MB exceeds M MB — requesting graceful restart`, and the server log's hourly `memory` lines show the climb that led there. A healthy server sits well under 2 GB, so a guard restart is a signal worth reading, not noise: file an issue with the `memory` lines from `~/.minder/logs/minder.log`. Raise the ceiling or set it to `0` only if you have a reason to expect a larger working set.
+
+### Stopping the server safely
+
+Use the tray's **Quit** or **Restart server**, or `pnpm service:stop` for the service wrapper. Those run the server's graceful shutdown, which checkpoints the SQLite index before the process exits. Ending the `node.exe` process from Task Manager or with `taskkill /F` can leave the index mid-write; the next start then quarantines it and spends tens of minutes rebuilding. See [Database corruption after hard stop](service-mode#database-corruption-after-hard-stop).
 
 ### Notifications don't appear
 
@@ -331,5 +340,6 @@ If you're on a desktop, the tray app's checkbox and menu are simpler than servic
 The tray app is lightweight:
 - **Polling overhead:** 15-second health checks and ~30-second notification polls. Network-only, no subprocess spawning.
 - **CPU:** Idle when not polling. No background re-scanning (the server's internal watcher handles that).
+- **Memory guard:** The same health poll reports the server's resident set, and the tray restarts the server if it crosses `MINDER_TRAY_MAX_RSS_MB` (8 GB by default). The server also writes an hourly `memory` line to its log. See [Environment Variables](#environment-variables).
 
 The bundled Node runtime (~80 MB uncompressed) and standalone server payload dominate the ~100+ MB installer size. This is expected for a "no dependencies required" desktop app.

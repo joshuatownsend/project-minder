@@ -9,7 +9,7 @@
 // Node the packaging job used for `pnpm build && package:standalone`. Both are
 // pinned to the same NODE_VERSION below (22.x — better-sqlite3@12 ships a
 // prebuilt for Node 22's ABI 127 on every target OS, and the repo's Windows CI
-// already builds on 22.13.0 for exactly this reason).
+// already builds on 22.23.2 for exactly this reason).
 //
 // Integrity: the archive's SHA-256 is checked against the SHASUMS256.txt that
 // nodejs.org publishes alongside it (both fetched over HTTPS) before anything
@@ -44,7 +44,7 @@ import { fileURLToPath } from "node:url";
 // The pinned Node major/minor/patch for BOTH the packaging step and the bundled
 // runtime. Keep in sync with .github/workflows (release-installers.yml pins the
 // same value for setup-node) and with package.json `engines`.
-const NODE_VERSION = "22.13.0";
+const NODE_VERSION = "22.23.2";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");

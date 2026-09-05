@@ -236,8 +236,29 @@ export async function runBootstrap(): Promise<void> {
   await bootMcpHealthCache();
   if (isShuttingDown()) return abortBoot();
   await bootClaudeStatus();
+  if (isShuttingDown()) return abortBoot();
+  await bootMemoryMonitor();
 
   blog("boot sequence complete", { subsystems: getBootstrapStatus().subsystems });
+}
+
+/**
+ * Hourly `memory` line in the service log (#561). Last in the sequence so its
+ * first sample describes a fully booted process, and registered with its own
+ * disposer because the timer is created here rather than by a module
+ * singleton the shared disposers already know about. Cheap enough to run in
+ * every mode — one `process.memoryUsage()` an hour.
+ */
+async function bootMemoryMonitor(): Promise<void> {
+  try {
+    const { startMemoryMonitor } = await import("@/lib/memoryMonitor");
+    const { onShutdown } = await import("@/lib/lifecycle");
+    const stop = startMemoryMonitor();
+    onShutdown("memoryMonitor", async () => stop());
+    recordSubsystem("memoryMonitor");
+  } catch (err) {
+    bwarn("memoryMonitor: failed to start", err);
+  }
 }
 
 /** Logged bail-out when a shutdown signal arrives mid-boot. */

@@ -109,7 +109,9 @@ export function resolveUsageHomeKey(
  * Sharing it is what keeps the two shapes from drifting.
  */
 export function turnMatchesCandidate(
-  turn: UsageTurn,
+  // Only the two identity fields are read, so a session head (#559) or a
+  // full turn both satisfy it.
+  turn: Pick<UsageTurn, "projectDirName" | "homeKey">,
   c: DirNameCandidate
 ): boolean {
   if (turn.projectDirName !== c.dirName) return false;

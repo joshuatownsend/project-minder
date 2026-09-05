@@ -42,7 +42,9 @@ setInterval(() => {}, 60_000);
 
 async function reloadHost() {
   vi.resetModules();
-  delete (globalThis as { __minderWorker?: unknown }).__minderWorker;
+  const gg = globalThis as { __minderWorker?: unknown; __minderWorkerCrashLog?: unknown };
+  delete gg.__minderWorker;
+  delete gg.__minderWorkerCrashLog; // #563: persistent crash log survives stopWorker, so reset per test
   const mod = await import("@/lib/db/workerHost");
   // Phase-1 inline workers don't understand the phase-2 `start`
   // handshake or need the loader shim. Wrap startWorker so existing
@@ -217,6 +219,63 @@ describe("workerHost lifecycle", () => {
       await new Promise((r) => setTimeout(r, 50));
     }
     expect(respawned).toBe(true);
+  }, 10_000);
+
+  it("clears the previous isolate's memory/watcher snapshot on respawn (#563)", async () => {
+    const entry = createInlineWorker(TRIVIAL_WORKER);
+    const host = await reloadHost();
+    await host.startWorker({ workerEntry: entry });
+
+    // Seed cached snapshots as if the (now-doomed) isolate had reported them.
+    const state = (
+      globalThis as {
+        __minderWorker?: {
+          memory: unknown;
+          watcher: unknown;
+        };
+      }
+    ).__minderWorker!;
+    state.memory = { heapTotalMb: 999, heapUsedMb: 999, at: Date.now() };
+    state.watcher = { watcherMode: "chokidar", initialReconcileMs: 12400, eventsHandled: 500 };
+    expect(host.getWorkerStatus().memory).not.toBeNull();
+
+    host.postMessage({ type: "crash" });
+
+    // Once the new isolate is up, the accessors must report null — not the dead
+    // isolate's numbers — until the fresh worker actually reports.
+    const deadline = Date.now() + 5000;
+    let cleared = false;
+    while (Date.now() < deadline) {
+      const s = host.getWorkerStatus();
+      if (s.running && s.crashesLastHour >= 1 && s.memory === null && s.watcher === null) {
+        cleared = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(cleared).toBe(true);
+  }, 10_000);
+
+  it("reports recent crashes even after the host is torn down (#563)", async () => {
+    const entry = createInlineWorker(TRIVIAL_WORKER);
+    const host = await reloadHost();
+    await host.startWorker({ workerEntry: entry });
+
+    // One crash, then let the respawn land so the crash is recorded.
+    host.postMessage({ type: "crash" });
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      if (host.getWorkerStatus().crashesLastHour >= 1) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(host.getWorkerStatus().crashesLastHour).toBeGreaterThanOrEqual(1);
+
+    // Tear the host down (mirrors the crash-budget fallback path, which stops
+    // the worker before handing off to the in-process watcher). The count must
+    // survive — that fallback is the event /api/health needs to surface.
+    await host.stopWorker();
+    expect(host.getWorkerStatus().running).toBe(false);
+    expect(host.getWorkerStatus().crashesLastHour).toBeGreaterThanOrEqual(1);
   }, 10_000);
 
   it("subscriptions survive crash-respawn (subscriber registry)", async () => {

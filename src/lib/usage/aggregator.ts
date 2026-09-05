@@ -1,4 +1,4 @@
-import { parseAllSessions, streamAllSessions } from "./parser";
+import { streamAllSessions } from "./parser";
 import { classifyTurn } from "./classifier";
 import { computeToolTransitions } from "./toolTransitions";
 import { applyPricing, computeTurnCost, getModelPricing, loadPricing } from "./costCalculator";
@@ -179,14 +179,69 @@ export function scopeSessionMap(
 }
 
 /**
+ * The per-session identity the yield augmentation matches on. Every field is
+ * what `turnMatchesCandidate` / the slug test read off a session's head turn
+ * — a session belongs to one project, one source and one home, so the head
+ * stands for all of it.
+ */
+export interface SessionHead {
+  sessionId: string;
+  projectSlug: string;
+  projectDirName: string;
+  homeKey?: string;
+  source?: string;
+}
+
+/**
+ * Where {@link augmentPortfolioYield} gets its sessions from (#559).
+ *
+ * `intervals` is a thunk so a source that has to compute them (the file path
+ * reduces a turn list) only pays for sessions some project actually claims —
+ * the pre-#559 code built lazily for the same reason.
+ */
+export type SessionIntervalSource = (
+  visit: (head: SessionHead, intervals: () => SessionInterval[]) => void
+) => Promise<void>;
+
+/**
+ * The file-parse source: one sweep of every JSONL transcript. This is what
+ * `augmentPortfolioYield` always did, and it is still right when the report
+ * itself came from the files (the sweep is warm in the FileCache). It is the
+ * wrong thing after a SQL report, where it turned a sub-second query into a
+ * 100 s response regardless of period — see `sessionIntervalsFromSql`.
+ */
+export function fileSessionIntervalSource(): SessionIntervalSource {
+  return async (visit) => {
+    await loadPricing();
+    const costOf = (t: UsageTurn) => applyPricing(getModelPricing(t.model, t.speed), t);
+    await streamAllSessions(async (sessionId, turns) => {
+      const head = turns[0];
+      if (!head) return;
+      visit(
+        {
+          sessionId,
+          projectSlug: head.projectSlug,
+          projectDirName: head.projectDirName,
+          homeKey: head.homeKey,
+          source: head.source,
+        },
+        () => buildSessionIntervals(turns, costOf)
+      );
+    });
+  };
+}
+
+/**
  * Augment a UsageReport with portfolio-level yield data in-place.
  * Exported so the DB-backed path in `data/index.ts` can call it after
  * loading the SQL report — the augmentation is identical regardless of
  * which backend produced the base report.
  *
- * Calls parseAllSessions() internally (mtime-keyed FileCache; cold call
- * sweeps ~/.claude/projects/). On the file-parse path the cache is already
- * warm; on the DB path it adds one sweep per cold cache hit.
+ * Sessions come from `source` (default: the file sweep,
+ * {@link fileSessionIntervalSource}). The DB path passes a SQL source so a
+ * SQL-backed report never triggers a corpus re-parse (#559: 54–111 s per
+ * `/api/usage` call on an 8.7k-transcript corpus, blocking the event loop —
+ * and `/api/health` with it — for the duration).
  *
  * Yield is computed from full session history regardless of the report's
  * period filter — by design, matching the Activity section. Yield is a
@@ -206,18 +261,17 @@ export async function augmentPortfolioYield(
    * report would classify Codex and Gemini sessions into its yield while every
    * other figure in the response excluded them. (Codex P2 ×2, PR #490.)
    */
-  scope: SessionMapScope = {}
+  scope: SessionMapScope = {},
+  source: SessionIntervalSource = fileSessionIntervalSource()
 ): Promise<void> {
   const scan = getCachedScan();
   if (!scan || report.projectDetails.length === 0) return;
 
   // Intervals, not turns (#515). `buildSessionIntervals` reduces a session to
   // one { start, end, cost } record and nothing downstream reads a turn again,
-  // so this streams the sweep and keeps only the reductions — the difference
+  // so this streams the source and keeps only the reductions — the difference
   // between kilobytes and the corpus. Without this the streaming report above
   // would still peak at the corpus, because this runs in the same request.
-  await loadPricing();
-  const costOf = (t: UsageTurn) => applyPricing(getModelPricing(t.model, t.speed), t);
   /** projectDetails index -> that project's session intervals. */
   const intervalsFor = new Map<number, SessionInterval[]>();
   // Key by encoded path (e.g. "C--dev-project-minder") so it matches
@@ -258,11 +312,11 @@ export async function augmentPortfolioYield(
       : null;
   });
 
-  await streamAllSessions(async (_sessionId, turns) => {
-    const head = turns[0];
-    if (!head) return;
+  await source((head, buildIntervals) => {
     // Scope BEFORE matching, mirroring `scopeSessionMap`'s head-keyed test —
     // see the `scope` parameter's note on why every axis has to be threaded.
+    // Applied here for every source (the SQL one also filters in its WHERE
+    // clause, but the rule must not depend on which source was passed).
     if (scope.source && (head.source ?? "claude") !== scope.source) return;
     if (scope.home && head.homeKey !== scope.home) return;
 
@@ -275,7 +329,7 @@ export async function augmentPortfolioYield(
       }
       // Built at most once per session, and only for a session some project
       // actually wants.
-      const built = (intervals ??= buildSessionIntervals(turns, costOf));
+      const built = (intervals ??= buildIntervals());
       const acc = intervalsFor.get(i);
       if (acc) acc.push(...built);
       else intervalsFor.set(i, [...built]);
