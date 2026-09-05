@@ -186,6 +186,10 @@ export function openReadonlyConnection(): DatabaseT.Database | null {
     const db = new Database(DB_PATH, { readonly: true });
     db.pragma("busy_timeout = 5000");
     db.pragma("mmap_size = 268435456");
+    // Match the primary connection's read-relevant pragma (Copilot, PR #563):
+    // the heavy usage aggregates build TEMP B-TREEs for GROUP BY, and the
+    // default `temp_store = FILE` would spill them to disk on this connection.
+    db.pragma("temp_store = MEMORY");
     return db;
   } catch {
     return null;
