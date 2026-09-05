@@ -56,10 +56,10 @@ To run the tray app from source during development:
    ```bash
    node scripts/fetch-node-runtime.mjs
    ```
-   This downloads Node 22.13.0 and places it at `dist/node/` — the tray uses this bundled runtime instead of your PATH node.
+   This downloads Node 22.23.2 and places it at `dist/node/` — the tray uses this bundled runtime instead of your PATH node.
 
 2. **Build the server payload:**
-   **Important:** The payload's `better-sqlite3` native binary is ABI-tied to your Node version. Ensure you're using Node 22.x (matching the bundled 22.13.0 runtime) by running `node --version` first. If your active Node differs, either switch to Node 22 before building, or set `MINDER_NODE_PATH` to point `pnpm tray:dev` to the same Node major you used for the build.
+   **Important:** The payload's `better-sqlite3` native binary is ABI-tied to your Node version. Ensure you're using Node 22.x (matching the bundled 22.23.2 runtime) by running `node --version` first. If your active Node differs, either switch to Node 22 before building, or set `MINDER_NODE_PATH` to point `pnpm tray:dev` to the same Node major you used for the build.
    ```bash
    pnpm build && pnpm package:standalone
    ```

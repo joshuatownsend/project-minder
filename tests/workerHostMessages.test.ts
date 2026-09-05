@@ -30,6 +30,29 @@ describe("absorbWorkerMessage", () => {
     expect(s.memory).toBeNull();
   });
 
+  it("rejects non-finite numeric telemetry that would serialize to null (#563)", () => {
+    const s = fresh();
+    absorbWorkerMessage(s, { type: "memory", heapTotalMb: NaN, heapUsedMb: 10 });
+    absorbWorkerMessage(s, { type: "memory", heapTotalMb: Infinity, heapUsedMb: 10 });
+    expect(s.memory).toBeNull();
+
+    // A finite report is still accepted, and a non-finite `at` falls back.
+    absorbWorkerMessage(s, { type: "memory", heapTotalMb: 40, heapUsedMb: 22, at: Infinity });
+    expect(s.memory).toMatchObject({ heapTotalMb: 40, heapUsedMb: 22 });
+    expect(Number.isFinite(s.memory!.at)).toBe(true);
+
+    // Non-finite reconcile duration and watcher counts are dropped too.
+    absorbWorkerMessage(s, {
+      type: "watcher-status",
+      watcherMode: "chokidar",
+      initialReconcileMs: NaN,
+      eventsHandled: Infinity,
+    });
+    expect(s.watcher).toEqual({ watcherMode: "chokidar", initialReconcileMs: null, eventsHandled: 0 });
+    absorbWorkerMessage(s, { type: "initial-reconcile", ms: NaN });
+    expect(s.watcher!.initialReconcileMs).toBeNull();
+  });
+
   it("takes the initial watcher snapshot from the started ack", () => {
     const s = fresh();
     absorbWorkerMessage(s, {

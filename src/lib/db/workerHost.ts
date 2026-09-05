@@ -498,11 +498,14 @@ export function absorbWorkerMessage(
   const m = msg as Record<string, unknown>;
   switch (m.type) {
     case "memory": {
-      if (typeof m.heapTotalMb === "number" && typeof m.heapUsedMb === "number") {
+      // Boundary input from another isolate: require FINITE numbers, not just
+      // `typeof === "number"` (Copilot, PR #563). NaN/Infinity would pass a
+      // typeof check and then JSON-serialize to `null` in /api/health.
+      if (isFiniteNumber(m.heapTotalMb) && isFiniteNumber(m.heapUsedMb)) {
         state.memory = {
           heapTotalMb: m.heapTotalMb,
           heapUsedMb: m.heapUsedMb,
-          at: typeof m.at === "number" ? m.at : Date.now(),
+          at: isFiniteNumber(m.at) ? m.at : Date.now(),
         };
       }
       return;
@@ -528,8 +531,8 @@ export function absorbWorkerMessage(
     }
     case "initial-reconcile": {
       // The reconcile finished; record its duration even if the next
-      // `watcher-status` tick hasn't landed yet (#563).
-      if (typeof m.ms === "number" && state.watcher) {
+      // `watcher-status` tick hasn't landed yet (#563). Finite guard as above.
+      if (isFiniteNumber(m.ms) && state.watcher) {
         state.watcher = { ...state.watcher, initialReconcileMs: m.ms };
       }
       return;
@@ -553,9 +556,14 @@ function watcherSnapshotOf(s: Record<string, unknown>): WorkerWatcherSnapshot {
   const mode = s.watcherMode;
   return {
     watcherMode: mode === "chokidar" || mode === "arming" || mode === "sweep-only" ? mode : null,
-    initialReconcileMs: typeof s.initialReconcileMs === "number" ? s.initialReconcileMs : null,
-    eventsHandled: typeof s.eventsHandled === "number" ? s.eventsHandled : 0,
+    initialReconcileMs: isFiniteNumber(s.initialReconcileMs) ? s.initialReconcileMs : null,
+    eventsHandled: isFiniteNumber(s.eventsHandled) ? s.eventsHandled : 0,
   };
+}
+
+/** A real, finite number — rejects NaN/Infinity that pass `typeof === "number"` (#563). */
+function isFiniteNumber(x: unknown): x is number {
+  return typeof x === "number" && Number.isFinite(x);
 }
 
 function spawnAndAttach(state: WorkerHostState, entry: string): void {
