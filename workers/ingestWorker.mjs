@@ -24,6 +24,28 @@ let watcher = null;
 let watcherLoadError = null;
 let started = false;
 
+// #561: this isolate's heap is invisible to the main thread's
+// `process.memoryUsage()`, so self-report once a minute. The host keeps the
+// last sample for /api/health and the hourly memory line. `unref` so the
+// timer never keeps a stopping worker alive.
+const MEMORY_REPORT_INTERVAL_MS = 60_000;
+const MB = 1024 * 1024;
+function reportMemory() {
+  try {
+    const mu = process.memoryUsage();
+    parentPort.postMessage({
+      type: "memory",
+      heapTotalMb: Math.round(mu.heapTotal / MB),
+      heapUsedMb: Math.round(mu.heapUsed / MB),
+      at: Date.now(),
+    });
+  } catch {
+    /* telemetry is best-effort */
+  }
+}
+reportMemory();
+setInterval(reportMemory, MEMORY_REPORT_INTERVAL_MS).unref();
+
 try {
   watcher = await import("./dist/ingestWorker.mjs");
 } catch (err) {
@@ -100,6 +122,11 @@ async function handleStart(options) {
       deferInitialReconcile: true,
       onInitialReconcile: (result) => {
         parentPort.postMessage({ type: "initial-reconcile", ...result, at: Date.now() });
+      },
+      // #558: the host records this so /api/health can say whether this
+      // isolate's chokidar watcher is live or the 30 s sweep is all there is.
+      onWatcherMode: (mode) => {
+        parentPort.postMessage({ type: "watcher-mode", mode, at: Date.now() });
       },
     });
     // Only mark started if the watcher actually entered a running

@@ -24,6 +24,7 @@
 import * as fs from "fs";
 import os from "os";
 import path from "path";
+import { isMainThread, parentPort } from "node:worker_threads";
 
 export const LOG_DIR = path.join(os.homedir(), ".minder", "logs");
 export const LOG_FILE = path.join(LOG_DIR, "minder.log");
@@ -165,6 +166,23 @@ export function serviceLog(entry: LogEntry): void {
   } else {
     // eslint-disable-next-line no-console
     console.log(line);
+  }
+
+  // Inside the ingest worker (`workers/ingestWorker.mjs`) the `active` flag is
+  // never set — `globalThis` is per-isolate and only the main thread runs the
+  // bootstrap — so the file branch below would silently drop every line, and
+  // the console tee above lands on a stdout the tray drains and discards. Hand
+  // the entry to the host instead; `workerHost.absorbWorkerMessage` writes it
+  // (#560: this is how a quarantine that happens on the worker's `initDb`
+  // reaches `minder.log`). Wrapped because `postMessage` throws on values
+  // structured-clone cannot copy (functions, symbols) — a logger never throws.
+  if (!isMainThread && parentPort) {
+    try {
+      parentPort.postMessage({ type: "service-log", entry: { level, ...entry } });
+    } catch {
+      /* console tee already fired */
+    }
+    return;
   }
 
   if (!state.active) return;
