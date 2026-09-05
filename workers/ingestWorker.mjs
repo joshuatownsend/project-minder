@@ -43,8 +43,27 @@ function reportMemory() {
     /* telemetry is best-effort */
   }
 }
+
+// Watcher status the host caches for /api/health (#563). The `started` ack is a
+// one-time snapshot taken with `deferInitialReconcile` still in flight — so
+// `initialReconcileMs` is null and `eventsHandled` 0 there and would stay frozen
+// forever. Re-post the live snapshot on the same cadence so the reconcile
+// duration and event count go current once ingest has been running.
+function reportWatcherStatus() {
+  if (!started || !watcher) return;
+  try {
+    parentPort.postMessage({ type: "watcher-status", ...watcher.getWatcherStatus(), at: Date.now() });
+  } catch {
+    /* telemetry is best-effort */
+  }
+}
+
+function reportTelemetry() {
+  reportMemory();
+  reportWatcherStatus();
+}
 reportMemory();
-setInterval(reportMemory, MEMORY_REPORT_INTERVAL_MS).unref();
+setInterval(reportTelemetry, MEMORY_REPORT_INTERVAL_MS).unref();
 
 try {
   watcher = await import("./dist/ingestWorker.mjs");
@@ -122,6 +141,10 @@ async function handleStart(options) {
       deferInitialReconcile: true,
       onInitialReconcile: (result) => {
         parentPort.postMessage({ type: "initial-reconcile", ...result, at: Date.now() });
+        // Publish the fresh snapshot immediately (#563) so the host's health
+        // fields reflect the completed reconcile without waiting for the next
+        // 60 s tick.
+        reportWatcherStatus();
       },
       // #558: the host records this so /api/health can say whether this
       // isolate's chokidar watcher is live or the 30 s sweep is all there is.

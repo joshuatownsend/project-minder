@@ -219,6 +219,41 @@ describe("workerHost lifecycle", () => {
     expect(respawned).toBe(true);
   }, 10_000);
 
+  it("clears the previous isolate's memory/watcher snapshot on respawn (#563)", async () => {
+    const entry = createInlineWorker(TRIVIAL_WORKER);
+    const host = await reloadHost();
+    await host.startWorker({ workerEntry: entry });
+
+    // Seed cached snapshots as if the (now-doomed) isolate had reported them.
+    const state = (
+      globalThis as {
+        __minderWorker?: {
+          memory: unknown;
+          watcher: unknown;
+        };
+      }
+    ).__minderWorker!;
+    state.memory = { heapTotalMb: 999, heapUsedMb: 999, at: Date.now() };
+    state.watcher = { watcherMode: "chokidar", initialReconcileMs: 12400, eventsHandled: 500 };
+    expect(host.getWorkerStatus().memory).not.toBeNull();
+
+    host.postMessage({ type: "crash" });
+
+    // Once the new isolate is up, the accessors must report null — not the dead
+    // isolate's numbers — until the fresh worker actually reports.
+    const deadline = Date.now() + 5000;
+    let cleared = false;
+    while (Date.now() < deadline) {
+      const s = host.getWorkerStatus();
+      if (s.running && s.crashesLastHour >= 1 && s.memory === null && s.watcher === null) {
+        cleared = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(cleared).toBe(true);
+  }, 10_000);
+
   it("subscriptions survive crash-respawn (subscriber registry)", async () => {
     const entry = createInlineWorker(TRIVIAL_WORKER);
     const host = await reloadHost();

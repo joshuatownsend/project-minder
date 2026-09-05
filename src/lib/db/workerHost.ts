@@ -519,6 +519,21 @@ export function absorbWorkerMessage(
       }
       return;
     }
+    case "watcher-status": {
+      // Periodic live snapshot (#563): keeps initialReconcileMs and
+      // eventsHandled current, since the one-time `started` ack froze them at
+      // null/0 under deferInitialReconcile.
+      state.watcher = watcherSnapshotOf(m);
+      return;
+    }
+    case "initial-reconcile": {
+      // The reconcile finished; record its duration even if the next
+      // `watcher-status` tick hasn't landed yet (#563).
+      if (typeof m.ms === "number" && state.watcher) {
+        state.watcher = { ...state.watcher, initialReconcileMs: m.ms };
+      }
+      return;
+    }
     case "service-log": {
       // The worker's `serviceLog` cannot write the file (its `active` flag is
       // per-isolate), so it forwards the entry; stamp it so the reader can
@@ -547,6 +562,13 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
   const worker = new Worker(entry, { stderr: false, stdout: false });
   state.worker = worker;
   state.startedAt = Date.now();
+  // A crash-respawn reuses this WorkerHostState, so the previous isolate's
+  // memory/watcher snapshots would otherwise be served for the freshly spawned
+  // worker until its first `memory`/`started` message arrives — `/api/health`
+  // reporting a dead isolate's heap and watcherMode (Copilot, PR #563). Clear
+  // them so the accessors report `null` (not stale) until the new worker speaks.
+  state.memory = null;
+  state.watcher = null;
 
   state.readyPromise = new Promise<void>((resolve, reject) => {
     state.readyResolve = resolve;

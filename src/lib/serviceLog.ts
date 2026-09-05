@@ -178,7 +178,10 @@ export function serviceLog(entry: LogEntry): void {
   // structured-clone cannot copy (functions, symbols) — a logger never throws.
   if (!isMainThread && parentPort) {
     try {
-      parentPort.postMessage({ type: "service-log", entry: { level, ...entry } });
+      // `level` last, so the computed default wins even when a caller passes
+      // `level: undefined` explicitly (the spread would otherwise reinstate it
+      // and JSON.stringify would drop the field on the host side).
+      parentPort.postMessage({ type: "service-log", entry: { ...entry, level } });
     } catch {
       /* console tee already fired */
     }

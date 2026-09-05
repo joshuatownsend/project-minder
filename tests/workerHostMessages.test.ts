@@ -49,6 +49,33 @@ describe("absorbWorkerMessage", () => {
     expect(s.watcher).toEqual({ watcherMode: "chokidar", initialReconcileMs: 745076, eventsHandled: 3 });
   });
 
+  it("refreshes the frozen reconcile duration and event count from a later watcher-status (#563)", () => {
+    const s = fresh();
+    // The `started` ack under deferInitialReconcile: reconcile still in flight.
+    absorbWorkerMessage(s, {
+      type: "started",
+      status: { watcherMode: "chokidar", initialReconcileMs: null, eventsHandled: 0 },
+    });
+    expect(s.watcher).toMatchObject({ initialReconcileMs: null, eventsHandled: 0 });
+    // The completion message alone updates the duration.
+    absorbWorkerMessage(s, { type: "initial-reconcile", ms: 12400 });
+    expect(s.watcher).toMatchObject({ initialReconcileMs: 12400, eventsHandled: 0 });
+    // A later periodic snapshot advances the event count.
+    absorbWorkerMessage(s, {
+      type: "watcher-status",
+      watcherMode: "chokidar",
+      initialReconcileMs: 12400,
+      eventsHandled: 318,
+    });
+    expect(s.watcher).toEqual({ watcherMode: "chokidar", initialReconcileMs: 12400, eventsHandled: 318 });
+  });
+
+  it("ignores an initial-reconcile before any watcher snapshot exists", () => {
+    const s = fresh();
+    absorbWorkerMessage(s, { type: "initial-reconcile", ms: 12400 });
+    expect(s.watcher).toBeNull();
+  });
+
   it("rejects an unknown mode value", () => {
     const s = fresh();
     absorbWorkerMessage(s, { type: "watcher-mode", mode: "turbo" });
