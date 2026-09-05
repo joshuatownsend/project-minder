@@ -12,6 +12,8 @@ import {
 import { getDb, getDbSync } from "./connection";
 import { isShuttingDown } from "@/lib/lifecycle";
 import { closeOrphanedIndexerRuns, recordOptionForSweep } from "./indexerRuns";
+import { serviceLog } from "@/lib/serviceLog";
+import type { IngestWatcherMode } from "@/lib/types/init";
 
 // chokidar-driven incremental ingest.
 //
@@ -104,6 +106,13 @@ interface WatcherState {
   eventsHandled: number;
   lastEventAt: number | null;
   errors: number;
+  /**
+   * How JSONL changes reach the index (#558): `chokidar` once the watcher has
+   * reported `ready`; `arming` while chokidar is still scanning past the
+   * ready timeout (events already flow, the sweep covers any gap); `sweep-only`
+   * when chokidar is absent or failed and the 30 s mtime sweep is all there is.
+   */
+  watcherMode: IngestWatcherMode;
 }
 
 const g = globalThis as unknown as {
@@ -160,6 +169,19 @@ export interface StartIngestWatcherOptions {
    * message for observability.
    */
   onInitialReconcile?: (result: { ms: number; error?: string }) => void;
+  /**
+   * How long `startIngestWatcher` waits for chokidar's `ready` before
+   * returning with `watcherMode: "arming"`. Bounds the caller's wait only —
+   * the watcher stays armed and flips to `chokidar` whenever `ready` lands
+   * (#558). Default 30 s; tests pass a few ms to exercise the late-ready path.
+   */
+  readyTimeoutMs?: number;
+  /**
+   * Invoked on every `watcherMode` transition. The worker forwards this to the
+   * host as a `watcher-mode` message so `/api/health` can report the mode of a
+   * watcher running in another isolate.
+   */
+  onWatcherMode?: (mode: IngestWatcherMode) => void;
 }
 
 export interface WatcherStatus {
@@ -172,6 +194,8 @@ export interface WatcherStatus {
   errors: number;
   pending: number;
   inFlight: number;
+  /** See `WatcherState.watcherMode` (#558). `sweep-only` when idle/not running. */
+  watcherMode: IngestWatcherMode;
 }
 
 /**
@@ -256,8 +280,19 @@ export async function startIngestWatcher(
     eventsHandled: 0,
     lastEventAt: null,
     errors: 0,
+    watcherMode: "sweep-only",
   };
   g.__minderIngestWatcher = state;
+
+  const setWatcherMode = (mode: IngestWatcherMode): void => {
+    if (state.watcherMode === mode) return;
+    state.watcherMode = mode;
+    try {
+      options.onWatcherMode?.(mode);
+    } catch {
+      /* observer callback must not destabilize the watcher */
+    }
+  };
 
   const runInitialReconcile = async (): Promise<void> => {
     const t0 = Date.now();
@@ -369,41 +404,109 @@ export async function startIngestWatcher(
   watcher.on("change", onJsonl(scheduleReconcile));
   watcher.on("unlink", onJsonl(scheduleUnlink));
 
-  // Don't return until the initial scan has completed. Race ready
-  // against (a) an emitted error and (b) a 30 s timeout so a malformed
-  // watch path can't block server boot indefinitely.
-  try {
-    await new Promise<void>((resolve, reject) => {
-      pendingErrorReject = reject;
-      const timeout = setTimeout(() => {
-        pendingErrorReject = null;
-        reject(new Error("chokidar ready timeout (30 s)"));
-      }, READY_TIMEOUT_MS);
-      timeout.unref?.();
-      watcher.once("ready", () => {
-        clearTimeout(timeout);
-        pendingErrorReject = null;
-        resolve();
-      });
+  // Wait for the initial scan, but only for so long. `ready` is raced against
+  // (a) an emitted error and (b) a timeout so a malformed watch path can't
+  // block the caller indefinitely.
+  //
+  // **The timeout bounds the wait, not the watcher (#558).** This used to
+  // treat a late `ready` as a failure: close the watcher, null it out, run
+  // sweep-only for the life of the process. But the common way to miss 30 s
+  // is not a broken path — it is chokidar's initial scan of ~8k transcripts
+  // competing for I/O with the deferred initial reconcile that runs alongside
+  // it (12 min after a rebuild, measured on the live tray server), and giving
+  // up there left the packaged build permanently on the 30 s sweep with
+  // nothing outside the process able to tell. Events are already delivered
+  // while the scan runs, and the sweep covers whatever the scan has not
+  // reached, so the right response to a slow scan is to return `arming` and
+  // let `ready` land whenever it lands. A chokidar `error` still means what it
+  // meant: close and fall back for good.
+  const readyTimeoutMs = options.readyTimeoutMs ?? READY_TIMEOUT_MS;
+  let readyTimer: NodeJS.Timeout | null = null;
+  const ready = new Promise<void>((resolve, reject) => {
+    pendingErrorReject = reject;
+    watcher.once("ready", () => {
+      pendingErrorReject = null;
+      resolve();
     });
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[ingest-watcher] failed to reach 'ready': ${(err as Error).message}. ` +
-        `Falling back to sweep-only mode.`
+  });
+  const clearReadyTimer = (): void => {
+    if (readyTimer) clearTimeout(readyTimer);
+    readyTimer = null;
+  };
+  const timeout = new Promise<never>((_, reject) => {
+    readyTimer = setTimeout(
+      () => reject(new ReadyTimeoutError(readyTimeoutMs)),
+      readyTimeoutMs
     );
+    readyTimer.unref?.();
+  });
+  ready.then(clearReadyTimer, clearReadyTimer);
+
+  const fallBackToSweepOnly = async (why: string): Promise<void> => {
+    serviceLog({
+      level: "warn",
+      subsystem: "ingest-watcher",
+      msg: `chokidar failed (${why}); falling back to sweep-only mode`,
+    });
     try {
       await watcher.close();
     } catch {
       /* ignore */
     }
-    state.watcher = null;
-    if (!options.disableSweep) startSweep(state);
-    return snapshot(state);
+    if (state.watcher === watcher) state.watcher = null;
+    setWatcherMode("sweep-only");
+  };
+
+  try {
+    await Promise.race([ready, timeout]);
+    setWatcherMode("chokidar");
+  } catch (err) {
+    if (!(err instanceof ReadyTimeoutError)) {
+      // A real chokidar error before `ready`: the pre-#558 behaviour, unchanged.
+      await fallBackToSweepOnly((err as Error).message);
+      if (!options.disableSweep) startSweep(state);
+      return snapshot(state);
+    }
+    serviceLog({
+      level: "warn",
+      subsystem: "ingest-watcher",
+      msg:
+        `chokidar not ready after ${readyTimeoutMs} ms; watcher stays armed ` +
+        `(initial reconcile in flight: ${state.initialReconcileInFlight}). ` +
+        `Sweep covers the gap until it reports ready.`,
+      readyTimeoutMs,
+      initialReconcileInFlight: state.initialReconcileInFlight,
+    });
+    setWatcherMode("arming");
+    // Whichever way the still-pending race resolves later, record it. Both
+    // branches check the watcher is still the live one: a stop or a restart
+    // in the meantime must not resurrect a closed watcher's mode.
+    ready.then(
+      () => {
+        if (state.watcher !== watcher || state.stopped) return;
+        setWatcherMode("chokidar");
+        serviceLog({
+          level: "info",
+          subsystem: "ingest-watcher",
+          msg: `chokidar reported ready ${Date.now() - state.startedAt} ms after start`,
+        });
+      },
+      (lateErr: Error) => {
+        if (state.watcher !== watcher || state.stopped) return;
+        void fallBackToSweepOnly(lateErr.message);
+      }
+    );
   }
 
   if (!options.disableSweep) startSweep(state);
   return snapshot(state);
+}
+
+class ReadyTimeoutError extends Error {
+  constructor(ms: number) {
+    super(`chokidar ready timeout (${ms} ms)`);
+    this.name = "ReadyTimeoutError";
+  }
 }
 
 /**
@@ -467,6 +570,7 @@ function idleStatus(): WatcherStatus {
     errors: 0,
     pending: 0,
     inFlight: 0,
+    watcherMode: "sweep-only",
   };
 }
 
@@ -481,6 +585,7 @@ function snapshot(state: WatcherState): WatcherStatus {
     errors: state.errors,
     pending: state.pendingTimers.size,
     inFlight: state.inFlight.size,
+    watcherMode: state.watcherMode,
   };
 }
 
