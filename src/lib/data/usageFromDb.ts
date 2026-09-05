@@ -152,9 +152,18 @@ export function sessionIntervalsFromSql(
       cost_usd: number;
     }>;
     for (const r of rows) {
-      const startMs = Date.parse(r.start_ts);
-      const endMs = Date.parse(r.end_ts);
-      if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) continue;
+      const a = Date.parse(r.start_ts);
+      const b = Date.parse(r.end_ts);
+      if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+      // Order the bounds (#563). Ingest stores start_ts/end_ts as the first and
+      // last transcript ENTRIES, not timestamp extrema — and the parser accepts
+      // backward-moving timestamps (there are parity tests for it) — so a raw
+      // forward could yield startMs > endMs. `buildSessionIntervals` took the
+      // min/max over assistant turns and never inverted; match that, or
+      // `commitsInIntervalIndexed` searches an inverted window and can call a
+      // real session abandoned.
+      const startMs = Math.min(a, b);
+      const endMs = Math.max(a, b);
       visit(
         {
           sessionId: r.session_id,

@@ -145,4 +145,18 @@ describe.skipIf(!driverAvailable)("sessionIntervalsFromSql (#559)", () => {
     db.prepare("UPDATE sessions SET end_ts = 'not a date' WHERE session_id = 's1'").run();
     expect(await collect(fromDb.sessionIntervalsFromSql(db))).toHaveLength(0);
   });
+
+  it("orders inverted bounds so a backward-timestamp session never yields startMs > endMs (#563)", async () => {
+    const { db, fromDb } = await setup();
+    // Ingest stores start_ts/end_ts as the first/last transcript entry; a
+    // transcript whose timestamps move backward leaves end_ts before start_ts.
+    db.prepare(
+      "UPDATE sessions SET start_ts = '2026-05-01T10:30:00Z', end_ts = '2026-05-01T10:00:00Z' WHERE session_id = 's1'"
+    ).run();
+    const visits = await collect(fromDb.sessionIntervalsFromSql(db));
+    const s1 = visits.find((v) => v.head.sessionId === "s1")!;
+    expect(s1.intervals[0].startMs).toBeLessThanOrEqual(s1.intervals[0].endMs);
+    expect(s1.intervals[0].startMs).toBe(Date.parse("2026-05-01T10:00:00Z"));
+    expect(s1.intervals[0].endMs).toBe(Date.parse("2026-05-01T10:30:00Z"));
+  });
 });
