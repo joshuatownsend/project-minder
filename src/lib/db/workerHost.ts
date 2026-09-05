@@ -145,7 +145,36 @@ export function resolveDefaultWorkerEntry(cwd: string, serverRoot: string | unde
     : path.join(cwd, "workers", "ingestWorker.mjs");
 }
 
-const g = globalThis as unknown as { __minderWorker?: WorkerHostState };
+const g = globalThis as unknown as {
+  __minderWorker?: WorkerHostState;
+  /**
+   * Crash timestamps that OUTLIVE the host state (#563). When the worker
+   * exhausts its crash budget, `stopWorker()` deletes `__minderWorker` and
+   * ingest falls back to the in-process watcher — but `/api/health` then read
+   * the default status and reported `crashesLastHour: 0` at the exact moment
+   * the fallback fired. This log is pruned by time, not cleared on teardown,
+   * so the count survives the very event the diagnostic exists to show.
+   */
+  __minderWorkerCrashLog?: number[];
+};
+
+/** Record a crash in the teardown-surviving log and return the last-hour count. */
+function recordCrash(): number {
+  const log = (g.__minderWorkerCrashLog ??= []);
+  log.push(Date.now());
+  const cutoff = Date.now() - ONE_HOUR_MS;
+  g.__minderWorkerCrashLog = log.filter((t) => t >= cutoff);
+  return g.__minderWorkerCrashLog.length;
+}
+
+/** Last-hour crash count from the persistent log — valid with or without a live host. */
+function crashesLastHour(): number {
+  const log = g.__minderWorkerCrashLog;
+  if (!log) return 0;
+  const cutoff = Date.now() - ONE_HOUR_MS;
+  g.__minderWorkerCrashLog = log.filter((t) => t >= cutoff);
+  return g.__minderWorkerCrashLog.length;
+}
 
 function freshState(readyTimeoutMs: number, workerEntry: string): WorkerHostState {
   return {
@@ -435,7 +464,10 @@ export function getWorkerStatus(): WorkerHostStatus {
       startedAt: null,
       lastReadyAt: null,
       lastMessageAt: null,
-      crashesLastHour: 0,
+      // From the persistent log, not 0 (#563): after the crash budget is spent
+      // and the host is torn down, health must still show the crashes that
+      // caused the fallback to the in-process watcher.
+      crashesLastHour: crashesLastHour(),
       workerEntry: "",
       memory: null,
       watcher: null,
@@ -475,7 +507,9 @@ function snapshot(state: WorkerHostState): WorkerHostStatus {
     startedAt: state.startedAt,
     lastReadyAt: state.lastReadyAt,
     lastMessageAt: state.lastMessageAt,
-    crashesLastHour: pruneCrashHistory(state),
+    // Reconcile the per-state budget history with the persistent log so both
+    // status paths report the same number (#563).
+    crashesLastHour: Math.max(pruneCrashHistory(state), crashesLastHour()),
     workerEntry: state.workerEntry,
     memory: state.worker !== null ? state.memory : null,
     watcher: state.worker !== null ? state.watcher : null,
@@ -662,6 +696,9 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
     if (g.__minderWorker !== state) return;
 
     state.crashHistory.push(Date.now());
+    // Also record in the teardown-surviving log so the count outlives the
+    // crash-budget fallback that deletes this state (#563).
+    recordCrash();
     const crashes = pruneCrashHistory(state);
     // Through the service log, not bare console.warn: this runs on the main
     // thread, and a crash/respawn is exactly the event that must be findable

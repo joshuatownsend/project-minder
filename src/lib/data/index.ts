@@ -42,6 +42,7 @@ import type { UsageReport, AgentStats, SkillStats, UsageComparison } from "@/lib
 import { getPeriodStart } from "@/lib/usage/periods";
 import type { Period } from "@/lib/usage/constants";
 import type { AggregatorPeriod } from "@/lib/usage/period";
+import { createSerialGate } from "@/lib/serialGate";
 import type {
   SessionDetail,
   SessionSummary,
@@ -735,34 +736,53 @@ export async function getUsage(
   if (await checkBuildStateFallback("getUsage", db)) {
     return runFileUsage(period, project, source, home);
   }
-  const t0 = Date.now();
-  // readonlySnapshot: the route path reads a consistent snapshot on an
-  // isolated connection and yields between queries, so a reconcile committing
-  // mid-report can't make totals and breakdowns disagree (#563) and the event
-  // loop / health probe stays responsive (#559).
-  const report = await callDbLoader("getUsage", () =>
-    loadUsageReportFromSql(db, period, project, source, home, { readonlySnapshot: true })
-  );
-  const t1 = Date.now();
-  // The SQL source, not the default file sweep (#559): a SQL report must not
-  // cost a corpus re-parse on the way out.
-  if (!project) {
-    const scope = { source, home };
-    await augmentPortfolioYield(report, scope, sessionIntervalsFromSql(db, scope));
-  }
-  return {
-    report,
-    meta: {
-      backend: "db",
-      maxMtimeMs: getDbMaxMtimeMs(db),
-      timings: {
-        readyMs: tReady - tStart,
-        gatesMs: t0 - tReady,
-        sqlMs: t1 - t0,
-        yieldMs: Date.now() - t1,
+  // Serialize DB report generation across concurrent callers (#563). Yielding
+  // between queries (#559) means several overlapping `/api/usage` cache misses
+  // — e.g. the group Costs page firing one request per usage key — would each
+  // hold an open snapshot connection and its accumulated aggregate arrays at
+  // once, multiplying memory and DB work on a large corpus and potentially
+  // tripping the RSS guard. The synchronous version serialized these; the gate
+  // restores that bound while each report still yields internally, so health
+  // stays responsive. File-parse/demo paths above are unaffected.
+  return serializeDbUsageReport(async () => {
+    const t0 = Date.now();
+    // readonlySnapshot: the route path reads a consistent snapshot on an
+    // isolated connection and yields between queries, so a reconcile committing
+    // mid-report can't make totals and breakdowns disagree (#563) and the event
+    // loop / health probe stays responsive (#559).
+    const report = await callDbLoader("getUsage", () =>
+      loadUsageReportFromSql(db, period, project, source, home, { readonlySnapshot: true })
+    );
+    const t1 = Date.now();
+    // The SQL source, not the default file sweep (#559): a SQL report must not
+    // cost a corpus re-parse on the way out.
+    if (!project) {
+      const scope = { source, home };
+      await augmentPortfolioYield(report, scope, sessionIntervalsFromSql(db, scope));
+    }
+    return {
+      report,
+      meta: {
+        backend: "db" as const,
+        maxMtimeMs: getDbMaxMtimeMs(db),
+        timings: {
+          readyMs: tReady - tStart,
+          gatesMs: t0 - tReady,
+          sqlMs: t1 - t0,
+          yieldMs: Date.now() - t1,
+        },
       },
-    },
-  };
+    };
+  });
+}
+
+/**
+ * Runs DB usage reports one at a time (#563), module-scoped so it spans all
+ * `getUsage` callers. See `serialGate.ts` for why.
+ */
+const dbUsageReportGate = createSerialGate();
+function serializeDbUsageReport<T>(fn: () => Promise<T>): Promise<T> {
+  return dbUsageReportGate.run(fn);
 }
 
 export interface EngagementResult {
