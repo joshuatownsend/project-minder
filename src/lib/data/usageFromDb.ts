@@ -326,6 +326,7 @@ export async function loadUsageReportFromSql(
   const conn = snap ?? db;
   const yielding = snap !== null;
 
+  let parts: UsageReportParts;
   try {
     if (snap) snap.exec("BEGIN DEFERRED"); // pins the snapshot at the first read
     // Inside the try so the finally below always closes `snap` — a BEGIN that
@@ -382,7 +383,7 @@ export async function loadUsageReportFromSql(
       );
     }
 
-    return buildUsageReport({
+    parts = {
       period,
       totals,
       bySource,
@@ -406,7 +407,7 @@ export async function loadUsageReportFromSql(
       streak,
       contributionCalendar,
       subagent,
-    });
+    };
   } finally {
     if (snap) {
       try {
@@ -417,6 +418,12 @@ export async function loadUsageReportFromSql(
       snap.close();
     }
   }
+  // Assemble AFTER the snapshot connection has closed in the finally above
+  // (Copilot, PR #563): the assembly is pure and touches no DB, so it needn't
+  // hold the read transaction open. `parts!` is safe — a throw in the try
+  // propagates through the finally and never reaches here, so this line runs
+  // only when `parts` was assigned.
+  return buildUsageReport(parts!);
 }
 
 interface UsageReportParts {
