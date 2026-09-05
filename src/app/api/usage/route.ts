@@ -1,12 +1,13 @@
 import { NextRequest } from "next/server";
 import { validatePeriod } from "@/lib/usage/constants";
-import { getUsage, dbModeRequested } from "@/lib/data";
+import { getUsage, dbModeRequested, type UsageBackendMeta } from "@/lib/data";
 import { computeETag, ifNoneMatch, jsonWithETag } from "@/lib/httpCache";
 import type { UsageReport } from "@/lib/usage/types";
 import { getOrCreateRouteCache } from "@/lib/routeCache";
 import { demoMode } from "@/lib/demo/demoMode";
 import { readConfig } from "@/lib/config";
 import { normalizePathKey } from "@/lib/platform";
+import { logSlowRoute } from "@/lib/slowRouteLog";
 
 const CACHE_TTL = 2 * 60_000;
 
@@ -21,11 +22,14 @@ interface UsageCacheSlot {
   // the served bytes stayed identical.
   maxMtime: number;
   backend: "db" | "file";
+  /** DB-path breakdown for the slow-response line (#559). */
+  timings?: UsageBackendMeta["timings"];
 }
 
 const cache = getOrCreateRouteCache<UsageCacheSlot>("usage", { ttlMs: CACHE_TTL });
 
 export async function GET(request: NextRequest) {
+  const startedAt = Date.now();
   const params = request.nextUrl.searchParams;
   const safePeriod = validatePeriod(params.get("period") || "30d");
   const project = params.get("project") || undefined;
@@ -66,6 +70,7 @@ export async function GET(request: NextRequest) {
       cachedAt: Date.now(),
       maxMtime: meta.maxMtimeMs,
       backend: meta.backend,
+      timings: meta.timings,
     };
     cache.set(cacheKey, slot);
   }
@@ -102,6 +107,18 @@ export async function GET(request: NextRequest) {
       homesSig,
       String(slot.cachedAt),
     ],
+  });
+
+  // #559: a usage response that took longer than SLOW_ROUTE_MS leaves a line
+  // in minder.log with enough to reproduce it. Cache hits are cheap and only
+  // appear here if something else stalled the event loop, which is itself
+  // worth knowing.
+  logSlowRoute("/api/usage", startedAt, {
+    period: safePeriod,
+    project: project ?? null,
+    backend: slot.backend,
+    cacheHit: cached !== undefined,
+    ...(slot.timings ?? {}),
   });
 
   const notModified = ifNoneMatch(request, etag);

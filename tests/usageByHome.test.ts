@@ -221,7 +221,7 @@ describe.skipIf(!driverAvailable)("home_key end-to-end: multi-home ingest → SQ
 
     // toSlug drops the leading dash of POSIX-encoded dirnames.
     const slug = "home-me-dev-app";
-    const all = mods.fromDb.loadUsageReportFromSql(db, "all", slug);
+    const all = await mods.fromDb.loadUsageReportFromSql(db, "all", slug);
     expect(all.totalTokens).toBe(400);
     // One byProject row per (slug, home), each carrying its homeKey.
     expect(all.byProject).toHaveLength(2);
@@ -229,13 +229,13 @@ describe.skipIf(!driverAvailable)("home_key end-to-end: multi-home ingest → SQ
       new Set([primaryKey, extraKey])
     );
 
-    const onlyPrimary = mods.fromDb.loadUsageReportFromSql(db, "all", slug, undefined, primaryKey);
+    const onlyPrimary = await mods.fromDb.loadUsageReportFromSql(db, "all", slug, undefined, primaryKey);
     expect(onlyPrimary.totalTokens).toBe(100);
     expect(onlyPrimary.totalSessions).toBe(1);
     expect(onlyPrimary.byProject).toHaveLength(1);
     expect(onlyPrimary.byProject[0].homeKey).toBe(primaryKey);
 
-    const onlyExtra = mods.fromDb.loadUsageReportFromSql(db, "all", slug, undefined, extraKey);
+    const onlyExtra = await mods.fromDb.loadUsageReportFromSql(db, "all", slug, undefined, extraKey);
     expect(onlyExtra.totalTokens).toBe(300);
     expect(onlyExtra.totalSessions).toBe(1);
 
@@ -291,7 +291,7 @@ describe.skipIf(!driverAvailable)("#236 — one row per project, not per dir-nam
       insertTurn.run(id, "2025-01-01T10:00:00Z", tokens, cost);
     }
 
-    const report = mods.fromDb.loadUsageReportFromSql(db, "all", slug);
+    const report = await mods.fromDb.loadUsageReportFromSql(db, "all", slug);
 
     // One row, and it carries the SUM of both spellings — folding must not
     // drop a variant's spend, which is the failure mode that would make this
@@ -363,7 +363,7 @@ describe.skipIf(!driverAvailable)("#236 — one row per project, not per dir-nam
       insertTurn.run(id, "2025-01-01T10:00:00Z", tokens, cost);
     }
 
-    const report = mods.fromDb.loadUsageReportFromSql(db, "all", slug);
+    const report = await mods.fromDb.loadUsageReportFromSql(db, "all", slug);
     const byHome = new Map(report.byProject.map((r) => [r.tokens, r]));
 
     // The case-INSENSITIVE home: one row carrying both spellings' spend.
@@ -412,7 +412,7 @@ describe.skipIf(!driverAvailable)("#236 — one row per project, not per dir-nam
       "2025-01-01T10:00:00Z", "2025-01-01T10:05:00Z");
     insertTurn.run("b", "2025-01-01T10:00:00Z", 300, 3);
 
-    const report = mods.fromDb.loadUsageReportFromSql(db, "all", slug);
+    const report = await mods.fromDb.loadUsageReportFromSql(db, "all", slug);
     expect(report.byProject).toHaveLength(2);
 
     mods.conn.closeDb();
@@ -456,7 +456,7 @@ describe.skipIf(!driverAvailable)("#236 — one row per project, not per dir-nam
       insertTurn.run(id, "2025-01-01T10:00:00Z", tokens, cost);
     }
 
-    const report = mods.fromDb.loadUsageReportFromSql(db, "all", slug);
+    const report = await mods.fromDb.loadUsageReportFromSql(db, "all", slug);
 
     expect(report.byProject).toHaveLength(2);
     expect(new Set(report.byProject.map((r) => r.projectDirName))).toEqual(
@@ -504,7 +504,7 @@ describe.skipIf(!driverAvailable)("#236 — one row per project, not per dir-nam
       insertTurn.run(id, "2025-01-01T10:00:00Z", tokens, cost);
     }
 
-    const report = mods.fromDb.loadUsageReportFromSql(db, "all", slug);
+    const report = await mods.fromDb.loadUsageReportFromSql(db, "all", slug);
     expect(report.byProject).toHaveLength(2);
     expect(new Set(report.byProject.map((r) => r.tokens))).toEqual(new Set([100, 300]));
 
@@ -550,7 +550,7 @@ describe.skipIf(!driverAvailable)("#236 — one row per project, not per dir-nam
       insertTurn.run(id, "2025-01-01T10:00:00Z", tokens, cost);
     }
 
-    const report = mods.fromDb.loadUsageReportFromSql(db, "all", slug);
+    const report = await mods.fromDb.loadUsageReportFromSql(db, "all", slug);
     expect(report.byProject).toHaveLength(1);
     expect(report.byProject[0].tokens).toBe(400);
     expect(report.byProject[0].cost).toBeCloseTo(4);

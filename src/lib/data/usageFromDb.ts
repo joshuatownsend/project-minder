@@ -23,6 +23,7 @@ import type {
 } from "@/lib/usage/types";
 import { getAdapterDisplayNameMap } from "@/lib/adapters";
 import { parseStoredArgs } from "@/lib/db/storedArgs";
+import type { SessionIntervalSource, SessionMapScope } from "@/lib/usage/aggregator";
 import { periodSinceIso } from "@/lib/usage/period";
 import { UNKNOWN_EFFORT, compareEffort } from "@/lib/usage/effort";
 import {
@@ -97,6 +98,77 @@ export function getDbMaxMtimeMs(db: DatabaseT.Database): number {
  * flag is set; the façade falls back to file-parse so /api/usage stays
  * accurate during the v3 catch-up window.
  */
+/**
+ * Session intervals for the yield augmentation, from the index (#559).
+ *
+ * `augmentPortfolioYield` used to re-sweep every JSONL transcript after a SQL
+ * report — 54–111 s per `/api/usage` call on an 8.7k-transcript corpus, for
+ * every period including `today`, with the event loop (and `/api/health`)
+ * blocked for the parse. This reads the same reduction from `sessions`:
+ * measured at ~80 ms warm on the same 1.1 GB index. A `turns`-level
+ * `GROUP BY session_id` reproducing the file path's assistant-only span was
+ * 3.5–6.5 s synchronous, which is a smaller version of the same event-loop
+ * problem, so the session-level columns are used instead. Two documented
+ * differences from `buildSessionIntervals` over the files:
+ *
+ *   - `start_ts`/`end_ts` span every entry in the transcript, not only
+ *     assistant turns. A session starts a few seconds earlier (the first user
+ *     prompt) and the commit-alignment window widens by that much.
+ *   - `cost_usd` is the session's ingest-time total including delegated
+ *     (sidechain) spend, where the file path summed primary turns at
+ *     request-time pricing.
+ *
+ * Sessions the file path never visits are excluded here too: `streamAllSessions`
+ * drops sidechain turns and `buildSessionIntervals` reads assistant turns only,
+ * so a transcript with no primary assistant turn (a user-only session, a
+ * delegated-agent transcript) contributes nothing there. `assistant_turn_count`
+ * counts exactly those primary assistant turns at ingest, so `> 0` is the same
+ * set — on the real index 5,294 of 8,335 rows; without the predicate portfolio
+ * yield's `totalSessions` would inflate by roughly a third on the DB path.
+ * Rows with no recorded span are skipped for the same reason.
+ */
+export function sessionIntervalsFromSql(
+  db: DatabaseT.Database,
+  scope: SessionMapScope = {}
+): SessionIntervalSource {
+  return async (visit) => {
+    const rows = prepCached(
+      db,
+      `SELECT session_id, project_slug, project_dir_name, home_key, source,
+              start_ts, end_ts, COALESCE(cost_usd, 0) AS cost_usd
+         FROM sessions
+        WHERE start_ts IS NOT NULL AND end_ts IS NOT NULL
+          AND assistant_turn_count > 0
+          AND (@source IS NULL OR source = @source)
+          AND (@home IS NULL OR home_key = @home)`
+    ).iterate({ source: scope.source ?? null, home: scope.home ?? null }) as IterableIterator<{
+      session_id: string;
+      project_slug: string;
+      project_dir_name: string;
+      home_key: string | null;
+      source: string | null;
+      start_ts: string;
+      end_ts: string;
+      cost_usd: number;
+    }>;
+    for (const r of rows) {
+      const startMs = Date.parse(r.start_ts);
+      const endMs = Date.parse(r.end_ts);
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) continue;
+      visit(
+        {
+          sessionId: r.session_id,
+          projectSlug: r.project_slug,
+          projectDirName: r.project_dir_name,
+          homeKey: r.home_key ?? undefined,
+          source: r.source ?? undefined,
+        },
+        () => [{ sessionId: r.session_id, startMs, endMs, costUsd: r.cost_usd }]
+      );
+    }
+  };
+}
+
 export function needsReconcileAfterV3(db: DatabaseT.Database): boolean {
   const row = prepCached(db, "SELECT value FROM meta WHERE key = 'needs_reconcile_after_v3'")
     .get() as { value?: string } | undefined;
@@ -195,13 +267,13 @@ interface FilterParams {
  * Build a UsageReport entirely from SQL aggregates. Single read-side
  * entry point for the SQL backend.
  */
-export function loadUsageReportFromSql(
+export async function loadUsageReportFromSql(
   db: DatabaseT.Database,
   period: string,
   project?: string,
   source?: string,
   home?: string
-): UsageReport {
+): Promise<UsageReport> {
   const periodStart = periodStartIso(period);
   const filter: FilterParams = {
     periodStart,
@@ -211,28 +283,70 @@ export function loadUsageReportFromSql(
     home: home ?? null,
   };
 
-  const totals = queryTotals(db, filter);
-  const bySource = queryBySource(db, filter);
-  const byModel = queryByModel(db, filter);
-  const byProject = queryByProject(db, filter);
-  const byCategory = queryByCategory(db, filter);
-  const byEffort = queryByEffort(db, filter);
-  const byEntrypoint = queryByEntrypoint(db, filter);
-  const bySkillCost = queryBySkillCost(db, filter);
-  const byMcpCost = queryByMcpCost(db, filter);
-  const daily = queryDaily(db, filter);
-  const topTools = queryTopTools(db, filter);
-  const toolFlow = queryToolTransitions(db, filter);
-  const mcpStats = queryMcpStats(db, filter);
-  const shellStats = queryShellStats(db, filter);
-  const oneShot = queryOneShot(db, filter);
-  const projectDetails = queryProjectDetails(db, filter);
-  const activityTurns = queryActivityTurns(db, filter);
+  // Every query below is synchronous (better-sqlite3), so this function used
+  // to hold the event loop for their sum — 47 s for `period=all` on a 252k-turn
+  // index, during which `/api/health` could not answer and the tray's 4 s
+  // probe reported the server down (#559). `timed` now yields to the event
+  // loop (one `setImmediate` turn) before each query, so a health probe or an
+  // OTEL post waits for at most one query rather than all seventeen. The
+  // per-query cost itself was cut two ways in the same change:
+  //
+  //   - `(@periodStart IS NULL OR t.ts >= @periodStart)` defeated the
+  //     `(role, ts)` index — SQLite cannot use a range constraint inside an OR
+  //     on a parameter — so every query scanned every assistant turn whatever
+  //     the period. `t.ts >= COALESCE(@periodStart, '')` is the same predicate
+  //     (no `ts` is NULL) with the index usable: `today` went from 47 s to 5 s.
+  //   - Queries that start from `tool_uses` gained `t.role = 'assistant'` (an
+  //     ingest invariant: tool uses live on assistant turns), which lets the
+  //     planner drive from the turns index instead of scanning `tool_uses`:
+  //     2.3 s → 0.16 s each.
+  //
+  // What remains for `all`/`1y` is the join itself over most of the corpus
+  // (~3 s per query, ~50 s total); that needs rollup tables or a query worker
+  // and is tracked separately. `MINDER_USAGE_PROFILE=1` prints one line per
+  // report with each query's wall time, sorted, for the next round.
+  const profile = process.env.MINDER_USAGE_PROFILE === "1";
+  const marks: Array<[string, number]> = [];
+  const timed = async <T>(name: string, run: () => T): Promise<T> => {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    if (!profile) return run();
+    const t = Date.now();
+    const out = run();
+    marks.push([name, Date.now() - t]);
+    return out;
+  };
+
+  const totals = await timed("totals", () => queryTotals(db, filter));
+  const bySource = await timed("bySource", () => queryBySource(db, filter));
+  const byModel = await timed("byModel", () => queryByModel(db, filter));
+  const byProject = await timed("byProject", () => queryByProject(db, filter));
+  const byCategory = await timed("byCategory", () => queryByCategory(db, filter));
+  const byEffort = await timed("byEffort", () => queryByEffort(db, filter));
+  const byEntrypoint = await timed("byEntrypoint", () => queryByEntrypoint(db, filter));
+  const bySkillCost = await timed("bySkillCost", () => queryBySkillCost(db, filter));
+  const byMcpCost = await timed("byMcpCost", () => queryByMcpCost(db, filter));
+  const daily = await timed("daily", () => queryDaily(db, filter));
+  const topTools = await timed("topTools", () => queryTopTools(db, filter));
+  const toolFlow = await timed("toolTransitions", () => queryToolTransitions(db, filter));
+  const mcpStats = await timed("mcpStats", () => queryMcpStats(db, filter));
+  const shellStats = await timed("shellStats", () => queryShellStats(db, filter));
+  const oneShot = await timed("oneShot", () => queryOneShot(db, filter));
+  const projectDetails = await timed("projectDetails", () => queryProjectDetails(db, filter));
+  const activityTurns = await timed("activityTurns", () => queryActivityTurns(db, filter));
   const { byHourOfDay, byDayOfWeek, byHourDay } = bucketByHourDay(activityTurns);
   const streak = computeStreaks(activityTurns);
   const contributionCalendar = computeContributionCalendar(activityTurns);
 
-  const subagent = querySubagentTotals(db, filter);
+  const subagent = await timed("subagent", () => querySubagentTotals(db, filter));
+
+  if (profile) {
+    marks.sort((a, b) => b[1] - a[1]);
+    // eslint-disable-next-line no-console
+    console.log(
+      `[usage-profile] period=${period} project=${project ?? "-"} total=${marks.reduce((s, m) => s + m[1], 0)}ms ` +
+        marks.map(([n, ms]) => `${n}=${ms}`).join(" ")
+    );
+  }
 
   const totalTokens =
     totals.input_tokens + totals.output_tokens + totals.cache_create_tokens + totals.cache_read_tokens;
@@ -299,7 +413,7 @@ function querySubagentTotals(
        FROM turns t JOIN sessions s USING (session_id)
        WHERE t.role = 'assistant'
          AND t.is_sidechain = 1
-         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)`
@@ -335,7 +449,7 @@ function queryTotals(db: DatabaseT.Database, f: FilterParams): TotalsRow {
          COUNT(*)                                AS assistant_turns
        FROM turns t JOIN sessions s USING (session_id)
        WHERE t.role = 'assistant'
-         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)`
@@ -344,7 +458,7 @@ function queryTotals(db: DatabaseT.Database, f: FilterParams): TotalsRow {
   const sRow = prepCached(db,
       `SELECT COUNT(DISTINCT t.session_id) AS distinct_sessions
        FROM turns t JOIN sessions s USING (session_id)
-       WHERE (@periodStart IS NULL OR t.ts >= @periodStart)
+       WHERE t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)`
@@ -363,7 +477,7 @@ function queryBySource(db: DatabaseT.Database, f: FilterParams): SourceBreakdown
          COUNT(DISTINCT t.session_id) AS sessionCount
        FROM turns t JOIN sessions s USING (session_id)
        WHERE t.role = 'assistant'
-         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
@@ -398,7 +512,7 @@ function queryByModel(db: DatabaseT.Database, f: FilterParams): ModelCost[] {
          COUNT(*)                                AS turns
        FROM turns t JOIN sessions s USING (session_id)
        WHERE t.role = 'assistant'
-         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
@@ -438,7 +552,7 @@ function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdo
          COUNT(*)                     AS turns
        FROM turns t JOIN sessions s USING (session_id)
        WHERE t.role = 'assistant'
-         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
@@ -510,7 +624,7 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
          FROM turns t JOIN sessions s USING (session_id)
          WHERE t.role = 'assistant'
            AND t.category IS NOT NULL
-           AND (@periodStart IS NULL OR t.ts >= @periodStart)
+           AND t.ts >= COALESCE(@periodStart, '')
            AND (@project IS NULL OR s.project_slug = @project)
            AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
@@ -546,7 +660,7 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
          COALESCE(SUM(tokens), 0)   AS tokens,
          COALESCE(SUM(cost_usd), 0) AS cost
        FROM category_costs
-       WHERE (@startDay IS NULL OR day >= @startDay)
+       WHERE day >= COALESCE(@startDay, '')
          AND (@project IS NULL OR project_slug = @project)
        GROUP BY category
        ORDER BY cost DESC, category ASC`
@@ -597,7 +711,7 @@ function queryCategoryTasks(
          AND t.category IS NOT NULL
          AND t.task_outcome IS NOT NULL
          AND t.is_sidechain = 0
-         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
        GROUP BY t.category`
     )
@@ -637,7 +751,7 @@ function queryByEffort(db: DatabaseT.Database, f: FilterParams): EffortBreakdown
          SUM(CASE WHEN t.task_outcome = 'one_shot'  AND t.is_sidechain = 0 THEN 1 ELSE 0 END) AS oneShotTasks
        FROM turns t JOIN sessions s USING (session_id)
        WHERE t.role = 'assistant'
-         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
@@ -699,7 +813,7 @@ function queryByEntrypoint(db: DatabaseT.Database, f: FilterParams): EntrypointB
                                       AS backgroundSessions
        FROM turns t JOIN sessions s USING (session_id)
        WHERE t.role = 'assistant'
-         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
@@ -755,7 +869,7 @@ function queryBySkillCost(db: DatabaseT.Database, f: FilterParams): SkillCost[] 
        FROM turns t JOIN sessions s USING (session_id)
        WHERE t.role = 'assistant'
          AND t.attribution_skill IS NOT NULL AND t.attribution_skill <> ''
-         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
@@ -788,7 +902,7 @@ function queryBySkillCost(db: DatabaseT.Database, f: FilterParams): SkillCost[] 
            JOIN sessions s ON s.session_id = t.session_id
            WHERE t.role = 'assistant'
              AND tu.skill_name IS NOT NULL AND tu.skill_name <> ''
-             AND (@periodStart IS NULL OR t.ts >= @periodStart)
+             AND t.ts >= COALESCE(@periodStart, '')
              AND (@project IS NULL OR s.project_slug = @project)
              AND (@source IS NULL OR s.source = @source)
              AND (@home IS NULL OR s.home_key = @home)
@@ -832,7 +946,7 @@ function queryByMcpCost(db: DatabaseT.Database, f: FilterParams): McpServerCost[
        FROM turns t JOIN sessions s USING (session_id)
        WHERE t.role = 'assistant'
          AND t.attribution_mcp_server IS NOT NULL AND t.attribution_mcp_server <> ''
-         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
@@ -877,7 +991,7 @@ function queryByMcpCost(db: DatabaseT.Database, f: FilterParams): McpServerCost[
            JOIN sessions s ON s.session_id = t.session_id
            WHERE t.role = 'assistant'
              AND tu.mcp_server IS NOT NULL AND tu.mcp_server <> ''
-             AND (@periodStart IS NULL OR t.ts >= @periodStart)
+             AND t.ts >= COALESCE(@periodStart, '')
              AND (@project IS NULL OR s.project_slug = @project)
              AND (@source IS NULL OR s.source = @source)
              AND (@home IS NULL OR s.home_key = @home)
@@ -933,7 +1047,7 @@ function queryDaily(db: DatabaseT.Database, f: FilterParams): DailyBucket[] {
       `SELECT t.ts AS ts, t.cost_usd AS cost, t.input_tokens AS inputTokens, t.output_tokens AS outputTokens
        FROM turns t JOIN sessions s USING (session_id)
        WHERE t.role = 'assistant'
-         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)`
@@ -959,8 +1073,8 @@ function queryTopTools(db: DatabaseT.Database, f: FilterParams): [string, number
        FROM tool_uses tu
        JOIN turns t USING (session_id, turn_index)
        JOIN sessions s ON s.session_id = t.session_id
-       WHERE tu.tool_name NOT LIKE 'mcp__%'
-         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+       WHERE t.role = 'assistant' AND tu.tool_name NOT LIKE 'mcp__%'
+         AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
@@ -1030,7 +1144,7 @@ function queryToolTransitions(
          JOIN sessions s ON s.session_id = t.session_id
         WHERE t.role = 'assistant'
           AND t.is_sidechain = 0
-          AND (@periodStart IS NULL OR t.ts >= @periodStart)
+          AND t.ts >= COALESCE(@periodStart, '')
           AND (@project IS NULL OR s.project_slug = @project)
           AND (@source IS NULL OR s.source = @source)
           AND (@home IS NULL OR s.home_key = @home)
@@ -1078,8 +1192,8 @@ function queryMcpStats(db: DatabaseT.Database, f: FilterParams): McpServerStats[
        FROM tool_uses tu
        JOIN turns t USING (session_id, turn_index)
        JOIN sessions s ON s.session_id = t.session_id
-       WHERE tu.mcp_server IS NOT NULL
-         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+       WHERE t.role = 'assistant' AND tu.mcp_server IS NOT NULL
+         AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
@@ -1138,8 +1252,8 @@ function queryShellStats(db: DatabaseT.Database, f: FilterParams) {
        FROM tool_uses tu
        JOIN turns t USING (session_id, turn_index)
        JOIN sessions s ON s.session_id = t.session_id
-       WHERE tu.tool_name IN ('Bash', 'PowerShell')
-         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+       WHERE t.role = 'assistant' AND tu.tool_name IN ('Bash', 'PowerShell')
+         AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)`
@@ -1203,7 +1317,7 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
          COUNT(*)                     AS turns
        FROM turns t JOIN sessions s USING (session_id)
        WHERE t.role = 'assistant'
-         AND (@periodStart IS NULL OR t.ts >= @periodStart)
+         AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
@@ -1270,7 +1384,7 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
        FROM tool_uses tu
        JOIN turns t USING (session_id, turn_index)
        JOIN sessions s ON s.session_id = t.session_id
-       WHERE tu.tool_name NOT LIKE 'mcp__%'
+       WHERE t.role = 'assistant' AND tu.tool_name NOT LIKE 'mcp__%'
          AND (? IS NULL OR t.ts >= ?)
          AND (? IS NULL OR s.home_key = ?)
          AND s.project_slug IN (${placeholders})
@@ -1291,7 +1405,7 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
        FROM tool_uses tu
        JOIN turns t USING (session_id, turn_index)
        JOIN sessions s ON s.session_id = t.session_id
-       WHERE tu.mcp_server IS NOT NULL
+       WHERE t.role = 'assistant' AND tu.mcp_server IS NOT NULL
          AND (? IS NULL OR t.ts >= ?)
          AND (? IS NULL OR s.home_key = ?)
          AND s.project_slug IN (${placeholders})

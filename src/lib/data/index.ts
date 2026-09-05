@@ -12,6 +12,7 @@ import {
   buildNotComparable,
   getDbMaxMtimeMs,
   needsReconcileAfterV3,
+  sessionIntervalsFromSql,
 } from "./usageFromDb";
 import { loadEngagementReportFromSql } from "./engagementFromDb";
 import { getIndexBuildState, isRebuildInProgress } from "@/lib/db/indexerRuns";
@@ -459,6 +460,12 @@ export interface UsageBackendMeta {
   backend: "db" | "file";
   /** Max input mtime — feeds ETag computation upstream. */
   maxMtimeMs: number;
+  /**
+   * Where the time went (#559), for the route's slow-response line. DB path
+   * only: `sqlMs` is the synchronous report load, `yieldMs` the portfolio-yield
+   * augmentation (session intervals plus one `git log` per project).
+   */
+  timings?: { readyMs: number; gatesMs: number; sqlMs: number; yieldMs: number };
 }
 
 export interface UsageResult {
@@ -710,7 +717,9 @@ export async function getUsage(
   if (await demoMode()) return demoUsage(period, project, Date.now(), source);
   if (!dbModeRequested()) return runFileUsage(period, project, source, home);
 
+  const tStart = Date.now();
   const db = await getReadyDb();
+  const tReady = Date.now();
   if (await checkV3Gate("getUsage", db)) {
     logIntentionalFallthrough(
       "getUsage",
@@ -726,11 +735,30 @@ export async function getUsage(
   if (await checkBuildStateFallback("getUsage", db)) {
     return runFileUsage(period, project, source, home);
   }
+  const t0 = Date.now();
   const report = await callDbLoader("getUsage", () =>
     loadUsageReportFromSql(db, period, project, source, home)
   );
-  if (!project) await augmentPortfolioYield(report, { source, home });
-  return { report, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
+  const t1 = Date.now();
+  // The SQL source, not the default file sweep (#559): a SQL report must not
+  // cost a corpus re-parse on the way out.
+  if (!project) {
+    const scope = { source, home };
+    await augmentPortfolioYield(report, scope, sessionIntervalsFromSql(db, scope));
+  }
+  return {
+    report,
+    meta: {
+      backend: "db",
+      maxMtimeMs: getDbMaxMtimeMs(db),
+      timings: {
+        readyMs: tReady - tStart,
+        gatesMs: t0 - tReady,
+        sqlMs: t1 - t0,
+        yieldMs: Date.now() - t1,
+      },
+    },
+  };
 }
 
 export interface EngagementResult {
