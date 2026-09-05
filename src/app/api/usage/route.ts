@@ -8,6 +8,7 @@ import { demoMode } from "@/lib/demo/demoMode";
 import { readConfig } from "@/lib/config";
 import { normalizePathKey } from "@/lib/platform";
 import { logSlowRoute } from "@/lib/slowRouteLog";
+import { createSingleFlight, type SingleFlight } from "@/lib/singleFlight";
 
 const CACHE_TTL = 2 * 60_000;
 
@@ -27,6 +28,14 @@ interface UsageCacheSlot {
 }
 
 const cache = getOrCreateRouteCache<UsageCacheSlot>("usage", { ttlMs: CACHE_TTL });
+
+/**
+ * In-flight report builds keyed by cache key (#563), so two concurrent misses
+ * for the same key share one build instead of each running the ~50s aggregate.
+ * On `globalThis` to survive Next.js HMR module reloads, like the caches here.
+ */
+const inflightUsage = ((globalThis as { __minderUsageInflight?: SingleFlight<UsageCacheSlot> })
+  .__minderUsageInflight ??= createSingleFlight<UsageCacheSlot>());
 
 export async function GET(request: NextRequest) {
   const startedAt = Date.now();
@@ -61,18 +70,29 @@ export async function GET(request: NextRequest) {
   const cached = cache.get(cacheKey);
 
   let slot: UsageCacheSlot;
+  const cacheHit = cached !== undefined;
   if (cached) {
     slot = cached;
   } else {
-    const { report, meta } = await getUsage(safePeriod, project, source, home);
-    slot = {
-      report,
-      cachedAt: Date.now(),
-      maxMtime: meta.maxMtimeMs,
-      backend: meta.backend,
-      timings: meta.timings,
-    };
-    cache.set(cacheKey, slot);
+    // Coalesce identical in-flight misses (#563). Both the serial gate in
+    // getUsage and the ~50s aggregate cost make it wasteful to run the same
+    // uncached key twice: two concurrent requests for one key both observe the
+    // miss above, and without this the second would queue a second full report
+    // and never see the cache the first populates. Sharing one in-flight
+    // promise per key means the second awaits the first and gets its slot.
+    // Distinct keys are unaffected and the gate still bounds how many run.
+    slot = await inflightUsage.run(cacheKey, async () => {
+      const { report, meta } = await getUsage(safePeriod, project, source, home);
+      const built: UsageCacheSlot = {
+        report,
+        cachedAt: Date.now(),
+        maxMtime: meta.maxMtimeMs,
+        backend: meta.backend,
+        timings: meta.timings,
+      };
+      cache.set(cacheKey, built);
+      return built;
+    });
   }
 
   // Salt the ETag with the backend so a runtime flag flip (e.g. operator
@@ -117,8 +137,11 @@ export async function GET(request: NextRequest) {
     period: safePeriod,
     project: project ?? null,
     backend: slot.backend,
-    cacheHit: cached !== undefined,
-    ...(slot.timings ?? {}),
+    cacheHit,
+    // Timings describe the report BUILD, so include them only on a miss (#563).
+    // On a hit `slot.timings` is the earlier build's numbers and would misread
+    // a slow cache-hit response (an unrelated event-loop stall) as slow SQL.
+    ...(cacheHit ? {} : (slot.timings ?? {})),
   });
 
   const notModified = ifNoneMatch(request, etag);
