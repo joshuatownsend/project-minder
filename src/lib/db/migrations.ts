@@ -1044,6 +1044,36 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 31,
+    name: "covering indexes for the /api/usage aggregate scans (#562)",
+    up: (db) => {
+      // Pure index additions — no columns, no data derivation, so NO
+      // DERIVED_VERSION bump and no re-parse. An index cannot change a query's
+      // result, only its plan, so this is safe to apply to a live DB with the
+      // read path active. `IF NOT EXISTS` because a fresh DB already created
+      // these in v1's schema.sql; only DBs built before v31 need them here.
+      //
+      // Cost: ~4 s to build on a ~120k-turn corpus (one-time, at startup) and
+      // ~30 MB added to a ~1.1 GB index. Ingest now maintains three more
+      // indexes per turn/tool_use write; that write is on the background
+      // worker and batched, and it buys a widest-period usage report dropping
+      // from ~52 s to ~12 s of SQL. See the matching comments in schema.sql for
+      // the per-query rationale and column choices.
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS turns_usage_cover ON turns(
+          role, ts, session_id, cost_usd,
+          input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
+          model, category, is_sidechain, effort, task_outcome
+        );
+        CREATE INDEX IF NOT EXISTS tool_uses_pk_name
+          ON tool_uses(session_id, turn_index, sequence_in_turn, tool_name);
+        CREATE INDEX IF NOT EXISTS tool_uses_mcp_cover
+          ON tool_uses(mcp_server, mcp_tool, session_id, turn_index)
+          WHERE mcp_server IS NOT NULL;
+      `);
+    },
+  },
 ];
 
 /**
