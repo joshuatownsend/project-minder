@@ -439,7 +439,7 @@ describe.skipIf(!driverAvailable)("loadProjectFileEditsFromDb (#439)", () => {
     // loader only covered the homes-derived directories; the ones rebuilt from
     // `sessions.file_path` bypassed it entirely. Ingest deliberately RETAINS
     // rows for a stopped distro (the `unavailableDirs` prefix shield in
-    // `reconcileAllSessionsSerialized`), so UNC
+    // `runReconcileAllSessions`), so UNC
     // paths into a stopped home are guaranteed to be present — and a readdir on
     // one wakes the distro (Codex, PR #454).
     const { conn, ingest, fromDb, projectsDir } = await setup();

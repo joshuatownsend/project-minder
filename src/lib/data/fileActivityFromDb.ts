@@ -111,9 +111,9 @@ function pathKey(p: string): string {
  * gate the routes apply, so passing `getReadableClaudeHomes()` in was only half
  * a fix (Codex, PR #454). And the rows this matters for are not hypothetical:
  * ingest DELIBERATELY retains sessions belonging to a stopped distro —
- * `reconcileAllSessionsSerialized`'s `unavailableDirs` prefix shield keeps
- * them out of the prune pass precisely so a stopped home does not lose its
- * history. Rows whose
+ * `runReconcileAllSessions`'s `unavailableDirs` prefix shield keeps them out
+ * of the prune pass precisely so a stopped home does not lose its history.
+ * Rows whose
  * `file_path` is a UNC path into a now-stopped distro are therefore guaranteed
  * to exist, and a `readdirSync` on one WAKES it.
  *
