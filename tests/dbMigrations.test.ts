@@ -221,9 +221,11 @@ describe.skipIf(!driverAvailable)("initDb", () => {
 
     // Roll back to a v2-shaped state: drop the columns / table the v3
     // migration is responsible for adding, and reset the schema_version
-    // stamp. The v31 covering indexes reference cost_usd (and other
-    // post-v2 columns), so they must go first — SQLite refuses to drop a
-    // column an index still names, and a real v2 DB never had them anyway.
+    // stamp. Drop the v31 indexes first. Only `turns_usage_cover` names
+    // cost_usd, so it is the one that would make the DROP COLUMN below fail
+    // ("cannot drop column referenced in an index"); the two tool_uses
+    // indexes name none of the dropped columns and are removed only for
+    // realism, since a genuine v2 DB never had any of the three.
     db!.exec("DROP INDEX IF EXISTS turns_usage_cover");
     db!.exec("DROP INDEX IF EXISTS tool_uses_pk_name");
     db!.exec("DROP INDEX IF EXISTS tool_uses_mcp_cover");
