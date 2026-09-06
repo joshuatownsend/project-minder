@@ -468,7 +468,7 @@ function defaultResolveNextBin(root) {
  * Locate a Node runtime shipped beside a server bundle, if there is one.
  *
  * The desktop app's install layout puts them side by side, and the runtime's
- * own layout is platform-dependent — see scripts/fetch-node-runtime.mjs:21-22,
+ * own layout is platform-dependent — see scripts/fetch-node-runtime.mjs,
  * which lays these down:
  *   <app>/minder-server/server.js
  *   <app>/node/node.exe    (Windows)

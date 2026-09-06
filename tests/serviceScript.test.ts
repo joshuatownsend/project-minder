@@ -546,7 +546,7 @@ describe("resolveBundledNodeExe", () => {
   });
 
   it("finds node/bin/node — the actual POSIX packaging layout", () => {
-    // scripts/fetch-node-runtime.mjs:21-22 lays down `dist/node/bin/node` on
+    // scripts/fetch-node-runtime.mjs lays down `dist/node/bin/node` on
     // macOS/Linux. Missing this level doesn't fail loudly: the installer falls
     // back to whatever Node is running it, and a Node-major mismatch leaves the
     // service unable to load the ABI-tied better-sqlite3 binary at all.
