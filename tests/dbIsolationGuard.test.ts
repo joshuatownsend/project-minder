@@ -128,10 +128,11 @@ const ALLOWLIST = new Map<string, string>([
     "bootstrap.test.ts",
     // Imports `@/lib/bootstrap`, which reaches both connection modules through
     // runtime `import()`. Both sit inside `onShutdown(...)` callbacks
-    // (bootstrap.ts:231, :235) — registered during boot, executed only when the
-    // process shuts down, which this suite never does. It also never calls
-    // `initServiceLog()`, guarded behind `!process.env.VITEST` at
-    // bootstrap.ts:173, so the `~/.minder/logs` mkdir #331 asked about does not
+    // (the `onShutdown("sqlite", ...)` and `onShutdown("tasksDb", ...)`
+    // registrations in `bootstrap.ts`) — registered during boot, executed only
+    // when the process shuts down, which this suite never does. It also never
+    // calls `initServiceLog()`, guarded behind `!process.env.VITEST` in
+    // `bootstrap.ts`, so the `~/.minder/logs` mkdir #331 asked about does not
     // fire either.
     "its runtime DB imports live in onShutdown callbacks the suite never runs",
   ],

@@ -74,7 +74,8 @@ export interface SessionSearchFacets {
  * dropped here, or the fix trades one silent wrong answer for another:
  *
  *   - `source`   — client: `(s.source ?? "claude") === f`. The column is
- *     `NOT NULL DEFAULT 'claude'` (migrations.ts:327), so the COALESCE
+ *     `NOT NULL DEFAULT 'claude'` (the `ALTER TABLE sessions ADD COLUMN
+ *     source` statement in `migrations.ts`), so the COALESCE
  *     branch is currently **unreachable** for DB rows — it is kept to
  *     mirror the client exactly, so the two cannot diverge if that
  *     constraint is ever relaxed, not because it fires today. `??` and

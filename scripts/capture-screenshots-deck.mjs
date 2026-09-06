@@ -270,7 +270,7 @@ async function tabIsActive(page, label) {
     { group: 'Command Deck', name: 'board', route: '/board', settle: 1500, base: DEMO_BASE, optional: true,
       why: 'set MINDER_CAPTURE_DEMO_BASE to a MINDER_DEMO=1 server (a real board is empty until you write BOARD.md)' },
     // WorkflowsBrowser prints a plain "Loading…" paragraph rather than a
-    // skeleton (src/components/WorkflowsBrowser.tsx:113), so waitForStableUI
+    // skeleton (src/components/WorkflowsBrowser.tsx), so waitForStableUI
     // sails straight past it on a large workflow history.
     { group: 'Power tools', name: 'workflows', route: '/workflows', settle: 1200,
       waitTextGone: 'Loading…' },
@@ -287,7 +287,7 @@ async function tabIsActive(page, label) {
     // /costs runs last: it is by far the slowest route, so a timeout here
     // costs nothing that has not already been captured.
     // Both cost routes navigate fine and then render an *empty* report when
-    // their child API fails: EngagementDashboard.tsx:97 prints "Engagement
+    // their child API fails: EngagementDashboard.tsx prints "Engagement
     // report unavailable." on a 503, and CostReportDashboard prints "No cost
     // data for this period" with no rows. Neither is a skeleton, so only a
     // positive assertion keeps a published PNG from being replaced by one.

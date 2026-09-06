@@ -104,7 +104,8 @@ const g = globalThis as Record<string, unknown>;
 // Not creating it is what keeps that affordable. `MINDER_STATE_DIR` only has to
 // NAME a directory: `readConfig()` treats a missing file as defaults, and every
 // writer that matters already does its own `mkdir(..., { recursive: true })` —
-// `initDb` at `src/lib/db/connection.ts:126`, and the three `.cache` writers.
+// `ensureDbDir` in `src/lib/db/connection.ts` (which `initDb` reaches), and
+// the three `.cache` writers.
 // `installIsolatedState` has always relied on the same thing, since it never
 // pre-creates `<tmpHome>/.minder` and the DB tests work regardless.
 //

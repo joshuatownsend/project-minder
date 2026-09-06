@@ -4,8 +4,9 @@
  * Verifies:
  * 1. `meta.hasThinking` is set when a thinking block exists.
  * 2. Content longer than 300 chars is preserved (Phase 1 lifts the old cap to 3000).
- *    This test uses parseSessionTurnsWithMeta; scanSessionDetail has the same cap
- *    change at claudeConversations.ts:563-568.
+ *    This test uses parseSessionTurnsWithMeta; `scanSessionDetail` applies the
+ *    same cap in its thinking-block branch — `String(block.thinking).slice(0,
+ *    3000)`, beside the 300-char cap on plain text blocks.
  */
 import { describe, it, expect, afterEach } from "vitest";
 import { promises as fs } from "fs";

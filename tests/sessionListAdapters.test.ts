@@ -420,7 +420,8 @@ describe("session list adapter discovery (#489)", () => {
     //
     // **The fixture is a session_meta line and nothing else, not an empty
     // file.** `discover()` drops any file whose meta it cannot read
-    // (`codex.ts:544`), so a truly empty file never reaches `parseFile` and a
+    // (the `session_meta` guard in `adapters/codex.ts` returns null), so a
+    // truly empty file never reaches `parseFile` and a
     // test built on one measures the discovery filter rather than the cache.
     // The first version of this test did exactly that and passed against a
     // deliberately broken cache — caught by mutation.

@@ -857,8 +857,9 @@ const MIGRATIONS: Migration[] = [
       // It survives a corpus this one does not have, too: on the local index no
       // session mixes primary and sidechain turns (0 of 6,045), because modern
       // Claude Code writes subagents to their own files. Older transcripts
-      // inline them (`claudeConversations.ts:820` — probed 0/214 in 2026-05, but
-      // that is a fact about this machine, not about the format). A separate
+      // inline them (see `scanner/claudeConversations.ts` — probed 0/214 in
+      // 2026-05, but that is a fact about this machine, not about the
+      // format). A separate
       // table is correct on both shapes; writing into `tool_uses` is only safe
       // on this one.
       //

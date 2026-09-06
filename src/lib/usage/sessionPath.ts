@@ -11,8 +11,9 @@ import { getReadableClaudeHomes } from "@/lib/claudeHome";
 // which means callers that have only the session id but not the project must
 // scan every subdirectory to find the matching file.
 //
-// Three call sites used to inline this fs.walk fallback (parser.ts:622 and 683,
-// claudeConversations.ts:502). Extracted here so the validation rules and the
+// Three call sites used to inline this fs.walk fallback (two in
+// `usage/parser.ts`, one in `scanner/claudeConversations.ts`; those inlined
+// copies are gone). Extracted here so the validation rules and the
 // walk pattern stay in lockstep.
 
 // Re-exported rather than redefined (#483). This module and four other sites

@@ -46,8 +46,8 @@ describe("MCP server boot", () => {
   // blow the 10s default. Bumping the hook (not each `it`) is the right knob.
   //
   // Per-call `timeout: 120_000` overrides the MCP SDK's default 60s request
-  // timeout (DEFAULT_REQUEST_TIMEOUT_MSEC at
-  // node_modules/@modelcontextprotocol/sdk/.../protocol.ts:1216). `listResources()`
+  // timeout (`DEFAULT_REQUEST_TIMEOUT_MSEC` in the MCP SDK's
+  // `shared/protocol.ts`). `listResources()`
   // invokes every registered resource template's `list` callback to enumerate
   // concrete instances — on a machine with hundreds of indexed sessions that
   // single call blows the 60s SDK window even though the vitest hookTimeout

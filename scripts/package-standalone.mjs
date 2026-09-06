@@ -1036,7 +1036,7 @@ if (storeTripwireFailures.length > 0) {
 // acts on it), so this bundle is load-bearing rather than opt-in extra.
 // `workers/ingestWorker.mjs` dynamic-imports `./dist/ingestWorker.mjs`
 // at a path resolved by `resolveDefaultWorkerEntry(process.cwd(),
-// process.env.MINDER_SERVER_ROOT)` (workerHost.ts:232), which PREFERS
+// process.env.MINDER_SERVER_ROOT)` (in `db/workerHost.ts`), which PREFERS
 // MINDER_SERVER_ROOT — set by the wrapper to this package's own
 // directory — and falls back to cwd. Either way it is a runtime
 // `new Worker(path)` call, not a static import, so Next's file tracer

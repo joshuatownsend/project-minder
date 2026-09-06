@@ -204,12 +204,12 @@ async function settleBeforeShot(page, budgetMs = 60000) {
 //      (StatusDashboard.tsx:80, DiagnosisPanel.tsx:159), hence `[style*="pulse"]`.
 //   D  Next's "Compiling" pill
 //
-// Match the animation NAME, not the `animation` property: DashboardGrid.tsx:454
+// Match the animation NAME, not the `animation` property: DashboardGrid.tsx
 // renders `animation: loading ? "spin …" : "none"`, so a `[style*="animation"]`
 // selector would match the IDLE state too and the gate would never settle.
 //
 // And require height >= 24px, because not every pulse means "loading". The CI
-// status dot in GithubActivityStrip.tsx:23-34 is a 7px circle that pulses to
+// status dot `CiDot` in GithubActivityStrip.tsx is a 7px circle that pulses to
 // show a check is RUNNING — a fully settled state. Without the size floor, any
 // project view with CI in flight reads as permanently loading and its shot is
 // skipped (this would have broken projects-grid.png, the hero image). Every

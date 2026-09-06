@@ -85,7 +85,7 @@ async function waitForStableUI(page, { timeout = 25000 } = {}) {
         const hasCompile = /Compiling/i.test(text);
         // Word boundaries, so "Reloading"/"Disconnecting" do not read as busy.
         const hasLoadingText = /\bLoading\b/i.test(text) || /\bConnecting\b/i.test(text);
-        // Match the animation NAME: DashboardGrid.tsx:454 renders
+        // Match the animation NAME: DashboardGrid.tsx renders
         // `animation: loading ? "spin …" : "none"`, so a [style*="animation"]
         // selector would match the idle state and never settle.
         //

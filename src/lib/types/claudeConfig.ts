@@ -9,7 +9,7 @@ export type HookSource = "project" | "local" | "user" | "plugin";
 //
 //   - toggleable:    round-trips via the sidecar (~/.claude/.minder/disabled-hooks.json)
 //   - projectShared: git-tracked, can't be safely mutated from the dashboard
-//                    (hooks are additive — see effectiveConfig.ts:106)
+//                    (hooks are additive — see `effectiveConfig.ts`)
 //
 // `plugin` is owned by the plugin author and intentionally inert in both flags.
 const HOOK_SOURCE_FLAGS = {

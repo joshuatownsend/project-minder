@@ -772,7 +772,8 @@ describe.skipIf(!driverAvailable)("searchSessionsInDb — facets", () => {
     const db = (await conn.getDb())!;
     await ingest.reconcileAllSessions(db, { projectsDir });
     // `src-default` is deliberately left alone: the column is
-    // `source TEXT NOT NULL DEFAULT 'claude'` (migrations.ts:327), so an
+    // `source TEXT NOT NULL DEFAULT 'claude'` (the `ALTER TABLE sessions ADD
+    // COLUMN source` statement in `migrations.ts`), so an
     // unset source arrives as the literal 'claude' and a NULL is not
     // reachable at all. An earlier version of this test tried to write
     // NULL and hit the NOT NULL constraint — which is how the constraint

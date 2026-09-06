@@ -24,8 +24,8 @@ import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptP
 // pulls in the full file-parse pipeline (pricing, fs caches, every
 // scanner helper), and the read path shouldn't carry that weight at
 // boot just to do a path-to-dirname encoding. Kept in sync with the
-// canonical impl at `claudeConversations.ts:51`; if the encoding rule
-// changes both must move together.
+// canonical `encodePath` in `scanner/claudeConversations.ts`; if the
+// encoding rule changes both must move together.
 //
 // **Documented divergences from the file-parse path:**
 //
@@ -42,9 +42,10 @@ import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptP
 //    zeroed cost during the v3 catch-up.
 //
 // 2. **Worktree sessions roll up to the parent project under DB.**
-//    Ingest applies `canonicalizeDirName` (`src/lib/usage/parser.ts:58`)
-//    which strips the `--<word>-worktrees-...` suffix from worktree
-//    dirs, so a session originating from
+//    Ingest applies `canonicalizeDirName` (defined in
+//    `src/lib/sessions/projectIdentity.ts`, re-exported from
+//    `usage/parser.ts`) which strips the `--<word>-worktrees-...` suffix
+//    from worktree dirs, so a session originating from
 //    `C--dev-my-app--claude-worktrees-foo` is stored with
 //    `project_dir_name = 'C--dev-my-app'`. File-parse uses raw dir
 //    names (`scanClaudeConversationsForProjects` filters by
@@ -85,8 +86,12 @@ import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptP
 //
 //    Note the /usage surface is NOT affected and needs no matching
 //    change: `usageFromDb`'s session count is over `turns`, and its
-//    file-parse counterpart (`usage/parser.ts:716`) already walks
-//    `subagents/`, so both sides include them there by design.
+//    file-parse counterpart is `generateUsageReport`, which streams with
+//    `streamAllSessions(..., { includeSidechains: true })` over the same
+//    `sweepSessions` walk that picks up `subagents/` — so both sides include
+//    them there by design. (NOT `parseAllSessions`: a different entry point
+//    onto that same sweep, and one that filters sidechains out unless asked
+//    not to — citing it here would have implied the opposite guarantee.)
 //
 // 4. **Claude sessions only** (#475). Every query here filters
 //    `source = 'claude'`. This surface is the "Claude Code Usage" card;
@@ -101,8 +106,9 @@ import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptP
 //    they answer about every source on both backends. `getClaudeUsage`
 //    is the one whose *question* is single-source, so the two are
 //    equalized by narrowing the SQL rather than widening the walk.
-//    `sessions.source` is `TEXT NOT NULL DEFAULT 'claude'`
-//    (`migrations.ts:333`), so bare equality needs no COALESCE — checked
+//    `sessions.source` is `TEXT NOT NULL DEFAULT 'claude'` (the
+//    `ALTER TABLE sessions ADD COLUMN source` statement in
+//    `migrations.ts`), so bare equality needs no COALESCE — checked
 //    against the schema, not against the fact that every row on the
 //    reference index happens to say `claude`.
 
@@ -286,7 +292,7 @@ function collectStats(
 
 /**
  * Inlined mirror of `encodePath` from
- * `src/lib/scanner/claudeConversations.ts:51`. Three characters of
+ * `src/lib/scanner/claudeConversations.ts`. Three characters of
  * substitution; not worth importing the heavy scanner module just for
  * this. Kept in sync with the canonical impl — if encoding changes
  * both move together.
