@@ -86,8 +86,12 @@ import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptP
 //
 //    Note the /usage surface is NOT affected and needs no matching
 //    change: `usageFromDb`'s session count is over `turns`, and its
-//    file-parse counterpart (`parseAllSessions`) already walks
-//    `subagents/`, so both sides include them there by design.
+//    file-parse counterpart is `generateUsageReport`, which streams with
+//    `streamAllSessions(..., { includeSidechains: true })` over the same
+//    `sweepSessions` walk that picks up `subagents/` — so both sides include
+//    them there by design. (NOT `parseAllSessions`: a different entry point
+//    onto that same sweep, and one that filters sidechains out unless asked
+//    not to — citing it here would have implied the opposite guarantee.)
 //
 // 4. **Claude sessions only** (#475). Every query here filters
 //    `source = 'claude'`. This surface is the "Claude Code Usage" card;
