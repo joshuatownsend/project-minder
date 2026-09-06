@@ -190,7 +190,7 @@ async function settleBeforeShot(page, budgetMs = 60000) {
 //   B  plain "Loading…"/"Connecting…" text (~20 components)
 //   C  bespoke placeholder divs (~12) — NO class and NO text, but they carry an
 //      INLINE `animation: "pulse …"` (StatusDashboard.tsx:80), so `[style*="pulse"]`
-//      finds them. Match the animation NAME, not the property: DashboardGrid.tsx:454
+//      finds them. Match the animation NAME, not the property: DashboardGrid.tsx
 //      renders `animation: loading ? "spin …" : "none"`, and `[style*="animation"]`
 //      would match that IDLE state and never settle.
 //   D  Next's "Compiling" pill
@@ -402,9 +402,11 @@ async function clickButton(page, name) {
   // No filter click here, deliberately. An earlier version called
   // clickButton(page, 'All') to move off what looked like a "Board"-scoped view,
   // but that was wrong twice over: KanbanBoard already initialises kindFilter to
-  // "all" (KanbanBoard.tsx:233), so there is nothing to switch; and with the
+  // "all" (`KanbanBoard.tsx`'s `kindFilter` initial state), so there is
+  // nothing to switch; and with the
   // sidebar expanded, the helper's `button:has-text("All")` candidate matches the
-  // sidebar's "All projects" scope button (AppSidebar.tsx:257) instead. That
+  // sidebar's "All projects" scope button (`scopeLabel` in `AppSidebar.tsx`)
+  // instead. That
   // opens ProjectScopeMenu, and the shot would publish the scope-picker overlay
   // covering the board — a wrong image, which is worse than an empty one.
   if (!owned('kanban')) await shoot(page, 'kanban');
@@ -472,7 +474,8 @@ async function clickButton(page, name) {
     // general "any count is non-zero" test can never pass here.
     //
     // Accept a populated MCP count, or the valid empty state that the hydrated
-    // path renders for a legitimately empty catalog (ConfigBrowser.tsx:688).
+    // path renders for a legitimately empty catalog ("No MCP servers
+    // configured." in `ConfigBrowser.tsx`).
     // Unlike the "No hooks configured." mistake on /config, this text IS on the
     // active tab: ?type=mcp opens the MCP tab, which is what renders it.
     const MCP_READY = 'MCP\\s+[1-9]|No MCP servers configured';

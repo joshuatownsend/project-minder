@@ -231,7 +231,7 @@ describe("deriveProjectGroups", () => {
 
   describe("worktrees", () => {
     // Worktree directories never reach this function: their `.git` is a FILE
-    // (`gitdir: …`), and `isGitRepo` (scanner/index.ts:151) requires a
+    // (`gitdir: …`), and `isGitRepo` (`scanner/index.ts`) requires a
     // DIRECTORY, so they are filtered out before slug assignment and attached
     // separately as WorktreeOverlay. This test pins the consequence — if a
     // future scanner change ever let them through, they would share the parent

@@ -44,7 +44,8 @@ function pickTopProjects(projects: ProjectData[]): ProjectData[] {
   // Active projects with a CLAUDE.md first, sorted by most-recent activity.
   // Use `new Date(x).getTime()` instead of string compare: the type declares
   // lastActivity as string, but the in-memory cached scan can hold Date
-  // objects (mirrors the defensive pattern in src/lib/scanner/index.ts:273).
+  // objects (mirrors the `allProjects.sort` comparator in
+  // `src/lib/scanner/index.ts`).
   return projects
     .filter((p) => p.status === "active" && p.claudeMdAudit.hasClaudeMd)
     .sort((a, b) => {

@@ -83,8 +83,9 @@ import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptP
 // 8. **`startTime` / `endTime` derived from non-sidechain turns only**:
 //    DB ingest stamps `sessions.start_ts` / `end_ts` from `turns.ts`,
 //    and `turns` skips sidechain / meta / non-(user|assistant) entries
-//    (`src/lib/db/ingest.ts:352-357`). File-parse's `scanSessionFile`
-//    walks every JSONL entry's `timestamp` (`claudeConversations.ts:148-151`).
+//    (the `entry.isMeta || !entry.timestamp` and `type !== "assistant" &&
+//    type !== "user"` guards in `readJsonlSession`). File-parse's
+//    `scanSessionFileRaw` walks every JSONL entry's `timestamp`.
 //    For sessions with sidechain or system entries before the first
 //    user turn or after the last assistant turn, the DB path's
 //    `startTime` / `endTime` (and therefore `durationMs`) can fall
@@ -564,7 +565,8 @@ function groupSearchable(rows: TextPreviewRow[]): Map<string, string> {
     // searchableText accumulator never folds tool output into search
     // (only humanText + assistant text blocks). The `startsWith`
     // detection is the same one the detail loader uses to skip these
-    // from the timeline — see `sessionDetailFromDb.ts:268-272`.
+    // from the timeline — see the `tool_result_preview.startsWith(...)`
+    // test in `sessionDetailFromDb.ts`.
     if (
       row.role === "user" &&
       row.tool_result_preview !== null &&

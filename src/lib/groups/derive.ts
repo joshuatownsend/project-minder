@@ -19,7 +19,8 @@ export interface DeriveGroupsOptions {
    * Keyed on PATH, not slug, and that is load-bearing: `resolveProjectSlug`
    * hands the undecorated slug to whichever root sorts first, so slugs move
    * between rescans when `devRoots` is reordered (documented at
-   * `src/lib/scanner/index.ts:125-129`). A slug-keyed opt-out would silently
+   * `resolveProjectSlug` in `src/lib/scanner/index.ts`). A slug-keyed opt-out
+   * would silently
    * stop matching after a reorder — failing in the direction of re-merging
    * checkouts the user explicitly asked to keep apart.
    */
@@ -34,7 +35,7 @@ export interface DeriveGroupsOptions {
  * client-side.
  *
  * Worktrees need no exclusion here. A worktree's `.git` is a file, not a
- * directory, so `isGitRepo` (`scanner/index.ts:151`) rejects it before slug
+ * directory, so `isGitRepo` (`scanner/index.ts`) rejects it before slug
  * assignment — worktree dirs never become `ProjectData` and are attached
  * separately as `WorktreeOverlay`. See `tests/projectGroups.test.ts` for the
  * regression test that pins this.

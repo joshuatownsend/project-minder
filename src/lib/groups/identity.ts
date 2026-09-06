@@ -8,7 +8,7 @@
  *
  * ## What the scanner already did
  *
- * The input is `git.remoteUrl`, which `src/lib/scanner/git.ts:160-172` has
+ * The input is `git.remoteUrl`, which `scanGit` (`src/lib/scanner/git.ts`) has
  * already partially normalized:
  *
  *   - SCP-style `git@host:owner/repo.git` -> `https://host/owner/repo`

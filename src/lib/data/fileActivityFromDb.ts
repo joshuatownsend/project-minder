@@ -65,7 +65,8 @@ interface KnownFile {
  *   - a transcript on disk the index has never seen (a new session);
  *   - a known transcript that has GROWN or been rewritten since ingest,
  *     compared on mtime AND size — the same pair ingest itself compares
- *     (`ingest.ts:3192-3193`) and the file backend's `FileCache` compares.
+ *     (the `file_mtime_ms`/`file_size` skip gate in `reconcileSessionFile`)
+ *     and the file backend's `FileCache` compares.
  *     mtime alone silently misses an append that lands inside the same whole
  *     millisecond, or any append at all on a filesystem with coarse timestamp
  *     resolution (Codex, PR #454); and
@@ -110,8 +111,9 @@ function pathKey(p: string): string {
  * gate the routes apply, so passing `getReadableClaudeHomes()` in was only half
  * a fix (Codex, PR #454). And the rows this matters for are not hypothetical:
  * ingest DELIBERATELY retains sessions belonging to a stopped distro —
- * `reconcileAllSessions` shields them from the prune pass (`ingest.ts:3761`,
- * `:3835`) precisely so a stopped home does not lose its history. Rows whose
+ * `reconcileAllSessionsSerialized`'s `unavailableDirs` prefix shield keeps
+ * them out of the prune pass precisely so a stopped home does not lose its
+ * history. Rows whose
  * `file_path` is a UNC path into a now-stopped distro are therefore guaranteed
  * to exist, and a `readdirSync` on one WAKES it.
  *
@@ -206,11 +208,13 @@ function indexIsCurrentForProject(
       }
       // Recorded before the size cap below, because `seen` means "present on
       // disk" and is read only by the deletion sweep. A capped file that DOES
-      // still hold a row (ingest keeps the stale row rather than pruning it,
-      // `ingest.ts:3150-3152`) would otherwise look deleted.
+      // still hold a row (ingest keeps the stale row rather than pruning it —
+      // the `MAX_SESSION_FILE_SIZE` guard in `reconcileSessionFile` returns
+      // before any write) would otherwise look deleted.
       seen.add(fullKey);
-      // Oversized transcripts are skipped by ingest (`ingest.ts:3153`) and by
-      // the file backend alike (`parser.ts:710`), so one is missing from the
+      // Oversized transcripts are skipped by ingest (that same guard) and by
+      // the file backend alike (`parseAllSessions`' identical cap), so one is
+      // missing from the
       // index BY DESIGN. Reading that as "never ingested" would pin the project
       // permanently stale and send every request to a parse that skips the very
       // same file — the slow path, forever, for an identical answer. Found

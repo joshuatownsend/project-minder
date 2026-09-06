@@ -205,7 +205,8 @@ export function needsReconcileAfterV3(db: DatabaseT.Database): boolean {
  * both to one slug, reproducing the very split this exists to remove. Folding
  * here uses the same `.toLowerCase()` as `toSlug`, so the two agree by
  * construction instead of by coincidence of character set. The `[A-Za-z]--`
- * shape is the one `canonicalizeDirName` tests for (`usage/parser.ts:72`).
+ * shape is the one `canonicalizeDirName` tests for (in
+ * `sessions/projectIdentity.ts`).
  */
 /**
  * Descending by cost, then ascending by name — BINARY, matching SQLite's
@@ -628,7 +629,7 @@ function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdo
   // Grouped per (slug, home) so two homes with identical path layouts (same
   // project_slug) keep separable rows — mirrors the file-parse aggregator's
   // composite projectMap key `${projectSlug}\0${homeKey}` (#311,
-  // aggregator.ts:311). Single-home setups have one uniform home_key, so
+  // `usage/aggregator.ts`). Single-home setups have one uniform home_key, so
   // their row count is unchanged.
   //
   // The encoded dir name stays in the identity because `toSlug` strips the
@@ -1146,8 +1147,8 @@ function queryTopTools(db: DatabaseT.Database, f: FilterParams): [string, number
  * never rendered on the default backend at all.
  *
  * The `role = 'assistant'` and `is_sidechain = 0` predicates mirror the file
- * backend's input exactly (`aggregator.ts:596` feeds it
- * `assistantTurns.filter((t) => !t.isSidechain)`). Both are stated rather than
+ * backend's input exactly — `usage/aggregator.ts` gates its tool, shell and
+ * MCP tallies on `if (!isSub)`. Both are stated rather than
  * relied upon: tool calls only arise from assistant messages, and the schema
  * comment says sidechain turns carry no `tool_uses` — but those describe
  * current ingest behaviour, not invariants, and the cost of an explicit
@@ -1336,13 +1337,14 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
   // shape from a single query needs window functions / JSON aggregation
   // that would explode the SQL surface area for marginal gain.
   // Keyed on project_slug alone, matching the file-parse aggregator's
-  // `projectDetailAccum` (aggregator.ts:444) — note this one has neither the
-  // home component nor the folded dir name that byProject groups on above.
+  // `projectDetailAccum` (in `usage/aggregator.ts`) — note this one has
+  // neither the home component nor the folded dir name that byProject groups
+  // on above.
   // That is deliberate rather than an oversight: everything downstream of
   // here assumes one row per slug. `slugs` below drives the `IN (...)` fan-out
   // for the category and tool queries, whose results are stitched back by
   // slug, and the breakdown renders with `key={p.projectSlug}`
-  // (UsageDashboard.tsx:371) — two rows sharing a slug double-count the stitch
+  // (in `UsageDashboard.tsx`) — two rows sharing a slug double-count the stitch
   // and collide the React key, which is the bug this grouping fixes (#236).
   //
   // The cost of slug-only is the same slug collision `toSlug` creates

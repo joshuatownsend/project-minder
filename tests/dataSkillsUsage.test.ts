@@ -6,8 +6,9 @@ import { assertReconcileClean } from "./_helpers/reconcile";
 
 // Parity test for `getSkillUsage`. Mirror of `dataAgentsUsage.test.ts`
 // against `tool_uses.skill_name`. No documented divergences — both
-// backends skip sidechain entries (parser.ts:103 for file-parse,
-// ingest for DB) and extract `skill_name` from the same `args.skill`
+// backends skip sidechain entries (`parseAllSessions` strips them for
+// file-parse, ingest for DB) and extract `skill_name` from the same
+// `args.skill`
 // field. Skipped when better-sqlite3 isn't loadable.
 
 let driverAvailable: boolean;

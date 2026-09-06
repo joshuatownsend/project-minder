@@ -197,7 +197,8 @@ describe("extractTicketsFromEntries", () => {
     // an empty array with the real blocks (incl. tool_results) on the
     // top-level `content` field. A nullish-only fallback would skip them
     // and silently drop the ticket URL; the length-based fallback must
-    // scan top-level content. Mirrors parser.ts:236-241.
+    // scan top-level content. Mirrors the `topLevelContent` fallback in
+    // `usage/parser.ts`.
     const entry = {
       type: "user",
       timestamp: "2026-05-29T12:00:03Z",

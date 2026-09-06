@@ -12,7 +12,7 @@ import { assertReconcileClean } from "./_helpers/reconcile";
 // here — the agent stats derive from indexed `tool_uses.agent_name`
 // which is extracted at ingest from the same `args.subagent_type` that
 // `groupAgentCalls` reads. Both backends skip sidechain entries
-// (parser.ts:103 for file-parse, ingest for DB).
+// (`parseAllSessions` strips them for file-parse, ingest for DB).
 //
 // **Fixture constraint**: every assistant turn has at most one text
 // block, no thinking, no sidechain. Same constraint as the other

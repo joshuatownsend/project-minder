@@ -85,7 +85,8 @@ export function buildToolCalls(
       // `ToolCall.name` is required, and the cast this replaced would have put a
       // literal `undefined` there for a `tool_use` block with no `name` —
       // producing an "undefined" bucket in `topTools` and in every downstream
-      // grouping. `ingest.ts:583` already normalizes the same case to "unknown",
+      // grouping. `normalizeToolName` in `ingest.ts` already normalizes the
+      // same case to "unknown",
       // so matching it keeps the two backends agreeing rather than inventing a
       // third answer. (Copilot, PR #468.)
       name: typeof b.name === "string" ? b.name : "unknown",

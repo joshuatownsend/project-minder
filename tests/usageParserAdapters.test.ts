@@ -22,7 +22,7 @@ preserveEnvVars(["CODEX_HOME"]);
 // actually represents is pinned separately rather than assumed harmless.
 //
 // The seam is `CODEX_HOME`, which the adapter resolves before `~/.codex`
-// (`codex.ts:28`) — no homedir spy, so it survives into any child process.
+// (`adapters/codex.ts`) — no homedir spy, so it survives into any child process.
 
 const state = installIsolatedState({
   prefix: "pm-usage-adapters-",
@@ -204,7 +204,8 @@ describe("file-parse adapter discovery (#475)", () => {
     // file with `fs.readFile`, five concurrently. Memory is the obvious reason
     // for the cap, but the reason it belongs in THIS change is narrower:
     // `reconcileAdapterSessionFile` skips oversized files on the SQL side
-    // (`ingest.ts:3706`), so parsing them here would make the fallback include
+    // (its `MAX_SESSION_FILE_SIZE` guard), so parsing them here would make the
+    // fallback include
     // sessions the index deliberately excludes — a fresh divergence introduced
     // by the change that closes one. (Codex P2 + Copilot, PR #490.)
     //
@@ -335,7 +336,8 @@ describe("adapter read failures are not cached as empty (#498)", () => {
    *
    * **No `try/finally` at the call sites, deliberately.** `installIsolatedState`
    * calls `vi.restoreAllMocks()` at the top of its `afterEach` teardown
-   * (`_helpers/isolatedState.ts:247`), which runs on every path including an
+   * (the `teardown` function in `_helpers/isolatedState.ts`), which runs on
+   * every path including an
    * assertion throwing mid-test — so a `finally` here would restore something
    * already guaranteed to be restored. The test below asserts that rather than
    * asking the next reader to take it on trust. (Copilot, PR #499.)
@@ -482,7 +484,7 @@ describe("adapter read failures are not cached as empty (#498)", () => {
     // Order-dependent on purpose: order dependence is the thing under test.
     //
     // Fails if `installIsolatedState`'s `vi.restoreAllMocks()` is dropped from
-    // teardown (`_helpers/isolatedState.ts:247`), which is the only thing
+    // its `teardown` (`_helpers/isolatedState.ts`), which is the only thing
     // restoring a spy on the path where a test throws before its own
     // `mockRestore()`. That is why the spy-using tests above need no
     // `try/finally`.

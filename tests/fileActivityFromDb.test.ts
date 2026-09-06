@@ -118,19 +118,20 @@ describe.skipIf(!driverAvailable)("loadProjectFileEditsFromDb (#439)", () => {
 
   it("counts every tool_use block when a message spans several JSONL lines", async () => {
     // Claude Code writes ONE JSONL LINE PER CONTENT BLOCK, all sharing a
-    // `message.id`. The DB path counts them all; the file path drops every
-    // block after the first, because `parser.ts:231` skips the whole repeated
-    // line (the #426 defect, fixed in ingest and still live in the file path —
-    // filed as #453).
+    // `message.id`. Skipping the whole repeated line therefore drops every
+    // block after the first — the #426 defect, fixed in ingest and later in
+    // the file path too (#453; both closed). The repeat-id guard now covers
+    // only tokens, while a repeat id's content blocks merge into the turn that
+    // id already owns, via `mergeAssistantContinuation`.
     //
-    // Measured on the real index for one project: 4,164 write edits from raw
-    // JSONL, 4,164 in the DB, 1,651 from the file parse. The file path reports
-    // 40% of the truth.
+    // Measured on the real index for one project WHILE THE FILE PATH WAS
+    // STILL BROKEN: 4,164 write edits from raw JSONL, 4,164 in the DB, 1,651
+    // from the file parse — the file path reported 40% of the truth.
     //
-    // This test therefore does NOT assert parity — the two genuinely disagree
-    // here, and asserting equality would pin the bug. It asserts the DB path
-    // is right, which is what makes the ~2.5x jump in these panels a
-    // correction rather than a regression.
+    // This test asserts the DB path is right, which is what made the ~2.5x
+    // jump in these panels a correction rather than a regression. It does not
+    // assert parity with the file path; now that #453 has landed a parity
+    // assertion would probably hold, and would be worth adding.
     const reloaded = await reload();
     await reloaded.mig.initDb();
     const projectsDir = path.join(tmpHome, ".claude", "projects");
@@ -356,7 +357,8 @@ describe.skipIf(!driverAvailable)("loadProjectFileEditsFromDb (#439)", () => {
     // Size is the second half of the comparison, and mtime alone cannot stand
     // in for it: rapid appends can land inside the same whole millisecond, and
     // some filesystems keep timestamps at coarse resolution. Ingest compares
-    // mtime AND size (`ingest.ts:3192-3193`), and so does the file backend's
+    // mtime AND size (the skip gate in `reconcileSessionFile`), and so does
+    // the file backend's
     // FileCache — a guard that checked only mtime would let both routes cache a
     // truncated answer for five minutes (Codex, PR #454).
     const { conn, ingest, fromDb, projectsDir } = await setup();
@@ -409,11 +411,13 @@ describe.skipIf(!driverAvailable)("loadProjectFileEditsFromDb (#439)", () => {
   });
 
   it("stays current when an oversized transcript is absent from the index", async () => {
-    // A transcript over the 50 MB cap is skipped by ingest (`ingest.ts:3153`)
+    // A transcript over the 50 MB cap is skipped by ingest (the
+    // `MAX_SESSION_FILE_SIZE` guard in `reconcileSessionFile`)
     // BEFORE any row is written, so it is missing from the index by design.
     // Reading that as "never ingested" pinned the project permanently stale and
     // sent every request to the 190-299 s parse — which skips the same file
-    // (`parser.ts:710`) and so returns an identical answer. The slow path
+    // (`parseAllSessions` applies the identical cap) and so returns an
+    // identical answer. The slow path
     // forever, for nothing. Self-found; it arrived with the round-1 gate.
     const { conn, ingest, fromDb, projectsDir } = await setup();
     const db = (await conn.getDb())!;
@@ -434,7 +438,8 @@ describe.skipIf(!driverAvailable)("loadProjectFileEditsFromDb (#439)", () => {
     // The never-wake invariant. Passing `getReadableClaudeHomes()` into the
     // loader only covered the homes-derived directories; the ones rebuilt from
     // `sessions.file_path` bypassed it entirely. Ingest deliberately RETAINS
-    // rows for a stopped distro (prune-shielding, `ingest.ts:3761`), so UNC
+    // rows for a stopped distro (the `unavailableDirs` prefix shield in
+    // `reconcileAllSessionsSerialized`), so UNC
     // paths into a stopped home are guaranteed to be present — and a readdir on
     // one wakes the distro (Codex, PR #454).
     const { conn, ingest, fromDb, projectsDir } = await setup();

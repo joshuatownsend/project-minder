@@ -1195,7 +1195,7 @@ async function sweepSessions(visit: SessionVisitor): Promise<void> {
     //
     // Merged after the Claude sweep and into the same map, because the aggregator
     // is already source-aware: it filters on `t.source ?? "claude"` and builds its
-    // by-source breakdown from the same turns (`aggregator.ts:69,474`). Confirmed
+    // by-source breakdown from the same turns (`usage/aggregator.ts`). Confirmed
     // against that code rather than taken on the issue's word.
     await mergeAdapterSessions(config, cache, emit, emitted, liveSet);
 
@@ -1310,7 +1310,7 @@ async function mergeAdapterSessions(
             turns = await cache.getOrCompute(file.filePath, async (fp) => {
               // The same `MAX_SESSION_FILE_SIZE` cap the Claude sweep applies
               // above, and that `reconcileAdapterSessionFile` applies on the SQL
-              // side (`ingest.ts:3706`). Both adapter parsers read the whole
+              // side. Both adapter parsers read the whole
               // file with `fs.readFile` and this loop runs five at a time, so an
               // uncapped oversized transcript is hundreds of megabytes resident
               // — but the reason it belongs here is narrower than memory: the
@@ -1333,7 +1333,8 @@ async function mergeAdapterSessions(
 
           // Keyed by the turn's OWN `sessionId`, not the file's basename. Codex
           // reads its id from the `session_meta` line and falls back to the
-          // basename only when that is absent (`codex.ts:257`), so a basename
+          // basename only when that is absent (the `metaPayload.id` fallback
+          // in `adapters/codex.ts`), so a basename
           // key would disagree with the id those same turns carry — and with
           // the id ingest stores, which is what any "same corpus" claim rests
           // on. A file with no parseable meta yields zero turns and is skipped
