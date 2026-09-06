@@ -620,3 +620,72 @@ describe.skipIf(!driverAvailable)("#567 — projectDetails category mix honors t
     mods.conn.closeDb();
   });
 });
+
+describe.skipIf(!driverAvailable)("#568 — projectDetails tool/MCP mix honors the source filter", () => {
+  // Sibling gap to the `catRows` fix in #567: `toolRows` and `mcpRows` filtered
+  // `t.ts` and `s.home_key` but not `s.source`, so a `?source=` request showed a
+  // project's top tools and MCP servers drawn from EVERY adapter while the
+  // header cost/turns beside them counted only the requested one. Raw inserts
+  // because the ingest path only ever writes source='claude'.
+  it("excludes another source's tool calls from a source-filtered breakdown", async () => {
+    const mods = await reloadModules();
+    const init = await mods.mig.initDb();
+    expect(init.available).toBe(true);
+    const db = (await mods.conn.getDb())!;
+
+    const slug = "dev-app";
+    const homeKey = normalizePathKey(path.join(tmpHome, ".claude"));
+    const insertSession = db.prepare(
+      `INSERT INTO sessions
+         (session_id, project_slug, project_dir_name, file_path, file_mtime_ms,
+          file_size, source, home_key, start_ts, end_ts, assistant_turn_count,
+          indexed_at_ms)
+       VALUES (?, ?, 'C--dev-app', ?, 0, 0, ?, ?, ?, ?, 1, 0)`
+    );
+    const insertTurn = db.prepare(
+      `INSERT INTO turns
+         (session_id, turn_index, ts, role, model, input_tokens, output_tokens,
+          cost_usd, category)
+       VALUES (?, 0, ?, 'assistant', 'claude-opus-4-7', 100, 0, 1, 'Coding')`
+    );
+    const insertTool = db.prepare(
+      `INSERT INTO tool_uses
+         (session_id, turn_index, sequence_in_turn, tool_name, mcp_server)
+       VALUES (?, 0, ?, ?, ?)`
+    );
+
+    // Same project + home, two adapter sources, disjoint tool + MCP vocabularies
+    // so an unfiltered read is unmistakable in the assertions below.
+    insertSession.run("sess-claude", slug, "/tmp/c.jsonl", "claude",
+      homeKey, "2025-01-01T10:00:00Z", "2025-01-01T10:05:00Z");
+    insertTurn.run("sess-claude", "2025-01-01T10:00:00Z");
+    insertTool.run("sess-claude", 0, "Read", null);
+    insertTool.run("sess-claude", 1, "mcp__alpha__go", "alpha");
+
+    insertSession.run("sess-codex", slug, "/tmp/x.jsonl", "codex",
+      homeKey, "2025-01-01T11:00:00Z", "2025-01-01T11:05:00Z");
+    insertTurn.run("sess-codex", "2025-01-01T11:00:00Z");
+    insertTool.run("sess-codex", 0, "Bash", null);
+    insertTool.run("sess-codex", 1, "Bash", null);
+    insertTool.run("sess-codex", 2, "mcp__beta__go", "beta");
+
+    // Filter to 'claude'. Bash outnumbers Read 2:1, so an unfiltered `toolRows`
+    // would put the codex-only tool at the TOP of this project's list.
+    const claudeOnly = await mods.fromDb.loadUsageReportFromSql(db, "all", slug, "claude");
+    const detail = claudeOnly.projectDetails.find((p) => p.projectSlug === slug);
+    expect(detail).toBeDefined();
+    expect(detail!.topTools).toEqual([["Read", 1]]);
+    expect(detail!.mcpServers).toEqual(["alpha"]);
+    expect(detail!.mcpCalls).toBe(1);
+
+    // Sanity: unfiltered sees both sources, proving the filter — not an empty
+    // join — is what excluded the codex tool calls above.
+    const both = await mods.fromDb.loadUsageReportFromSql(db, "all", slug);
+    const bothDetail = both.projectDetails.find((p) => p.projectSlug === slug)!;
+    expect(bothDetail.topTools).toEqual([["Bash", 2], ["Read", 1]]);
+    expect([...bothDetail.mcpServers].sort()).toEqual(["alpha", "beta"]);
+    expect(bothDetail.mcpCalls).toBe(2);
+
+    mods.conn.closeDb();
+  });
+});

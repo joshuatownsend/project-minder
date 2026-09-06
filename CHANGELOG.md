@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Source-filtered usage reports showed every adapter's tool calls** (#568, sibling to #564). In the projects breakdown of `/api/usage`, each project's header (cost, turns) and category mix filter `?source=`, but the top-tools and MCP-server queries beside them filtered only period and Claude home. A `?source=codex` request therefore decorated a Codex-only cost figure with a tool list and MCP-server list drawn from *every* adapter — and because the list is capped at the five most-used tools, another source's busier tools could push the requested source's own tools off it entirely. Both queries now carry the same `s.source` predicate as the header they sit under. Unfiltered reports (the default, and every request that omits `?source=`) are unaffected.
+
 ## [1.15.0] - 2026-09-06
 
 *Usage reports get fast and honest. A full-history `/api/usage` report drops from roughly a minute of SQL to about twelve seconds behind three covering indexes, and the by-category breakdown stops trusting a rollup that had drifted to a third of the truth — it now reads spend straight from the turns, index-only, so `byCategory` and `byModel` finally agree. Underneath, the server learns to watch its own memory: `/api/health` reports resident set and heap, the tray restarts a process that runs away, and ingest-worker crashes, watcher fallbacks, and index quarantines all reach the service log instead of a console nobody reads. The bundled Node runtime moves to 22.23.2.*
