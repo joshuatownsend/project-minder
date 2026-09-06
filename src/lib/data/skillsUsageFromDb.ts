@@ -17,8 +17,9 @@ import type { SkillStats } from "@/lib/usage/types";
 // **No documented divergences** vs the file-parse path: both backends
 // skip sidechain entries (`parseAllSessions` strips them for file-parse,
 // ingest for DB), and `skill_name` is extracted identically (`args.skill`
-// — see `extractSkillName` in `src/lib/db/ingest.ts` and `groupSkillCalls`
-// in `skillParser.ts`). The SQL filter mirrors `groupSkillCalls`'s
+// — see `extractSkillName` in `src/lib/db/ingest/parseHelpers.ts` and
+// `groupSkillCalls` in `skillParser.ts`). The SQL filter mirrors
+// `groupSkillCalls`'s
 // string-existence check
 // (`if (typeof skillName !== "string" || !skillName) continue`) — the
 // `tu.skill_name <> ''` predicate matches the falsy-string branch so

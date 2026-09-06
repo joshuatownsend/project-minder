@@ -18,8 +18,9 @@ import type { AgentStats } from "@/lib/usage/types";
 // **No documented divergences** vs the file-parse path: both backends
 // skip sidechain entries (`parseAllSessions` strips them for file-parse,
 // ingest for DB), and `agent_name` is extracted identically
-// (`args.subagent_type` — see `extractAgentName` in `src/lib/db/ingest.ts`
-// and `groupAgentCalls` in `agentParser.ts`). The SQL filter mirrors
+// (`args.subagent_type` — see `extractAgentName` in
+// `src/lib/db/ingest/parseHelpers.ts` and `groupAgentCalls` in
+// `agentParser.ts`). The SQL filter mirrors
 // `groupAgentCalls`'s string-existence check
 // (`if (typeof agentType !== "string" || !agentType) continue`) — the
 // `tu.agent_name <> ''` predicate matches the falsy-string branch so
