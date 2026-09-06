@@ -1096,6 +1096,18 @@ const MIGRATIONS: Migration[] = [
       //
       // No DERIVED_VERSION bump — removing a table nothing reads cannot change
       // any derived value, so there is nothing to re-parse.
+      //
+      // Downgrade window, stated rather than guarded: a pre-v32 binary running
+      // against a DB that has reached v32 still calls `refreshDailyCosts` /
+      // `refreshCategoryCosts` and will hit `no such table`. On its watcher
+      // path that is caught (`state.errors++`); on its sweep path the refresh
+      // sits after the per-file try/catch and aborts the pass. This is the
+      // known "older tray, newer index" condition the repo already documents
+      // for v24 — `applyPendingMigrations` only skips versions it has passed
+      // and never refuses a higher stamp — and an install replaces the running
+      // binary, so it needs a deliberate downgrade or two concurrent binaries
+      // to reach. Not guarded here: a schema-version shield is a broader
+      // change than this cleanup, and the index is rebuildable regardless.
       db.exec(`
         DROP TABLE IF EXISTS daily_costs;
         DROP TABLE IF EXISTS category_costs;

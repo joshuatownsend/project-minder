@@ -63,7 +63,7 @@ import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptP
 // 3. **Nested subagent transcripts are excluded from
 //    `conversationCount`** (#480). Ingest indexes
 //    `<project>/<parent>/subagents/agent-*.jsonl` as its own `sessions`
-//    row so its cost reaches the daily_costs rollups, but the session
+//    row so its cost reaches the usage totals, but the session
 //    row's own aggregates are primary-only (`is_sidechain = 0`, see
 //    `ingest.ts:2834`), so such a row contributes **zero** turns and
 //    zero tokens here. Counting it as a conversation was therefore
