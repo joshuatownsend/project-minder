@@ -213,7 +213,8 @@ function indexIsCurrentForProject(
       // before any write) would otherwise look deleted.
       seen.add(fullKey);
       // Oversized transcripts are skipped by ingest (that same guard) and by
-      // the file backend alike (`parseAllSessions`' identical cap), so one is
+      // the file backend alike (the identical `MAX_SESSION_FILE_SIZE` check in
+      // `sweepSessions`, which `parseAllSessions` delegates to), so one is
       // missing from the
       // index BY DESIGN. Reading that as "never ingested" would pin the project
       // permanently stale and send every request to a parse that skips the very

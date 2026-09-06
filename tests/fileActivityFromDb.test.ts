@@ -179,10 +179,13 @@ describe.skipIf(!driverAvailable)("loadProjectFileEditsFromDb (#439)", () => {
   });
 
   it("matches the file backend's edits exactly", async () => {
-    // NOTE: this fixture uses one content block per JSONL line, which is where
-    // the two backends agree. They diverge on multi-block messages — see the
-    // test above and #453. Parity here means "same extraction rule", not "same
-    // answer on every corpus".
+    // NOTE: this fixture uses one content block per JSONL line. The two
+    // backends USED to diverge on multi-block messages; #453 closed that on
+    // the file side (see the test above), so the divergence this note was
+    // written to explain is gone. Parity here still means "same extraction
+    // rule" rather than "same answer on every corpus" — the weaker claim is
+    // what this test actually pins, and remains the right one to pin whether
+    // or not the two answers now coincide.
     const { conn, ingest, fromDb, parser, fileActivity, projectMatch, projectsDir } = await setup();
     const db = (await conn.getDb())!;
     await ingest.reconcileAllSessions(db, { projectsDir });
@@ -416,8 +419,9 @@ describe.skipIf(!driverAvailable)("loadProjectFileEditsFromDb (#439)", () => {
     // BEFORE any row is written, so it is missing from the index by design.
     // Reading that as "never ingested" pinned the project permanently stale and
     // sent every request to the 190-299 s parse — which skips the same file
-    // (`parseAllSessions` applies the identical cap) and so returns an
-    // identical answer. The slow path
+    // (the identical `MAX_SESSION_FILE_SIZE` check in `sweepSessions`, which
+    // `parseAllSessions` delegates to) and so returns an identical answer.
+    // The slow path
     // forever, for nothing. Self-found; it arrived with the round-1 gate.
     const { conn, ingest, fromDb, projectsDir } = await setup();
     const db = (await conn.getDb())!;
