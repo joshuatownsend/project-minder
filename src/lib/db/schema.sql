@@ -305,6 +305,24 @@ CREATE INDEX idx_turns_effort ON turns(effort) WHERE effort IS NOT NULL;
 CREATE INDEX idx_turns_attribution_mcp_server
   ON turns(attribution_mcp_server) WHERE attribution_mcp_server IS NOT NULL;
 
+-- Covering index for the /api/usage aggregate reads (#562). Every "by X"
+-- breakdown scans `turns` filtered on (role='assistant', ts >= period) and
+-- SUMs the cost/token columns; without this the planner walks
+-- `turns_by_role_ts` and then fetches each of ~120k matching rows from the
+-- WITHOUT ROWID primary key — rows made wide by `text_preview` /
+-- `tool_result_preview` (~2 KB each), so a full-history report spent ~3 s PER
+-- query on random page reads. Carrying every column those aggregates read lets
+-- the scan stay index-only (EXPLAIN: "USING COVERING INDEX"), which took the
+-- widest-period SQL from ~52 s to ~12 s measured on a 1.1 GB index. `session_id`
+-- is included so the joins that only need it for the `sessions` lookup
+-- (byProject/byEntrypoint headers) also stay off the base table. Column order
+-- past (role, ts) is immaterial — nothing seeks on it, it exists only to cover.
+CREATE INDEX turns_usage_cover ON turns(
+  role, ts, session_id, cost_usd,
+  input_tokens, output_tokens, cache_create_tokens, cache_read_tokens,
+  model, category, is_sidechain, effort, task_outcome
+);
+
 -- ─── tool_uses ───────────────────────────────────────────────────────────
 -- One row per tool call inside a turn. `sequence_in_turn` is a 0-indexed
 -- counter assigned at ingest — it makes the PK trivially unique even when
@@ -344,6 +362,22 @@ CREATE INDEX tool_uses_by_file    ON tool_uses(file_path) WHERE file_path IS NOT
 CREATE INDEX tool_uses_by_agent   ON tool_uses(agent_name) WHERE agent_name IS NOT NULL;
 CREATE INDEX tool_uses_by_skill   ON tool_uses(skill_name) WHERE skill_name IS NOT NULL;
 CREATE INDEX tool_uses_by_mcp     ON tool_uses(mcp_server) WHERE mcp_server IS NOT NULL;
+
+-- Covering indexes for the /api/usage tool aggregates (#562). Those queries
+-- drive from `turns` and probe `tool_uses` by its (session_id, turn_index) key;
+-- because the table is WITHOUT ROWID, that probe reads the whole wide row —
+-- including `arguments_json`, which can be kilobytes — just to read a name.
+-- `tool_uses_pk_name` is the PK columns plus `tool_name`, so topTools and the
+-- tool-transition read resolve index-only (topTools 3.3 s -> 0.4 s,
+-- toolTransitions 1.8 s -> 0.8 s). `tool_uses_mcp_cover` is partial on the ~1 %
+-- of rows that carry an MCP server, letting the MCP breakdown seek just those
+-- (mcpStats 3.8 s -> 0.01 s) in 0.3 MB. `shellStats` is deliberately NOT
+-- covered: it needs `arguments_json` itself, so no narrow index can spare the
+-- wide read, and duplicating that column into an index would cost more space
+-- than the single query saves.
+CREATE INDEX tool_uses_pk_name ON tool_uses(session_id, turn_index, sequence_in_turn, tool_name);
+CREATE INDEX tool_uses_mcp_cover ON tool_uses(mcp_server, mcp_tool, session_id, turn_index)
+  WHERE mcp_server IS NOT NULL;
 
 -- ─── sidechain_tool_uses ─────────────────────────────────────────────────
 -- Schema v25 / DERIVED_VERSION 20 (#395). Tool calls made inside SUBAGENT

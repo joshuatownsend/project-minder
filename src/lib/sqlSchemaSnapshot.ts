@@ -1,4 +1,4 @@
-// Last verified: schema version 30 (src/lib/db/schema.sql + migrations v1-v30)
+// Last verified: schema version 31 (src/lib/db/schema.sql + migrations v1-v31)
 // Re-verify with `tests/sqlSchemaSnapshot.test.ts` after any migration.
 //
 // Column ORDER here is not meaningful — the live check compares both

@@ -60,8 +60,8 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     // but each still bumps the schema_version stamp. Note that v3
     // ALSO sets `meta.needs_reconcile_after_v3 = 1` even on fresh DBs;
     // that's harmless because the indexer's first reconcile clears it.
-    expect(result.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30]);
-    expect(result.schemaVersion).toBe(30);
+    expect(result.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30, 31]);
+    expect(result.schemaVersion).toBe(31);
 
     const db = await conn.getDb();
     expect(db).not.toBeNull();
@@ -84,7 +84,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
     expect(result.appliedMigrations).toEqual([]);
-    expect(result.schemaVersion).toBe(30);
+    expect(result.schemaVersion).toBe(31);
     second.conn.closeDb();
   });
 
@@ -114,7 +114,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
 
     expect(result.available).toBe(true);
     expect(result.quarantined).not.toBeNull();
-    expect(result.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30]);
+    expect(result.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30, 31]);
 
     // The schema ran on the rebuilt empty DB.
     const db = await conn.getDb();
@@ -144,7 +144,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     expect(result.error).toBeNull();
     expect(result.available).toBe(true);
     expect(result.quarantined).not.toBeNull();
-    expect(result.schemaVersion).toBe(30);
+    expect(result.schemaVersion).toBe(31);
     second.conn.closeDb();
   });
 
@@ -198,8 +198,8 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const second = await reloadModulesPointingAt(tmpHome);
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.appliedMigrations).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30]);
-    expect(result.schemaVersion).toBe(30);
+    expect(result.appliedMigrations).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30, 31]);
+    expect(result.schemaVersion).toBe(31);
 
     const db2 = await second.conn.getDb();
     const colsRecovered = db2!
@@ -221,7 +221,14 @@ describe.skipIf(!driverAvailable)("initDb", () => {
 
     // Roll back to a v2-shaped state: drop the columns / table the v3
     // migration is responsible for adding, and reset the schema_version
-    // stamp.
+    // stamp. Drop the v31 indexes first. Only `turns_usage_cover` names
+    // cost_usd, so it is the one that would make the DROP COLUMN below fail
+    // ("cannot drop column referenced in an index"); the two tool_uses
+    // indexes name none of the dropped columns and are removed only for
+    // realism, since a genuine v2 DB never had any of the three.
+    db!.exec("DROP INDEX IF EXISTS turns_usage_cover");
+    db!.exec("DROP INDEX IF EXISTS tool_uses_pk_name");
+    db!.exec("DROP INDEX IF EXISTS tool_uses_mcp_cover");
     db!.exec("ALTER TABLE turns DROP COLUMN cost_usd");
     db!.exec("ALTER TABLE sessions DROP COLUMN verified_task_count");
     db!.exec("ALTER TABLE sessions DROP COLUMN one_shot_task_count");
@@ -234,8 +241,8 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const second = await reloadModulesPointingAt(tmpHome);
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.appliedMigrations).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30]);
-    expect(result.schemaVersion).toBe(30);
+    expect(result.appliedMigrations).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30, 31]);
+    expect(result.schemaVersion).toBe(31);
 
     const db2 = await second.conn.getDb();
     expect(db2).not.toBeNull();
@@ -264,7 +271,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const reloaded = await reloadModulesPointingAt(tmpHome);
     const result = await reloaded.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.schemaVersion).toBe(30);
+    expect(result.schemaVersion).toBe(31);
 
     const db = await reloaded.conn.getDb();
     expect(db).not.toBeNull();
@@ -288,7 +295,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const reloaded = await reloadModulesPointingAt(tmpHome);
     const result = await reloaded.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.schemaVersion).toBe(30);
+    expect(result.schemaVersion).toBe(31);
 
     const db = await reloaded.conn.getDb();
     expect(db).not.toBeNull();
@@ -330,8 +337,8 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const second = await reloadModulesPointingAt(tmpHome);
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.appliedMigrations).toEqual([18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30]);
-    expect(result.schemaVersion).toBe(30);
+    expect(result.appliedMigrations).toEqual([18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30, 31]);
+    expect(result.schemaVersion).toBe(31);
 
     const db2 = await second.conn.getDb();
     const rows = db2!
@@ -400,8 +407,8 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     // 27 runs even though the stamp is already 26 — the point of the gap.
     // 28 rides along: this fixture is stamped 26, so every later migration
     // applies. The assertion is about 27 RUNNING, not about it being last.
-    expect(result.appliedMigrations).toEqual([27, 28, 29, 30]);
-    expect(result.schemaVersion).toBe(30);
+    expect(result.appliedMigrations).toEqual([27, 28, 29, 30, 31]);
+    expect(result.schemaVersion).toBe(31);
 
     const db2 = await second.conn.getDb();
     const cols = (
