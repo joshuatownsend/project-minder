@@ -3,12 +3,7 @@ import path from "path";
 import os from "os";
 import type { FSWatcher } from "chokidar";
 import { initDb } from "./migrations";
-import {
-  reconcileAllSessions,
-  reconcileSessionFile,
-  refreshCategoryCosts,
-  refreshDailyCosts,
-} from "./ingest";
+import { reconcileAllSessions, reconcileSessionFile } from "./ingest";
 import { getDb, getDbSync } from "./connection";
 import { isShuttingDown } from "@/lib/lifecycle";
 import { closeOrphanedIndexerRuns, recordOptionForSweep } from "./indexerRuns";
@@ -634,15 +629,7 @@ async function runReconcile(state: WatcherState, filePath: string): Promise<void
       state.errors++;
       return;
     }
-    const result = await reconcileSessionFile(db, filePath, projectDirNameFor(state.projectsDir, filePath));
-    if (result.rowsWritten > 0) {
-      refreshDailyCosts(db, result.affectedDays);
-      // Sister rollup to daily_costs, keyed on category. Skipping it here
-      // left category_costs stale for watcher-driven appends: the sweep
-      // can't backfill because this reconcile already advanced the file's
-      // cursor/mtime, so the next sweep sees the file as unchanged.
-      refreshCategoryCosts(db, result.affectedCategoryTuples);
-    }
+    await reconcileSessionFile(db, filePath, projectDirNameFor(state.projectsDir, filePath));
     state.eventsHandled++;
   } catch (err) {
     state.errors++;

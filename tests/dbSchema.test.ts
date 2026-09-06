@@ -42,7 +42,7 @@ describe.skipIf(!Database)("schema.sql", () => {
       .all()
       .map((r: any) => r.name);
     for (const expected of [
-      "meta", "sessions", "turns", "tool_uses", "file_edits", "daily_costs",
+      "meta", "sessions", "turns", "tool_uses", "file_edits",
       "agents", "skills", "commands", "mcp_servers", "otel_events", "indexer_runs",
       "mcp_scan_runs", "mcp_scan_findings", "mcp_tool_fingerprints",
       "prompts_fts", "catalog_fts",
@@ -255,26 +255,6 @@ describe.skipIf(!Database)("schema.sql", () => {
     db.prepare("DELETE FROM agents WHERE id = 'a1'").run();
     const gone = db.prepare("SELECT 1 FROM catalog_fts WHERE kind = 'agent' AND id = 'a1'").all();
     expect(gone.length).toBe(0);
-  });
-
-  it("daily_costs ON CONFLICT DO UPDATE accumulates correctly", () => {
-    db.prepare(
-      "INSERT INTO daily_costs (day, project_slug, model, cost_usd, turn_count, session_count) " +
-        "VALUES ('2026-04-30', 'pm', 'sonnet', 0.10, 5, 1) " +
-        "ON CONFLICT(day, project_slug, model) DO UPDATE SET " +
-        "cost_usd = cost_usd + excluded.cost_usd, turn_count = turn_count + excluded.turn_count"
-    ).run();
-    db.prepare(
-      "INSERT INTO daily_costs (day, project_slug, model, cost_usd, turn_count, session_count) " +
-        "VALUES ('2026-04-30', 'pm', 'sonnet', 0.05, 3, 1) " +
-        "ON CONFLICT(day, project_slug, model) DO UPDATE SET " +
-        "cost_usd = cost_usd + excluded.cost_usd, turn_count = turn_count + excluded.turn_count"
-    ).run();
-    const row = db
-      .prepare("SELECT cost_usd, turn_count FROM daily_costs WHERE day='2026-04-30' AND project_slug='pm' AND model='sonnet'")
-      .get() as { cost_usd: number; turn_count: number };
-    expect(row.cost_usd).toBeCloseTo(0.15, 5);
-    expect(row.turn_count).toBe(8);
   });
 
   it("indexer_runs accepts a heartbeat and reports last run", () => {

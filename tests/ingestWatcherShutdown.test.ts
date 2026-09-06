@@ -17,9 +17,7 @@ vi.mock("@/lib/db/connection", () => ({
 }));
 vi.mock("@/lib/db/ingest", () => ({
   reconcileAllSessions: vi.fn(),
-  reconcileSessionFile: vi.fn().mockResolvedValue({ rowsWritten: 0, affectedDays: [], affectedCategoryTuples: [] }),
-  refreshDailyCosts: vi.fn(),
-  refreshCategoryCosts: vi.fn(),
+  reconcileSessionFile: vi.fn().mockResolvedValue({ rowsWritten: 0 }),
 }));
 // Minimal fake chokidar: a watcher that reaches `ready` immediately and closes
 // cleanly, so startIngestWatcher() arms and returns without real FS events.

@@ -388,14 +388,18 @@ describe.skipIf(!driverAvailable)("byCategory — file-parse vs SQLite parity", 
     }
   });
 
-  it("ignores the `category_costs` rollup and reads spend from `turns` (#564)", async () => {
-    // The regression this whole PR fixes: the rollup was ~30% populated and
-    // under-reported wide-period spend ~3×, yet the common-path read trusted
-    // it. Discriminating test — corrupt the rollup with absurd values AFTER a
-    // faithful reconcile, then assert `byCategory` still returns the
-    // `turns`-derived figures. This FAILS against the pre-#564 code (which read
-    // `category_costs` on the unfiltered path); it passes only because the read
-    // now recomputes from `turns`.
+  it("byCategory spend matches the `turns`-derived ground truth exactly (#564)", async () => {
+    // #564: `byCategory` used to read the `category_costs` rollup, which was
+    // ~30% populated and under-reported wide-period spend ~3×. It now recomputes
+    // from `turns`, so the read path and a hand-written aggregate over `turns`
+    // must agree category-for-category — a wrong join predicate, GROUP BY or
+    // filter would break that equality.
+    //
+    // Until #566 this test also POISONED `category_costs` with absurd values
+    // after the reconcile and asserted they never surfaced. That table is now
+    // dropped, so the rollup can no longer be read by construction and the
+    // poison has nothing to write to; the ground-truth equality below is the
+    // half of the check that still discriminates.
     await writeFixture();
     await state.reload();
     process.env.MINDER_USE_DB = "1";
@@ -426,31 +430,14 @@ describe.skipIf(!driverAvailable)("byCategory — file-parse vs SQLite parity", 
     );
     expect(truth.size, "fixture must produce categories").toBeGreaterThan(0);
 
-    // Poison the rollup: inflate every existing tuple and inject a category
-    // that exists in NO turn. A read that trusts `category_costs` would report
-    // $999,999 totals and a phantom "Bogus564" row.
-    const poisoned = db
-      .prepare("UPDATE category_costs SET cost_usd = 999999, turns = 999999, tokens = 999999")
-      .run();
-    // Guard the guard: an empty rollup would make the poison a no-op and this
-    // test would pass without discriminating. Reconcile must have populated it.
-    expect(poisoned.changes, "category_costs must have rows to poison").toBeGreaterThan(0);
-    db.prepare(
-      `INSERT INTO category_costs (day, project_slug, category, turns, tokens, cost_usd)
-       VALUES ('2026-08-01', 'dev-x', 'Bogus564', 999999, 999999, 999999)`
-    ).run();
-
     const data = await import("@/lib/data");
     const { report, meta } = await data.getUsage("all", undefined);
     expect(meta.backend).toBe("db");
     const rows = byKey(report.byCategory);
 
-    // No phantom category, and no poisoned magnitude anywhere.
-    expect(rows).not.toHaveProperty("Bogus564");
-    for (const r of report.byCategory) {
-      expect(r.cost, `category ${r.category} must not carry the poisoned cost`).toBeLessThan(999999);
-    }
-    // Every real category matches the `turns`-derived spend and turn count.
+    // Every category matches the `turns`-derived spend and turn count, and the
+    // category SET matches too — so the read can neither invent a category nor
+    // silently drop one.
     expect(Object.keys(rows).sort()).toEqual([...truth.keys()].sort());
     for (const [category, t] of truth) {
       expect(rows[category].cost, `cost for ${category}`).toBeCloseTo(t.cost, 10);

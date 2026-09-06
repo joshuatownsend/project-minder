@@ -93,12 +93,6 @@ export function getDbMaxMtimeMs(db: DatabaseT.Database): number {
 }
 
 /**
- * True if migration v3 ran but no reconcile has populated `turns.cost_usd`
- * + `category_costs` yet. The SQL aggregate path returns zeros while this
- * flag is set; the façade falls back to file-parse so /api/usage stays
- * accurate during the v3 catch-up window.
- */
-/**
  * Session intervals for the yield augmentation, from the index (#559).
  *
  * `augmentPortfolioYield` used to re-sweep every JSONL transcript after a SQL

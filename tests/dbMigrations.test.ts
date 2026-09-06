@@ -60,8 +60,8 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     // but each still bumps the schema_version stamp. Note that v3
     // ALSO sets `meta.needs_reconcile_after_v3 = 1` even on fresh DBs;
     // that's harmless because the indexer's first reconcile clears it.
-    expect(result.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30, 31]);
-    expect(result.schemaVersion).toBe(31);
+    expect(result.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30, 31, 32]);
+    expect(result.schemaVersion).toBe(32);
 
     const db = await conn.getDb();
     expect(db).not.toBeNull();
@@ -84,7 +84,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
     expect(result.appliedMigrations).toEqual([]);
-    expect(result.schemaVersion).toBe(31);
+    expect(result.schemaVersion).toBe(32);
     second.conn.closeDb();
   });
 
@@ -114,7 +114,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
 
     expect(result.available).toBe(true);
     expect(result.quarantined).not.toBeNull();
-    expect(result.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30, 31]);
+    expect(result.appliedMigrations).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30, 31, 32]);
 
     // The schema ran on the rebuilt empty DB.
     const db = await conn.getDb();
@@ -144,7 +144,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     expect(result.error).toBeNull();
     expect(result.available).toBe(true);
     expect(result.quarantined).not.toBeNull();
-    expect(result.schemaVersion).toBe(31);
+    expect(result.schemaVersion).toBe(32);
     second.conn.closeDb();
   });
 
@@ -198,8 +198,8 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const second = await reloadModulesPointingAt(tmpHome);
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.appliedMigrations).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30, 31]);
-    expect(result.schemaVersion).toBe(31);
+    expect(result.appliedMigrations).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30, 31, 32]);
+    expect(result.schemaVersion).toBe(32);
 
     const db2 = await second.conn.getDb();
     const colsRecovered = db2!
@@ -232,7 +232,10 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     db!.exec("ALTER TABLE turns DROP COLUMN cost_usd");
     db!.exec("ALTER TABLE sessions DROP COLUMN verified_task_count");
     db!.exec("ALTER TABLE sessions DROP COLUMN one_shot_task_count");
-    db!.exec("DROP TABLE category_costs");
+    // v3 created `category_costs` and v32 drops it again, so a fully-migrated
+    // DB no longer has it to remove here — IF EXISTS keeps the v2 simulation
+    // honest either way (a real v2 DB never had the table).
+    db!.exec("DROP TABLE IF EXISTS category_costs");
     db!.prepare("UPDATE meta SET value = '2' WHERE key = 'schema_version'").run();
     db!.prepare("DELETE FROM meta WHERE key = 'needs_reconcile_after_v3'").run();
     reloaded.conn.closeDb();
@@ -241,8 +244,8 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const second = await reloadModulesPointingAt(tmpHome);
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.appliedMigrations).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30, 31]);
-    expect(result.schemaVersion).toBe(31);
+    expect(result.appliedMigrations).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30, 31, 32]);
+    expect(result.schemaVersion).toBe(32);
 
     const db2 = await second.conn.getDb();
     expect(db2).not.toBeNull();
@@ -253,10 +256,13 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const sessionCols = db2!.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>;
     expect(sessionCols.some((c) => c.name === "verified_task_count")).toBe(true);
     expect(sessionCols.some((c) => c.name === "one_shot_task_count")).toBe(true);
+    // v3 recreates `category_costs` and v32 drops it again, so a DB migrated
+    // the whole way ends with the table absent. v3 still has to run its CREATE:
+    // the migrations in between are written against a schema that has it.
     const tableRow = db2!
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='category_costs'")
       .get() as { name?: string } | undefined;
-    expect(tableRow?.name).toBe("category_costs");
+    expect(tableRow).toBeUndefined();
 
     // Readiness flag was set so the read-side falls back until reconcile
     // populates the new columns.
@@ -271,7 +277,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const reloaded = await reloadModulesPointingAt(tmpHome);
     const result = await reloaded.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.schemaVersion).toBe(31);
+    expect(result.schemaVersion).toBe(32);
 
     const db = await reloaded.conn.getDb();
     expect(db).not.toBeNull();
@@ -295,7 +301,7 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const reloaded = await reloadModulesPointingAt(tmpHome);
     const result = await reloaded.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.schemaVersion).toBe(31);
+    expect(result.schemaVersion).toBe(32);
 
     const db = await reloaded.conn.getDb();
     expect(db).not.toBeNull();
@@ -337,8 +343,8 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     const second = await reloadModulesPointingAt(tmpHome);
     const result = await second.mig.initDb();
     expect(result.error).toBeNull();
-    expect(result.appliedMigrations).toEqual([18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30, 31]);
-    expect(result.schemaVersion).toBe(31);
+    expect(result.appliedMigrations).toEqual([18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30, 31, 32]);
+    expect(result.schemaVersion).toBe(32);
 
     const db2 = await second.conn.getDb();
     const rows = db2!
@@ -407,8 +413,8 @@ describe.skipIf(!driverAvailable)("initDb", () => {
     // 27 runs even though the stamp is already 26 — the point of the gap.
     // 28 rides along: this fixture is stamped 26, so every later migration
     // applies. The assertion is about 27 RUNNING, not about it being last.
-    expect(result.appliedMigrations).toEqual([27, 28, 29, 30, 31]);
-    expect(result.schemaVersion).toBe(31);
+    expect(result.appliedMigrations).toEqual([27, 28, 29, 30, 31, 32]);
+    expect(result.schemaVersion).toBe(32);
 
     const db2 = await second.conn.getDb();
     const cols = (
@@ -421,6 +427,64 @@ describe.skipIf(!driverAvailable)("initDb", () => {
       .all() as Array<{ files_seen: number; error: string | null }>;
     expect(rows).toHaveLength(1);
     expect(rows[0].files_seen).toBe(40);
+    second.conn.closeDb();
+  });
+
+  it("v32 drops the write-only daily_costs / category_costs rollups (#566)", async () => {
+    // Structural replacement for the poison test #564 added: once the tables
+    // are gone, "the read path cannot trust a stale rollup" stops being a
+    // behavior to assert and becomes a property of the schema. This is what
+    // proves the schema actually reached that state — on a MIGRATED DB, which
+    // is the path that matters (a fresh one simply never creates them).
+    const reloaded = await reloadModulesPointingAt(tmpHome);
+    expect((await reloaded.mig.initDb()).error).toBeNull();
+    const db = await reloaded.conn.getDb();
+
+    // Rewind to v31: recreate both tables as they stood, with a row each, and
+    // stamp the version back. Rows matter — a DROP of an empty table would not
+    // prove data is discarded rather than orphaned.
+    db!.exec(`
+      CREATE TABLE IF NOT EXISTS daily_costs (
+        day TEXT NOT NULL, project_slug TEXT NOT NULL, model TEXT NOT NULL,
+        input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_create_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+        cost_usd REAL NOT NULL DEFAULT 0, turn_count INTEGER NOT NULL DEFAULT 0,
+        session_count INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (day, project_slug, model)
+      ) WITHOUT ROWID;
+      CREATE INDEX IF NOT EXISTS daily_costs_by_day ON daily_costs(day DESC);
+      CREATE TABLE IF NOT EXISTS category_costs (
+        day TEXT NOT NULL, project_slug TEXT NOT NULL, category TEXT NOT NULL,
+        turns INTEGER NOT NULL DEFAULT 0, tokens INTEGER NOT NULL DEFAULT 0,
+        cost_usd REAL NOT NULL DEFAULT 0,
+        PRIMARY KEY (day, project_slug, category)
+      ) WITHOUT ROWID;
+      CREATE INDEX IF NOT EXISTS category_costs_by_day ON category_costs(day DESC);
+      INSERT INTO daily_costs (day, project_slug, model) VALUES ('2026-04-30', 'pm', 'sonnet');
+      INSERT INTO category_costs (day, project_slug, category) VALUES ('2026-04-30', 'pm', 'Coding');
+    `);
+    db!.prepare("UPDATE meta SET value = '31' WHERE key = 'schema_version'").run();
+    reloaded.conn.closeDb();
+
+    const second = await reloadModulesPointingAt(tmpHome);
+    const result = await second.mig.initDb();
+    expect(result.error).toBeNull();
+    expect(result.appliedMigrations).toEqual([32]);
+    expect(result.schemaVersion).toBe(32);
+
+    const db2 = await second.conn.getDb();
+    const names = (
+      db2!
+        .prepare(
+          `SELECT name FROM sqlite_master
+            WHERE name IN ('daily_costs', 'category_costs',
+                           'daily_costs_by_day', 'category_costs_by_day')`
+        )
+        .all() as Array<{ name: string }>
+    ).map((r) => r.name);
+    // Tables AND the indexes that rode on them — DROP TABLE takes both, which
+    // is why v32 needs no separate DROP INDEX statements.
+    expect(names).toEqual([]);
     second.conn.closeDb();
   });
 });

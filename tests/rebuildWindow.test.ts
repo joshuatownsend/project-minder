@@ -183,12 +183,14 @@ describe.skipIf(!driverAvailable)("isRebuildInProgress (#478)", () => {
     }
   });
 
-  it("stays up through the rollup refresh after the last row is stamped", async () => {
+  it("stays up through the post-loop tail after the last row is stamped", async () => {
     // `hasMixedDerivations` goes false the instant the last session transaction
-    // commits, but `reconcileAllSessions` refreshes `daily_costs` and
-    // `category_costs` AFTER that — so for the length of that tail every
-    // `derived_version` agrees while the rollups the aggregates read do not
-    // (Codex P1, PR #525).
+    // commits, but `reconcileAllSessions` still has work after that — it
+    // rewrites continuation links across the corpus and only then clears the
+    // v3 readiness gate. For the length of that tail every `derived_version`
+    // agrees while the index is not yet settled (Codex P1, PR #525). The tail
+    // was longer when this was written: it also refreshed the `daily_costs` /
+    // `category_costs` rollups, dropped in #566.
     //
     // The run row lives in the DATABASE, which is the property every
     // in-process signal lacked: reconciliation runs in a worker thread whose
