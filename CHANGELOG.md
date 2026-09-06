@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-09-06
+
+*The cache that outlived its reason is gone. 1.15.0 caught `byCategory` trusting a rollup that had drifted to a third of the truth and stopped reading it; this release finishes the thought and deletes the rollups outright, along with every line of ingest machinery that kept them fed. Once covering indexes made the equivalent query index-only, a table that can go stale bought nothing but a way to be wrong — so schema v32 drops both, removing a class of staleness rather than one instance of it, and taking two index writes off every turn the indexer stores. Alongside it, the projects breakdown learns to respect the source filter it was already advertising: ask for one adapter's usage and the tool and MCP lists beside the cost are now that adapter's too, instead of every harness on the machine.*
+
 ### Removed
 
 - **The `daily_costs` and `category_costs` rollup tables** (#566, schema v32, follow-up to #564). Both were pre-aggregated by day and maintained on every ingest, and both had become write-only: the day and model breakdowns on `/api/usage` had long aggregated `turns` directly, and #564 stopped `byCategory` reading `category_costs` after finding it ~30% populated and under-reporting wide-period spend ~3×. With #562's `turns_usage_cover` making the equivalent `GROUP BY` index-only, a cache that could go stale bought nothing, so the tables, their indexes, and the tuple-collection and refresh machinery that fed them are gone — removing a class of staleness rather than one instance of it, and taking two index writes off every ingested turn. Migration v32 drops both tables on first startup after upgrade; it does not `VACUUM` (the freed pages go on the freelist and `maintenance.ts` owns reclaim). No `DERIVED_VERSION` bump and no re-parse: removing a table nothing reads cannot change a derived value. No user-visible change — every figure these tables once served has been computed from `turns` for some time.
