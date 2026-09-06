@@ -356,7 +356,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     reloaded.conn.closeDb();
   });
 
-  it("populates daily_costs from ingested sessions", async () => {
+  it("stamps day, model and a priced cost on ingested assistant turns", async () => {
     const { reloaded, projectsDir } = await setup();
     const sessionFile = path.join(projectsDir, "C--dev-pm", "s1.jsonl");
     await writeJsonl(sessionFile, [
@@ -370,18 +370,22 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     const db = (await reloaded.conn.getDb())!;
     await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
 
-    const row = db
+    // Read the facts off `turns` itself. This used to assert them through the
+    // `daily_costs` rollup, which was dropped in #566 once nothing read it —
+    // the underlying ingest claims (right day bucket, model carried through,
+    // positive priced cost) are unchanged, only the observable is.
+    const rows = db
       .prepare(
-        "SELECT day, project_slug, model, turn_count, cost_usd FROM daily_costs WHERE day = '2026-04-30'"
+        `SELECT substr(t.ts, 1, 10) AS day, s.project_slug AS project_slug,
+                t.model AS model, t.cost_usd AS cost_usd
+         FROM turns t JOIN sessions s USING (session_id)
+         WHERE t.role = 'assistant' AND substr(t.ts, 1, 10) = '2026-04-30'`
       )
-      .get() as
-      | { day: string; project_slug: string; model: string; turn_count: number; cost_usd: number }
-      | undefined;
-    expect(row).toBeDefined();
-    expect(row!.day).toBe("2026-04-30");
-    expect(row!.model).toBe("claude-sonnet-4-5");
-    expect(row!.turn_count).toBe(1);
-    expect(row!.cost_usd).toBeGreaterThan(0);
+      .all() as Array<{ day: string; project_slug: string; model: string; cost_usd: number }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].day).toBe("2026-04-30");
+    expect(rows[0].model).toBe("claude-sonnet-4-5");
+    expect(rows[0].cost_usd).toBeGreaterThan(0);
 
     reloaded.conn.closeDb();
   });
@@ -1214,12 +1218,12 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     reloaded.conn.closeDb();
   });
 
-  it("refreshes daily_costs for the OLD day when a turn moves between days", async () => {
-    // Regression test: re-ingesting a session that moves an assistant
-    // turn from day X to day Y previously left day X's daily_costs row
-    // holding stale token/cost totals from the deleted turn. Now we
-    // collect the OLD session's tuples before replace and union them
-    // with the new ones for the refresh.
+  it("leaves no turn on the OLD day when a session moves an assistant turn between days", async () => {
+    // Regression test for the full-replace path: re-ingesting a session that
+    // moves an assistant turn from day X to day Y must delete the day-X row,
+    // not leave it alongside the new one. Asserted against `turns` directly;
+    // before #566 the same claim was made through the `daily_costs` rollup
+    // (whose day-X row went stale), which no longer exists.
     const { reloaded, projectsDir } = await setup();
     const sessionFile = path.join(projectsDir, "C--dev-shift", "s1.jsonl");
     await writeJsonl(sessionFile, [
@@ -1232,11 +1236,13 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
 
     const db = (await reloaded.conn.getDb())!;
     await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
-    expect(
+    const assistantTurnsOn = (day: string) =>
       (db
-        .prepare("SELECT COUNT(*) AS n FROM daily_costs WHERE day = '2026-04-30'")
-        .get() as { n: number }).n
-    ).toBe(1);
+        .prepare(
+          "SELECT COUNT(*) AS n FROM turns WHERE role = 'assistant' AND substr(ts, 1, 10) = ?"
+        )
+        .get(day) as { n: number }).n;
+    expect(assistantTurnsOn("2026-04-30")).toBe(1);
 
     // Re-ingest with the assistant turn moved to a different day.
     await writeJsonl(sessionFile, [
@@ -1251,16 +1257,8 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
 
     // Day X should be gone (no remaining assistant turns), day Y populated.
-    expect(
-      (db
-        .prepare("SELECT COUNT(*) AS n FROM daily_costs WHERE day = '2026-04-30'")
-        .get() as { n: number }).n
-    ).toBe(0);
-    expect(
-      (db
-        .prepare("SELECT COUNT(*) AS n FROM daily_costs WHERE day = '2026-05-01'")
-        .get() as { n: number }).n
-    ).toBe(1);
+    expect(assistantTurnsOn("2026-04-30")).toBe(0);
+    expect(assistantTurnsOn("2026-05-01")).toBe(1);
 
     reloaded.conn.closeDb();
   });
@@ -1967,8 +1965,6 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions — non-Claude adapter p
     // assistant turns classified, user turn not
     expect(parsed.turns[0].category).toBeNull();
     expect(parsed.turns[1].category).toBeTypeOf("string");
-    // affected rollup tuple keyed on the real slug + model
-    expect([...parsed.affectedDays]).toContain("2026-05-01|codexproj|gpt-5");
     reloaded.conn.closeDb();
   });
 
@@ -2008,9 +2004,6 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions — non-Claude adapter p
     // The raw dir name is still what gets stored — `isWorktree` is derived
     // from it on both backends.
     expect(parsed.projectDirName).toBe("C--dev-app-x--claude-worktrees-featbranch");
-    // And the rollup tuples are keyed on the corrected slug, which is the
-    // stored consequence a later re-derivation has to restamp.
-    expect([...parsed.affectedDays]).toContain("2026-05-01|dev-app-x|gpt-5");
     reloaded.conn.closeDb();
   });
 
@@ -2204,7 +2197,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions — non-Claude adapter p
     reloaded.conn.closeDb();
   });
 
-  it("refreshes stale daily_costs tuples when an adapter file is rewritten with a different model", async () => {
+  it("replaces the adapter session's turns when the file is rewritten with a different model", async () => {
     const { reloaded, projectsDir } = await setup();
     const db = (await reloaded.conn.getDb())!;
     await fs.mkdir(projectsDir, { recursive: true });
@@ -2215,23 +2208,22 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions — non-Claude adapter p
       projectsDir, config: cfg(["claude", "codex"]), adapterSessions: [sf],
       parseAdapterFile: async () => [uAsst("2026-05-01T10:00:01Z", "gpt-4", "hi", "cx-1")],
     });
-    expect(
-      (db.prepare("SELECT COUNT(*) AS n FROM daily_costs WHERE model='gpt-4'").get() as { n: number }).n
-    ).toBe(1);
+    const turnsWithModel = (model: string) =>
+      (db
+        .prepare("SELECT COUNT(*) AS n FROM turns WHERE model = ?")
+        .get(model) as { n: number }).n;
+    expect(turnsWithModel("gpt-4")).toBe(1);
 
-    // Rewrite the SAME file with a different model. The old (day|project|gpt-4)
-    // tuple must be refreshed away, not left stale (mirrors the Claude path's
-    // old+new tuple union).
+    // Rewrite the SAME file with a different model. The old gpt-4 turn must be
+    // replaced, not left alongside the new one (mirrors the Claude full-replace
+    // path). Asserted on `turns`; before #566 this read the `daily_costs`
+    // rollup, whose stale (day|project|gpt-4) tuple was the visible symptom.
     await reloaded.ingest.reconcileAllSessions(db, {
       projectsDir, force: true, config: cfg(["claude", "codex"]), adapterSessions: [sf],
       parseAdapterFile: async () => [uAsst("2026-05-01T10:00:01Z", "gpt-5", "hi", "cx-1")],
     });
-    expect(
-      (db.prepare("SELECT COUNT(*) AS n FROM daily_costs WHERE model='gpt-4'").get() as { n: number }).n
-    ).toBe(0); // stale tuple recomputed → gone
-    expect(
-      (db.prepare("SELECT COUNT(*) AS n FROM daily_costs WHERE model='gpt-5'").get() as { n: number }).n
-    ).toBe(1);
+    expect(turnsWithModel("gpt-4")).toBe(0); // stale turn replaced → gone
+    expect(turnsWithModel("gpt-5")).toBe(1);
     reloaded.conn.closeDb();
   });
 

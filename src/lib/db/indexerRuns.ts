@@ -312,10 +312,17 @@ export function isRebuildInProgress(db: DatabaseT.Database): boolean {
   // Two conditions, and the second one is not redundant.
   //
   // `hasMixedDerivations` goes false the instant the last session transaction
-  // commits — but `reconcileAllSessions` refreshes the accumulated
-  // `daily_costs` and `category_costs` tuples AFTER that, so for the length of
-  // that tail every `derived_version` agrees while the rollups the aggregates
-  // read do not yet (Codex P1, PR #525).
+  // commits — but `reconcileAllSessions` still has work to do after that:
+  // `refreshContinuationLinks` rewrites `continued_from_session_id` across the
+  // whole corpus, and the v3 readiness gate is only cleared once the pass is
+  // known-good. For the length of that tail every `derived_version` agrees
+  // while the index is not yet settled (Codex P1, PR #525).
+  //
+  // The tail was longer when this guard was written: it also refreshed the
+  // `daily_costs` / `category_costs` rollups, which the aggregates read back
+  // then. Those rollups are gone (#566) and no aggregate reads a rollup any
+  // more, but the two steps named above still run after the last commit, so
+  // the guard is unchanged.
   //
   // An OPEN `'rebuild'` run covers exactly that tail, and it lives in the
   // database — which is the property every in-process signal lacked: the
@@ -328,8 +335,8 @@ export function isRebuildInProgress(db: DatabaseT.Database): boolean {
  * Is a pass that found stale rows still running?
  *
  * Recorded by `recordOptionForSweep` when it sees staleness, and closed in
- * `reconcileAllSessions`'s `finally` — so it spans the rollup refresh as well
- * as the session loop.
+ * `reconcileAllSessions`'s `finally` — so it spans the post-loop tail
+ * (continuation linking, readiness-gate clear) as well as the session loop.
  *
  * NOT a substitute for the row check. A run row says a pass is in flight; it
  * says nothing about an index left mixed by a crash, a rollback, or a build

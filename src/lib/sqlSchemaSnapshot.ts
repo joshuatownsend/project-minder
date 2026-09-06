@@ -1,4 +1,4 @@
-// Last verified: schema version 31 (src/lib/db/schema.sql + migrations v1-v31)
+// Last verified: schema version 32 (src/lib/db/schema.sql + migrations v1-v32)
 // Re-verify with `tests/sqlSchemaSnapshot.test.ts` after any migration.
 //
 // Column ORDER here is not meaningful — the live check compares both
@@ -95,18 +95,8 @@ export const SQL_SCHEMA: TableSchema[] = [
     table: "file_edits",
     columns: ["session_id", "turn_index", "file_path", "op", "ts"],
   },
-  {
-    table: "daily_costs",
-    columns: [
-      "day", "project_slug", "model", "input_tokens", "output_tokens",
-      "cache_create_tokens", "cache_read_tokens", "cost_usd", "turn_count",
-      "session_count",
-    ],
-  },
-  {
-    table: "category_costs",
-    columns: ["day", "project_slug", "category", "turns", "tokens", "cost_usd"],
-  },
+  // `daily_costs` and `category_costs` were dropped in v32 (#566) — both had
+  // become write-only rollups. See the note in schema.sql where they stood.
   {
     table: "agents",
     columns: [

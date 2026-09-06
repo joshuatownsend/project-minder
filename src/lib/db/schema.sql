@@ -441,55 +441,14 @@ CREATE TABLE file_edits (
 
 CREATE INDEX file_edits_by_path ON file_edits(file_path, ts DESC);
 
--- ─── daily_costs ─────────────────────────────────────────────────────────
--- Pre-aggregated rollup by (day, project, model). Updated incrementally on
--- every session ingest via INSERT … ON CONFLICT DO UPDATE.
---
--- WRITE-ONLY: no read path reads this table — the /usage day/model
--- breakdowns aggregate from `turns` directly. Maintained but unread;
--- removing it rides the same follow-up (#566).
-
-CREATE TABLE daily_costs (
-  day                  TEXT NOT NULL,
-  project_slug         TEXT NOT NULL,
-  model                TEXT NOT NULL,
-  input_tokens         INTEGER NOT NULL DEFAULT 0,
-  output_tokens        INTEGER NOT NULL DEFAULT 0,
-  cache_create_tokens  INTEGER NOT NULL DEFAULT 0,
-  cache_read_tokens    INTEGER NOT NULL DEFAULT 0,
-  cost_usd             REAL    NOT NULL DEFAULT 0,
-  turn_count           INTEGER NOT NULL DEFAULT 0,
-  session_count        INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (day, project_slug, model)
-) WITHOUT ROWID;
-
-CREATE INDEX daily_costs_by_day ON daily_costs(day DESC);
-
--- ─── category_costs ─────────────────────────────────────────────────────
--- Pre-aggregated rollup by (day, project, category). Sister table to
--- `daily_costs`, but keyed on the classifier's category instead of model.
--- Updated incrementally by the ingest pipeline whenever a session's turns
--- change category mix (e.g., a classifier version bump moves a turn from
--- 'Coding' to 'Refactoring').
---
--- WRITE-ONLY as of #564: `byCategory` on /api/usage no longer reads this
--- rollup. It was only ~30% populated (most historical tuples were never
--- enqueued for refresh) and under-reported wide-period spend ~3×, so the
--- read path now recomputes from `turns` directly — fast index-only after
--- #562's `turns_usage_cover`. The incremental maintenance is retained but
--- unread; removing it is tracked in #566.
-
-CREATE TABLE category_costs (
-  day           TEXT NOT NULL,
-  project_slug  TEXT NOT NULL,
-  category      TEXT NOT NULL,
-  turns         INTEGER NOT NULL DEFAULT 0,
-  tokens        INTEGER NOT NULL DEFAULT 0,
-  cost_usd      REAL    NOT NULL DEFAULT 0,
-  PRIMARY KEY (day, project_slug, category)
-) WITHOUT ROWID;
-
-CREATE INDEX category_costs_by_day ON category_costs(day DESC);
+-- The `daily_costs` and `category_costs` rollup tables lived here until v32.
+-- Both were pre-aggregated by (day, project, model|category) and maintained on
+-- every ingest, and both ended up write-only: the /usage day and model
+-- breakdowns had long aggregated `turns` directly, and `byCategory` stopped
+-- reading `category_costs` in #564 after it was found ~30% populated and
+-- under-reporting wide-period spend ~3×. With v31's `turns_usage_cover` making
+-- the equivalent GROUP BY index-only, a cache that can go stale bought nothing,
+-- so the tables and their maintenance were removed (#566, migration v32).
 
 -- ─── catalogs (agents / skills / commands) ────────────────────────────────
 -- One row per catalog entry. `source` is 'user' | 'plugin' | 'project'.

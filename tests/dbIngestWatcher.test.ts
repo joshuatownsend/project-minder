@@ -262,18 +262,20 @@ describe.skipIf(!driverAvailable)("ingestWatcher", () => {
     const status = reloaded.watcher.getWatcherStatus();
     expect(status.eventsHandled).toBeGreaterThan(0);
 
-    // Watcher-driven reconciles must refresh BOTH rollups. daily_costs was
-    // always refreshed; category_costs used to be skipped — and the sweep
-    // can't backfill it because the reconcile already advanced the file's
-    // cursor, so it stayed stale until a forced full re-parse.
-    const dailyRows = (db
-      .prepare("SELECT COUNT(*) AS n FROM daily_costs")
-      .get() as { n: number }).n;
-    const categoryRows = (db
-      .prepare("SELECT COUNT(*) AS n FROM category_costs")
-      .get() as { n: number }).n;
-    expect(dailyRows).toBeGreaterThan(0);
-    expect(categoryRows).toBeGreaterThan(0);
+    // A watcher-driven reconcile must land the session's turns, priced and
+    // classified, exactly as a sweep would. This used to assert that both
+    // rollups were refreshed (category_costs was once skipped here, and the
+    // sweep could not backfill it because the reconcile had already advanced
+    // the file's cursor); the rollups were dropped in #566, so the assertion
+    // moves to the rows they were derived from.
+    const turnRows = db
+      .prepare(
+        "SELECT model, cost_usd, category FROM turns WHERE session_id = 's1' AND role = 'assistant'"
+      )
+      .all() as Array<{ model: string | null; cost_usd: number; category: string | null }>;
+    expect(turnRows).toHaveLength(1);
+    expect(turnRows[0].model).toBe("claude-sonnet-4-5");
+    expect(turnRows[0].category).toBeTypeOf("string");
 
     await reloaded.watcher.stopIngestWatcher();
     reloaded.conn.closeDb();

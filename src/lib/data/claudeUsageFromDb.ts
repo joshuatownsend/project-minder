@@ -63,9 +63,11 @@ import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptP
 // 3. **Nested subagent transcripts are excluded from
 //    `conversationCount`** (#480). Ingest indexes
 //    `<project>/<parent>/subagents/agent-*.jsonl` as its own `sessions`
-//    row so its cost reaches the daily_costs rollups, but the session
-//    row's own aggregates are primary-only (`is_sidechain = 0`, see
-//    `ingest.ts:2834`), so such a row contributes **zero** turns and
+//    row so its cost reaches the usage totals, but the session
+//    row's own aggregates are primary-only (`is_sidechain = 0` — see
+//    the session-aggregate UPDATE in `appendSessionTail`, and the
+//    `primaryTurnCount` that `writeSession` captures before appending
+//    sidechain rows), so such a row contributes **zero** turns and
 //    zero tokens here. Counting it as a conversation was therefore
 //    incoherent even ignoring parity: on the reference index 1,268 of
 //    6,799 rows (18.6%, and up to 94% for a single project) are nested,

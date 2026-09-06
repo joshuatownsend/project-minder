@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Removed
+
+- **The `daily_costs` and `category_costs` rollup tables** (#566, schema v32, follow-up to #564). Both were pre-aggregated by day and maintained on every ingest, and both had become write-only: the day and model breakdowns on `/api/usage` had long aggregated `turns` directly, and #564 stopped `byCategory` reading `category_costs` after finding it ~30% populated and under-reporting wide-period spend ~3×. With #562's `turns_usage_cover` making the equivalent `GROUP BY` index-only, a cache that could go stale bought nothing, so the tables, their indexes, and the tuple-collection and refresh machinery that fed them are gone — removing a class of staleness rather than one instance of it, and taking two index writes off every ingested turn. Migration v32 drops both tables on first startup after upgrade; it does not `VACUUM` (the freed pages go on the freelist and `maintenance.ts` owns reclaim). No `DERIVED_VERSION` bump and no re-parse: removing a table nothing reads cannot change a derived value. No user-visible change — every figure these tables once served has been computed from `turns` for some time.
+
 ### Fixed
 
 - **Source-filtered usage reports showed every adapter's tool calls** (#568, sibling to #564). In the projects breakdown of `/api/usage`, each project's header (cost, turns) and category mix filter `?source=`, but the top-tools and MCP-server queries beside them filtered only period and Claude home. A `?source=codex` request therefore decorated a Codex-only cost figure with a tool list and MCP-server list drawn from *every* adapter — and because the list is capped at the five most-used tools, another source's busier tools could push the requested source's own tools off it entirely. Both queries now carry the same `s.source` predicate as the header they sit under. Unfiltered reports (the default, and every request that omits `?source=`) are unaffected.
