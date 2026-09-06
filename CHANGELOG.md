@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.16.1] - 2026-09-06
+
+*A release with no functional change, cut to put a testable build in hand. What it carries is an accuracy fix to the codebase's own commentary: an audit of every `file.ts:<line>` pointer in the source found roughly 45 of 78 aimed at unrelated code, having drifted silently as their targets grew. They now cite symbols. Worth recording what reviewing that change taught, because it inverts the intuition — nine findings, and every one was in a replacement rather than a removal. Deleting a rotted line number is safe; writing the sentence that replaces it is where the risk lives, because a fluent symbol reference invites less scrutiny than an obviously-stale `:3761` and earns trust it has not yet paid for.*
+
+### Changed
+
+- **Source comments cite symbols instead of line numbers** (#572). Comments across `src/`, `tests/` and `scripts/` pointed at the logic they describe with `file.ts:<line>`. An audit of all 78 such pointers found ~45 landing on unrelated code on `main` — and the decay tracks how active the target file is, so they were least reliable exactly where the code is most worth pointing at (nearly every citation into `ingest.ts`, `usage/parser.ts` and `claudeConversations.ts` was wrong; citations into rarely-touched components were fine). 58 citations across 32 files now name a verified symbol; seven are kept deliberately, all aimed at anonymous inline JSX where no symbol exists and prose would be less precise than a number. Two classes of rot that a line number cannot survive turned up on the way: a pointer cannot survive a **file move** (`canonicalizeDirName` had changed modules, so two comments were wrong about the file, not the line), and a **stale claim can hide behind a stale pointer** — one test comment described a file-parse divergence as live and "filed as #453" when both that issue and its parent were long closed and the divergence fixed.
+
+**No behavior change.** No API, schema, migration, or UI change; `~/.minder/index.db` stays at schema **v32** and nothing re-indexes. Upgrading from a build older than 1.15.0 still applies the v30 → v32 migrations on first start — v31's covering indexes take roughly 4 seconds and ~30 MB, once, before serving.
+
 ## [1.16.0] - 2026-09-06
 
 *The cache that outlived its reason is gone. 1.15.0 caught `byCategory` trusting a rollup that had drifted to a third of the truth and stopped reading it; this release finishes the thought and deletes the rollups outright, along with every line of ingest machinery that kept them fed. Once covering indexes made the equivalent query index-only, a table that can go stale bought nothing but a way to be wrong — so schema v32 drops both, removing a class of staleness rather than one instance of it, and taking two index writes off every turn the indexer stores. Alongside it, the projects breakdown learns to respect the source filter it was already advertising: ask for one adapter's usage and the tool and MCP lists beside the cost are now that adapter's too, instead of every harness on the machine.*
