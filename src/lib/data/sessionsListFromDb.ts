@@ -82,10 +82,15 @@ import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptP
 // 7. `isActive`: same 2-min mtime heuristic in both backends — matches.
 // 8. **`startTime` / `endTime` derived from non-sidechain turns only**:
 //    DB ingest stamps `sessions.start_ts` / `end_ts` from `turns.ts`,
-//    and `turns` skips sidechain / meta / non-(user|assistant) entries
-//    (the `entry.isMeta || !entry.timestamp` and `type !== "assistant" &&
-//    type !== "user"` guards in `readJsonlSession`). File-parse's
-//    `scanSessionFileRaw` walks every JSONL entry's `timestamp`.
+//    and `turns` skips sidechain / meta / non-(user|assistant) entries via
+//    three separate guards in `readJsonlSession`:
+//    `entry.isSidechain && !isDelegatedAgentTranscript` drops sidechains,
+//    `entry.isMeta || !entry.timestamp` drops meta, and
+//    `type !== "assistant" && type !== "user"` drops the rest. Note the
+//    exception, which makes the first narrower than it reads: a DELEGATED
+//    subagent transcript fails that condition, so its entries fall through
+//    and DO stamp `startTs`/`endTs`. File-parse's `scanSessionFileRaw`
+//    walks every JSONL entry's `timestamp`.
 //    For sessions with sidechain or system entries before the first
 //    user turn or after the last assistant turn, the DB path's
 //    `startTime` / `endTime` (and therefore `durationMs`) can fall
