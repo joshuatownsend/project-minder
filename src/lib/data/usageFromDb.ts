@@ -1386,10 +1386,13 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
   // here. The three queries each fire once per request anyway, and
   // their wins come from the SQL aggregation, not the prepare.
   // Per-project category mix from `turns` (never the `category_costs` rollup,
-  // which was ~30% populated and under-reported spend — #564). Same
-  // turns-driven shape as the `toolRows`/`mcpRows` queries just below, with an
-  // optional home filter; after #562's `turns_usage_cover` covering index this
-  // GROUP BY resolves index-only.
+  // which was ~30% populated and under-reported spend — #564). After #562's
+  // `turns_usage_cover` covering index this GROUP BY resolves index-only.
+  // Unlike the `toolRows`/`mcpRows` siblings below, this filters `s.source` as
+  // well as `s.home_key`: the header query above is source-filtered, and
+  // `byCategory` now is too, so an unfiltered category mix here would disagree
+  // with both on a `?source=` request (Copilot, #567). The tool siblings share
+  // that source gap but it predates #564 and is tracked separately (#568).
   const catRows = db
     .prepare(
       `SELECT s.project_slug AS projectSlug, t.category AS category,
@@ -1398,12 +1401,13 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
        WHERE t.role = 'assistant'
          AND t.category IS NOT NULL
          AND (? IS NULL OR t.ts >= ?)
+         AND (? IS NULL OR s.source = ?)
          AND (? IS NULL OR s.home_key = ?)
          AND s.project_slug IN (${placeholders})
        GROUP BY s.project_slug, t.category
        ORDER BY cost DESC, s.project_slug ASC, t.category ASC`
     )
-    .all(f.periodStart, f.periodStart, f.home, f.home, ...slugs) as Array<{
+    .all(f.periodStart, f.periodStart, f.source, f.source, f.home, f.home, ...slugs) as Array<{
     projectSlug: string;
     category: string;
     cost: number;
