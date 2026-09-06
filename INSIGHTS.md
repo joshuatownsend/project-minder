@@ -1,5 +1,31 @@
 # Insights
 
+<!-- insight:58b7df774b26 | session:8cfc57ec-b27d-4c22-b88a-4139690433ed | 2026-09-06T11:15:30.088Z -->
+## ★ Insight
+The reason these two issues are siblings is a classic SQL-refactor hazard: `queryProjectDetails` fires **four** queries (header, catRows, toolRows, mcpRows) that must agree with each other, but each carries its own hand-written `WHERE` clause. There's no shared filter-builder, so a predicate added to one silently diverges from the other three — which is exactly how the `s.source` gap survived.
+
+---
+
+<!-- insight:e4af63528d10 | session:8cfc57ec-b27d-4c22-b88a-4139690433ed | 2026-09-06T02:27:49.213Z -->
+## ★ Insight
+The sibling `toolRows`/`mcpRows` have the *same* source-filter gap — but that's a pre-existing bug unrelated to #564, so per the out-of-scope rule I'll fix only the flagged `catRows` here and file a follow-up for the tool queries, rather than expand this PR's blast radius.
+
+---
+
+<!-- insight:96a82f3f69fb | session:8cfc57ec-b27d-4c22-b88a-4139690433ed | 2026-09-06T02:05:22.840Z -->
+## ★ Insight
+With v31's `turns_usage_cover` present, **both** rewritten queries resolve `USING COVERING INDEX turns_usage_cover` — no PK fetch of wide rows:
+- byCategory (unfiltered, period=all): **~170ms** — matches the issue's estimate
+- catRows (47 slugs, never measured before): **~450ms** — index-only, acceptable for one query/report
+
+---
+
+<!-- insight:e43cadbb53f5 | session:8cfc57ec-b27d-4c22-b88a-4139690433ed | 2026-09-06T01:47:04.819Z -->
+## ★ Insight
+Issue #564 offers two fixes: (1) backfill + fix the enqueue gap (keeps rollups, addresses root cause), or (2) drop the rollup read entirely (relies on #562's `turns_usage_cover` making the raw GROUP BY ~170ms index-only). Option 2 deletes a whole *class* of staleness bugs rather than patching one instance — usually the better structural call when the performance reason for the cache has evaporated.
+
+---
+
 <!-- insight:af815b9ddddb | session:0d853dc1-d967-43c9-be8f-ac36c6255a9b | 2026-09-02T01:48:22.785Z -->
 ## ★ Insight
 The three failures were `Hook timed out in 10000ms` from `installIsolatedState`, a vitest `beforeEach` limit, not an assertion. That distinction is what made a retry the right call instead of a `--no-verify`, which the project rules forbid. A load-induced flake in a doc-only commit is still worth noting: the isolated-state setup is sensitive enough that a busy box can fail the hook.
