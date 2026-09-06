@@ -558,3 +558,65 @@ describe.skipIf(!driverAvailable)("#236 — one row per project, not per dir-nam
     mods.conn.closeDb();
   });
 });
+
+describe.skipIf(!driverAvailable)("#567 — projectDetails category mix honors the source filter", () => {
+  // The `catRows` query that builds each project's `categoryBreakdown` filters
+  // `s.source`, matching the source-filtered header it decorates (and the
+  // source-filtered `byCategory`). Without that predicate a `?source=` request
+  // would fold another adapter's spend into the category mix while the header
+  // cost/turns beside it excluded it (Copilot, PR #567). Raw inserts because
+  // the ingest path only ever writes source='claude'.
+  it("excludes another source's spend from a source-filtered category mix", async () => {
+    const mods = await reloadModules();
+    const init = await mods.mig.initDb();
+    expect(init.available).toBe(true);
+    const db = (await mods.conn.getDb())!;
+
+    const slug = "dev-app";
+    const homeKey = normalizePathKey(path.join(tmpHome, ".claude"));
+    const insertSession = db.prepare(
+      `INSERT INTO sessions
+         (session_id, project_slug, project_dir_name, file_path, file_mtime_ms,
+          file_size, source, home_key, start_ts, end_ts, assistant_turn_count,
+          indexed_at_ms)
+       VALUES (?, ?, 'C--dev-app', ?, 0, 0, ?, ?, ?, ?, 1, 0)`
+    );
+    const insertTurn = db.prepare(
+      `INSERT INTO turns
+         (session_id, turn_index, ts, role, model, input_tokens, output_tokens,
+          cost_usd, category)
+       VALUES (?, 0, ?, 'assistant', 'claude-opus-4-7', 100, 0, ?, 'Coding')`
+    );
+
+    // Same project + home, two adapter sources, each with one Coding turn.
+    insertSession.run("sess-claude", slug, "/tmp/c.jsonl", "claude",
+      homeKey, "2025-01-01T10:00:00Z", "2025-01-01T10:05:00Z");
+    insertTurn.run("sess-claude", "2025-01-01T10:00:00Z", 5);
+    insertSession.run("sess-codex", slug, "/tmp/x.jsonl", "codex",
+      homeKey, "2025-01-01T11:00:00Z", "2025-01-01T11:05:00Z");
+    insertTurn.run("sess-codex", "2025-01-01T11:00:00Z", 99);
+
+    // Filter to 'claude'. The header cost is source-filtered, so the category
+    // mix under it must be too: $5, never $5 + $99.
+    const claudeOnly = await mods.fromDb.loadUsageReportFromSql(db, "all", slug, "claude");
+    const detail = claudeOnly.projectDetails.find((p) => p.projectSlug === slug);
+    expect(detail).toBeDefined();
+    const coding = detail!.categoryBreakdown.find((c) => c.category === "Coding");
+    expect(coding).toBeDefined();
+    expect(coding!.cost).toBeCloseTo(5);
+    expect(coding!.turns).toBe(1);
+    // The invariant Copilot flagged: the mix agrees with its own header total.
+    expect(detail!.cost).toBeCloseTo(coding!.cost);
+
+    // Sanity: unfiltered sees both sources ($104), proving the filter — not an
+    // empty table — is what excluded the codex spend above.
+    const both = await mods.fromDb.loadUsageReportFromSql(db, "all", slug);
+    const bothCoding = both.projectDetails
+      .find((p) => p.projectSlug === slug)!
+      .categoryBreakdown.find((c) => c.category === "Coding")!;
+    expect(bothCoding.cost).toBeCloseTo(104);
+    expect(bothCoding.turns).toBe(2);
+
+    mods.conn.closeDb();
+  });
+});

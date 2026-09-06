@@ -724,7 +724,7 @@ export async function getUsage(
   if (await checkV3Gate("getUsage", db)) {
     logIntentionalFallthrough(
       "getUsage",
-      "DB awaiting v3 reconcile (cost_usd / category_costs not yet populated)"
+      "DB awaiting v3 reconcile (cost_usd not yet populated on turns)"
     );
     return runFileUsage(period, project, source, home);
   }

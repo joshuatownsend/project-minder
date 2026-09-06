@@ -443,8 +443,11 @@ CREATE INDEX file_edits_by_path ON file_edits(file_path, ts DESC);
 
 -- ─── daily_costs ─────────────────────────────────────────────────────────
 -- Pre-aggregated rollup by (day, project, model). Updated incrementally on
--- every session ingest via INSERT … ON CONFLICT DO UPDATE so the /usage
--- chart is a direct read, not a runtime aggregation.
+-- every session ingest via INSERT … ON CONFLICT DO UPDATE.
+--
+-- WRITE-ONLY: no read path reads this table — the /usage day/model
+-- breakdowns aggregate from `turns` directly. Maintained but unread;
+-- removing it rides the same follow-up (#566).
 
 CREATE TABLE daily_costs (
   day                  TEXT NOT NULL,
@@ -465,17 +468,16 @@ CREATE INDEX daily_costs_by_day ON daily_costs(day DESC);
 -- ─── category_costs ─────────────────────────────────────────────────────
 -- Pre-aggregated rollup by (day, project, category). Sister table to
 -- `daily_costs`, but keyed on the classifier's category instead of model.
--- Drives `byCategory` on /api/usage as a direct SELECT — no rehydrate,
--- no in-JS classification pass. Updated incrementally by the ingest
--- pipeline whenever a session's turns change category mix (e.g., a
--- classifier version bump moves a turn from 'Coding' to 'Refactoring').
+-- Updated incrementally by the ingest pipeline whenever a session's turns
+-- change category mix (e.g., a classifier version bump moves a turn from
+-- 'Coding' to 'Refactoring').
 --
--- Note: `byCategory.oneShotRate` is deliberately NOT denormalized here.
--- The read path pairs this rollup with a small live GROUP BY over
--- `turns.task_outcome` instead (`queryCategoryTasks` in usageFromDb.ts),
--- which keeps this table's incremental maintenance a pure spend rollup —
--- the rate would otherwise have to be recomputed on every ingest for a
--- field that two callers read.
+-- WRITE-ONLY as of #564: `byCategory` on /api/usage no longer reads this
+-- rollup. It was only ~30% populated (most historical tuples were never
+-- enqueued for refresh) and under-reported wide-period spend ~3×, so the
+-- read path now recomputes from `turns` directly — fast index-only after
+-- #562's `turns_usage_cover`. The incremental maintenance is retained but
+-- unread; removing it is tracked in #566.
 
 CREATE TABLE category_costs (
   day           TEXT NOT NULL,
