@@ -276,11 +276,11 @@ describe.skipIf(!driverAvailable)("byCategory — file-parse vs SQLite parity", 
   });
 
   it("reports the rate on the source-filtered path too", async () => {
-    // `queryByCategory` has two SQL bodies: the fast `category_costs` rollup,
-    // and a live recompute over `turns` used whenever a `?source=` or `?home=`
-    // filter is present (the rollup carries neither column). Only the rollup
-    // path is exercised above, so without this the filtered body could drop
-    // the rate entirely and every other test here would still pass.
+    // `queryByCategory` recomputes from `turns` for every filter (#564 dropped
+    // the `category_costs` rollup read). This exercises the `?source=` path
+    // specifically — the `source`/`home` columns live only on `sessions`, so a
+    // broken join predicate could drop the rate here while the unfiltered
+    // tests above still pass.
     await writeFixture();
     await state.reload();
     process.env.MINDER_USE_DB = "1";
@@ -355,7 +355,8 @@ describe.skipIf(!driverAvailable)("byCategory — file-parse vs SQLite parity", 
     expect(planted.n, "the sidechain row under test must exist").toBe(1);
 
     const data = await import("@/lib/data");
-    // Both SQL bodies: the rollup path (no filter) and the live recompute.
+    // Unfiltered and `?source=`-filtered — the same turns-driven body serves
+    // both (#564), so the `is_sidechain = 0` CASE guard must hold on each.
     for (const source of [undefined, "claude"]) {
       const { report } = await data.getUsage("all", undefined, source);
       const rows = byKey(report.byCategory);
@@ -385,5 +386,77 @@ describe.skipIf(!driverAvailable)("byCategory — file-parse vs SQLite parity", 
         expect(r, `backend useDb=${useDb}, category ${r.category}`).not.toHaveProperty("oneShotRate");
       }
     }
+  });
+
+  it("ignores the `category_costs` rollup and reads spend from `turns` (#564)", async () => {
+    // The regression this whole PR fixes: the rollup was ~30% populated and
+    // under-reported wide-period spend ~3×, yet the common-path read trusted
+    // it. Discriminating test — corrupt the rollup with absurd values AFTER a
+    // faithful reconcile, then assert `byCategory` still returns the
+    // `turns`-derived figures. This FAILS against the pre-#564 code (which read
+    // `category_costs` on the unfiltered path); it passes only because the read
+    // now recomputes from `turns`.
+    await writeFixture();
+    await state.reload();
+    process.env.MINDER_USE_DB = "1";
+
+    const mig = await import("@/lib/db/migrations");
+    expect((await mig.initDb()).error).toBeNull();
+    const conn = await import("@/lib/db/connection");
+    const db = (await conn.getDb())!;
+    const ingest = await import("@/lib/db/ingest");
+    await ingest.reconcileAllSessions(db, {
+      projectsDir: path.join(tmpHome, ".claude", "projects"),
+      recordRun: "reconcile",
+    });
+
+    // Ground truth straight from `turns` — exactly what the read path now does.
+    const truth = new Map(
+      (db
+        .prepare(
+          `SELECT t.category AS category,
+                  COUNT(*) AS turns,
+                  COALESCE(SUM(t.cost_usd), 0) AS cost
+           FROM turns t JOIN sessions s USING (session_id)
+           WHERE t.role = 'assistant' AND t.category IS NOT NULL
+           GROUP BY t.category`
+        )
+        .all() as Array<{ category: string; turns: number; cost: number }>)
+        .map((r) => [r.category, r])
+    );
+    expect(truth.size, "fixture must produce categories").toBeGreaterThan(0);
+
+    // Poison the rollup: inflate every existing tuple and inject a category
+    // that exists in NO turn. A read that trusts `category_costs` would report
+    // $999,999 totals and a phantom "Bogus564" row.
+    const poisoned = db
+      .prepare("UPDATE category_costs SET cost_usd = 999999, turns = 999999, tokens = 999999")
+      .run();
+    // Guard the guard: an empty rollup would make the poison a no-op and this
+    // test would pass without discriminating. Reconcile must have populated it.
+    expect(poisoned.changes, "category_costs must have rows to poison").toBeGreaterThan(0);
+    db.prepare(
+      `INSERT INTO category_costs (day, project_slug, category, turns, tokens, cost_usd)
+       VALUES ('2026-08-01', 'dev-x', 'Bogus564', 999999, 999999, 999999)`
+    ).run();
+
+    const data = await import("@/lib/data");
+    const { report, meta } = await data.getUsage("all", undefined);
+    expect(meta.backend).toBe("db");
+    const rows = byKey(report.byCategory);
+
+    // No phantom category, and no poisoned magnitude anywhere.
+    expect(rows).not.toHaveProperty("Bogus564");
+    for (const r of report.byCategory) {
+      expect(r.cost, `category ${r.category} must not carry the poisoned cost`).toBeLessThan(999999);
+    }
+    // Every real category matches the `turns`-derived spend and turn count.
+    expect(Object.keys(rows).sort()).toEqual([...truth.keys()].sort());
+    for (const [category, t] of truth) {
+      expect(rows[category].cost, `cost for ${category}`).toBeCloseTo(t.cost, 10);
+      expect(rows[category].turns, `turns for ${category}`).toBe(t.turns);
+    }
+
+    conn.closeDb();
   });
 });

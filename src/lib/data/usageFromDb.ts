@@ -260,8 +260,6 @@ interface FilterParams {
   periodStart: string | null;
   /** Project slug filter. null for "all projects". */
   project: string | null;
-  /** YYYY-MM-DD slice of `periodStart` for queries that filter by `day` column. */
-  startDay: string | null;
   /** Adapter source filter (e.g. "claude"). null for all sources. */
   source: string | null;
   /**
@@ -313,7 +311,6 @@ export async function loadUsageReportFromSql(
   const filter: FilterParams = {
     periodStart,
     project: project ?? null,
-    startDay: periodStart?.slice(0, 10) ?? null,
     source: source ?? null,
     home: home ?? null,
   };
@@ -716,75 +713,49 @@ function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdo
 }
 
 function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreakdown[] {
-  // Source- or home-filtered: the `category_costs` rollup is keyed only by
-  // (day, project, category) with no `source`/`home_key` column, so it can't
-  // answer per-source or per-home. Recompute from `turns` joined to `sessions`
-  // (same approach as `queryDaily` / `queryByModel`) — otherwise a `?source=`
-  // or `?home=` byCategory would mix everything while every other breakdown
-  // on the report is filtered. The token formula matches the rollup's
-  // (`refreshCategoryCosts`): input + output + cache_create + cache_read.
-  if (f.source !== null || f.home !== null) {
-    const rows = prepCached(db,
-        `SELECT
-           t.category                 AS category,
-           COUNT(*)                   AS turns,
-           COALESCE(SUM(t.input_tokens + t.output_tokens + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
-           COALESCE(SUM(t.cost_usd), 0) AS cost,
-           SUM(CASE WHEN t.task_outcome IS NOT NULL AND t.is_sidechain = 0 THEN 1 ELSE 0 END)  AS verifiedTasks,
-           SUM(CASE WHEN t.task_outcome = 'one_shot'  AND t.is_sidechain = 0 THEN 1 ELSE 0 END) AS oneShotTasks
-         FROM turns t JOIN sessions s USING (session_id)
-         WHERE t.role = 'assistant'
-           AND t.category IS NOT NULL
-           AND t.ts >= COALESCE(@periodStart, '')
-           AND (@project IS NULL OR s.project_slug = @project)
-           AND (@source IS NULL OR s.source = @source)
-         AND (@home IS NULL OR s.home_key = @home)
-         GROUP BY t.category
-         ORDER BY cost DESC, t.category ASC`
-      )
-      .all(f) as Array<{
-        category: string; turns: number; tokens: number; cost: number;
-        verifiedTasks: number; oneShotTasks: number;
-      }>;
-    // The `is_sidechain = 0` guards live INSIDE the CASE, not in the WHERE:
-    // subagent spend belongs in this breakdown (matching byModel/byProject)
-    // while subagent turns anchor no user-verified task. Moving them up would
-    // silently drop subagent tokens from the cost column.
-    return rows.map((r) => ({
-      category: r.category as CategoryType,
-      turns: r.turns,
-      tokens: r.tokens,
-      cost: r.cost,
-      ...oneShotRateOf(r),
-    }));
-  }
-
-  // Source-agnostic (the common case): read the fast `category_costs` rollup
-  // for spend, and a second small query over `turns` for the task columns.
-  // The rollup is keyed (day, project, category) and carries no
-  // `task_outcome`, so the rate cannot come from it; denormalizing one in
-  // would mean re-deriving it on every ingest for a field two callers read.
+  // Recompute from `turns` joined to `sessions` rather than reading the
+  // `category_costs` rollup. The rollup was only ~30% populated — most
+  // historical (day, project, category) tuples were never enqueued for
+  // refresh — so it under-reported wide-period spend by ~3× while byModel on
+  // the same report showed the true figure (#564). After #562's
+  // `turns_usage_cover` covering index the raw GROUP BY resolves index-only in
+  // ~170 ms, so the rollup's reason to exist (avoiding a full-corpus scan) is
+  // gone. One body now serves every filter — `?source=` / `?home=` included,
+  // which the rollup could never answer (it is keyed only by day/project/
+  // category, with no source/home column). Token formula: input + output +
+  // cache_create + cache_read.
   const rows = prepCached(db,
       `SELECT
-         category,
-         COALESCE(SUM(turns), 0)    AS turns,
-         COALESCE(SUM(tokens), 0)   AS tokens,
-         COALESCE(SUM(cost_usd), 0) AS cost
-       FROM category_costs
-       WHERE day >= COALESCE(@startDay, '')
-         AND (@project IS NULL OR project_slug = @project)
-       GROUP BY category
-       ORDER BY cost DESC, category ASC`
+         t.category                 AS category,
+         COUNT(*)                   AS turns,
+         COALESCE(SUM(t.input_tokens + t.output_tokens + t.cache_create_tokens + t.cache_read_tokens), 0) AS tokens,
+         COALESCE(SUM(t.cost_usd), 0) AS cost,
+         SUM(CASE WHEN t.task_outcome IS NOT NULL AND t.is_sidechain = 0 THEN 1 ELSE 0 END)  AS verifiedTasks,
+         SUM(CASE WHEN t.task_outcome = 'one_shot'  AND t.is_sidechain = 0 THEN 1 ELSE 0 END) AS oneShotTasks
+       FROM turns t JOIN sessions s USING (session_id)
+       WHERE t.role = 'assistant'
+         AND t.category IS NOT NULL
+         AND t.ts >= COALESCE(@periodStart, '')
+         AND (@project IS NULL OR s.project_slug = @project)
+         AND (@source IS NULL OR s.source = @source)
+         AND (@home IS NULL OR s.home_key = @home)
+       GROUP BY t.category
+       ORDER BY cost DESC, t.category ASC`
     )
-    .all(f) as Array<{ category: string; turns: number; tokens: number; cost: number }>;
-
-  const tasks = queryCategoryTasks(db, f);
+    .all(f) as Array<{
+      category: string; turns: number; tokens: number; cost: number;
+      verifiedTasks: number; oneShotTasks: number;
+    }>;
+  // The `is_sidechain = 0` guards live INSIDE the CASE, not in the WHERE:
+  // subagent spend belongs in this breakdown (matching byModel/byProject)
+  // while subagent turns anchor no user-verified task. Moving them up would
+  // silently drop subagent tokens from the cost column.
   return rows.map((r) => ({
     category: r.category as CategoryType,
     turns: r.turns,
     tokens: r.tokens,
     cost: r.cost,
-    ...oneShotRateOf(tasks.get(r.category)),
+    ...oneShotRateOf(r),
   }));
 }
 
@@ -795,40 +766,6 @@ function oneShotRateOf(t: { verifiedTasks: number; oneShotTasks: number } | unde
   return t && t.verifiedTasks > 0
     ? { oneShotRate: t.oneShotTasks / t.verifiedTasks }
     : {};
-}
-
-/**
- * Task outcomes per category, for the rollup path of `queryByCategory`.
- *
- * Filtered on `@periodStart` (a timestamp) while the rollup it decorates is
- * filtered on `@startDay` (that timestamp's date). The rollup window is
- * therefore the wider of the two, back to midnight on the boundary day. Only
- * the boundary day is affected and only for bounded periods; matching
- * `byEffort` and the file backend's turn filtering is worth more than matching
- * the rollup's day granularity, since the rate is read on its own rather than
- * against the `turns` column beside it.
- */
-function queryCategoryTasks(
-  db: DatabaseT.Database,
-  f: FilterParams,
-): Map<string, { verifiedTasks: number; oneShotTasks: number }> {
-  const rows = prepCached(db,
-      `SELECT
-         t.category                                                   AS category,
-         SUM(CASE WHEN t.task_outcome IS NOT NULL THEN 1 ELSE 0 END)  AS verifiedTasks,
-         SUM(CASE WHEN t.task_outcome = 'one_shot' THEN 1 ELSE 0 END) AS oneShotTasks
-       FROM turns t JOIN sessions s USING (session_id)
-       WHERE t.role = 'assistant'
-         AND t.category IS NOT NULL
-         AND t.task_outcome IS NOT NULL
-         AND t.is_sidechain = 0
-         AND t.ts >= COALESCE(@periodStart, '')
-         AND (@project IS NULL OR s.project_slug = @project)
-       GROUP BY t.category`
-    )
-    .all(f) as Array<{ category: string; verifiedTasks: number; oneShotTasks: number }>;
-
-  return new Map(rows.map((r) => [r.category, r]));
 }
 
 /**
@@ -1448,36 +1385,25 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
   // `prepCached`'s static-SQL contract. Use `db.prepare()` directly
   // here. The three queries each fire once per request anyway, and
   // their wins come from the SQL aggregation, not the prepare.
-  // The `category_costs` rollup has no home_key column, so a home-filtered
-  // request recomputes the per-project category mix from `turns` (same
-  // limitation-and-fallback as `queryByCategory`). The unfiltered path keeps
-  // the fast rollup read.
-  const catRows = (f.home !== null
-    ? db
-        .prepare(
-          `SELECT s.project_slug AS projectSlug, t.category AS category,
-                  SUM(t.cost_usd) AS cost, COUNT(*) AS turns
-           FROM turns t JOIN sessions s USING (session_id)
-           WHERE t.role = 'assistant'
-             AND t.category IS NOT NULL
-             AND (? IS NULL OR t.ts >= ?)
-             AND s.home_key = ?
-             AND s.project_slug IN (${placeholders})
-           GROUP BY s.project_slug, t.category
-           ORDER BY cost DESC, s.project_slug ASC, t.category ASC`
-        )
-        .all(f.periodStart, f.periodStart, f.home, ...slugs)
-    : db
-        .prepare(
-          `SELECT cc.project_slug AS projectSlug, cc.category AS category,
-                  SUM(cc.cost_usd) AS cost, SUM(cc.turns) AS turns
-           FROM category_costs cc
-           WHERE (? IS NULL OR cc.day >= ?)
-             AND cc.project_slug IN (${placeholders})
-           GROUP BY cc.project_slug, cc.category
-           ORDER BY cost DESC, cc.project_slug ASC, cc.category ASC`
-        )
-        .all(f.startDay, f.startDay, ...slugs)) as Array<{
+  // Per-project category mix from `turns` (never the `category_costs` rollup,
+  // which was ~30% populated and under-reported spend — #564). Same
+  // turns-driven shape as the `toolRows`/`mcpRows` queries just below, with an
+  // optional home filter; after #562's `turns_usage_cover` covering index this
+  // GROUP BY resolves index-only.
+  const catRows = db
+    .prepare(
+      `SELECT s.project_slug AS projectSlug, t.category AS category,
+              SUM(t.cost_usd) AS cost, COUNT(*) AS turns
+       FROM turns t JOIN sessions s USING (session_id)
+       WHERE t.role = 'assistant'
+         AND t.category IS NOT NULL
+         AND (? IS NULL OR t.ts >= ?)
+         AND (? IS NULL OR s.home_key = ?)
+         AND s.project_slug IN (${placeholders})
+       GROUP BY s.project_slug, t.category
+       ORDER BY cost DESC, s.project_slug ASC, t.category ASC`
+    )
+    .all(f.periodStart, f.periodStart, f.home, f.home, ...slugs) as Array<{
     projectSlug: string;
     category: string;
     cost: number;
