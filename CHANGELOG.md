@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-09-06
+
+*Usage reports get fast and honest. A full-history `/api/usage` report drops from roughly a minute of SQL to about twelve seconds behind three covering indexes, and the by-category breakdown stops trusting a rollup that had drifted to a third of the truth — it now reads spend straight from the turns, index-only, so `byCategory` and `byModel` finally agree. Underneath, the server learns to watch its own memory: `/api/health` reports resident set and heap, the tray restarts a process that runs away, and ingest-worker crashes, watcher fallbacks, and index quarantines all reach the service log instead of a console nobody reads. The bundled Node runtime moves to 22.23.2.*
+
 ### Added
 
 - **Memory telemetry** (#561). `/api/health` now carries a `memory` block (resident set, V8 heap, external and array-buffer sizes in MB, plus the ingest worker's last self-reported heap) and an `ingest` block (which pipeline is running and its `watcherMode`). The service log gains one `memory sample` line per hour, escalating to `warn` above 4 GB of resident set, so the next runaway process leaves a growth curve instead of a single figure at death.
