@@ -24,8 +24,6 @@ import { resolveIngestMode, type IngestMode } from "./ingestMode";
 // this reads the same two accessors in the same order.
 
 export interface IngestSettleInput {
-  /** `MINDER_USE_DB !== "0"` — with the DB off nothing reconciles, so nothing to wait for. */
-  useDb: boolean;
   /**
    * The index can never open here: the native driver is missing, or an open was
    * attempted and failed. `startIngestWatcher` then returns idle and
@@ -46,9 +44,17 @@ export interface IngestSettleInput {
  * `null` deliberately covers "not started yet" as well as "running": the
  * bootstrap enqueues its caches before the ingest watcher has even been asked to
  * start, and that early window is exactly the one to hold off in.
+ *
+ * **Only the indexer being off, or the index being unopenable, lets a caller
+ * skip the wait — `MINDER_USE_DB` deliberately does not.** It switches the READ
+ * backend, not index maintenance: `startIngest()` picks the watcher from
+ * `resolveIngestMode` alone, and pure file-parse mode needs both
+ * `MINDER_INDEXER=0` and `MINDER_USE_DB=0` (see `instrumentation-node.ts`). With
+ * `MINDER_USE_DB=0` alone the reconcile still runs, so skipping the wait would
+ * put the grade sweep straight back on top of it. (Codex, PR #587.)
  */
 export function initialReconcilePending(input: IngestSettleInput): boolean {
-  if (!input.useDb || input.dbUnusable) return false;
+  if (input.dbUnusable) return false;
   if (input.mode === "off") return false;
   return input.initialReconcileMs === null;
 }
@@ -66,6 +72,8 @@ export async function readInitialReconcilePending(): Promise<boolean> {
   // that drains the grade cache would sit out the full ceiling. Same gate, same
   // reason, as the watcher's own.
   if (process.env.NODE_ENV === "test") return false;
+  // Demo mode serves synthetic fixtures and has no real reconcile to wait for.
+  if (process.env.MINDER_DEMO === "1") return false;
   try {
     const [{ getWorkerStatus }, { getWatcherStatus, isIndexUnusable }] = await Promise.all([
       import("./workerHost"),
@@ -76,7 +84,6 @@ export async function readInitialReconcilePending(): Promise<boolean> {
       ? (worker.watcher?.initialReconcileMs ?? null)
       : getWatcherStatus().initialReconcileMs;
     return initialReconcilePending({
-      useDb: process.env.MINDER_USE_DB !== "0" && process.env.MINDER_DEMO !== "1",
       dbUnusable: isIndexUnusable(),
       mode: resolveIngestMode(),
       initialReconcileMs,

@@ -1,8 +1,24 @@
-import { describe, it, expect, vi } from "vitest";
-import { initialReconcilePending, waitUntilSettled } from "@/lib/db/ingestSettled";
+import { describe, it, expect, vi, afterEach } from "vitest";
+
+// The live reader imports these on demand. Stubbed so the regression test below
+// controls exactly what "ingest is running but has not reported" looks like,
+// without starting a watcher or touching a database.
+vi.mock("@/lib/db/workerHost", () => ({
+  getWorkerStatus: () => ({ running: false }),
+}));
+vi.mock("@/lib/db/ingestWatcher", () => ({
+  getWatcherStatus: () => ({ initialReconcileMs: null }),
+  isIndexUnusable: () => false,
+}));
+
+import {
+  initialReconcilePending,
+  readInitialReconcilePending,
+  waitUntilSettled,
+} from "@/lib/db/ingestSettled";
 
 describe("initialReconcilePending", () => {
-  const base = { useDb: true, dbUnusable: false } as const;
+  const base = { dbUnusable: false } as const;
 
   it("is pending until the reconcile reports a duration", () => {
     expect(initialReconcilePending({ ...base, mode: "worker", initialReconcileMs: null })).toBe(true);
@@ -17,10 +33,9 @@ describe("initialReconcilePending", () => {
   });
 
   it("never waits for a reconcile that will not run", () => {
-    // MINDER_INDEXER=0 → mode "off"; MINDER_USE_DB=0 → no index at all. Waiting
-    // on either would hold the grade drain for the full ceiling.
+    // MINDER_INDEXER=0 → mode "off": nothing will ever report, so waiting would
+    // hold the grade drain for the full ceiling.
     expect(initialReconcilePending({ ...base, mode: "off", initialReconcileMs: null })).toBe(false);
-    expect(initialReconcilePending({ ...base, useDb: false, mode: "worker", initialReconcileMs: null })).toBe(false);
   });
 
   it("does not wait on an index that cannot open", () => {
@@ -30,6 +45,31 @@ describe("initialReconcilePending", () => {
     for (const mode of ["worker", "in-process"] as const) {
       expect(initialReconcilePending({ ...base, dbUnusable: true, mode, initialReconcileMs: null })).toBe(false);
     }
+  });
+});
+
+describe("readInitialReconcilePending", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  // Codex, PR #587: MINDER_USE_DB=0 switches the READ backend, not index
+  // maintenance. Pure file-parse mode needs MINDER_INDEXER=0 as well, so with
+  // USE_DB=0 alone the watcher still starts and the reconcile still runs — a
+  // sweep that skipped the wait there would land on top of it.
+  it("still waits for the reconcile when only MINDER_USE_DB=0", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("MINDER_DEMO", "");
+    vi.stubEnv("MINDER_INDEXER", "");
+    vi.stubEnv("MINDER_USE_DB", "0");
+    await expect(readInitialReconcilePending()).resolves.toBe(true);
+  });
+
+  it("does not wait when the indexer itself is off (MINDER_INDEXER=0)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("MINDER_DEMO", "");
+    vi.stubEnv("MINDER_INDEXER", "0");
+    await expect(readInitialReconcilePending()).resolves.toBe(false);
   });
 });
 
