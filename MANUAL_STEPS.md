@@ -1,8 +1,9 @@
 ## 2026-09-29 23:10 | slow-boot | Get the #584/#585/#586 fixes into the running tray and verify them
 
-- [ ] Cut a release and install the new tray build (both PRs are merged: #587 and #589)
+- [ ] Install the v1.16.2 tray build (cut 2026-09-30; both fixes are in it: #587 and #589)
   The fixes live in two places, and the running tray on :4100 (v1.16.1) has none of them. Tray binary (Rust): 10 s health-probe timeout and the "slow to respond" label (#587). Packaged server (TS): the efficiency-grade sweep deferred behind the initial reconcile (#587), the ingest worker's start-handshake budget 60 s → 5 min, and durable failure logging (#589).
-  Use the normal release process (see the release-process note: branch + PR, CHANGELOG heading, annotated tag, `gh release`), then let the updater install it or run the installer.
+  Pushing the `v1.16.2` tag fires `release.yml` (creates the GitHub Release) and `release-installers.yml` (four platform bundles + `latest.json` for the updater, ~15-25 min). Install once the installers run is green, via the in-app updater or `Project.Minder.Tray_1.16.2_x64-setup.exe` from the release.
+  For future releases: do **not** run `gh release create` — it races the workflow, and whichever loses fails (that is what turned the v1.9.0/v1.9.1 `Release` runs red). Let the tag create the Release, then swap in curated notes with `gh release edit vX.Y.Z --notes-file <file> --latest`.
 - [ ] Reboot with the new build installed
   **#586 is deliberately still open until the four checks below pass** — the handshake timeout was never reproduced past 60 s in isolation, so the fix is unproven until then.
 - [ ] Check 1 — tray: while the server is busy indexing it reads "slow to respond", not "not responding"
