@@ -80,7 +80,7 @@ describe.skipIf(!driverAvailable)("reconcile phase timing (#595)", () => {
       // A session dir with a subagents/ folder, so the enumeration counter moves.
       await fs.mkdir(path.join(projectsDir, "C--dev-a", "s1", "subagents"), { recursive: true });
 
-      await reconcileAllSessions(db, { projectsDir, recordRun: "reconcile" });
+      await reconcileAllSessions(db, { projectsDir, recordRun: "reconcile", logTiming: true });
 
       const lines = timingLines();
       expect(lines).toHaveLength(1);
@@ -104,6 +104,51 @@ describe.skipIf(!driverAvailable)("reconcile phase timing (#595)", () => {
       // is lost, which is the property that makes the breakdown trustworthy.
       const sum = Object.values(line.phaseMs).reduce((a, b) => a + b, 0);
       expect(Math.abs(sum - (line.totalMs as number))).toBeLessThanOrEqual(1);
+    } finally {
+      conn.closeDb();
+    }
+  }, 60_000);
+
+  it("stays silent for a recorded pass that did not ask for timing (recovery sweeps are recorded too)", async () => {
+    const { conn, db } = await freshDb();
+    const { reconcileAllSessions } = await import("@/lib/db/ingest");
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+    try {
+      await writeSession(projectsDir, "C--dev-a", "s1");
+      await reconcileAllSessions(db, { projectsDir, recordRun: "reconcile" });
+      await reconcileAllSessions(db, { projectsDir, recordRun: "rebuild" });
+      expect(timingLines()).toHaveLength(0);
+    } finally {
+      conn.closeDb();
+    }
+  }, 60_000);
+
+  it("names the prune phase when a synchronous DB phase throws", async () => {
+    const { conn, db } = await freshDb();
+    const { reconcileAllSessions } = await import("@/lib/db/ingest");
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+    try {
+      await writeSession(projectsDir, "C--dev-a", "s1");
+      await reconcileAllSessions(db, { projectsDir });
+      const realPrepare = db.prepare.bind(db);
+      const spy = vi.spyOn(db, "prepare").mockImplementation(((sql: string) => {
+        if (/SELECT session_id, project_slug, file_path, derived_version FROM sessions/.test(sql)) {
+          throw new Error("prune select failed");
+        }
+        return realPrepare(sql);
+      }) as typeof db.prepare);
+      try {
+        await expect(
+          reconcileAllSessions(db, { projectsDir, recordRun: "reconcile", logTiming: true })
+        ).rejects.toThrow("prune select failed");
+      } finally {
+        spy.mockRestore();
+      }
+      const threw = logSpy.mock.calls
+        .map((c) => c[0] as Record<string, unknown> & { msg: string; phaseMs: Record<string, number> })
+        .filter((e) => /^reconcile threw after \d+ ms$/.test(e.msg));
+      expect(threw).toHaveLength(1);
+      expect(threw[0].phaseMs).toHaveProperty("prune");
     } finally {
       conn.closeDb();
     }
@@ -135,6 +180,7 @@ describe.skipIf(!driverAvailable)("reconcile phase timing (#595)", () => {
         ingest.reconcileAllSessions(db, {
           projectsDir: path.join(tmpHome, ".claude", "projects"),
           recordRun: "reconcile",
+          logTiming: true,
         })
       ).rejects.toThrow("config unreadable");
 

@@ -3243,6 +3243,13 @@ export interface ReconcileOptions {
    * is the same trap `tests/_helpers/reconcile.ts` documents for the v3 gate.
    */
   recordRun?: IndexerRunKind;
+  /**
+   * Log the per-phase timing summary for this pass (#595). Explicit and separate
+   * from `recordRun`: `recordOptionForSweep` returns a `recordRun` for recovery
+   * sweeps too (after an aborted startup, or a stale derivation), so keying the
+   * log on it would emit a line every recovery sweep. Only the initial pass asks.
+   */
+  logTiming?: boolean;
 }
 
 export interface FileReconcileResult {
@@ -3874,6 +3881,8 @@ interface ReconcileTiming {
   phaseMs: Record<string, number>;
   counts: { subagentReaddirs: number };
   timed<T>(phase: string, fn: () => Promise<T>): Promise<T>;
+  /** Synchronous twin of `timed`; accumulates in a `finally` so a throw still names the phase. */
+  timedSync<T>(phase: string, fn: () => T): T;
 }
 
 function createReconcileTiming(): ReconcileTiming {
@@ -3890,10 +3899,18 @@ function createReconcileTiming(): ReconcileTiming {
         phaseMs[phase] = (phaseMs[phase] ?? 0) + (Date.now() - t);
       }
     },
+    timedSync<T>(phase: string, fn: () => T): T {
+      const t = Date.now();
+      try {
+        return fn();
+      } finally {
+        phaseMs[phase] = (phaseMs[phase] ?? 0) + (Date.now() - t);
+      }
+    },
   };
 }
 
-/** One line per RECORDED pass; the 30 s sweeps pass no `recordRun` and stay silent. */
+/** One line per pass that sets `logTiming` (the initial pass); sweeps stay silent. */
 function logReconcileTiming(
   timing: ReconcileTiming,
   stats: IngestStats | undefined,
@@ -3971,7 +3988,7 @@ async function reconcileAllSessionsSerialized(
       // stay `aborted: false` and count as ready. (#471, Codex P1.)
       aborted: stats === undefined || stats.enumerationFailures > 0,
     });
-    if (options.recordRun) logReconcileTiming(timing, stats, options.recordRun);
+    if (options.logTiming) logReconcileTiming(timing, stats, options.recordRun ?? "unrecorded");
     // Written by EVERY full pass, whatever `recordRun` said (#529, finding 1).
     //
     // `indexer_runs` cannot carry this: `recordOptionForSweep` deliberately
@@ -4010,7 +4027,7 @@ async function runReconcileAllSessions(
     enumerationFailures: 0,
   };
 
-  const { phaseMs, counts, timed } = timing;
+  const { counts, timed, timedSync } = timing;
 
   await timed("pricing", () => loadPricing());
 
@@ -4111,7 +4128,7 @@ async function runReconcileAllSessions(
   let anyDirListed = false;
   for (const dir of projectsDirs) {
     try {
-      const entries = await fs.readdir(dir, { withFileTypes: true });
+      const entries = await timed("enumerate", () => fs.readdir(dir, { withFileTypes: true }));
       anyDirListed = true;
       for (const e of entries) {
         if (e.isDirectory()) subdirs.push({ projectsDir: dir, dirName: e.name });
@@ -4247,12 +4264,14 @@ async function runReconcileAllSessions(
     liveFilePaths.add(file.filePath);
     stats.filesSeen++;
     try {
-      const result = await reconcileAdapterSessionFile(
-        db,
-        file,
-        parseAdapterFile,
-        existingAdapterMeta.get(file.filePath),
-        options.force ?? false
+      const result = await timed("adapterFiles", () =>
+        reconcileAdapterSessionFile(
+          db,
+          file,
+          parseAdapterFile,
+          existingAdapterMeta.get(file.filePath),
+          options.force ?? false
+        )
       );
       if (result.skippedNewerDerivation) stats.newerDerivationSkips++;
       if (result.rowsWritten > 0) {
@@ -4295,49 +4314,49 @@ async function runReconcileAllSessions(
   // was dropped in v4, so each session's `prompts_fts` rows are explicitly
   // bulk-deleted here in one scan before the cascade — same contract as
   // `writeSession`'s pre-delete.
-  const pruneT0 = Date.now();
-  const allSessions = db
-    .prepare("SELECT session_id, project_slug, file_path, derived_version FROM sessions")
-    .all() as Array<{
-      session_id: string;
-      project_slug: string;
-      file_path: string;
-      derived_version: number;
-    }>;
-  const deleteFtsBySession = db.prepare("DELETE FROM prompts_fts WHERE session_id = ?");
-  const deleteStale = db.prepare("DELETE FROM sessions WHERE session_id = ?");
   const stalePruned = new Set<string>();
-  for (const r of allSessions) {
-    if (liveFilePaths.has(r.file_path)) continue;
+  timedSync("prune", () => {
+    const allSessions = db
+      .prepare("SELECT session_id, project_slug, file_path, derived_version FROM sessions")
+      .all() as Array<{
+        session_id: string;
+        project_slug: string;
+        file_path: string;
+        derived_version: number;
+      }>;
+    const deleteFtsBySession = db.prepare("DELETE FROM prompts_fts WHERE session_id = ?");
+    const deleteStale = db.prepare("DELETE FROM sessions WHERE session_id = ?");
+    for (const r of allSessions) {
+      if (liveFilePaths.has(r.file_path)) continue;
 
-    // Same rule as the reconcile gates, applied to the other way a build can
-    // destroy newer data. The guard there stops an old build REWRITING newer
-    // rows; without this one it simply DELETES them instead, which is worse.
-    //
-    // The reachable path is an adapter this build doesn't have (Codex review,
-    // PR #381). `getEnabledAdapters` skips an unknown configured id with only
-    // a console.warn, so discovery *succeeds* having found none of that
-    // adapter's files — which means `adapterDiscoveryFailed` stays false and
-    // the shield above never engages. Its already-indexed sessions are then
-    // absent from `liveFilePaths` and look exactly like vanished files. Roll
-    // back across a build that added an adapter and the entire newer index for
-    // it is deleted, cascading to its turns.
-    //
-    // Deferring costs nothing: if the file really is gone, the newer build
-    // prunes it on its next sweep, when it can also tell the difference. A
-    // permanent rollback keeps rows it can no longer re-derive, which is the
-    // same trade the reconcile guard makes — stale-but-intact over destroyed.
-    // `force` still prunes, so an explicit rebuild is not blocked.
-    if (!options.force && isNewerDerivation(r.derived_version)) {
-      stats.newerDerivationSkips++;
-      continue;
+      // Same rule as the reconcile gates, applied to the other way a build can
+      // destroy newer data. The guard there stops an old build REWRITING newer
+      // rows; without this one it simply DELETES them instead, which is worse.
+      //
+      // The reachable path is an adapter this build doesn't have (Codex review,
+      // PR #381). `getEnabledAdapters` skips an unknown configured id with only
+      // a console.warn, so discovery *succeeds* having found none of that
+      // adapter's files — which means `adapterDiscoveryFailed` stays false and
+      // the shield above never engages. Its already-indexed sessions are then
+      // absent from `liveFilePaths` and look exactly like vanished files. Roll
+      // back across a build that added an adapter and the entire newer index for
+      // it is deleted, cascading to its turns.
+      //
+      // Deferring costs nothing: if the file really is gone, the newer build
+      // prunes it on its next sweep, when it can also tell the difference. A
+      // permanent rollback keeps rows it can no longer re-derive, which is the
+      // same trade the reconcile guard makes — stale-but-intact over destroyed.
+      // `force` still prunes, so an explicit rebuild is not blocked.
+      if (!options.force && isNewerDerivation(r.derived_version)) {
+        stats.newerDerivationSkips++;
+        continue;
+      }
+
+      deleteFtsBySession.run(r.session_id);
+      deleteStale.run(r.session_id);
+      stalePruned.add(r.project_slug);
     }
-
-    deleteFtsBySession.run(r.session_id);
-    deleteStale.run(r.session_id);
-    stalePruned.add(r.project_slug);
-  }
-  phaseMs.prune = Date.now() - pruneT0;
+  });
 
   // Continuation linking: after sessions have been ingested with their
   // slugs stamped, walk the slug index and point each session's
@@ -4351,9 +4370,7 @@ async function runReconcileAllSessions(
   // fire frequently and most are no-ops; this gate keeps that path
   // free of incidental work.
   if (stats.filesChanged > 0 || stalePruned.size > 0) {
-    const linksT0 = Date.now();
-    refreshContinuationLinks(db);
-    phaseMs.links = Date.now() - linksT0;
+    timedSync("links", () => refreshContinuationLinks(db));
   }
 
   // Clear the v3 readiness gate ONLY when the reconcile pass is

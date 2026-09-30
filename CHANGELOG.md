@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **The initial reconcile now logs where its time goes** (#595). One line per recorded pass in `minder.log` — `reconcile finished in N ms` (or `reconcile threw after N ms`, at `warn`, when the pass dies) — with a `phaseMs` breakdown: `pricing`, `config`, `homes`, `adapterDiscovery`, `enumerate`, `perFile`, `prune`, `links`, and `other` for whatever none of them claimed, plus `filesSeen`, `filesChanged`, `rowsWritten` and `subagentReaddirs`. The 30 s sweeps stay silent. Motivated by a reconcile that took 689 → 849 → 1261 s to handle ~14k files of which one changed; with chokidar's initial scan switched off the same pass takes ~29 s, so the line is what lets the next slow boot be attributed instead of guessed at.
+- **The initial reconcile now logs where its time goes** (#595). One line per initial pass in `minder.log` — `reconcile finished in N ms` (or `reconcile threw after N ms`, at `warn`, when the pass dies) — with a `phaseMs` breakdown: `pricing`, `config`, `homes`, `adapterDiscovery`, `enumerate`, `perFile`, `adapterFiles`, `prune`, `links`, and `other` for whatever none of them claimed, plus `filesSeen`, `filesChanged`, `rowsWritten` and `subagentReaddirs`. The 30 s sweeps stay silent. Motivated by a reconcile that took 689 → 849 → 1261 s to handle ~14k files of which one changed; with chokidar's initial scan switched off the same pass takes ~29 s, so the line is what lets the next slow boot be attributed instead of guessed at.
 
 ## [1.16.2] - 2026-09-30
 

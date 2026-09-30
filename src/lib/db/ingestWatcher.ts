@@ -333,6 +333,7 @@ export async function startIngestWatcher(
           // index can answer, so it is the one that gets recorded. The 30 s
           // sweep below runs the same function and deliberately does not.
           recordRun: "reconcile",
+          logTiming: true,
         });
       }
     } catch (err) {
