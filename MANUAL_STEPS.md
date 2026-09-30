@@ -1,3 +1,14 @@
+## 2026-09-29 23:10 | tray-slow-boot | Get the #584/#585 fixes into the running tray
+
+- [ ] After the PR for `fix/slow-boot-tray-and-grade-sweep-584-585` merges, cut a release and install the new tray build
+  The fixes live in two places: the tray binary (10 s probe timeout, "slow to respond" label, Rust) and the packaged server (grade sweep deferred behind the initial reconcile, TS). The running tray on :4100 is v1.16.1 and has neither.
+  Use the normal release process (see the release-process note: branch + PR, CHANGELOG heading, annotated tag, `gh release`), then let the updater install it or run the installer.
+- [ ] Verify on the next reboot: the tray should read "slow to respond" (not "not responding") while indexing, and `~/.minder/logs/minder.log` should show the reconcile finishing in noticeably under the previous ~11.5 min
+  Compare `indexer_runs` (the latest `reconcile` row's duration) against 689 s from 2026-09-29. If it did not shorten, the grade sweep was not the main contributor and #586 (worker fallback) is the next lead.
+- [ ] Decide what to do about #586 (ingest worker falls back to in-process every boot) and the recurring re-parse in #585 — neither is fixed by this branch
+
+---
+
 ## 2026-07-18 16:00 | wsl-integration | Bring the Ubuntu-26.04 WSL projects + sessions into the dashboard
 
 - [x] Restart your running Minder server after the WSL PRs merge (#307/#308 + multi-home)

@@ -86,7 +86,7 @@ Click the tray icon to open the menu. The menu resets its status display every 1
 | Menu Item | Behavior | Notes |
 |-----------|----------|-------|
 | **Open Dashboard** | Opens your default browser to `http://localhost:4100` | Launches the web UI. Click this to navigate to any page (the first suggested destination). |
-| **Status** | Display-only line showing current server state | Updates every 15s: "Status: starting…" initially, then "Status: running (:4100)", "Status: degraded (:4100)", or "Status: not responding (:4100)"; suffix notes added when attached to an existing server. |
+| **Status** | Display-only line showing current server state | Re-checks about every 15s — the interval starts after each probe finishes, so updates can be up to ~25s apart while the server is slow to answer: "Status: starting…" initially, then "Status: running (:4100)", "Status: degraded (:4100)", "Status: slow to respond (:4100)" (the port accepts connections but `/api/health` did not answer within 10 s — typically a busy server just after boot), or "Status: not responding (:4100)"; suffix notes added when attached to an existing server. |
 | **Start at login** | Checkbox that registers/unregisters OS autostart | Checked state syncs with the OS (Windows registry Run key, macOS LaunchAgent, Linux XDG autostart .desktop entry). Reboot is not required. (This is distinct from Phase A service mode, which uses Windows Task Scheduler / macOS LaunchAgent / Linux systemd.) **Development builds cannot turn this on** — see below. |
 | **Mute notifications** | Checkbox that suppresses new-manual-steps toasts | When checked, `MANUAL_STEPS.md` changes no longer trigger OS notifications. The mute flag persists to disk. |
 | **Restart server** | Graceful server restart | **Disabled when in attach mode** (see [Modes](#modes) below). Blocks ~6s on graceful shutdown. Useful when the server becomes unresponsive. |
@@ -163,7 +163,15 @@ The tray app respects these optional environment variables (most have sensible d
 4. **Restart the tray:** Kill the process and relaunch the installer or the app from your applications menu.
 5. **Port conflict:** If port 4100 is held by another process, the server may fail to start. See [Port Held by Another App](#port-held-by-another-app).
 
+### Status says "slow to respond" after a reboot or restart
+
+Something is accepting connections on the port but did not answer `/api/health` within the tray's 10-second probe. Right after a boot or restart the most likely explanation is that Project Minder's own server is busy indexing your Claude Code sessions, which is normal for the first several minutes on a large history. The tray cannot confirm that, though: a different process that holds the port and has stopped answering would show the same label. On a machine with ~6 GB of session transcripts the initial index pass measured about 11 minutes. The status line changes to "running" by itself once the server answers; there is nothing to do, and restarting only starts the indexing over.
+
+If it stays on "slow to respond" for much longer than that, check `~/.minder/logs/minder.log` — an `ingest-watcher` line reporting `chokidar reported ready` and a `memory sample` line show the server is making progress.
+
 ### Status says "degraded" or "not responding" (or stays on "starting…" for too long)
+
+"not responding" means the port is not accepting connections at all, or something other than Project Minder answered on it. (A port that accepts connections but stays silent reads "slow to respond" instead — usually a busy Minder server, though the tray cannot rule out another process.)
 
 1. **Check the server log:** `~/.minder/logs/minder.log` will show any startup errors or crashes.
 2. **Check for port conflicts:** Run `netstat -ano | findstr :4100` (Windows), `lsof -i :4100` (macOS/Linux).
@@ -198,7 +206,7 @@ If you see `port 4100 bound by a non-Minder process`, something **answered** an 
 
 That verdict is not permanent either. The tray keeps re-checking a port it has called foreign — about once a minute, since it already has an answer and is only watching for it to stop being true. So if the other app exits and Minder takes the port, the tray notices and attaches on its own; you do not need to restart it. (Once it is attached to a Minder, it stops polling: that is the steady state, and it costs nothing to sit in.)
 
-If instead you see `port 4100 is bound but did not answer /api/health in time`, and a Status line reading `not responding — port bound, not responding — observing`, then **nothing** answered — and the most likely cause is Minder's own server still starting up. The tray keeps re-probing on a backoff and updates the status line by itself the moment the server answers; there is nothing to do but wait, and **no need to restart the tray**.
+If instead you see `port 4100 is bound but did not answer /api/health in time`, and a Status line reading `slow to respond — port bound, no answer yet — observing`, then **nothing** answered — and the most likely cause is Minder's own server still starting up. The tray keeps re-probing on a backoff and updates the status line by itself the moment the server answers; there is nothing to do but wait, and **no need to restart the tray**.
 
 The usual reason for a long startup is the SQLite index: the integrity check that runs when the DB is opened scales with the file's size, and on a multi-gigabyte `~/.minder/index.db` read cold after a reboot it can take minutes, during which the server accepts connections but cannot answer them. Minder now skips that check when the previous shutdown was clean, so this should only affect the first boot after an unclean stop (a reboot, a force-kill, or a power loss). To see how long it actually took, check `~/.minder/logs/minder.log` for the `db: probed` line and its `ms` field.
 

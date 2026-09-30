@@ -4,7 +4,7 @@ import os from "os";
 import type { FSWatcher } from "chokidar";
 import { initDb } from "./migrations";
 import { reconcileAllSessions, reconcileSessionFile } from "./ingest";
-import { getDb, getDbSync } from "./connection";
+import { getDb, getDbSync, getDbError, isDbAvailable, isDriverLoaded } from "./connection";
 import { isShuttingDown } from "@/lib/lifecycle";
 import { closeOrphanedIndexerRuns, recordOptionForSweep } from "./indexerRuns";
 import { serviceLog } from "@/lib/serviceLog";
@@ -552,6 +552,21 @@ export function getWatcherStatus(): WatcherStatus {
   const state = g.__minderIngestWatcher;
   if (!state) return idleStatus();
   return snapshot(state);
+}
+
+/**
+ * The index cannot open in this process, so no watcher will ever run and no
+ * reconcile will ever report: the native driver is missing, or an open was
+ * attempted, failed, and nothing is connected now.
+ *
+ * "Not opened yet" is deliberately NOT this — a large index takes ~100 s to open
+ * at boot, and that is when callers most want to know a reconcile is coming.
+ * `getDbError()` alone is not enough either: it can outlive a recovery, hence the
+ * connected check. Read-only and O(1); lives here because this module already
+ * owns the connection state that `startIngestWatcher` acts on.
+ */
+export function isIndexUnusable(): boolean {
+  return !isDriverLoaded() || (getDbError() !== null && !isDbAvailable());
 }
 
 function idleStatus(): WatcherStatus {

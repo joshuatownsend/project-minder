@@ -21,7 +21,7 @@
 //!     handshake from the listen backlog with no application code involved, so
 //!     the port reads as bound while the Node process is still blocked opening a
 //!     large SQLite index. A 2.1 GB index measured 2m47s of blocked event loop,
-//!     against this agent's 4s timeout — so the tray would time out, conclude
+//!     against this agent's timeout (`PROBE_TIMEOUT`) — so the tray would time out, conclude
 //!     "foreign process", and latch that verdict for the rest of the session
 //!     while the perfectly healthy service finished booting behind it.
 //!
@@ -43,10 +43,28 @@ pub(crate) fn agent() -> &'static ureq::Agent {
     static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
     AGENT.get_or_init(|| {
         ureq::AgentBuilder::new()
-            .timeout(Duration::from_secs(4))
+            .timeout(PROBE_TIMEOUT)
             .build()
     })
 }
+
+/// How long one probe waits for the server to answer.
+///
+/// `/api/health` is a cheap in-memory read, but it shares the server's main
+/// thread with whatever else is running. Right after boot that is a
+/// full-corpus JSONL parse and, when the ingest worker has fallen back
+/// in-process, the reconcile too — measured 3.0–6.0 s per health answer on a
+/// server that was healthy and about to recover (#584). The previous 4 s sat
+/// inside that band, so about half the probes of a busy-but-fine server read as
+/// `Unreachable`.
+///
+/// Kept below `POLL_INTERVAL` (15 s in `tray.rs`): the poll loop sleeps after
+/// each probe, so a probe that always ran to its ceiling would stretch the
+/// cadence. The agent is also shared with `notify.rs` and the spawn-vs-attach
+/// decision, both of which tolerate a longer wait. A server whose loop is
+/// blocked for minutes (a large index opening) still times out — that case is
+/// handled by labelling, not by waiting longer.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ServerStatus {

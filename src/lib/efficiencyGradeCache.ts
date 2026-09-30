@@ -6,6 +6,8 @@ import { getCachedScan } from "./cache";
 import { readConfig } from "./config";
 import { getClaudeHomes } from "./claudeHome";
 import { recordGradeSnapshots, type GradeSnapshotRow } from "./data/gradeSnapshots";
+import { readInitialReconcilePending, waitUntilSettled } from "./db/ingestSettled";
+import { serviceLog } from "./serviceLog";
 
 export type EfficiencyGrade = "A" | "B" | "C" | "D" | "F";
 
@@ -47,6 +49,36 @@ class EfficiencyGradeCache {
 
   private async processQueue() {
     const myGen = this.generation;
+
+    // Stay out of the initial reconcile's way (#585). `parseAllSessions()` below
+    // is a whole-corpus JSONL parse, and this drain is started at boot — before
+    // the ingest watcher has even been asked to start. Running both at once left
+    // the main thread saturated for ~11 min on a 6 GB corpus and pushed
+    // `/api/health` past the tray's timeout. Nothing here needs the reconcile's
+    // result (grades are computed from the JSONL, not the index), so waiting
+    // costs only latency: queued projects are still counted by `pending`, and
+    // enqueues that arrive meanwhile join the queue rather than starting a
+    // second drain (`running` stays true throughout).
+    //
+    // Fails open: this wait is an optimisation, and a drain that never runs
+    // would leave `running` true forever and every grade missing for the life of
+    // the process. `readInitialReconcilePending` already swallows its own
+    // errors; this covers the wait loop itself.
+    try {
+      const settled = await waitUntilSettled(readInitialReconcilePending);
+      if (settled === "timed-out") {
+        serviceLog({
+          level: "warn",
+          subsystem: "efficiency-grade",
+          msg: "initial reconcile still pending after the settle ceiling; running the grade sweep anyway",
+        });
+      }
+    } catch {
+      /* proceed without waiting */
+    }
+    // dispose()/invalidateGrades() during the wait cleared the queue and reset
+    // `running`; a newer drain owns the work now.
+    if (myGen !== this.generation) return;
 
     // Load shared data once for all projects in the queue.
     let sessionMap: Awaited<ReturnType<typeof parseAllSessions>>;

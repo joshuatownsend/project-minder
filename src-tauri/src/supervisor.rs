@@ -192,7 +192,11 @@ impl AttachVerdict {
         match self {
             AttachVerdict::Minder => "attached to existing service",
             AttachVerdict::Foreign => "port in use (foreign) — observing",
-            AttachVerdict::Pending => "port bound, not responding — observing",
+            // Not "not responding": the Status line's word for a bound-but-silent
+            // port is now "slow to respond" (`tray::status_word`), and the two
+            // read back to back — "slow to respond — port bound, not responding"
+            // contradicted itself.
+            AttachVerdict::Pending => "port bound, no answer yet — observing",
         }
     }
 }
@@ -1029,7 +1033,7 @@ mod crash_decision_tests {
     fn the_unbound_note_describes_absence_not_ownership() {
         use super::PENDING_UNBOUND_NOTE;
         // While observing, a port can be released under us. Leaving up
-        // "port bound, not responding" would describe a port that is no longer
+        // "port bound, no answer yet" would describe a port that is no longer
         // bound — the same stale-note failure this PR exists to remove, just
         // smaller. It must also not claim foreignness, having proved nothing.
         assert_ne!(PENDING_UNBOUND_NOTE, AttachVerdict::Pending.note());

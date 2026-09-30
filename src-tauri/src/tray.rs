@@ -336,7 +336,9 @@ fn spawn_poll_loop<R: Runtime>(
         loop {
             let probe = health::probe_detail(port);
             let status = probe.status;
-            let next = describe(status, port, &supervisor);
+            // Only a silent probe needs the second opinion — see `status_word`.
+            let port_bound = status == ServerStatus::Unreachable && health::port_is_bound(port);
+            let next = describe(status, port_bound, port, &supervisor);
             if last.as_ref() != Some(&next) {
                 let _ = status_item.set_text(&next.0);
                 let _ = tray.set_tooltip(Some(&next.1));
@@ -371,7 +373,15 @@ fn spawn_poll_loop<R: Runtime>(
 
 /// Human-readable Status line + tray tooltip for a probe result. Reads attach
 /// state straight off the supervisor (no threaded-through flag).
-fn describe(status: ServerStatus, port: u16, supervisor: &Arc<Supervisor>) -> (String, String) {
+///
+/// `port_bound` is only consulted for `Unreachable` (the poll loop skips the TCP
+/// connect otherwise): see [`status_word`].
+fn describe(
+    status: ServerStatus,
+    port_bound: bool,
+    port: u16,
+    supervisor: &Arc<Supervisor>,
+) -> (String, String) {
     let suffix = if supervisor.is_attached() {
         match supervisor.attach_note() {
             Some(note) => format!(" — {note}"),
@@ -380,19 +390,36 @@ fn describe(status: ServerStatus, port: u16, supervisor: &Arc<Supervisor>) -> (S
     } else {
         String::new()
     };
-    let word = match status {
-        ServerStatus::Up => "running",
-        ServerStatus::Degraded => "degraded",
-        // Both mean "not serving us right now", and the attach note carried in
-        // `suffix` is what distinguishes a proven-foreign owner from a server
-        // that simply hasn't answered yet — so the word itself stays neutral
-        // rather than asserting a cause the status alone can't establish.
-        ServerStatus::Foreign | ServerStatus::Unreachable => "not responding",
-    };
+    let word = status_word(status, port_bound);
     (
         format!("Status: {word} (:{port}){suffix}"),
         format!("Project Minder — {word} (:{port}){suffix}"),
     )
+}
+
+/// The one-word state shown in the Status line and tooltip.
+///
+/// A probe that timed out is `Unreachable`, which `health` defines as the
+/// *absence* of information. But the TCP connect the poll loop makes alongside
+/// it does carry some: a port that still accepts connections has a live process
+/// behind it (a busy Node server keeps accepting into the kernel backlog while
+/// its loop is blocked). Saying "not responding" for that conflated a server
+/// that is busy indexing with one that is gone, and sent the user looking for a
+/// crash after a reboot (#584). "slow to respond" is true in both readings of
+/// that state — ours and busy, or someone else's and hung — so it asserts no
+/// cause the evidence can't support.
+///
+/// `Foreign` keeps "not responding": something answered, and it was not Minder.
+fn status_word(status: ServerStatus, port_bound: bool) -> &'static str {
+    match status {
+        ServerStatus::Up => "running",
+        ServerStatus::Degraded => "degraded",
+        ServerStatus::Unreachable if port_bound => "slow to respond",
+        // The attach note carried in `describe`'s suffix is what distinguishes a
+        // proven-foreign owner from a server that simply hasn't answered yet, so
+        // the word itself stays neutral.
+        ServerStatus::Foreign | ServerStatus::Unreachable => "not responding",
+    }
 }
 
 /// The tray icon image, embedded at compile time.
@@ -431,7 +458,35 @@ fn open_logs_dir<R: Runtime>(app: &tauri::AppHandle<R>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{autostart_registration_allowed, recovered_checked_state, revert_target};
+    use super::{
+        autostart_registration_allowed, recovered_checked_state, revert_target, status_word,
+    };
+    use crate::health::ServerStatus;
+
+    /// The #584 payload: a busy server whose port still accepts connections must
+    /// not read as gone.
+    #[test]
+    fn a_silent_probe_on_a_bound_port_reads_slow_not_dead() {
+        assert_eq!(status_word(ServerStatus::Unreachable, true), "slow to respond");
+    }
+
+    /// The other half: an unbound port really is nothing, and must keep saying so.
+    #[test]
+    fn a_silent_probe_on_an_unbound_port_still_reads_not_responding() {
+        assert_eq!(status_word(ServerStatus::Unreachable, false), "not responding");
+    }
+
+    /// `port_bound` refines only the inconclusive state. An answer is an answer
+    /// whatever the connect said, so it can never soften a foreign verdict or
+    /// mask a healthy one.
+    #[test]
+    fn port_bound_never_overrides_a_conclusive_answer() {
+        for bound in [true, false] {
+            assert_eq!(status_word(ServerStatus::Up, bound), "running");
+            assert_eq!(status_word(ServerStatus::Degraded, bound), "degraded");
+            assert_eq!(status_word(ServerStatus::Foreign, bound), "not responding");
+        }
+    }
 
     #[test]
     fn revert_target_no_op_when_sync_succeeds() {
