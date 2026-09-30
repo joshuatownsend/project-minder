@@ -3951,8 +3951,10 @@ async function reconcileAllSessionsSerialized(
 ): Promise<IngestStats> {
   // #470: the pass records itself only when asked. See `ReconcileOptions.recordRun`
   // for why the 30 s sweep must not.
-  const runId = options.recordRun ? beginIndexerRun(db, options.recordRun) : null;
+  // Clock first: opening the run row can itself wait on a busy DB, and that wait
+  // belongs in `totalMs` (the matching finish is counted).
   const timing = createReconcileTiming();
+  const runId = options.recordRun ? beginIndexerRun(db, options.recordRun) : null;
   let stats: IngestStats | undefined;
   // Captured BEFORE the work, so the verdict is stamped with the corpus this
   // pass was actually asked to walk. Reading it afterwards would let a config
