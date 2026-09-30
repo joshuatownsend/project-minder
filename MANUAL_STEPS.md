@@ -1,11 +1,22 @@
-## 2026-09-29 23:10 | tray-slow-boot | Get the #584/#585 fixes into the running tray
+## 2026-09-29 23:10 | slow-boot | Get the #584/#585/#586 fixes into the running tray and verify them
 
-- [ ] After the PR for `fix/slow-boot-tray-and-grade-sweep-584-585` merges, cut a release and install the new tray build
-  The fixes live in two places: the tray binary (10 s probe timeout, "slow to respond" label, Rust) and the packaged server (grade sweep deferred behind the initial reconcile, TS). The running tray on :4100 is v1.16.1 and has neither.
-  Use the normal release process (see the release-process note: branch + PR, CHANGELOG heading, annotated tag, `gh release`), then let the updater install it or run the installer.
-- [ ] Verify on the next reboot: the tray should read "slow to respond" (not "not responding") while indexing, and `~/.minder/logs/minder.log` should show the reconcile finishing in noticeably under the previous ~11.5 min
-  Compare `indexer_runs` (the latest `reconcile` row's duration) against 689 s from 2026-09-29. If it did not shorten, the grade sweep was not the main contributor and #586 (worker fallback) is the next lead.
-- [ ] Decide what to do about #586 (ingest worker falls back to in-process every boot) and the recurring re-parse in #585 — neither is fixed by this branch
+- [ ] Install the v1.16.2 tray build (cut 2026-09-30; both fixes are in it: #587 and #589)
+  The fixes live in two places, and the running tray on :4100 (v1.16.1) has none of them. Tray binary (Rust): 10 s health-probe timeout and the "slow to respond" label (#587). Packaged server (TS): the efficiency-grade sweep deferred behind the initial reconcile (#587), the ingest worker's start-handshake budget 60 s → 5 min, and durable failure logging (#589).
+  Pushing the `v1.16.2` tag fires `release.yml` (creates the GitHub Release) and `release-installers.yml` (four platform bundles + `latest.json` for the updater, ~15-25 min). Install once the installers run is green, via the in-app updater or `Project.Minder.Tray_1.16.2_x64-setup.exe` from the release.
+  For future releases: do **not** run `gh release create` — it races the workflow, and whichever loses fails (that is what turned the v1.9.0/v1.9.1 `Release` runs red). Let the tag create the Release, then swap in curated notes with `gh release edit vX.Y.Z --notes-file <file> --latest`.
+- [ ] Reboot with the new build installed
+  **#586 is deliberately still open until the four checks below pass** — the handshake timeout was never reproduced past 60 s in isolation, so the fix is unproven until then.
+- [ ] Check 1 — tray: it never reads "not responding" while the server is up and busy
+  Either "slow to respond" (the health probe timed out but the port still accepts connections) or "running" (the probe answered within the 10 s budget) is a pass — with the boot-load fixes the server may answer in time and never show the slow state. "not responding" is the failure.
+- [ ] Check 2 — `http://localhost:4100/api/health`: `ingest.mode` is `"worker"` with `crashesLastHour: 0`
+  It was `"in-process"` on every boot since ~09-26.
+- [ ] Check 3 — `~/.minder/logs/minder.log`: a `watcher armed after N ms` line and no failure lines, from THIS boot only
+  The file is append-only until it rotates, so read only the lines after the last `starting service-mode boot sequence…` entry; an older boot's failure line proves nothing about this one. Expect `watcher armed after N ms` with a `phaseMs` breakdown showing where startup time went (`initDb` was ~21 s warm on the 2.5 GB index), and **no** `start handshake failed` / `worker failed before ready` lines. If one is present it names the reason, elapsed time and timeout.
+- [ ] Check 4 — `~/.minder/index.db` → `indexer_runs`: this boot has ONE `reconcile` row
+  Every boot since 09-26 produced an aborted/orphaned ~60 s run followed by a second one. Also compare the row's duration with 689 s from 2026-09-29; if it did not shorten, the grade sweep was not the main contributor.
+- [ ] Record the outcome of Checks 1-4, then close out
+  All four pass → close #586 and archive this entry. Check 2 still shows `"in-process"` → the log line from Check 3 is the diagnosis; the known follow-ups are #588 (the duplicate `PRAGMA quick_check` that spends ~21 s of the handshake budget on every start) and #585 (the usage cache is smaller than the corpus, so later whole-history sweeps still re-parse most of it). Either way this item is done once the result is written down.
+  Unrelated: #590 is a flaky Windows CI test (10 s hook timeout in `subagentBillingBoundary.test.ts` and other DB-backed tests), not a product problem.
 
 ---
 
