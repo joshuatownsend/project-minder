@@ -6,15 +6,17 @@
   For future releases: do **not** run `gh release create` — it races the workflow, and whichever loses fails (that is what turned the v1.9.0/v1.9.1 `Release` runs red). Let the tag create the Release, then swap in curated notes with `gh release edit vX.Y.Z --notes-file <file> --latest`.
 - [ ] Reboot with the new build installed
   **#586 is deliberately still open until the four checks below pass** — the handshake timeout was never reproduced past 60 s in isolation, so the fix is unproven until then.
-- [ ] Check 1 — tray: while the server is busy indexing it reads "slow to respond", not "not responding"
+- [ ] Check 1 — tray: it never reads "not responding" while the server is up and busy
+  Either "slow to respond" (the health probe timed out but the port still accepts connections) or "running" (the probe answered within the 10 s budget) is a pass — with the boot-load fixes the server may answer in time and never show the slow state. "not responding" is the failure.
 - [ ] Check 2 — `http://localhost:4100/api/health`: `ingest.mode` is `"worker"` with `crashesLastHour: 0`
   It was `"in-process"` on every boot since ~09-26.
-- [ ] Check 3 — `~/.minder/logs/minder.log`: a `watcher armed after N ms` line and no failure lines
-  Expect `watcher armed after N ms` with a `phaseMs` breakdown showing where startup time went (`initDb` was ~21 s warm on the 2.5 GB index), and **no** `start handshake failed` / `worker failed before ready` lines. If one is present it names the reason, elapsed time and timeout.
+- [ ] Check 3 — `~/.minder/logs/minder.log`: a `watcher armed after N ms` line and no failure lines, from THIS boot only
+  The file is append-only until it rotates, so read only the lines after the last `starting service-mode boot sequence…` entry; an older boot's failure line proves nothing about this one. Expect `watcher armed after N ms` with a `phaseMs` breakdown showing where startup time went (`initDb` was ~21 s warm on the 2.5 GB index), and **no** `start handshake failed` / `worker failed before ready` lines. If one is present it names the reason, elapsed time and timeout.
 - [ ] Check 4 — `~/.minder/index.db` → `indexer_runs`: this boot has ONE `reconcile` row
   Every boot since 09-26 produced an aborted/orphaned ~60 s run followed by a second one. Also compare the row's duration with 689 s from 2026-09-29; if it did not shorten, the grade sweep was not the main contributor.
-- [ ] If Check 2 still shows `"in-process"`: the log line from Check 3 is the diagnosis. The known follow-ups are #588 (the duplicate `PRAGMA quick_check` that spends ~21 s of the handshake budget on every start) and #585 (the usage cache is smaller than the corpus, so later whole-history sweeps still re-parse most of it).
-  Unrelated: #590 is a flaky Windows CI test (10 s hook timeout in `subagentBillingBoundary.test.ts`), not a product problem.
+- [ ] Record the outcome of Checks 1-4, then close out
+  All four pass → close #586 and archive this entry. Check 2 still shows `"in-process"` → the log line from Check 3 is the diagnosis; the known follow-ups are #588 (the duplicate `PRAGMA quick_check` that spends ~21 s of the handshake budget on every start) and #585 (the usage cache is smaller than the corpus, so later whole-history sweeps still re-parse most of it). Either way this item is done once the result is written down.
+  Unrelated: #590 is a flaky Windows CI test (10 s hook timeout in `subagentBillingBoundary.test.ts` and other DB-backed tests), not a product problem.
 
 ---
 
