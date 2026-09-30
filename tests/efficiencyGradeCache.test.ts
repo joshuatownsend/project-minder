@@ -33,7 +33,17 @@ vi.mock("@/lib/data/gradeSnapshots", () => ({
   recordGradeSnapshots: vi.fn().mockResolvedValue(undefined),
 }));
 
+// The drain waits for the initial reconcile before its whole-corpus parse
+// (#585). Default: settled at once, so every test below behaves as before; the
+// gating tests swap in a deferred one-shot.
+vi.mock("@/lib/db/ingestSettled", () => ({
+  readInitialReconcilePending: vi.fn().mockResolvedValue(false),
+  waitUntilSettled: vi.fn().mockResolvedValue("settled"),
+}));
+
 import { efficiencyGradeCache, type EfficiencyGrade } from "@/lib/efficiencyGradeCache";
+import { parseAllSessions } from "@/lib/usage/parser";
+import { waitUntilSettled } from "@/lib/db/ingestSettled";
 
 // Flush globalThis singleton between tests by disposing
 beforeEach(() => {
@@ -92,5 +102,69 @@ describe("efficiencyGradeCache", () => {
     const grade = efficiencyGradeCache.get("p2");
     expect(grade).not.toBeNull();
     expect(validGrades).toContain(grade);
+  });
+});
+
+describe("efficiencyGradeCache — deferred behind the initial reconcile (#585)", () => {
+  /** Make the next drain's settle-wait hang until the returned `release()`. */
+  function holdNextWait(): { release: () => void } {
+    const held: { release: () => void } = { release: () => {} };
+    vi.mocked(waitUntilSettled).mockImplementationOnce(
+      () => new Promise((resolve) => { held.release = () => resolve("settled"); })
+    );
+    return held;
+  }
+  const tick = () => new Promise((r) => setTimeout(r, 20));
+
+  it("does not start the whole-corpus parse until the reconcile has settled", async () => {
+    vi.mocked(parseAllSessions).mockClear();
+    const held = holdNextWait();
+
+    efficiencyGradeCache.enqueue([{ slug: "gated", path: "/p", hasSessions: true }]);
+    await tick();
+
+    expect(parseAllSessions).not.toHaveBeenCalled();
+    // Still counted, so the dashboard shows grades as pending rather than absent.
+    expect(efficiencyGradeCache.pending).toBe(1);
+
+    held.release();
+    await vi.waitFor(() => expect(efficiencyGradeCache.pending).toBe(0), { timeout: 2000 });
+    expect(parseAllSessions).toHaveBeenCalledTimes(1);
+    expect(efficiencyGradeCache.get("gated")).not.toBeNull();
+  });
+
+  it("folds enqueues that arrive during the wait into the same single sweep", async () => {
+    vi.mocked(parseAllSessions).mockClear();
+    const held = holdNextWait();
+
+    efficiencyGradeCache.enqueue([{ slug: "first", path: "/a", hasSessions: true }]);
+    await tick();
+    efficiencyGradeCache.enqueue([{ slug: "second", path: "/b", hasSessions: true }]);
+    await tick();
+    expect(parseAllSessions).not.toHaveBeenCalled();
+
+    held.release();
+    await vi.waitFor(() => expect(efficiencyGradeCache.pending).toBe(0), { timeout: 2000 });
+    // One parse for both projects — a second drain starting mid-wait would have
+    // doubled the sweep this change exists to avoid.
+    expect(parseAllSessions).toHaveBeenCalledTimes(1);
+    expect(efficiencyGradeCache.get("first")).not.toBeNull();
+    expect(efficiencyGradeCache.get("second")).not.toBeNull();
+  });
+
+  it("drops the deferred work when the cache is disposed during the wait", async () => {
+    vi.mocked(parseAllSessions).mockClear();
+    const held = holdNextWait();
+
+    efficiencyGradeCache.enqueue([{ slug: "stale", path: "/p", hasSessions: true }]);
+    await tick();
+    efficiencyGradeCache.dispose();
+
+    held.release();
+    await tick();
+    // The config that queued this work is gone; parsing for it now would land
+    // grades computed from the old config in the freshly cleared cache.
+    expect(parseAllSessions).not.toHaveBeenCalled();
+    expect(efficiencyGradeCache.get("stale")).toBeNull();
   });
 });
