@@ -1,11 +1,15 @@
-## 2026-09-29 23:10 | tray-slow-boot | Get the #584/#585 fixes into the running tray
+## 2026-09-29 23:10 | slow-boot | Get the #584/#585/#586 fixes into the running tray and verify them
 
-- [ ] After the PR for `fix/slow-boot-tray-and-grade-sweep-584-585` merges, cut a release and install the new tray build
-  The fixes live in two places: the tray binary (10 s probe timeout, "slow to respond" label, Rust) and the packaged server (grade sweep deferred behind the initial reconcile, TS). The running tray on :4100 is v1.16.1 and has neither.
+- [ ] Cut a release and install the new tray build (both PRs are merged: #587 and #589)
+  The fixes live in two places, and the running tray on :4100 (v1.16.1) has none of them. Tray binary (Rust): 10 s health-probe timeout and the "slow to respond" label (#587). Packaged server (TS): the efficiency-grade sweep deferred behind the initial reconcile (#587), the ingest worker's start-handshake budget 60 s → 5 min, and durable failure logging (#589).
   Use the normal release process (see the release-process note: branch + PR, CHANGELOG heading, annotated tag, `gh release`), then let the updater install it or run the installer.
-- [ ] Verify on the next reboot: the tray should read "slow to respond" (not "not responding") while indexing, and `~/.minder/logs/minder.log` should show the reconcile finishing in noticeably under the previous ~11.5 min
-  Compare `indexer_runs` (the latest `reconcile` row's duration) against 689 s from 2026-09-29. If it did not shorten, the grade sweep was not the main contributor and #586 (worker fallback) is the next lead.
-- [ ] Decide what to do about #586 (ingest worker falls back to in-process every boot) and the recurring re-parse in #585 — neither is fixed by this branch
+- [ ] Reboot, then verify. **#586 is deliberately still open until this passes** — the timeout was never reproduced past 60 s in isolation.
+  1. Tray: while the server is busy indexing it should read "slow to respond", not "not responding".
+  2. `http://localhost:4100/api/health` → `ingest.mode` should be `"worker"` (it was `"in-process"` on every boot since ~09-26) with `crashesLastHour: 0`.
+  3. `~/.minder/logs/minder.log`: expect a `watcher armed after N ms` line whose `phaseMs` shows where startup time went (`initDb` was ~21 s warm on the 2.5 GB index), and **no** `start handshake failed` / `worker failed before ready` lines. If one is present it names the reason, elapsed time and timeout.
+  4. `~/.minder/index.db` → `indexer_runs`: this boot should have ONE `reconcile` row, not the aborted/orphaned ~60 s run followed by a second one that every boot since 09-26 produced. Compare that row's duration with 689 s from 2026-09-29; if it did not shorten, the grade sweep was not the main contributor.
+- [ ] If step 2 still shows `"in-process"`: the log line from step 3 is the diagnosis. The known follow-ups are #588 (the duplicate `PRAGMA quick_check` that spends ~21 s of the handshake budget on every start) and #585 (the usage cache is smaller than the corpus, so later whole-history sweeps still re-parse most of it).
+  Unrelated: #590 is a flaky Windows CI test (10 s hook timeout in `subagentBillingBoundary.test.ts`), not a product problem.
 
 ---
 
