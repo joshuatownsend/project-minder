@@ -24,6 +24,23 @@ parentPort.postMessage({ type: "ready" });
 parentPort.on("message", (msg) => { if (msg?.type === "stop") process.exit(0); });
 `;
 
+// Acks the first `start`, then crashes; every respawned instance never acks.
+// The marker file (beside this worker) is how a fresh thread tells it is a respawn.
+const ACKS_ONCE_THEN_CRASHES_THEN_SILENT = `
+import { parentPort } from "node:worker_threads";
+import { existsSync, writeFileSync } from "node:fs";
+const marker = new URL("./respawn-marker", import.meta.url);
+parentPort.postMessage({ type: "ready" });
+parentPort.on("message", (msg) => {
+  if (msg?.type === "stop") process.exit(0);
+  if (msg?.type !== "start") return;
+  if (existsSync(marker)) return;
+  writeFileSync(marker, "1");
+  parentPort.postMessage({ type: "started" });
+  setTimeout(() => process.exit(1), 30);
+});
+`;
+
 async function loadHost() {
   vi.resetModules();
   const gg = globalThis as { __minderWorker?: unknown; __minderWorkerCrashLog?: unknown };
@@ -80,5 +97,31 @@ describe("worker start handshake budget (#586)", () => {
     expect(entry.msg).toMatch(/falling back to the in-process watcher/);
     expect(entry.startTimeoutMs).toBe(150);
     expect(entry.elapsedMs).toBeGreaterThanOrEqual(100);
+  });
+
+  it("records a failed RESPAWN handshake in the durable log too", async () => {
+    // A nonzero worker exit respawns the worker and re-sends `start`; that path
+    // has its own rejection handler and used to log to stdout only, so a slow or
+    // failed respawn left /api/health on `in-process` with no line in
+    // minder.log saying why (Codex, PR #589).
+    const host = await loadHost();
+    const onStartFailure = vi.fn();
+
+    await host.startWorker({
+      workerEntry: createInlineWorker(ACKS_ONCE_THEN_CRASHES_THEN_SILENT),
+      awaitStart: false,
+      startTimeoutMs: 150,
+      onStartFailure,
+    });
+
+    await vi.waitFor(() => expect(onStartFailure).toHaveBeenCalledTimes(1), { timeout: 8000 });
+
+    const entry = serviceLog.mock.calls.map((c) => c[0]).find((e) => e.phase === "respawn");
+    expect(entry).toBeDefined();
+    expect(entry.level).toBe("warn");
+    expect(entry.msg).toMatch(/^respawn start handshake failed after \d+ ms/);
+    expect(entry.msg).toMatch(/start timeout \(150 ms\)/);
+    // The initial handshake succeeded, so the ONLY failure logged is the respawn's.
+    expect(serviceLog.mock.calls.map((c) => c[0]).filter((e) => e.phase === "initial")).toHaveLength(0);
   });
 });

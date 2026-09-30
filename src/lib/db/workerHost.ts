@@ -273,8 +273,9 @@ export interface StartWorkerOptions {
   watcherOptions?: Record<string, unknown>;
   /**
    * How long to wait for the worker's `started` confirmation after
-   * `ready`. Default 60 s — initial reconcile of 3k JSONLs can take
-   * 30+ s on first boot. Applies in both modes: when `awaitStart` is
+   * `ready`. Default `DEFAULT_START_TIMEOUT_MS` (5 min) — sized for a cold
+   * open of a multi-GB index plus the watcher's ready cap, not for the
+   * reconcile (which is deferred and acked separately). Applies in both modes: when `awaitStart` is
    * true, this bounds how long `startWorker` waits before rejecting;
    * when `awaitStart` is false, it still bounds the fire-and-forget
    * handshake before logging a warning.
@@ -352,28 +353,43 @@ export async function startWorker(options: StartWorkerOptions = {}): Promise<Wor
       // watcher. The worker also emits `started` / `error/phase=start`
       // on the subscriber bus regardless.
       startPromise.catch((err: Error) => {
-        const elapsedMs = Date.now() - handshakeStartedAt;
-        // eslint-disable-next-line no-console
-        console.warn(`[ingest-worker] start handshake failed: ${err.message}`);
-        // Also to the durable log. This used to reach only stdout, which a
-        // windowed tray build discards — so for weeks the only trace of the
-        // fallback was `mode: "in-process"` in /api/health, with no reason and
-        // no timing, and #586 could not be diagnosed after the fact.
-        serviceLog({
-          level: "warn",
-          subsystem: "ingest-worker",
-          msg:
-            `start handshake failed after ${elapsedMs} ms (${err.message}); ` +
-            `falling back to the in-process watcher`,
-          elapsedMs,
-          startTimeoutMs: state.startTimeoutMs,
-        });
+        logStartHandshakeFailure(err, Date.now() - handshakeStartedAt, state.startTimeoutMs, "initial");
         state.onStartFailure?.(err);
       });
     }
   }
 
   return snapshot(state);
+}
+
+/**
+ * Record a failed start handshake in the durable log as well as on stdout.
+ *
+ * The console line alone is what this used to be, and a windowed tray build
+ * discards stdout — so for weeks the only trace of the fallback was
+ * `mode: "in-process"` in /api/health, with no reason and no timing, and #586
+ * could not be diagnosed after the fact. Shared by the initial handshake and the
+ * crash-respawn one: both end in the same in-process fallback, and a log that
+ * covered only the first would leave a slow respawn just as silent (Codex,
+ * PR #589).
+ */
+function logStartHandshakeFailure(
+  err: Error,
+  elapsedMs: number,
+  startTimeoutMs: number,
+  phase: "initial" | "respawn"
+): void {
+  const label = phase === "respawn" ? "respawn start handshake failed" : "start handshake failed";
+  // eslint-disable-next-line no-console
+  console.warn(`[ingest-worker] ${label}: ${err.message}`);
+  serviceLog({
+    level: "warn",
+    subsystem: "ingest-worker",
+    msg: `${label} after ${elapsedMs} ms (${err.message}); falling back to the in-process watcher`,
+    elapsedMs,
+    startTimeoutMs,
+    phase,
+  });
 }
 
 async function sendStartHandshake(
@@ -808,13 +824,13 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
         const timeout = state.startTimeoutMs;
         const fail = state.onStartFailure;
         state.readyPromise
-          ?.then(() =>
-            sendStartHandshake(state, opts, timeout).catch((err: Error) => {
-              // eslint-disable-next-line no-console
-              console.warn(`[ingest-worker] respawn start handshake failed: ${err.message}`);
+          ?.then(() => {
+            const respawnHandshakeStartedAt = Date.now();
+            return sendStartHandshake(state, opts, timeout).catch((err: Error) => {
+              logStartHandshakeFailure(err, Date.now() - respawnHandshakeStartedAt, timeout, "respawn");
               fail?.(err);
-            })
-          )
+            });
+          })
           .catch(() => {
             /* readyPromise rejected — its own handler logged */
           });
