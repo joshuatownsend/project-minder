@@ -124,4 +124,32 @@ describe("worker start handshake budget (#586)", () => {
     // The initial handshake succeeded, so the ONLY failure logged is the respawn's.
     expect(serviceLog.mock.calls.map((c) => c[0]).filter((e) => e.phase === "initial")).toHaveLength(0);
   });
+
+  it("logs a failed AWAITED handshake too, without claiming a fallback that will not happen", async () => {
+    // `awaitStart` defaults to true, and the durable log used to be attached only
+    // to the fire-and-forget branch — so a default caller's failure was a bare
+    // rejection with nothing in minder.log (Copilot, PR #589). With no
+    // onStartFailure registered nothing falls back, so the line must not say so.
+    const host = await loadHost();
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(
+        host.startWorker({
+          workerEntry: createInlineWorker(READY_BUT_NEVER_STARTS),
+          startTimeoutMs: 150,
+        })
+      ).rejects.toThrow(/start timeout \(150 ms\)/);
+
+      const entry = serviceLog.mock.calls.map((c) => c[0]).find((e) => e.subsystem === "ingest-worker");
+      expect(entry).toBeDefined();
+      expect(entry.msg).toMatch(/^start handshake failed after \d+ ms \(worker start timeout \(150 ms\)\)$/);
+      expect(entry.msg).not.toMatch(/falling back/);
+
+      // serviceLog (mocked here) is what tees to the console in production; a
+      // direct console.warn as well printed every failure twice.
+      expect(consoleWarn.mock.calls.flat().join(" ")).not.toMatch(/start handshake failed/);
+    } finally {
+      consoleWarn.mockRestore();
+    }
+  });
 });

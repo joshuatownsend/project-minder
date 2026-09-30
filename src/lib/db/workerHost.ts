@@ -344,16 +344,31 @@ export async function startWorker(options: StartWorkerOptions = {}): Promise<Wor
     state.startOptions = options.watcherOptions ?? {};
     state.startTimeoutMs = options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS;
     const handshakeStartedAt = Date.now();
-    const startPromise = sendStartHandshake(state, state.startOptions, state.startTimeoutMs);
+    // Logged BEFORE the branch below, so every way of consuming the handshake is
+    // covered: `awaitStart` defaults to true, and attaching the log only in the
+    // fire-and-forget branch left a default caller's failure a bare rejection
+    // with nothing in minder.log (Copilot, PR #589). Rethrown so the awaited
+    // path still rejects exactly as before.
+    const startPromise = sendStartHandshake(state, state.startOptions, state.startTimeoutMs).catch(
+      (err: Error) => {
+        logStartHandshakeFailure(
+          err,
+          Date.now() - handshakeStartedAt,
+          state.startTimeoutMs,
+          "initial",
+          state.onStartFailure !== null
+        );
+        throw err;
+      }
+    );
     if (options.awaitStart ?? true) {
       await startPromise;
     } else {
-      // Fire-and-forget: log on failure, surface to onStartFailure
-      // callback so instrumentation can fall back to the in-process
-      // watcher. The worker also emits `started` / `error/phase=start`
-      // on the subscriber bus regardless.
+      // Fire-and-forget: surface to the onStartFailure callback so
+      // instrumentation can fall back to the in-process watcher (the failure is
+      // already logged above). The worker also emits `started` /
+      // `error/phase=start` on the subscriber bus regardless.
       startPromise.catch((err: Error) => {
-        logStartHandshakeFailure(err, Date.now() - handshakeStartedAt, state.startTimeoutMs, "initial");
         state.onStartFailure?.(err);
       });
     }
@@ -363,7 +378,7 @@ export async function startWorker(options: StartWorkerOptions = {}): Promise<Wor
 }
 
 /**
- * Record a failed start handshake in the durable log as well as on stdout.
+ * Record a failed start handshake in the durable log.
  *
  * The console line alone is what this used to be, and a windowed tray build
  * discards stdout — so for weeks the only trace of the fallback was
@@ -372,20 +387,27 @@ export async function startWorker(options: StartWorkerOptions = {}): Promise<Wor
  * crash-respawn one: both end in the same in-process fallback, and a log that
  * covered only the first would leave a slow respawn just as silent (Codex,
  * PR #589).
+ *
+ * `serviceLog` already tees `warn` to the console in every mode, so this writes
+ * once and lets it do both — a direct `console.warn` as well printed each failure
+ * twice (Copilot, PR #589). `willFallBack` says whether an `onStartFailure`
+ * callback is registered: an awaited caller with none just gets the rejection and
+ * does not fall back, so the line must not claim it does.
  */
 function logStartHandshakeFailure(
   err: Error,
   elapsedMs: number,
   startTimeoutMs: number,
-  phase: "initial" | "respawn"
+  phase: "initial" | "respawn",
+  willFallBack: boolean
 ): void {
   const label = phase === "respawn" ? "respawn start handshake failed" : "start handshake failed";
-  // eslint-disable-next-line no-console
-  console.warn(`[ingest-worker] ${label}: ${err.message}`);
   serviceLog({
     level: "warn",
     subsystem: "ingest-worker",
-    msg: `${label} after ${elapsedMs} ms (${err.message}); falling back to the in-process watcher`,
+    msg:
+      `${label} after ${elapsedMs} ms (${err.message})` +
+      (willFallBack ? "; falling back to the in-process watcher" : ""),
     elapsedMs,
     startTimeoutMs,
     phase,
@@ -827,7 +849,13 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
           ?.then(() => {
             const respawnHandshakeStartedAt = Date.now();
             return sendStartHandshake(state, opts, timeout).catch((err: Error) => {
-              logStartHandshakeFailure(err, Date.now() - respawnHandshakeStartedAt, timeout, "respawn");
+              logStartHandshakeFailure(
+                err,
+                Date.now() - respawnHandshakeStartedAt,
+                timeout,
+                "respawn",
+                fail !== null && fail !== undefined
+              );
               fail?.(err);
             });
           })
