@@ -165,6 +165,100 @@ describe.skipIf(!driverAvailable)("ingestWatcher", () => {
     reloaded.conn.closeDb();
   });
 
+  it("logs once, when armed, where the startup time went (#586)", async () => {
+    // The worker host gives `startIngestWatcher` a fixed budget to return in, and
+    // until this line existed nothing recorded how a slow start divided between
+    // opening the index, the chokidar import, and waiting on `ready` — a handshake
+    // that timed out was indistinguishable from one that was merely slow.
+    const logSpy = vi.fn();
+    vi.doMock("@/lib/serviceLog", () => ({ serviceLog: logSpy }));
+    try {
+      const reloaded = await reloadModulesPointingAt(tmpHome);
+      const projectsDir = projectsDirOf(tmpHome);
+      await fs.mkdir(projectsDir, { recursive: true });
+
+      const status = await reloaded.watcher.startIngestWatcher({
+        projectsDir,
+        bypassEnvFlag: true,
+        deferInitialReconcile: true,
+        disableSweep: true,
+        usePolling: true,
+      });
+      expect(status.running).toBe(true);
+
+      const armed = logSpy.mock.calls
+        .map((c) => c[0] as { msg: string; phaseMs: Record<string, number> })
+        .filter((e) => /^watcher armed after \d+ ms$/.test(e.msg));
+      expect(armed).toHaveLength(1);
+
+      const phases = armed[0].phaseMs;
+      expect(Object.keys(phases)).toEqual([
+        "stopPrior",
+        "initDb",
+        "closeOrphans",
+        "reconcileKicked",
+        "chokidarImport",
+        "chokidarWatch",
+        "armed",
+      ]);
+      // Cumulative milliseconds since entry: each mark can only be at or after
+      // the one before it.
+      const values = Object.values(phases);
+      expect(values).toEqual([...values].sort((a, b) => a - b));
+
+      await reloaded.watcher.stopIngestWatcher();
+      reloaded.conn.closeDb();
+    } finally {
+      vi.doUnmock("@/lib/serviceLog");
+    }
+  });
+
+  it("still logs the startup timing when chokidar cannot load (sweep-only) (#586)", async () => {
+    // The timing line is documented as once-per-start. The sweep-only fallbacks
+    // are the starts most worth a breakdown, and they used to return before it
+    // (Codex, PR #589).
+    const logSpy = vi.fn();
+    vi.doMock("@/lib/serviceLog", () => ({ serviceLog: logSpy }));
+    vi.doMock("chokidar", () => {
+      throw new Error("chokidar unavailable (test)");
+    });
+    try {
+      const reloaded = await reloadModulesPointingAt(tmpHome);
+      const projectsDir = projectsDirOf(tmpHome);
+      await fs.mkdir(projectsDir, { recursive: true });
+
+      const status = await reloaded.watcher.startIngestWatcher({
+        projectsDir,
+        bypassEnvFlag: true,
+        deferInitialReconcile: true,
+        // Sweep left ON, as in the real fallback: with no chokidar watcher the
+        // sweep timer is what makes the start "running" at all.
+      });
+      expect(status.running).toBe(true);
+      expect(status.watcherMode).toBe("sweep-only");
+
+      const armed = logSpy.mock.calls
+        .map((c) => c[0] as { msg: string; phaseMs: Record<string, number>; watcherMode: string })
+        .filter((e) => /^watcher armed after \d+ ms$/.test(e.msg));
+      expect(armed).toHaveLength(1);
+      // Only the phases actually reached: the chokidar ones are the absence that
+      // tells you why this start ran sweep-only.
+      expect(Object.keys(armed[0].phaseMs)).toEqual([
+        "stopPrior",
+        "initDb",
+        "closeOrphans",
+        "reconcileKicked",
+        "armed",
+      ]);
+
+      await reloaded.watcher.stopIngestWatcher();
+      reloaded.conn.closeDb();
+    } finally {
+      vi.doUnmock("chokidar");
+      vi.doUnmock("@/lib/serviceLog");
+    }
+  });
+
   it("derives the project dir from the first segment under the watch root (subagent nesting)", async () => {
     // Chokidar watches the tree recursively; newer Claude Code nests
     // subagent transcripts at <project>/<session-id>/subagents/*.jsonl.

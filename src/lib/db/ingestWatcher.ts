@@ -153,7 +153,8 @@ export interface StartIngestWatcherOptions {
    * its `started` handshake acks as soon as the watcher is armed —
    * after a DERIVED_VERSION bump the initial reconcile is a full
    * re-parse of the corpus (minutes), and blocking on it used to blow
-   * the host's 60 s start timeout, which then terminated a healthy
+   * the host's start timeout (60 s then; see `DEFAULT_START_TIMEOUT_MS`), which
+   * then terminated a healthy
    * worker mid-write. Default false: the in-process path keeps its
    * reconcile-then-watch ordering.
    */
@@ -215,12 +216,25 @@ export async function startIngestWatcher(
     return idleStatus();
   }
 
+  // Where startup time goes (#586). The worker host waits a fixed budget
+  // (`DEFAULT_START_TIMEOUT_MS` in workerHost.ts) for this function to return,
+  // and nothing recorded how much of that each step used —
+  // so a handshake that timed out could not be told apart from one that was
+  // merely slow. Milliseconds since entry, logged once when the watcher is armed.
+  const startupT0 = Date.now();
+  const phaseMs: Record<string, number> = {};
+  const mark = (phase: string): void => {
+    phaseMs[phase] = Date.now() - startupT0;
+  };
+
   await stopIngestWatcher();
+  mark("stopPrior");
 
   const projectsDir = options.projectsDir ?? defaultProjectsDir();
 
   // Make sure the DB is open and migrated before we start parsing.
   const init = await initDb();
+  mark("initDb");
   if (!init.available) {
     // eslint-disable-next-line no-console
     console.warn(
@@ -243,6 +257,7 @@ export async function startIngestWatcher(
       console.info(`[ingest-watcher] closed ${closed} orphaned indexer run(s)`);
     }
   }
+  mark("closeOrphans");
 
   // Both awaits above (`stopIngestWatcher`, `initDb`) can straddle a shutdown
   // signal, and until the assignment below there is no published handle for
@@ -289,6 +304,23 @@ export async function startIngestWatcher(
     }
   };
 
+  // The once-per-start timing line. Called from every path that ends with a
+  // running watcher — the normal one AND both sweep-only fallbacks — because
+  // the fallbacks are exactly the starts worth a timing breakdown, and a line
+  // documented as once-per-start that skips them is missing when wanted most
+  // (Codex, PR #589). `phaseMs` holds only the phases actually reached, so a
+  // chokidar failure shows up as the absence of `chokidarImport`/`chokidarWatch`.
+  const logStartup = (): void => {
+    mark("armed");
+    serviceLog({
+      level: "info",
+      subsystem: "ingest-watcher",
+      msg: `watcher armed after ${phaseMs.armed} ms`,
+      phaseMs,
+      watcherMode: state.watcherMode,
+    });
+  };
+
   const runInitialReconcile = async (): Promise<void> => {
     const t0 = Date.now();
     let error: string | undefined;
@@ -329,6 +361,7 @@ export async function startIngestWatcher(
     // mid-reconcile drains it before closing SQLite.
     state.initialReconcileInFlight = true;
     void trackWork(state, runInitialReconcile());
+    mark("reconcileKicked");
   } else {
     // Inline mode (in-process watcher): reconcile-then-watch, no race
     // because chokidar hasn't started yet and `ignoreInitial: true` means
@@ -343,11 +376,13 @@ export async function startIngestWatcher(
   let chokidar: typeof import("chokidar");
   try {
     chokidar = await import("chokidar");
+    mark("chokidarImport");
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn(
       `[ingest-watcher] chokidar unavailable (${(err as Error).message}); falling back to sweep-only mode.`
     );
+    logStartup();
     if (!options.disableSweep) startSweep(state);
     return snapshot(state);
   }
@@ -373,6 +408,7 @@ export async function startIngestWatcher(
   });
 
   state.watcher = watcher;
+  mark("chokidarWatch");
 
   // Attach the error listener BEFORE we await `ready`. Without it, an
   // EventEmitter `error` emission during the initial scan has no listener
@@ -459,6 +495,7 @@ export async function startIngestWatcher(
     if (!(err instanceof ReadyTimeoutError)) {
       // A real chokidar error before `ready`: the pre-#558 behaviour, unchanged.
       await fallBackToSweepOnly((err as Error).message);
+      logStartup();
       if (!options.disableSweep) startSweep(state);
       return snapshot(state);
     }
@@ -492,6 +529,8 @@ export async function startIngestWatcher(
       }
     );
   }
+
+  logStartup();
 
   if (!options.disableSweep) startSweep(state);
   return snapshot(state);
