@@ -56,6 +56,7 @@ import {
 } from "./ingest/merge";
 import type { UsageTurn, ToolCall } from "@/lib/usage/types";
 import { DERIVED_VERSION } from "./derivationVersion";
+import { serviceLog } from "@/lib/serviceLog";
 import { parseStoredArgs } from "./storedArgs";
 import { detectResumeAnomaly } from "@/lib/usage/resumeAnomaly";
 import { discoverAllSessions, getAdapter } from "@/lib/adapters";
@@ -3854,6 +3855,70 @@ export function reconcileAllSessions(
   return run;
 }
 
+/**
+ * Where a reconcile pass spends its time (#595).
+ *
+ * The initial pass took 689 -> 849 -> 1261 s across three boots to handle ~14k
+ * files of which ONE changed, and nothing recorded which phase those minutes
+ * belong to: the per-file gate costs ~1 s and the whole enumeration ~3 s on a warm
+ * cache, so the time is somewhere the existing logs could not see.
+ *
+ * Owned by the WRAPPER, not the pass: the config snapshot is read there (and
+ * handed down), so a timer created inside the pass would never see that read, and
+ * the wrapper's `finally` is the one place that also runs when the pass throws —
+ * which is exactly when "where did it die" is the question. Durations are
+ * accumulated because the walk interleaves enumeration with per-file work.
+ */
+interface ReconcileTiming {
+  t0: number;
+  phaseMs: Record<string, number>;
+  counts: { subagentReaddirs: number };
+  timed<T>(phase: string, fn: () => Promise<T>): Promise<T>;
+}
+
+function createReconcileTiming(): ReconcileTiming {
+  const phaseMs: Record<string, number> = {};
+  return {
+    t0: Date.now(),
+    phaseMs,
+    counts: { subagentReaddirs: 0 },
+    async timed<T>(phase: string, fn: () => Promise<T>): Promise<T> {
+      const t = Date.now();
+      try {
+        return await fn();
+      } finally {
+        phaseMs[phase] = (phaseMs[phase] ?? 0) + (Date.now() - t);
+      }
+    },
+  };
+}
+
+/** One line per RECORDED pass; the 30 s sweeps pass no `recordRun` and stay silent. */
+function logReconcileTiming(
+  timing: ReconcileTiming,
+  stats: IngestStats | undefined,
+  kind: string
+): void {
+  const totalMs = Date.now() - timing.t0;
+  // Whatever none of the timers claimed: a phase nobody thought to name.
+  const phaseMs = {
+    ...timing.phaseMs,
+    other: totalMs - Object.values(timing.phaseMs).reduce((a, b) => a + b, 0),
+  };
+  serviceLog({
+    level: stats ? "info" : "warn",
+    subsystem: "ingest",
+    msg: stats ? `reconcile finished in ${totalMs} ms` : `reconcile threw after ${totalMs} ms`,
+    kind,
+    totalMs,
+    phaseMs,
+    filesSeen: stats?.filesSeen,
+    filesChanged: stats?.filesChanged,
+    rowsWritten: stats?.rowsWritten,
+    subagentReaddirs: timing.counts.subagentReaddirs,
+  });
+}
+
 async function reconcileAllSessionsSerialized(
   db: DatabaseT.Database,
   options: ReconcileOptions = {}
@@ -3861,6 +3926,7 @@ async function reconcileAllSessionsSerialized(
   // #470: the pass records itself only when asked. See `ReconcileOptions.recordRun`
   // for why the 30 s sweep must not.
   const runId = options.recordRun ? beginIndexerRun(db, options.recordRun) : null;
+  const timing = createReconcileTiming();
   let stats: IngestStats | undefined;
   // Captured BEFORE the work, so the verdict is stamped with the corpus this
   // pass was actually asked to walk. Reading it afterwards would let a config
@@ -3875,7 +3941,7 @@ async function reconcileAllSessionsSerialized(
     // that mislabeled verdict as evidence about the old corpus (Codex, #544).
     let passOptions = options;
     try {
-      const snapshot = options.config ?? (await readConfig());
+      const snapshot = options.config ?? (await timing.timed("config", () => readConfig()));
       corpusVersion = computeCorpusVersion(snapshot);
       passOptions = { ...options, config: snapshot };
     } catch {
@@ -3883,7 +3949,7 @@ async function reconcileAllSessionsSerialized(
       // WHICH corpus it walked must not leave a claim about one.
       corpusVersion = null;
     }
-    stats = await runReconcileAllSessions(db, passOptions);
+    stats = await runReconcileAllSessions(db, passOptions, timing);
     return stats;
   } finally {
     // `finally`, not the happy path: a pass that threw still has to stop
@@ -3905,6 +3971,7 @@ async function reconcileAllSessionsSerialized(
       // stay `aborted: false` and count as ready. (#471, Codex P1.)
       aborted: stats === undefined || stats.enumerationFailures > 0,
     });
+    if (options.recordRun) logReconcileTiming(timing, stats, options.recordRun);
     // Written by EVERY full pass, whatever `recordRun` said (#529, finding 1).
     //
     // `indexer_runs` cannot carry this: `recordOptionForSweep` deliberately
@@ -3931,7 +3998,8 @@ async function reconcileAllSessionsSerialized(
 
 async function runReconcileAllSessions(
   db: DatabaseT.Database,
-  options: ReconcileOptions = {}
+  options: ReconcileOptions = {},
+  timing: ReconcileTiming = createReconcileTiming()
 ): Promise<IngestStats> {
   const stats: IngestStats = {
     filesSeen: 0,
@@ -3942,7 +4010,9 @@ async function runReconcileAllSessions(
     enumerationFailures: 0,
   };
 
-  await loadPricing();
+  const { phaseMs, counts, timed } = timing;
+
+  await timed("pricing", () => loadPricing());
 
   // ── Multi-harness setup ─────────────────────────────────────────────────
   // Resolve config + discover non-Claude session files BEFORE the Claude walk
@@ -3950,7 +4020,7 @@ async function runReconcileAllSessions(
   // Claude) doesn't abort the whole reconcile. With the default config
   // (`enabledAdapters` unset → ["claude"]) `discoverAllSessions` yields Claude
   // files only and the `!== "claude"` filter empties the list — a pure no-op.
-  const config = options.config ?? (await readConfig());
+  const config = options.config ?? (await timed("config", () => readConfig()));
 
   // Claude projects dirs: an explicit options.projectsDir (tests, worker
   // wiring) pins a single dir; otherwise walk every READABLE Claude home
@@ -3963,7 +4033,7 @@ async function runReconcileAllSessions(
     projectsDirs = [options.projectsDir];
   } else {
     const allHomes = getClaudeHomes(config);
-    const readableHomes = await getReadableClaudeHomes(config);
+    const readableHomes = await timed("homes", () => getReadableClaudeHomes(config));
     const readableSet = new Set(readableHomes);
     projectsDirs = readableHomes.map((h) => path.join(h, "projects"));
     // Record each home's filesystem case-sensitivity while we are here and the
@@ -3975,7 +4045,7 @@ async function runReconcileAllSessions(
     //
     // Awaited rather than fired off: a probe that is still running when the
     // reconcile finishes would write into a DB the caller may have closed.
-    await recordHomeCaseSensitivity(db, readableHomes);
+    await timed("homes", () => recordHomeCaseSensitivity(db, readableHomes));
     unavailableDirs = allHomes
       .filter((h) => !readableSet.has(h))
       .map((h) => path.join(h, "projects"));
@@ -4011,7 +4081,9 @@ async function runReconcileAllSessions(
   try {
     adapterSessions =
       options.adapterSessions ??
-      (await discoverAllSessions(config)).filter((f) => f.source !== "claude");
+      (await timed("adapterDiscovery", () => discoverAllSessions(config))).filter(
+          (f) => f.source !== "claude"
+        );
   } catch (err) {
     adapterSessions = [];
     adapterDiscoveryFailed = true;
@@ -4103,7 +4175,9 @@ async function runReconcileAllSessions(
     let filePaths: string[];
     let sessionDirs: string[];
     try {
-      const entries = await fs.readdir(dirPath, { withFileTypes: true });
+      const entries = await timed("enumerate", () =>
+        fs.readdir(dirPath, { withFileTypes: true })
+      );
       filePaths = entries
         .filter((e) => e.isFile() && e.name.endsWith(".jsonl"))
         .map((e) => path.join(dirPath, e.name));
@@ -4130,7 +4204,8 @@ async function runReconcileAllSessions(
     for (const sessionDir of sessionDirs) {
       const subagentsDir = path.join(dirPath, sessionDir, "subagents");
       try {
-        const subEntries = await fs.readdir(subagentsDir);
+        counts.subagentReaddirs++;
+        const subEntries = await timed("enumerate", () => fs.readdir(subagentsDir));
         for (const f of subEntries) {
           if (f.endsWith(".jsonl")) filePaths.push(path.join(subagentsDir, f));
         }
@@ -4148,7 +4223,9 @@ async function runReconcileAllSessions(
       liveFilePaths.add(filePath);
       stats.filesSeen++;
       try {
-        const result = await reconcileSessionFile(db, filePath, dirName, options);
+        const result = await timed("perFile", () =>
+          reconcileSessionFile(db, filePath, dirName, options)
+        );
         if (result.skippedNewerDerivation) stats.newerDerivationSkips++;
         if (result.rowsWritten > 0) {
           stats.filesChanged++;
@@ -4218,6 +4295,7 @@ async function runReconcileAllSessions(
   // was dropped in v4, so each session's `prompts_fts` rows are explicitly
   // bulk-deleted here in one scan before the cascade — same contract as
   // `writeSession`'s pre-delete.
+  const pruneT0 = Date.now();
   const allSessions = db
     .prepare("SELECT session_id, project_slug, file_path, derived_version FROM sessions")
     .all() as Array<{
@@ -4259,6 +4337,7 @@ async function runReconcileAllSessions(
     deleteStale.run(r.session_id);
     stalePruned.add(r.project_slug);
   }
+  phaseMs.prune = Date.now() - pruneT0;
 
   // Continuation linking: after sessions have been ingested with their
   // slugs stamped, walk the slug index and point each session's
@@ -4272,7 +4351,9 @@ async function runReconcileAllSessions(
   // fire frequently and most are no-ops; this gate keeps that path
   // free of incidental work.
   if (stats.filesChanged > 0 || stalePruned.size > 0) {
+    const linksT0 = Date.now();
     refreshContinuationLinks(db);
+    phaseMs.links = Date.now() - linksT0;
   }
 
   // Clear the v3 readiness gate ONLY when the reconcile pass is
