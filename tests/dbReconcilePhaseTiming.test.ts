@@ -104,7 +104,9 @@ describe.skipIf(!driverAvailable)("reconcile phase timing (#595)", () => {
       // within a millisecond of rounding per phase — `other` exists so nothing
       // is lost, which is the property that makes the breakdown trustworthy.
       const sum = Object.values(line.phaseMs).reduce((a, b) => a + b, 0);
-      expect(Math.abs(sum - (line.totalMs as number))).toBeLessThanOrEqual(1);
+      // Each figure is rounded independently, so allow a millisecond per phase.
+      expect(Math.abs(sum - (line.totalMs as number))).toBeLessThanOrEqual(Object.keys(line.phaseMs).length);
+      expect(line.phaseMs.other).toBeGreaterThanOrEqual(0);
     } finally {
       conn.closeDb();
     }

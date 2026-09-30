@@ -3918,12 +3918,19 @@ function logReconcileTiming(
 ): void {
   // Monotonic clock throughout: a wall-clock correction mid-pass would otherwise
   // produce negative durations in the very diagnostic meant to be trustworthy.
-  const totalMs = Math.round(performance.now() - timing.t0);
+  const rawTotal = performance.now() - timing.t0;
+  const totalMs = Math.round(rawTotal);
   const phaseMs: Record<string, number> = {};
-  for (const [k, v] of Object.entries(timing.phaseMs)) phaseMs[k] = Math.round(v);
-  // Whatever none of the timers claimed: a phase nobody thought to name. Computed
-  // from the rounded figures so the logged phases sum to the logged total.
-  phaseMs.other = totalMs - Object.values(phaseMs).reduce((a, b) => a + b, 0);
+  let rawSum = 0;
+  for (const [k, v] of Object.entries(timing.phaseMs)) {
+    phaseMs[k] = Math.round(v);
+    rawSum += v;
+  }
+  // Whatever none of the timers claimed: a phase nobody thought to name. Taken
+  // from the UNROUNDED figures so sub-millisecond phases that each round up
+  // cannot push it negative; the rounded phases may therefore miss the rounded
+  // total by up to a millisecond apiece.
+  phaseMs.other = Math.max(0, Math.round(rawTotal - rawSum));
   serviceLog({
     level: stats ? "info" : "warn",
     subsystem: "ingest",
