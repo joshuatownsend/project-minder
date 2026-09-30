@@ -47,6 +47,26 @@ setInterval(() => {}, 60_000);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// First instance: ready, acks `start`, then crashes. Every respawned instance
+// (the marker file beside this worker exists) sits silent and never reports ready.
+const CRASHES_THEN_RESPAWNS_NEVER_READY = `
+import { parentPort } from "node:worker_threads";
+import { existsSync, writeFileSync } from "node:fs";
+const marker = new URL("./respawn-ready-marker", import.meta.url);
+if (existsSync(marker)) {
+  setInterval(() => {}, 60_000);
+} else {
+  parentPort.postMessage({ type: "ready" });
+  parentPort.on("message", (msg) => {
+    if (msg?.type === "stop") process.exit(0);
+    if (msg?.type !== "start") return;
+    writeFileSync(marker, "1");
+    parentPort.postMessage({ type: "started" });
+    setTimeout(() => process.exit(1), 30);
+  });
+}
+`;
+
 async function loadHost() {
   vi.resetModules();
   const gg = globalThis as { __minderWorker?: unknown; __minderWorkerCrashLog?: unknown };
@@ -199,5 +219,51 @@ describe("worker start handshake budget (#586)", () => {
 
     await expect(starting).resolves.toMatch(/stopped before ready/);
     expect(serviceLog.mock.calls.map((c) => c[0]).filter((e) => e.phase === "ready")).toHaveLength(0);
+  });
+
+  it("does not log a fault when the START HANDSHAKE is interrupted by our own stopWorker()", async () => {
+    // The handshake's rejection on an intentional stop is a shutdown, not a
+    // worker fault. The pre-ready path already withheld the warning; this one
+    // logged `start handshake failed` unconditionally (Copilot, PR #589). The
+    // rejection must still propagate to onStartFailure.
+    const host = await loadHost();
+    const onStartFailure = vi.fn();
+
+    await host.startWorker({
+      workerEntry: createInlineWorker(READY_BUT_NEVER_STARTS),
+      awaitStart: false,
+      startTimeoutMs: 30_000,
+      onStartFailure,
+    });
+    await sleep(100);
+    await host.stopWorker();
+
+    await vi.waitFor(() => expect(onStartFailure).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    expect(serviceLog.mock.calls.map((c) => c[0]).filter((e) => e.phase === "initial")).toHaveLength(0);
+  });
+
+  it("logs a respawned worker that never becomes ready", async () => {
+    // The respawn's ready wait has no awaiter, and the handshake chain swallowed
+    // its rejection, so a respawn that timed out before `ready` left no trace
+    // (Copilot, PR #589).
+    const host = await loadHost();
+
+    await host.startWorker({
+      workerEntry: createInlineWorker(CRASHES_THEN_RESPAWNS_NEVER_READY),
+      awaitStart: false,
+      readyTimeoutMs: 1500,
+      onStartFailure: vi.fn(),
+    });
+
+    await vi.waitFor(
+      () => expect(serviceLog.mock.calls.map((c) => c[0]).some((e) => e.phase === "respawn-ready")).toBe(true),
+      { timeout: 10_000 }
+    );
+
+    const entry = serviceLog.mock.calls.map((c) => c[0]).find((e) => e.phase === "respawn-ready");
+    expect(entry.level).toBe("warn");
+    expect(entry.msg).toMatch(/^respawned worker failed before ready after \d+ ms \(worker ready timeout \(1500 ms\)\)$/);
+    expect(entry.readyTimeoutMs).toBe(1500);
+    expect(entry.msg).not.toMatch(/falling back/);
   });
 });

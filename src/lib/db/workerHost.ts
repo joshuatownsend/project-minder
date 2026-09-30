@@ -333,13 +333,14 @@ export async function startWorker(options: StartWorkerOptions = {}): Promise<Wor
   } catch (err) {
     // A worker that never becomes ready ends in the same `ingest.mode:
     // "in-process"` as a failed start handshake — the caller catches this and
-    // falls back — but it never reaches the handshake log below, and the
-    // caller's own catch writes to stdout only. Log it here so that class of
-    // failure explains itself too (Copilot, PR #589). Not when the rejection is
-    // our own `stopWorker()` during startup: that is a shutdown, not a fault.
-    if (!state.stopping) {
-      logReadyFailure(err as Error, Date.now() - readyWaitStartedAt, state.readyTimeoutMs);
-    }
+    // falls back — but its own catch writes to stdout only, so log it here.
+    reportWorkerStartFailure(state, {
+      phase: "ready",
+      err: err as Error,
+      elapsedMs: Date.now() - readyWaitStartedAt,
+      timeoutMs: state.readyTimeoutMs,
+      willFallBack: false,
+    });
     throw err;
   }
 
@@ -365,13 +366,13 @@ export async function startWorker(options: StartWorkerOptions = {}): Promise<Wor
     // path still rejects exactly as before.
     const startPromise = sendStartHandshake(state, state.startOptions, state.startTimeoutMs).catch(
       (err: Error) => {
-        logStartHandshakeFailure(
+        reportWorkerStartFailure(state, {
+          phase: "initial",
           err,
-          Date.now() - handshakeStartedAt,
-          state.startTimeoutMs,
-          "initial",
-          state.onStartFailure !== null
-        );
+          elapsedMs: Date.now() - handshakeStartedAt,
+          timeoutMs: state.startTimeoutMs,
+          willFallBack: state.onStartFailure !== null,
+        });
         throw err;
       }
     );
@@ -392,56 +393,75 @@ export async function startWorker(options: StartWorkerOptions = {}): Promise<Wor
 }
 
 /**
- * Record a failed start handshake in the durable log.
+ * Where a worker start can fail, each ending in the same `ingest.mode:
+ * "in-process"` and each worth a line in the durable log:
  *
- * The console line alone is what this used to be, and a windowed tray build
- * discards stdout — so for weeks the only trace of the fallback was
- * `mode: "in-process"` in /api/health, with no reason and no timing, and #586
- * could not be diagnosed after the fact. Shared by the initial handshake and the
- * crash-respawn one: both end in the same in-process fallback, and a log that
- * covered only the first would leave a slow respawn just as silent (Codex,
- * PR #589).
- *
- * `serviceLog` already tees `warn` to the console in every mode, so this writes
- * once and lets it do both — a direct `console.warn` as well printed each failure
- * twice (Copilot, PR #589). `willFallBack` says whether an `onStartFailure`
- * callback is registered: an awaited caller with none just gets the rejection and
- * does not fall back, so the line must not claim it does.
+ *   ready            the first worker never reported `ready` (thrown to the caller)
+ *   initial          the first worker's `start` handshake failed
+ *   respawn-ready    a crash-respawned worker never reported `ready`
+ *   respawn          a crash-respawned worker's `start` handshake failed
  */
-function logStartHandshakeFailure(
-  err: Error,
-  elapsedMs: number,
-  startTimeoutMs: number,
-  phase: "initial" | "respawn",
-  willFallBack: boolean
-): void {
-  const label = phase === "respawn" ? "respawn start handshake failed" : "start handshake failed";
+type WorkerStartPhase = "ready" | "initial" | "respawn-ready" | "respawn";
+
+interface WorkerStartFailure {
+  phase: WorkerStartPhase;
+  err: Error;
+  /** How long this phase waited before failing. */
+  elapsedMs: number;
+  /** The timeout that governed this phase (ready or start), for reading `elapsedMs` against. */
+  timeoutMs: number;
+  /**
+   * Whether an `onStartFailure` callback will take over. An awaited caller with
+   * none just gets the rejection and does not fall back, so the line must not
+   * claim it does.
+   */
+  willFallBack: boolean;
+}
+
+/**
+ * The ONE place a failed worker start is written to the durable log.
+ *
+ * Until this existed the fallback reason reached only stdout, which a windowed
+ * tray build discards — for weeks the only trace of the fallback was
+ * `mode: "in-process"` in /api/health, with no reason and no timing, and #586
+ * could not be diagnosed after the fact. It then grew a path at a time (the
+ * initial handshake, then the respawn's, then the awaited caller's, then the
+ * ready wait, then the respawned ready wait), and each review round found the
+ * next path missed (PR #589). Routing every phase through here means the rules
+ * below apply once, to all of them.
+ *
+ * - **Not on an intentional stop.** `stopWorker()` sets `stopping` before it
+ *   rejects the ready wait and terminates the thread, so the rejection that
+ *   follows is a shutdown, not a fault. The rejection itself still propagates;
+ *   only the warning is withheld.
+ * - **One write.** `serviceLog` already tees `warn` to the console in every
+ *   mode, so no separate `console.warn` (that printed each failure twice).
+ */
+function reportWorkerStartFailure(state: WorkerHostState, f: WorkerStartFailure): void {
+  if (state.stopping) return;
+
+  const subject =
+    f.phase === "ready"
+      ? "worker failed before ready"
+      : f.phase === "respawn-ready"
+        ? "respawned worker failed before ready"
+        : f.phase === "respawn"
+          ? "respawn start handshake failed"
+          : "start handshake failed";
+
   serviceLog({
     level: "warn",
     subsystem: "ingest-worker",
     msg:
-      `${label} after ${elapsedMs} ms (${err.message})` +
-      (willFallBack ? "; falling back to the in-process watcher" : ""),
-    elapsedMs,
-    startTimeoutMs,
-    phase,
-  });
-}
-
-/**
- * Record a worker that failed before ever reporting `ready` (ready timeout,
- * a thread `error`, exit during load). No fallback claim: whether the caller
- * falls back is its decision, and unlike a failed handshake this rejection is
- * thrown to it rather than routed through `onStartFailure`.
- */
-function logReadyFailure(err: Error, elapsedMs: number, readyTimeoutMs: number): void {
-  serviceLog({
-    level: "warn",
-    subsystem: "ingest-worker",
-    msg: `worker failed before ready after ${elapsedMs} ms (${err.message})`,
-    elapsedMs,
-    readyTimeoutMs,
-    phase: "ready",
+      `${subject} after ${f.elapsedMs} ms (${f.err.message})` +
+      (f.willFallBack ? "; falling back to the in-process watcher" : ""),
+    elapsedMs: f.elapsedMs,
+    // Named for what it bounds, as before: the ready phases wait on the ready
+    // timeout, the handshake phases on the start timeout.
+    ...(f.phase === "ready" || f.phase === "respawn-ready"
+      ? { readyTimeoutMs: f.timeoutMs }
+      : { startTimeoutMs: f.timeoutMs }),
+    phase: f.phase,
   });
 }
 
@@ -867,6 +887,20 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
       state.respawnTimer = null;
       if (state.stopping || g.__minderWorker !== state) return;
       spawnAndAttach(state, entry);
+      const respawnedAt = Date.now();
+      // A respawn that never reports `ready` used to vanish: nothing awaits this
+      // promise, and the handshake chain below swallows its rejection. Reported
+      // independently of whether a `start` handshake is configured, because the
+      // failure is the same either way (Copilot, PR #589).
+      state.readyPromise?.catch((err: Error) => {
+        reportWorkerStartFailure(state, {
+          phase: "respawn-ready",
+          err,
+          elapsedMs: Date.now() - respawnedAt,
+          timeoutMs: state.readyTimeoutMs,
+          willFallBack: false,
+        });
+      });
       // Re-send the `start` handshake to the freshly-spawned worker so
       // ingest actually resumes. Without this, the new worker stays
       // idle (it boots to ready and waits for a `start` message that
@@ -880,18 +914,18 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
           ?.then(() => {
             const respawnHandshakeStartedAt = Date.now();
             return sendStartHandshake(state, opts, timeout).catch((err: Error) => {
-              logStartHandshakeFailure(
+              reportWorkerStartFailure(state, {
+                phase: "respawn",
                 err,
-                Date.now() - respawnHandshakeStartedAt,
-                timeout,
-                "respawn",
-                fail !== null && fail !== undefined
-              );
+                elapsedMs: Date.now() - respawnHandshakeStartedAt,
+                timeoutMs: timeout,
+                willFallBack: fail !== null && fail !== undefined,
+              });
               fail?.(err);
             });
           })
           .catch(() => {
-            /* readyPromise rejected — its own handler logged */
+            /* readyPromise rejected — reported by the handler above */
           });
       }
     }, backoff);
