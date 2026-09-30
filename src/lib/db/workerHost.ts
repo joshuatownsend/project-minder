@@ -327,7 +327,21 @@ export async function startWorker(options: StartWorkerOptions = {}): Promise<Wor
   g.__minderWorker = state;
 
   spawnAndAttach(state, entry);
-  await state.readyPromise;
+  const readyWaitStartedAt = Date.now();
+  try {
+    await state.readyPromise;
+  } catch (err) {
+    // A worker that never becomes ready ends in the same `ingest.mode:
+    // "in-process"` as a failed start handshake — the caller catches this and
+    // falls back — but it never reaches the handshake log below, and the
+    // caller's own catch writes to stdout only. Log it here so that class of
+    // failure explains itself too (Copilot, PR #589). Not when the rejection is
+    // our own `stopWorker()` during startup: that is a shutdown, not a fault.
+    if (!state.stopping) {
+      logReadyFailure(err as Error, Date.now() - readyWaitStartedAt, state.readyTimeoutMs);
+    }
+    throw err;
+  }
 
   // Phase-2 worker entries expect a `start` handshake after `ready` so
   // the host can pass watcher options. Phase-1 tests using the trivial
@@ -411,6 +425,23 @@ function logStartHandshakeFailure(
     elapsedMs,
     startTimeoutMs,
     phase,
+  });
+}
+
+/**
+ * Record a worker that failed before ever reporting `ready` (ready timeout,
+ * a thread `error`, exit during load). No fallback claim: whether the caller
+ * falls back is its decision, and unlike a failed handshake this rejection is
+ * thrown to it rather than routed through `onStartFailure`.
+ */
+function logReadyFailure(err: Error, elapsedMs: number, readyTimeoutMs: number): void {
+  serviceLog({
+    level: "warn",
+    subsystem: "ingest-worker",
+    msg: `worker failed before ready after ${elapsedMs} ms (${err.message})`,
+    elapsedMs,
+    readyTimeoutMs,
+    phase: "ready",
   });
 }
 

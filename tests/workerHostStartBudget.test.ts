@@ -41,6 +41,12 @@ parentPort.on("message", (msg) => {
 });
 `;
 
+const NEVER_READY = `
+setInterval(() => {}, 60_000);
+`;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 async function loadHost() {
   vi.resetModules();
   const gg = globalThis as { __minderWorker?: unknown; __minderWorkerCrashLog?: unknown };
@@ -151,5 +157,47 @@ describe("worker start handshake budget (#586)", () => {
     } finally {
       consoleWarn.mockRestore();
     }
+  });
+
+  it("logs a worker that never becomes ready (the failure before the handshake)", async () => {
+    // The ready phase ends in the same `ingest.mode: "in-process"`, but its
+    // rejection is thrown to the caller rather than routed through
+    // onStartFailure, and the caller's own catch writes to stdout only — so it was
+    // the one class of start failure still missing from minder.log (Copilot,
+    // PR #589).
+    const host = await loadHost();
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(
+        host.startWorker({ workerEntry: createInlineWorker(NEVER_READY), readyTimeoutMs: 150 })
+      ).rejects.toThrow(/ready timeout \(150 ms\)/);
+
+      const entry = serviceLog.mock.calls.map((c) => c[0]).find((e) => e.phase === "ready");
+      expect(entry).toBeDefined();
+      expect(entry.level).toBe("warn");
+      expect(entry.subsystem).toBe("ingest-worker");
+      expect(entry.msg).toMatch(/^worker failed before ready after \d+ ms \(worker ready timeout \(150 ms\)\)$/);
+      expect(entry.readyTimeoutMs).toBe(150);
+    } finally {
+      consoleWarn.mockRestore();
+    }
+  });
+
+  it("does not log a fault when startup is interrupted by our own stopWorker()", async () => {
+    // Shutting down mid-boot rejects the ready wait with "worker stopped before
+    // ready". That is the server stopping, not the worker failing.
+    const host = await loadHost();
+    const starting = host
+      .startWorker({ workerEntry: createInlineWorker(NEVER_READY), readyTimeoutMs: 30_000 })
+      .then(
+        () => "resolved",
+        (e: Error) => e.message
+      );
+
+    await sleep(100);
+    await host.stopWorker();
+
+    await expect(starting).resolves.toMatch(/stopped before ready/);
+    expect(serviceLog.mock.calls.map((c) => c[0]).filter((e) => e.phase === "ready")).toHaveLength(0);
   });
 });
