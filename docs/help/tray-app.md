@@ -165,13 +165,13 @@ The tray app respects these optional environment variables (most have sensible d
 
 ### Status says "slow to respond" after a reboot or restart
 
-This is normal for the first several minutes on a large history. The server is up and its port accepts connections, but it is busy indexing your Claude Code sessions and is taking longer than the tray's 10-second probe allows to answer. On a machine with ~6 GB of session transcripts the initial index pass measured about 11 minutes. The status line changes to "running" by itself once the server answers; there is nothing to do, and restarting only starts the indexing over.
+Something is accepting connections on the port but did not answer `/api/health` within the tray's 10-second probe. Right after a boot or restart the most likely explanation is that Project Minder's own server is busy indexing your Claude Code sessions, which is normal for the first several minutes on a large history. The tray cannot confirm that, though: a different process that holds the port and has stopped answering would show the same label. On a machine with ~6 GB of session transcripts the initial index pass measured about 11 minutes. The status line changes to "running" by itself once the server answers; there is nothing to do, and restarting only starts the indexing over.
 
 If it stays on "slow to respond" for much longer than that, check `~/.minder/logs/minder.log` — an `ingest-watcher` line reporting `chokidar reported ready` and a `memory sample` line show the server is making progress.
 
 ### Status says "degraded" or "not responding" (or stays on "starting…" for too long)
 
-"not responding" means the port is not accepting connections at all, or something other than Project Minder answered on it. (A server that is merely busy reads "slow to respond" instead.)
+"not responding" means the port is not accepting connections at all, or something other than Project Minder answered on it. (A port that accepts connections but stays silent reads "slow to respond" instead — usually a busy Minder server, though the tray cannot rule out another process.)
 
 1. **Check the server log:** `~/.minder/logs/minder.log` will show any startup errors or crashes.
 2. **Check for port conflicts:** Run `netstat -ano | findstr :4100` (Windows), `lsof -i :4100` (macOS/Linux).

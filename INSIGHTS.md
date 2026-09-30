@@ -1,23 +1,5 @@
 # Insights
 
-<!-- insight:4a22f108ec36 | session:8cfc57ec-b27d-4c22-b88a-4139690433ed | 2026-09-06T16:43:53.436Z -->
-## ★ Insight
-Two findings that change the work:
-
----
-
-<!-- insight:680b27dcb8f9 | session:8cfc57ec-b27d-4c22-b88a-4139690433ed | 2026-09-06T16:40:34.342Z -->
-## ★ Insight
-The audit reveals the issue undercounted badly: **~45 of 78 pointers are stale**, not 5. The rot pattern is instructive — pointers into files that grew a lot (`ingest.ts`, `usage/parser.ts`, `claudeConversations.ts`) are almost all wrong, while pointers into files that barely changed (`StatusDashboard.tsx:80`, `ConfigBrowser.tsx:208`) are still correct. Line numbers decay in proportion to how active the target file is — which means they're least reliable exactly where the code is most worth pointing at.
-
----
-
-<!-- insight:69245ae6efa0 | session:8cfc57ec-b27d-4c22-b88a-4139690433ed | 2026-09-06T11:32:35.226Z -->
-## ★ Insight
-This is why the advisor's "verify the retarget is honest" matters. Had the tail actually reduced to "close the run row," rewriting the comment to keep the guard would have been documenting a rationalization. Instead there's genuine remaining post-loop work, so the guard stands on its own merits — and I can say *which* work without inventing it.
-
----
-
 <!-- insight:58b7df774b26 | session:8cfc57ec-b27d-4c22-b88a-4139690433ed | 2026-09-06T11:15:30.088Z -->
 ## ★ Insight
 The reason these two issues are siblings is a classic SQL-refactor hazard: `queryProjectDetails` fires **four** queries (header, catRows, toolRows, mcpRows) that must agree with each other, but each carries its own hand-written `WHERE` clause. There's no shared filter-builder, so a predicate added to one silently diverges from the other three — which is exactly how the `s.source` gap survived.
