@@ -9,8 +9,9 @@ import { installIsolatedState } from "./_helpers/isolatedState";
 // The pass took 689 -> 849 -> 1261 s across three boots to handle ~14k files of
 // which ONE changed, and nothing recorded which phase those minutes belong to.
 // The summary line is the instrument; these tests pin what it promises: one line
-// per RECORDED pass (never the 30 s sweep's), naming every phase it timed, with
-// the untimed remainder surfaced as `other` rather than lost.
+// per pass that opts in with `logTiming` (the initial pass; never the 30 s sweep,
+// and not merely any RECORDED pass — recovery sweeps are recorded too), naming
+// every phase it timed, with the untimed remainder surfaced as `other`.
 
 let driverAvailable: boolean;
 try {

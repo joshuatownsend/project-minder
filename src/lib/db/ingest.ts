@@ -3888,23 +3888,23 @@ interface ReconcileTiming {
 function createReconcileTiming(): ReconcileTiming {
   const phaseMs: Record<string, number> = {};
   return {
-    t0: Date.now(),
+    t0: performance.now(),
     phaseMs,
     counts: { subagentReaddirs: 0 },
     async timed<T>(phase: string, fn: () => Promise<T>): Promise<T> {
-      const t = Date.now();
+      const t = performance.now();
       try {
         return await fn();
       } finally {
-        phaseMs[phase] = (phaseMs[phase] ?? 0) + (Date.now() - t);
+        phaseMs[phase] = (phaseMs[phase] ?? 0) + (performance.now() - t);
       }
     },
     timedSync<T>(phase: string, fn: () => T): T {
-      const t = Date.now();
+      const t = performance.now();
       try {
         return fn();
       } finally {
-        phaseMs[phase] = (phaseMs[phase] ?? 0) + (Date.now() - t);
+        phaseMs[phase] = (phaseMs[phase] ?? 0) + (performance.now() - t);
       }
     },
   };
@@ -3916,12 +3916,14 @@ function logReconcileTiming(
   stats: IngestStats | undefined,
   kind: string
 ): void {
-  const totalMs = Date.now() - timing.t0;
-  // Whatever none of the timers claimed: a phase nobody thought to name.
-  const phaseMs = {
-    ...timing.phaseMs,
-    other: totalMs - Object.values(timing.phaseMs).reduce((a, b) => a + b, 0),
-  };
+  // Monotonic clock throughout: a wall-clock correction mid-pass would otherwise
+  // produce negative durations in the very diagnostic meant to be trustworthy.
+  const totalMs = Math.round(performance.now() - timing.t0);
+  const phaseMs: Record<string, number> = {};
+  for (const [k, v] of Object.entries(timing.phaseMs)) phaseMs[k] = Math.round(v);
+  // Whatever none of the timers claimed: a phase nobody thought to name. Computed
+  // from the rounded figures so the logged phases sum to the logged total.
+  phaseMs.other = totalMs - Object.values(phaseMs).reduce((a, b) => a + b, 0);
   serviceLog({
     level: stats ? "info" : "warn",
     subsystem: "ingest",
