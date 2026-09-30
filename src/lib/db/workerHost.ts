@@ -35,7 +35,35 @@ import type { IngestWatcherMode } from "@/lib/types/init";
 //   such wrapper exists to set the env var.
 
 const DEFAULT_READY_TIMEOUT_MS = 10_000;
-const DEFAULT_START_TIMEOUT_MS = 60_000;
+
+/**
+ * How long the worker gets to acknowledge `start` before the host gives up on it
+ * and falls back to the in-process watcher (#586).
+ *
+ * **What the budget has to cover.** `started` is posted only after
+ * `startIngestWatcher()` returns, which is (measured on the live 2.5 GB index,
+ * idle main thread, phase timings from that function's own log line):
+ *
+ *   - `initDb()`               21 s warm — dominated by `PRAGMA quick_check`,
+ *                              which is O(database size) and repeats the check
+ *                              the main thread already ran this boot. Cold after
+ *                              a reboot the main thread's own probe logs 95-101 s.
+ *   - chokidar `ready` race    up to 30 s (its `READY_TIMEOUT_MS`), a cap the
+ *                              function then waits out whenever the transcript
+ *                              scan is slower than that — always, at 14k files.
+ *
+ * Warm that is 51 s of a 60 s budget: nine seconds of headroom, gone the moment
+ * anything competes for the disk (the boot-time grade sweep reads the whole
+ * corpus). Cold it cannot fit. The fallback that follows is not free — it stops
+ * the worker (up to `STOP_GRACE_MS`, then `terminate()` mid-reconcile) and
+ * restarts the whole reconcile on the HTTP server's main thread, which is the
+ * contention the worker exists to avoid. Every boot since ~2026-09-26 took it.
+ *
+ * Sized as cold open + ready cap with a 2x margin. A worker that CRASHES still
+ * fails fast — `exit` and `error` reject the handshake immediately — so a longer
+ * ceiling only delays the verdict on a worker that is alive but silent.
+ */
+export const DEFAULT_START_TIMEOUT_MS = 300_000;
 // How long stopWorker waits for a post-ready worker to exit on its own
 // after the `stop` message before hard-terminating it. terminate() kills
 // the thread wherever it is — including inside a better-sqlite3 write,
@@ -314,6 +342,7 @@ export async function startWorker(options: StartWorkerOptions = {}): Promise<Wor
   if (sendStart) {
     state.startOptions = options.watcherOptions ?? {};
     state.startTimeoutMs = options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS;
+    const handshakeStartedAt = Date.now();
     const startPromise = sendStartHandshake(state, state.startOptions, state.startTimeoutMs);
     if (options.awaitStart ?? true) {
       await startPromise;
@@ -323,8 +352,22 @@ export async function startWorker(options: StartWorkerOptions = {}): Promise<Wor
       // watcher. The worker also emits `started` / `error/phase=start`
       // on the subscriber bus regardless.
       startPromise.catch((err: Error) => {
+        const elapsedMs = Date.now() - handshakeStartedAt;
         // eslint-disable-next-line no-console
         console.warn(`[ingest-worker] start handshake failed: ${err.message}`);
+        // Also to the durable log. This used to reach only stdout, which a
+        // windowed tray build discards — so for weeks the only trace of the
+        // fallback was `mode: "in-process"` in /api/health, with no reason and
+        // no timing, and #586 could not be diagnosed after the fact.
+        serviceLog({
+          level: "warn",
+          subsystem: "ingest-worker",
+          msg:
+            `start handshake failed after ${elapsedMs} ms (${err.message}); ` +
+            `falling back to the in-process watcher`,
+          elapsedMs,
+          startTimeoutMs: state.startTimeoutMs,
+        });
         state.onStartFailure?.(err);
       });
     }

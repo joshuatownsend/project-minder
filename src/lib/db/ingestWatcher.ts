@@ -215,12 +215,24 @@ export async function startIngestWatcher(
     return idleStatus();
   }
 
+  // Where startup time goes (#586). The worker host waits a fixed 60 s for this
+  // function to return, and nothing recorded how much of that each step used —
+  // so a handshake that timed out could not be told apart from one that was
+  // merely slow. Milliseconds since entry, logged once when the watcher is armed.
+  const startupT0 = Date.now();
+  const phaseMs: Record<string, number> = {};
+  const mark = (phase: string): void => {
+    phaseMs[phase] = Date.now() - startupT0;
+  };
+
   await stopIngestWatcher();
+  mark("stopPrior");
 
   const projectsDir = options.projectsDir ?? defaultProjectsDir();
 
   // Make sure the DB is open and migrated before we start parsing.
   const init = await initDb();
+  mark("initDb");
   if (!init.available) {
     // eslint-disable-next-line no-console
     console.warn(
@@ -243,6 +255,7 @@ export async function startIngestWatcher(
       console.info(`[ingest-watcher] closed ${closed} orphaned indexer run(s)`);
     }
   }
+  mark("closeOrphans");
 
   // Both awaits above (`stopIngestWatcher`, `initDb`) can straddle a shutdown
   // signal, and until the assignment below there is no published handle for
@@ -329,6 +342,7 @@ export async function startIngestWatcher(
     // mid-reconcile drains it before closing SQLite.
     state.initialReconcileInFlight = true;
     void trackWork(state, runInitialReconcile());
+    mark("reconcileKicked");
   } else {
     // Inline mode (in-process watcher): reconcile-then-watch, no race
     // because chokidar hasn't started yet and `ignoreInitial: true` means
@@ -343,6 +357,7 @@ export async function startIngestWatcher(
   let chokidar: typeof import("chokidar");
   try {
     chokidar = await import("chokidar");
+    mark("chokidarImport");
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn(
@@ -373,6 +388,7 @@ export async function startIngestWatcher(
   });
 
   state.watcher = watcher;
+  mark("chokidarWatch");
 
   // Attach the error listener BEFORE we await `ready`. Without it, an
   // EventEmitter `error` emission during the initial scan has no listener
@@ -492,6 +508,15 @@ export async function startIngestWatcher(
       }
     );
   }
+
+  mark("armed");
+  serviceLog({
+    level: "info",
+    subsystem: "ingest-watcher",
+    msg: `watcher armed after ${phaseMs.armed} ms`,
+    phaseMs,
+    watcherMode: state.watcherMode,
+  });
 
   if (!options.disableSweep) startSweep(state);
   return snapshot(state);

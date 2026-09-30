@@ -195,8 +195,8 @@ Lines worth knowing about when something has gone wrong:
 
 - **`memory`** — one `memory sample` line per hour (and one at boot) with the same figures as `/api/health`'s `memory` block plus `uptimeSec`. It is `info` below 4 GB of resident set and `warn` above. Grep for `"subsystem":"memory"` to read a growth curve after the fact.
 - **`route`** — a `slow response` warning whenever `/api/usage` or `/api/stats` takes 5 seconds or more, with the period, project and backend it ran under. Fast responses write nothing.
-- **`ingest-worker`** — worker crashes, respawns and the crash-budget fallback to the in-process watcher.
-- **`ingest-watcher`** — chokidar arming past its ready timeout, reporting ready later, or failing over to sweep-only mode.
+- **`ingest-worker`** — worker crashes, respawns, the crash-budget fallback to the in-process watcher, and a start handshake that failed (`start handshake failed after N ms (...)`, with the reason and how long it waited). If `/api/health` reports `ingest.mode: "in-process"` when you expected `"worker"`, this line says why.
+- **`ingest-watcher`** — chokidar arming past its ready timeout, reporting ready later, or failing over to sweep-only mode. Once per start, `watcher armed after N ms` with a `phaseMs` breakdown (`initDb`, `chokidarImport`, `chokidarWatch`, …) of where the startup time went; opening a large index dominates it.
 - **`db`** — an `error` line every time the index is quarantined, carrying the trigger (`reason`), the quarantine path (`dest`) and the file size.
 
 Lines from the ingest worker thread carry `"thread":"ingest-worker"`. The worker cannot write the file itself, so it hands its entries to the main thread; before this, its warnings went to a console the tray discards.
