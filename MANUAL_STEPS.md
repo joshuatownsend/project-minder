@@ -1,4 +1,4 @@
-## 2026-10-01 | slow-boot | Confirm the native recursive watch fixes the slow initial reconcile (#595)
+## 2026-10-01 01:19 | slow-boot | Confirm the native recursive watch fixes the slow initial reconcile (#595)
 
 - [ ] After the release containing this change is installed and the tray restarted (or the machine rebooted), check `http://localhost:4100/api/health`
   `ingest.watcherMode` should be `"native"` immediately (it used to sit on `"arming"` for minutes).

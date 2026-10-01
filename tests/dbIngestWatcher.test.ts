@@ -358,6 +358,22 @@ describe.skipIf(!driverAvailable)("ingestWatcher", () => {
     reloaded.conn.closeDb();
   });
 
+  it("usePolling forces chokidar even when watchStrategy asks for native (#595)", { timeout: 15000 }, async () => {
+    const reloaded = await reloadModulesPointingAt(tmpHome);
+    const projectsDir = projectsDirOf(tmpHome);
+    await fs.mkdir(projectsDir, { recursive: true });
+    const status = await reloaded.watcher.startIngestWatcher({
+      projectsDir,
+      bypassEnvFlag: true,
+      disableSweep: true,
+      watchStrategy: "native",
+      usePolling: true,
+    });
+    expect(status.watcherMode).not.toBe("native");
+    await reloaded.watcher.stopIngestWatcher();
+    reloaded.conn.closeDb();
+  });
+
   it("falls back to chokidar when the native watch cannot start", { timeout: 15000 }, async () => {
     const reloaded = await reloadModulesPointingAt(tmpHome);
     // The root does not exist yet: fs.watch throws ENOENT, chokidar can wait for it.
@@ -367,7 +383,6 @@ describe.skipIf(!driverAvailable)("ingestWatcher", () => {
       bypassEnvFlag: true,
       disableSweep: true,
       watchStrategy: "native",
-      usePolling: true,
     });
     expect(status.running).toBe(true);
     expect(status.watcherMode).not.toBe("native");

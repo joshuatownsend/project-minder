@@ -183,9 +183,9 @@ export interface StartIngestWatcherOptions {
   readyTimeoutMs?: number;
   /**
    * Which backend delivers change events (#595). `native` is one recursive
-   * `fs.watch`; `chokidar` is the per-file watcher. Default: `native` on
-   * Windows and macOS (kernel-level recursion), `chokidar` elsewhere and
-   * whenever `usePolling` is set. A `native` watch that cannot start (missing
+   * `fs.watch`; `chokidar` is the per-file watcher. `usePolling` always forces
+   * `chokidar`. Default: `native` on Windows and macOS (kernel-level
+   * recursion), `chokidar` elsewhere. A `native` watch that cannot start (missing
    * root, unsupported platform) falls back to chokidar.
    */
   watchStrategy?: "native" | "chokidar";
@@ -387,11 +387,12 @@ export async function startIngestWatcher(
     await trackWork(state, runInitialReconcile());
   }
 
-  const strategy =
-    options.watchStrategy ??
-    (!options.usePolling && (process.platform === "win32" || process.platform === "darwin")
-      ? "native"
-      : "chokidar");
+  // `usePolling` always wins: polling is a chokidar mode, and a native watch
+  // would silently ignore the caller's request for it.
+  const strategy = options.usePolling
+    ? "chokidar"
+    : (options.watchStrategy ??
+      (process.platform === "win32" || process.platform === "darwin" ? "native" : "chokidar"));
   if (strategy === "native") {
     const native = startNativeRecursiveWatch(projectsDir, {
       onChange: (fp) => scheduleReconcile(state, fp),
