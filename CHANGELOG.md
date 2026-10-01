@@ -6,13 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Changed
+## [1.16.3] - 2026-10-01
 
-- **Transcript changes are now heard through one recursive OS watch on Windows and macOS** (#595). chokidar attached a separate watch to each of ~14k transcripts and walked the tree to do it; on the live corpus that scan starved the initial reconcile's own I/O (28.7 s with chokidar off, 21+ minutes with it on). `fs.watch(..., { recursive: true })` is one handle with no initial scan, so the watcher is live immediately. chokidar remains the fallback — on other platforms, with polling, or when the native watch cannot start — and the 30 s mtime sweep still covers any missed event. `/api/health` `ingest.watcherMode` gains a `native` value; startup logs name `nativeWatch` instead of `chokidarImport`/`chokidarWatch` on this path.
+*A release about where the boot time actually went. v1.16.2 stopped the tray from crying wolf, but the initial index pass was still taking 11-21 minutes on a large history. Measuring it showed the cause was not the indexing work itself — chokidar's per-file watch setup starved the reconcile of I/O — so the watcher is now a single recursive OS watch on Windows and macOS, and a lab run on the real corpus finished the reconcile in about 25 seconds. This release also adds the per-phase timing line that found it.*
 
 ### Added
 
 - **The initial reconcile now logs where its time goes** (#595). One line per initial pass in `minder.log` — `reconcile finished in N ms` (or `reconcile threw after N ms`, at `warn`, when the pass dies) — with a `phaseMs` breakdown: `pricing`, `config`, `homes`, `adapterDiscovery`, `enumerate`, `perFile`, `adapterFiles`, `prune`, `links`, and `other` for whatever none of them claimed, plus `filesSeen`, `filesChanged`, `rowsWritten` and `subagentReaddirs`. The 30 s sweeps stay silent. Motivated by a reconcile that took 689 → 849 → 1261 s to handle ~14k files of which one changed; with chokidar's initial scan switched off the same pass takes ~29 s, so the line is what lets the next slow boot be attributed instead of guessed at.
+
+### Changed
+
+- **Transcript changes are now heard through one recursive OS watch on Windows and macOS** (#595). chokidar attached a separate watch to each of ~14k transcripts and walked the tree to do it; on the live corpus that scan starved the initial reconcile's own I/O (28.7 s with chokidar off, 21+ minutes with it on). `fs.watch(..., { recursive: true })` is one handle with no initial scan, so the watcher is live immediately. chokidar remains the fallback — on other platforms, with polling, or when the native watch cannot start — and the 30 s mtime sweep still covers any missed event. `/api/health` `ingest.watcherMode` gains a `native` value; startup logs name `nativeWatch` instead of `chokidarImport`/`chokidarWatch` on this path.
 
 ## [1.16.2] - 2026-09-30
 
