@@ -167,7 +167,7 @@ The tray app respects these optional environment variables (most have sensible d
 
 Something is accepting connections on the port but did not answer `/api/health` within the tray's 10-second probe. Right after a boot or restart the most likely explanation is that Project Minder's own server is busy indexing your Claude Code sessions, which is normal for the first several minutes on a large history. The tray cannot confirm that, though: a different process that holds the port and has stopped answering would show the same label. On a machine with ~6 GB of session transcripts the initial index pass measured about 11 minutes. The status line changes to "running" by itself once the server answers; there is nothing to do, and restarting only starts the indexing over.
 
-If it stays on "slow to respond" for much longer than that, check `~/.minder/logs/minder.log` — an `ingest-watcher` line reporting `chokidar reported ready` and a `memory sample` line show the server is making progress.
+If it stays on "slow to respond" for much longer than that, check `~/.minder/logs/minder.log` — an `ingest-watcher` line (`watcher armed after N ms`, or `chokidar reported ready` on the fallback watcher) and a `memory sample` line show the server is making progress.
 
 ### Status says "degraded" or "not responding" (or stays on "starting…" for too long)
 

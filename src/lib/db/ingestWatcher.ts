@@ -1,7 +1,7 @@
 import "server-only";
 import path from "path";
 import os from "os";
-import type { FSWatcher } from "chokidar";
+import { startNativeRecursiveWatch } from "./nativeWatch";
 import { initDb } from "./migrations";
 import { reconcileAllSessions, reconcileSessionFile } from "./ingest";
 import { getDb, getDbSync, getDbError, isDbAvailable, isDriverLoaded } from "./connection";
@@ -10,17 +10,19 @@ import { closeOrphanedIndexerRuns, recordOptionForSweep } from "./indexerRuns";
 import { serviceLog } from "@/lib/serviceLog";
 import type { IngestWatcherMode } from "@/lib/types/init";
 
-// chokidar-driven incremental ingest.
+// Incremental ingest driven by one recursive OS watch (chokidar as fallback).
 //
 // Lifecycle:
 //
 // 1. **Initial reconcile** — `reconcileAllSessions(db)` once at startup.
 //    Covers everything that existed before the watcher was running.
 //
-// 2. **Watch** — chokidar on `~/.claude/projects/**/*.jsonl` with
-//    `awaitWriteFinish` so we don't parse half-flushed lines, and
-//    `ignoreInitial: true` so we don't re-fire `add` for the 3k files
-//    we just reconciled.
+// 2. **Watch** — on Windows/macOS a single recursive `fs.watch` over
+//    `~/.claude/projects` (`nativeWatch.ts`; no initial scan, so it cannot
+//    compete with the initial reconcile for I/O — #595). Elsewhere, or when
+//    that cannot start, chokidar on the same tree with `awaitWriteFinish` so
+//    we don't parse half-flushed lines and `ignoreInitial: true` so we don't
+//    re-fire `add` for the files we just reconciled.
 //
 // 3. **Debounced per-file reconcile** — a JSONL gets appended on every
 //    turn. Without debouncing, a fast agent burst would queue dozens
@@ -49,8 +51,13 @@ const AWAIT_WRITE_FINISH_MS = 250;
 // chokidar isn't reading file contents).
 const READY_TIMEOUT_MS = 30_000;
 
+/** Either watcher backend: chokidar's `close()` is async, `fs.FSWatcher`'s is not. */
+interface Closable {
+  close(): void | Promise<void>;
+}
+
 interface WatcherState {
-  watcher: FSWatcher | null;
+  watcher: Closable | null;
   projectsDir: string;
   /** Effective debounce window — production default or test override. */
   debounceMs: number;
@@ -102,7 +109,9 @@ interface WatcherState {
   lastEventAt: number | null;
   errors: number;
   /**
-   * How JSONL changes reach the index (#558): `chokidar` once the watcher has
+   * How JSONL changes reach the index (#558): `native` once the single
+   * recursive OS watch is live (#595; immediately, there is no scan to wait
+   * for); `chokidar` once the watcher has
    * reported `ready`; `arming` while chokidar is still scanning past the
    * ready timeout (events already flow, the sweep covers any gap); `sweep-only`
    * when chokidar is absent or failed and the 30 s mtime sweep is all there is.
@@ -172,6 +181,14 @@ export interface StartIngestWatcherOptions {
    * (#558). Default 30 s; tests pass a few ms to exercise the late-ready path.
    */
   readyTimeoutMs?: number;
+  /**
+   * Which backend delivers change events (#595). `native` is one recursive
+   * `fs.watch`; `chokidar` is the per-file watcher. Default: `native` on
+   * Windows and macOS (kernel-level recursion), `chokidar` elsewhere and
+   * whenever `usePolling` is set. A `native` watch that cannot start (missing
+   * root, unsupported platform) falls back to chokidar.
+   */
+  watchStrategy?: "native" | "chokidar";
   /**
    * Invoked on every `watcherMode` transition. The worker forwards this to the
    * host as a `watcher-mode` message so `/api/health` can report the mode of a
@@ -368,6 +385,49 @@ export async function startIngestWatcher(
     // because chokidar hasn't started yet and `ignoreInitial: true` means
     // the `add` events for these files won't fire even after we attach.
     await trackWork(state, runInitialReconcile());
+  }
+
+  const strategy =
+    options.watchStrategy ??
+    (!options.usePolling && (process.platform === "win32" || process.platform === "darwin")
+      ? "native"
+      : "chokidar");
+  if (strategy === "native") {
+    const native = startNativeRecursiveWatch(projectsDir, {
+      onChange: (fp) => scheduleReconcile(state, fp),
+      onGone: (fp) => scheduleUnlink(state, fp),
+      onError: (err) => {
+        state.errors++;
+        // The watch is dead; the sweep is all that is left. Same end state as a
+        // chokidar `error` before `ready`.
+        serviceLog({
+          level: "warn",
+          subsystem: "ingest-watcher",
+          msg: `native watch failed (${err.message}); falling back to sweep-only mode`,
+        });
+        const dead = state.watcher;
+        state.watcher = null;
+        try {
+          void dead?.close();
+        } catch {
+          /* already closed */
+        }
+        if (!state.stopped) setWatcherMode("sweep-only");
+      },
+    });
+    if (native) {
+      state.watcher = native;
+      mark("nativeWatch");
+      setWatcherMode("native");
+      logStartup();
+      if (!options.disableSweep) startSweep(state);
+      return snapshot(state);
+    }
+    serviceLog({
+      level: "warn",
+      subsystem: "ingest-watcher",
+      msg: "native recursive watch unavailable; falling back to chokidar",
+    });
   }
 
   // Lazy import: `chokidar` ships with native binaries on some platforms

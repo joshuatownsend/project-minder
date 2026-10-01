@@ -231,6 +231,9 @@ describe.skipIf(!driverAvailable)("ingestWatcher", () => {
         projectsDir,
         bypassEnvFlag: true,
         deferInitialReconcile: true,
+        // This test is about chokidar failing to LOAD; the native watch would
+        // otherwise be chosen on Windows/macOS and never touch it.
+        watchStrategy: "chokidar",
         // Sweep left ON, as in the real fallback: with no chokidar watcher the
         // sweep timer is what makes the start "running" at all.
       });
@@ -315,6 +318,59 @@ describe.skipIf(!driverAvailable)("ingestWatcher", () => {
     expect(count).toBe(1);
     expect(reloaded.watcher.getWatcherStatus().initialReconcileMs).not.toBeNull();
 
+    await reloaded.watcher.stopIngestWatcher();
+    reloaded.conn.closeDb();
+  });
+
+  it("ingests via the native recursive watch, with no chokidar scan to wait for (#595)", { timeout: 15000 }, async () => {
+    const reloaded = await reloadModulesPointingAt(tmpHome);
+    const projectsDir = projectsDirOf(tmpHome);
+    await fs.mkdir(projectsDir, { recursive: true });
+
+    const modes: string[] = [];
+    const status = await reloaded.watcher.startIngestWatcher({
+      projectsDir,
+      bypassEnvFlag: true,
+      disableSweep: true,
+      watchStrategy: "native",
+      debounceMs: 50,
+      onWatcherMode: (m) => modes.push(m),
+    });
+    // Live on return: no `arming` interval, nothing for `ready` to gate.
+    expect(status.watcherMode).toBe("native");
+    expect(modes).toEqual(["native"]);
+
+    // A project dir that did not exist at arm time — the case a per-directory
+    // watcher has to discover, and a recursive one gets for free.
+    const sessionFile = path.join(projectsDir, "C--dev-native", "n1.jsonl");
+    await writeJsonl(sessionFile, [
+      userTurn("2026-04-30T10:00:00Z", "via native"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "live"),
+    ]);
+
+    const db = (await reloaded.conn.getDb())!;
+    await waitFor(
+      () => (db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE session_id = 'n1'").get() as { n: number }).n === 1,
+      { timeoutMs: 10000, pollMs: 50 }
+    );
+
+    await reloaded.watcher.stopIngestWatcher();
+    reloaded.conn.closeDb();
+  });
+
+  it("falls back to chokidar when the native watch cannot start", { timeout: 15000 }, async () => {
+    const reloaded = await reloadModulesPointingAt(tmpHome);
+    // The root does not exist yet: fs.watch throws ENOENT, chokidar can wait for it.
+    const projectsDir = projectsDirOf(tmpHome);
+    const status = await reloaded.watcher.startIngestWatcher({
+      projectsDir,
+      bypassEnvFlag: true,
+      disableSweep: true,
+      watchStrategy: "native",
+      usePolling: true,
+    });
+    expect(status.running).toBe(true);
+    expect(status.watcherMode).not.toBe("native");
     await reloaded.watcher.stopIngestWatcher();
     reloaded.conn.closeDb();
   });
