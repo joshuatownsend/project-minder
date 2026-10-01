@@ -58,6 +58,7 @@ describe("stopIngestWatcher drain (F7)", () => {
     // then arms the (fake) watcher and returns.
     await startIngestWatcher({
       bypassEnvFlag: true,
+      watchStrategy: "chokidar",
       projectsDir: "/fake/projects",
       deferInitialReconcile: true,
       disableSweep: true,
@@ -92,6 +93,7 @@ describe("stopIngestWatcher drain (F7)", () => {
 
     await startIngestWatcher({
       bypassEnvFlag: true,
+      watchStrategy: "chokidar",
       projectsDir: "/fake/projects",
       deferInitialReconcile: false, // inline: initial reconcile awaited before return
       disableSweep: true,

@@ -1,3 +1,14 @@
+## 2026-10-01 01:19 | slow-boot | Confirm the native recursive watch fixes the slow initial reconcile (#595)
+
+- [ ] After the release containing this change is installed and the tray restarted (or the machine rebooted), check `http://localhost:4100/api/health`
+  `ingest.watcherMode` should be `"native"` immediately (it used to sit on `"arming"` for minutes).
+- [ ] Check `~/.minder/logs/minder.log` for the `reconcile finished in N ms` line
+  Expect tens of seconds, not the 689 -> 849 -> 1261 s seen before. Lab measurement on the real corpus: 24.9 s total, 20.4 s of it in `prune` (a separate open question - the next thing to look at).
+- [ ] Edit a transcript (any Claude Code session) and confirm the dashboard sees it without waiting for the 30 s sweep
+  Not covered by the lab run: it only measured the reconcile, not live event delivery on the real tree.
+
+---
+
 ## 2026-09-29 23:10 | slow-boot | Get the #584/#585/#586 fixes into the running tray and verify them
 
 - [x] Install the v1.16.2 tray build (cut 2026-09-30; both fixes are in it: #587 and #589)

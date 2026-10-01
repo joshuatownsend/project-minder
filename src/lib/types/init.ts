@@ -61,8 +61,8 @@ export interface HealthResponse {
    */
   memory: HealthMemory;
   /**
-   * Ingest pipeline mode (#558). `watcherMode` distinguishes a live chokidar
-   * watcher from the 30 s sweep fallback — previously indistinguishable from
+   * Ingest pipeline mode (#558). `watcherMode` distinguishes a live watcher
+   * (`native` recursive watch or `chokidar`) from the 30 s sweep fallback — previously indistinguishable from
    * outside the process.
    */
   ingest: HealthIngest;
@@ -78,7 +78,7 @@ export interface HealthMemory {
   worker: { heapTotalMb: number; heapUsedMb: number; at: number } | null;
 }
 
-export type IngestWatcherMode = "chokidar" | "arming" | "sweep-only";
+export type IngestWatcherMode = "native" | "chokidar" | "arming" | "sweep-only";
 
 export interface HealthIngest {
   /** Which pipeline is running: worker thread, in-process watcher, or neither. */

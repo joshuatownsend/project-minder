@@ -53,6 +53,20 @@ describe("absorbWorkerMessage", () => {
     expect(s.watcher!.initialReconcileMs).toBeNull();
   });
 
+  it("accepts the native watcher mode from a watcher-mode message and a status snapshot (#595)", () => {
+    const s = fresh();
+    absorbWorkerMessage(s, { type: "watcher-mode", mode: "native" });
+    expect(s.watcher).toEqual({ watcherMode: "native", initialReconcileMs: null, eventsHandled: 0 });
+    const t = fresh();
+    absorbWorkerMessage(t, {
+      type: "watcher-status",
+      watcherMode: "native",
+      initialReconcileMs: 24899,
+      eventsHandled: 2,
+    });
+    expect(t.watcher).toEqual({ watcherMode: "native", initialReconcileMs: 24899, eventsHandled: 2 });
+  });
+
   it("takes the initial watcher snapshot from the started ack", () => {
     const s = fresh();
     absorbWorkerMessage(s, {

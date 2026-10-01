@@ -683,7 +683,7 @@ export function absorbWorkerMessage(
     }
     case "watcher-mode": {
       const mode = m.mode;
-      if (mode === "chokidar" || mode === "arming" || mode === "sweep-only") {
+      if (mode === "native" || mode === "chokidar" || mode === "arming" || mode === "sweep-only") {
         state.watcher = { ...(state.watcher ?? { initialReconcileMs: null, eventsHandled: 0 }), watcherMode: mode };
       }
       return;
@@ -721,7 +721,7 @@ export function absorbWorkerMessage(
 function watcherSnapshotOf(s: Record<string, unknown>): WorkerWatcherSnapshot {
   const mode = s.watcherMode;
   return {
-    watcherMode: mode === "chokidar" || mode === "arming" || mode === "sweep-only" ? mode : null,
+    watcherMode: mode === "native" || mode === "chokidar" || mode === "arming" || mode === "sweep-only" ? mode : null,
     initialReconcileMs: isFiniteNumber(s.initialReconcileMs) ? s.initialReconcileMs : null,
     eventsHandled: isFiniteNumber(s.eventsHandled) ? s.eventsHandled : 0,
   };
