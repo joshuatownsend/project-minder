@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **The initial reconcile now logs where its time goes** (#595). One line per initial pass in `minder.log` — `reconcile finished in N ms` (or `reconcile threw after N ms`, at `warn`, when the pass dies) — with a `phaseMs` breakdown: `pricing`, `config`, `homes`, `adapterDiscovery`, `enumerate`, `perFile`, `adapterFiles`, `prune`, `links`, and `other` for whatever none of them claimed, plus `filesSeen`, `filesChanged`, `rowsWritten` and `subagentReaddirs`. The 30 s sweeps stay silent. Motivated by a reconcile that took 689 → 849 → 1261 s to handle ~14k files of which one changed; with chokidar's initial scan switched off the same pass takes ~29 s, so the line is what lets the next slow boot be attributed instead of guessed at.
+
 ## [1.16.2] - 2026-09-30
 
 *A release about what a reboot looks like from the tray. After a restart Project Minder spent about eleven minutes with the tray reading "not responding" on a server that was up and busy indexing — and, on every boot since roughly 9/26, it did that indexing on the same thread that serves HTTP, because the ingest worker's 60-second start handshake timed out and fell back to the in-process watcher. Tracing it turned up three pressures stacking rather than one bug: a tray probe timeout inside the busy server's 3–6 second answer band, a whole-history transcript parse started at boot on top of the reconcile, and a worker start budget with nine seconds of headroom once a 2.5 GB index's integrity check and a 30-second watcher wait were counted. Each is addressed, but two are mitigations, not cures — the usage cache is still smaller than the history (#585) and the integrity check still runs twice (#588) — and the worker fix was never reproduced past its old limit in isolation, so it is unproven until a reboot on this build. #586 is deliberately left open for that check, and the fallback now writes its reason to `minder.log`.*

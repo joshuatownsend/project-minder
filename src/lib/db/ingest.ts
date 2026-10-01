@@ -56,6 +56,7 @@ import {
 } from "./ingest/merge";
 import type { UsageTurn, ToolCall } from "@/lib/usage/types";
 import { DERIVED_VERSION } from "./derivationVersion";
+import { serviceLog } from "@/lib/serviceLog";
 import { parseStoredArgs } from "./storedArgs";
 import { detectResumeAnomaly } from "@/lib/usage/resumeAnomaly";
 import { discoverAllSessions, getAdapter } from "@/lib/adapters";
@@ -3242,6 +3243,13 @@ export interface ReconcileOptions {
    * is the same trap `tests/_helpers/reconcile.ts` documents for the v3 gate.
    */
   recordRun?: IndexerRunKind;
+  /**
+   * Log the per-phase timing summary for this pass (#595). Explicit and separate
+   * from `recordRun`: `recordOptionForSweep` returns a `recordRun` for recovery
+   * sweeps too (after an aborted startup, or a stale derivation), so keying the
+   * log on it would emit a line every recovery sweep. Only the initial pass asks.
+   */
+  logTiming?: boolean;
 }
 
 export interface FileReconcileResult {
@@ -3854,12 +3862,98 @@ export function reconcileAllSessions(
   return run;
 }
 
+/**
+ * Where a reconcile pass spends its time (#595).
+ *
+ * The initial pass took 689 -> 849 -> 1261 s across three boots to handle ~14k
+ * files of which ONE changed, and nothing recorded which phase those minutes
+ * belong to: the per-file gate costs ~1 s and the whole enumeration ~3 s on a warm
+ * cache, so the time is somewhere the existing logs could not see.
+ *
+ * Owned by the WRAPPER, not the pass: the config snapshot is read there (and
+ * handed down), so a timer created inside the pass would never see that read, and
+ * the wrapper's `finally` is the one place that also runs when the pass throws —
+ * which is exactly when "where did it die" is the question. Durations are
+ * accumulated because the walk interleaves enumeration with per-file work.
+ */
+interface ReconcileTiming {
+  t0: number;
+  phaseMs: Record<string, number>;
+  counts: { subagentReaddirs: number };
+  timed<T>(phase: string, fn: () => Promise<T>): Promise<T>;
+  /** Synchronous twin of `timed`; accumulates in a `finally` so a throw still names the phase. */
+  timedSync<T>(phase: string, fn: () => T): T;
+}
+
+function createReconcileTiming(): ReconcileTiming {
+  const phaseMs: Record<string, number> = {};
+  return {
+    t0: performance.now(),
+    phaseMs,
+    counts: { subagentReaddirs: 0 },
+    async timed<T>(phase: string, fn: () => Promise<T>): Promise<T> {
+      const t = performance.now();
+      try {
+        return await fn();
+      } finally {
+        phaseMs[phase] = (phaseMs[phase] ?? 0) + (performance.now() - t);
+      }
+    },
+    timedSync<T>(phase: string, fn: () => T): T {
+      const t = performance.now();
+      try {
+        return fn();
+      } finally {
+        phaseMs[phase] = (phaseMs[phase] ?? 0) + (performance.now() - t);
+      }
+    },
+  };
+}
+
+/** One line per pass that sets `logTiming` (the initial pass); sweeps stay silent. */
+function logReconcileTiming(
+  timing: ReconcileTiming,
+  stats: IngestStats | undefined,
+  kind: string
+): void {
+  // Monotonic clock throughout: a wall-clock correction mid-pass would otherwise
+  // produce negative durations in the very diagnostic meant to be trustworthy.
+  const rawTotal = performance.now() - timing.t0;
+  const totalMs = Math.round(rawTotal);
+  const phaseMs: Record<string, number> = {};
+  let rawSum = 0;
+  for (const [k, v] of Object.entries(timing.phaseMs)) {
+    phaseMs[k] = Math.round(v);
+    rawSum += v;
+  }
+  // Whatever none of the timers claimed: a phase nobody thought to name. Taken
+  // from the UNROUNDED figures so sub-millisecond phases that each round up
+  // cannot push it negative; the rounded phases may therefore miss the rounded
+  // total by up to a millisecond apiece.
+  phaseMs.other = Math.max(0, Math.round(rawTotal - rawSum));
+  serviceLog({
+    level: stats ? "info" : "warn",
+    subsystem: "ingest",
+    msg: stats ? `reconcile finished in ${totalMs} ms` : `reconcile threw after ${totalMs} ms`,
+    kind,
+    totalMs,
+    phaseMs,
+    filesSeen: stats?.filesSeen,
+    filesChanged: stats?.filesChanged,
+    rowsWritten: stats?.rowsWritten,
+    subagentReaddirs: timing.counts.subagentReaddirs,
+  });
+}
+
 async function reconcileAllSessionsSerialized(
   db: DatabaseT.Database,
   options: ReconcileOptions = {}
 ): Promise<IngestStats> {
   // #470: the pass records itself only when asked. See `ReconcileOptions.recordRun`
   // for why the 30 s sweep must not.
+  // Clock first: opening the run row can itself wait on a busy DB, and that wait
+  // belongs in `totalMs` (the matching finish is counted).
+  const timing = createReconcileTiming();
   const runId = options.recordRun ? beginIndexerRun(db, options.recordRun) : null;
   let stats: IngestStats | undefined;
   // Captured BEFORE the work, so the verdict is stamped with the corpus this
@@ -3875,7 +3969,7 @@ async function reconcileAllSessionsSerialized(
     // that mislabeled verdict as evidence about the old corpus (Codex, #544).
     let passOptions = options;
     try {
-      const snapshot = options.config ?? (await readConfig());
+      const snapshot = options.config ?? (await timing.timed("config", () => readConfig()));
       corpusVersion = computeCorpusVersion(snapshot);
       passOptions = { ...options, config: snapshot };
     } catch {
@@ -3883,7 +3977,7 @@ async function reconcileAllSessionsSerialized(
       // WHICH corpus it walked must not leave a claim about one.
       corpusVersion = null;
     }
-    stats = await runReconcileAllSessions(db, passOptions);
+    stats = await runReconcileAllSessions(db, passOptions, timing);
     return stats;
   } finally {
     // `finally`, not the happy path: a pass that threw still has to stop
@@ -3905,6 +3999,7 @@ async function reconcileAllSessionsSerialized(
       // stay `aborted: false` and count as ready. (#471, Codex P1.)
       aborted: stats === undefined || stats.enumerationFailures > 0,
     });
+    if (options.logTiming) logReconcileTiming(timing, stats, options.recordRun ?? "unrecorded");
     // Written by EVERY full pass, whatever `recordRun` said (#529, finding 1).
     //
     // `indexer_runs` cannot carry this: `recordOptionForSweep` deliberately
@@ -3931,7 +4026,8 @@ async function reconcileAllSessionsSerialized(
 
 async function runReconcileAllSessions(
   db: DatabaseT.Database,
-  options: ReconcileOptions = {}
+  options: ReconcileOptions = {},
+  timing: ReconcileTiming = createReconcileTiming()
 ): Promise<IngestStats> {
   const stats: IngestStats = {
     filesSeen: 0,
@@ -3942,7 +4038,9 @@ async function runReconcileAllSessions(
     enumerationFailures: 0,
   };
 
-  await loadPricing();
+  const { counts, timed, timedSync } = timing;
+
+  await timed("pricing", () => loadPricing());
 
   // ── Multi-harness setup ─────────────────────────────────────────────────
   // Resolve config + discover non-Claude session files BEFORE the Claude walk
@@ -3950,7 +4048,7 @@ async function runReconcileAllSessions(
   // Claude) doesn't abort the whole reconcile. With the default config
   // (`enabledAdapters` unset → ["claude"]) `discoverAllSessions` yields Claude
   // files only and the `!== "claude"` filter empties the list — a pure no-op.
-  const config = options.config ?? (await readConfig());
+  const config = options.config ?? (await timed("config", () => readConfig()));
 
   // Claude projects dirs: an explicit options.projectsDir (tests, worker
   // wiring) pins a single dir; otherwise walk every READABLE Claude home
@@ -3963,7 +4061,7 @@ async function runReconcileAllSessions(
     projectsDirs = [options.projectsDir];
   } else {
     const allHomes = getClaudeHomes(config);
-    const readableHomes = await getReadableClaudeHomes(config);
+    const readableHomes = await timed("homes", () => getReadableClaudeHomes(config));
     const readableSet = new Set(readableHomes);
     projectsDirs = readableHomes.map((h) => path.join(h, "projects"));
     // Record each home's filesystem case-sensitivity while we are here and the
@@ -3975,7 +4073,7 @@ async function runReconcileAllSessions(
     //
     // Awaited rather than fired off: a probe that is still running when the
     // reconcile finishes would write into a DB the caller may have closed.
-    await recordHomeCaseSensitivity(db, readableHomes);
+    await timed("homes", () => recordHomeCaseSensitivity(db, readableHomes));
     unavailableDirs = allHomes
       .filter((h) => !readableSet.has(h))
       .map((h) => path.join(h, "projects"));
@@ -4011,7 +4109,9 @@ async function runReconcileAllSessions(
   try {
     adapterSessions =
       options.adapterSessions ??
-      (await discoverAllSessions(config)).filter((f) => f.source !== "claude");
+      (await timed("adapterDiscovery", () => discoverAllSessions(config))).filter(
+          (f) => f.source !== "claude"
+        );
   } catch (err) {
     adapterSessions = [];
     adapterDiscoveryFailed = true;
@@ -4039,7 +4139,7 @@ async function runReconcileAllSessions(
   let anyDirListed = false;
   for (const dir of projectsDirs) {
     try {
-      const entries = await fs.readdir(dir, { withFileTypes: true });
+      const entries = await timed("enumerate", () => fs.readdir(dir, { withFileTypes: true }));
       anyDirListed = true;
       for (const e of entries) {
         if (e.isDirectory()) subdirs.push({ projectsDir: dir, dirName: e.name });
@@ -4103,7 +4203,9 @@ async function runReconcileAllSessions(
     let filePaths: string[];
     let sessionDirs: string[];
     try {
-      const entries = await fs.readdir(dirPath, { withFileTypes: true });
+      const entries = await timed("enumerate", () =>
+        fs.readdir(dirPath, { withFileTypes: true })
+      );
       filePaths = entries
         .filter((e) => e.isFile() && e.name.endsWith(".jsonl"))
         .map((e) => path.join(dirPath, e.name));
@@ -4130,7 +4232,8 @@ async function runReconcileAllSessions(
     for (const sessionDir of sessionDirs) {
       const subagentsDir = path.join(dirPath, sessionDir, "subagents");
       try {
-        const subEntries = await fs.readdir(subagentsDir);
+        counts.subagentReaddirs++;
+        const subEntries = await timed("enumerate", () => fs.readdir(subagentsDir));
         for (const f of subEntries) {
           if (f.endsWith(".jsonl")) filePaths.push(path.join(subagentsDir, f));
         }
@@ -4148,7 +4251,9 @@ async function runReconcileAllSessions(
       liveFilePaths.add(filePath);
       stats.filesSeen++;
       try {
-        const result = await reconcileSessionFile(db, filePath, dirName, options);
+        const result = await timed("perFile", () =>
+          reconcileSessionFile(db, filePath, dirName, options)
+        );
         if (result.skippedNewerDerivation) stats.newerDerivationSkips++;
         if (result.rowsWritten > 0) {
           stats.filesChanged++;
@@ -4170,12 +4275,14 @@ async function runReconcileAllSessions(
     liveFilePaths.add(file.filePath);
     stats.filesSeen++;
     try {
-      const result = await reconcileAdapterSessionFile(
-        db,
-        file,
-        parseAdapterFile,
-        existingAdapterMeta.get(file.filePath),
-        options.force ?? false
+      const result = await timed("adapterFiles", () =>
+        reconcileAdapterSessionFile(
+          db,
+          file,
+          parseAdapterFile,
+          existingAdapterMeta.get(file.filePath),
+          options.force ?? false
+        )
       );
       if (result.skippedNewerDerivation) stats.newerDerivationSkips++;
       if (result.rowsWritten > 0) {
@@ -4218,47 +4325,49 @@ async function runReconcileAllSessions(
   // was dropped in v4, so each session's `prompts_fts` rows are explicitly
   // bulk-deleted here in one scan before the cascade — same contract as
   // `writeSession`'s pre-delete.
-  const allSessions = db
-    .prepare("SELECT session_id, project_slug, file_path, derived_version FROM sessions")
-    .all() as Array<{
-      session_id: string;
-      project_slug: string;
-      file_path: string;
-      derived_version: number;
-    }>;
-  const deleteFtsBySession = db.prepare("DELETE FROM prompts_fts WHERE session_id = ?");
-  const deleteStale = db.prepare("DELETE FROM sessions WHERE session_id = ?");
   const stalePruned = new Set<string>();
-  for (const r of allSessions) {
-    if (liveFilePaths.has(r.file_path)) continue;
+  timedSync("prune", () => {
+    const allSessions = db
+      .prepare("SELECT session_id, project_slug, file_path, derived_version FROM sessions")
+      .all() as Array<{
+        session_id: string;
+        project_slug: string;
+        file_path: string;
+        derived_version: number;
+      }>;
+    const deleteFtsBySession = db.prepare("DELETE FROM prompts_fts WHERE session_id = ?");
+    const deleteStale = db.prepare("DELETE FROM sessions WHERE session_id = ?");
+    for (const r of allSessions) {
+      if (liveFilePaths.has(r.file_path)) continue;
 
-    // Same rule as the reconcile gates, applied to the other way a build can
-    // destroy newer data. The guard there stops an old build REWRITING newer
-    // rows; without this one it simply DELETES them instead, which is worse.
-    //
-    // The reachable path is an adapter this build doesn't have (Codex review,
-    // PR #381). `getEnabledAdapters` skips an unknown configured id with only
-    // a console.warn, so discovery *succeeds* having found none of that
-    // adapter's files — which means `adapterDiscoveryFailed` stays false and
-    // the shield above never engages. Its already-indexed sessions are then
-    // absent from `liveFilePaths` and look exactly like vanished files. Roll
-    // back across a build that added an adapter and the entire newer index for
-    // it is deleted, cascading to its turns.
-    //
-    // Deferring costs nothing: if the file really is gone, the newer build
-    // prunes it on its next sweep, when it can also tell the difference. A
-    // permanent rollback keeps rows it can no longer re-derive, which is the
-    // same trade the reconcile guard makes — stale-but-intact over destroyed.
-    // `force` still prunes, so an explicit rebuild is not blocked.
-    if (!options.force && isNewerDerivation(r.derived_version)) {
-      stats.newerDerivationSkips++;
-      continue;
+      // Same rule as the reconcile gates, applied to the other way a build can
+      // destroy newer data. The guard there stops an old build REWRITING newer
+      // rows; without this one it simply DELETES them instead, which is worse.
+      //
+      // The reachable path is an adapter this build doesn't have (Codex review,
+      // PR #381). `getEnabledAdapters` skips an unknown configured id with only
+      // a console.warn, so discovery *succeeds* having found none of that
+      // adapter's files — which means `adapterDiscoveryFailed` stays false and
+      // the shield above never engages. Its already-indexed sessions are then
+      // absent from `liveFilePaths` and look exactly like vanished files. Roll
+      // back across a build that added an adapter and the entire newer index for
+      // it is deleted, cascading to its turns.
+      //
+      // Deferring costs nothing: if the file really is gone, the newer build
+      // prunes it on its next sweep, when it can also tell the difference. A
+      // permanent rollback keeps rows it can no longer re-derive, which is the
+      // same trade the reconcile guard makes — stale-but-intact over destroyed.
+      // `force` still prunes, so an explicit rebuild is not blocked.
+      if (!options.force && isNewerDerivation(r.derived_version)) {
+        stats.newerDerivationSkips++;
+        continue;
+      }
+
+      deleteFtsBySession.run(r.session_id);
+      deleteStale.run(r.session_id);
+      stalePruned.add(r.project_slug);
     }
-
-    deleteFtsBySession.run(r.session_id);
-    deleteStale.run(r.session_id);
-    stalePruned.add(r.project_slug);
-  }
+  });
 
   // Continuation linking: after sessions have been ingested with their
   // slugs stamped, walk the slug index and point each session's
@@ -4272,7 +4381,7 @@ async function runReconcileAllSessions(
   // fire frequently and most are no-ops; this gate keeps that path
   // free of incidental work.
   if (stats.filesChanged > 0 || stalePruned.size > 0) {
-    refreshContinuationLinks(db);
+    timedSync("links", () => refreshContinuationLinks(db));
   }
 
   // Clear the v3 readiness gate ONLY when the reconcile pass is
