@@ -210,12 +210,15 @@ describe.skipIf(!driverAvailable)("quick_check skip — against a real database"
   it("does NOT stamp the handoff when the file was quarantined and recreated", async () => {
     const first = await reloadModules();
     await first.mig.initDb();
+    // The first init stamped successfully and nothing consumed it (no worker has
+    // spawned yet) — the second init, which quarantines, must not inherit it.
+    expect(first.clean.parentVerifiedEnvFor({ first: true })).not.toEqual({});
+    first.clean.markParentVerified();
     const db1 = await first.conn.getDb();
     // Wipe the version stamp: the next initDb passes quick_check, THEN hits
     // SchemaVersionMissingError and quarantines — the stamp must not survive.
     db1!.prepare("DELETE FROM meta WHERE key='schema_version'").run();
     first.conn.closeDb();
-    first.clean.parentVerifiedEnvFor({ first: false }); // drop any earlier stamp
 
     const second = await reloadModules();
     const result = await second.mig.initDb();

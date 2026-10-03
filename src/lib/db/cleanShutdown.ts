@@ -304,6 +304,28 @@ export function parentVerifiedEnvFor(opts: {
   return { [PARENT_VERIFIED_ENV]: String(at) };
 }
 
+/** Drop any pending stamp (a main-thread `initDb` is starting; nothing is proven yet). */
+export function clearParentVerified(): void {
+  delete gv.__minderParentVerifiedAt;
+}
+
+/**
+ * The environment for a worker spawn: a copy of `base` with any AMBIENT
+ * `MINDER_QUICK_CHECK_VERIFIED_AT` removed, plus the one-shot stamp when
+ * {@link parentVerifiedEnvFor} offers one. Stripping matters: a server launched
+ * with the variable already set would otherwise hand it to every worker,
+ * including crash-respawns (Codex + Copilot, PR #601).
+ */
+export function workerEnvFor(opts: {
+  first: boolean;
+  base?: Record<string, string | undefined>;
+  now?: number;
+}): Record<string, string | undefined> {
+  const env = { ...(opts.base ?? process.env) };
+  delete env[PARENT_VERIFIED_ENV];
+  return { ...env, ...parentVerifiedEnvFor({ first: opts.first, now: opts.now }) };
+}
+
 /** True when running in a worker thread whose parent verified the index recently. */
 export function parentVerifiedRecently(opts: {
   isWorkerThread: boolean;

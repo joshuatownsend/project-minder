@@ -6,6 +6,7 @@ import type DatabaseT from "better-sqlite3";
 import { DB_DIR, DB_PATH, getDb, getDbError, closeDb, isDriverLoaded } from "./connection";
 import {
   clearCleanShutdownMarker,
+  clearParentVerified,
   markParentVerified,
   parentVerifiedRecently,
   quickCheckForced,
@@ -1465,6 +1466,9 @@ function dbFileSizeBytes(): number {
 }
 
 export async function initDb(): Promise<InitResult> {
+  // A stamp from an earlier init proves nothing about whatever this one ends up
+  // opening (it may quarantine and recreate the file). Re-earn it on success.
+  if (isMainThread) clearParentVerified();
   const result: InitResult = {
     available: false,
     appliedMigrations: [],

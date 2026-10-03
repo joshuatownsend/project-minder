@@ -4,6 +4,7 @@ import {
   PARENT_VERIFIED_MAX_AGE_MS,
   markParentVerified,
   parentVerifiedEnvFor,
+  workerEnvFor,
   parentVerifiedRecently,
   shouldRunQuickCheck,
 } from "@/lib/db/cleanShutdown";
@@ -99,5 +100,23 @@ describe("parent-verified quick_check handoff (#588)", () => {
         now,
       }),
     ).toBe(true);
+  });
+
+  it("workerEnvFor strips an ambient stamp and keeps the rest of the env", () => {
+    const base = { PATH: "p", [PARENT_VERIFIED_ENV]: String(Date.now()) };
+    // No parent verification pending: the ambient value must not reach a worker.
+    for (const first of [true, false]) {
+      const env = workerEnvFor({ first, base });
+      expect(env[PARENT_VERIFIED_ENV]).toBeUndefined();
+      expect(env.PATH).toBe("p");
+    }
+  });
+
+  it("workerEnvFor adds the real stamp for the first spawn only", () => {
+    markParentVerified(1_000);
+    const first = workerEnvFor({ first: true, base: { PATH: "p" }, now: 2_000 });
+    expect(first[PARENT_VERIFIED_ENV]).toBe("1000");
+    markParentVerified(1_500);
+    expect(workerEnvFor({ first: false, base: { PATH: "p" }, now: 2_000 })[PARENT_VERIFIED_ENV]).toBeUndefined();
   });
 });

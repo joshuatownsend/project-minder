@@ -2,7 +2,7 @@ import "server-only";
 import path from "path";
 import { Worker } from "node:worker_threads";
 import { serviceLog, type LogEntry } from "@/lib/serviceLog";
-import { parentVerifiedEnvFor } from "@/lib/db/cleanShutdown";
+import { workerEnvFor } from "@/lib/db/cleanShutdown";
 import type { IngestWatcherMode } from "@/lib/types/init";
 
 // Main-thread orchestrator for the ingest worker.
@@ -751,7 +751,7 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
   const worker = new Worker(entry, {
     stderr: false,
     stdout: false,
-    env: { ...process.env, ...parentVerifiedEnvFor({ first }) },
+    env: workerEnvFor({ first }),
   });
   state.worker = worker;
   state.startedAt = Date.now();

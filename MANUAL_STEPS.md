@@ -1,3 +1,14 @@
+## 2026-10-03 18:00 | slow-boot | Verify the clean-shutdown marker and single quick_check after installing the #588 fix (PR #601)
+
+- [ ] After the release containing PR #601 is installed, do a graceful tray Quit (or restart from the tray), then check `~/.minder/index.db.clean`
+  Its mtime/`closedAt` should be the moment of the stop. Before the fix it was stuck at 2026-09-30 13:14Z because a slow `ingest` disposer spent the whole 5 s shutdown budget and the `sqlite` close was skipped. Also check `minder.log`: the `shutdown initiated` block should end with `disposer ok` for `sqlite`, no `skipped (shutdown budget exhausted)` lines.
+- [ ] After an UNCLEAN stop (reboot, or `taskkill /F`), confirm only ONE `quick_check` runs at the next boot
+  In `minder.log` the `watcher armed after N ms` line's `phaseMs.initDb` should be near 0 (it was 31,401 ms at the 2026-10-03 16:42 EDT boot, when the worker repeated the server's 95 s scan). `db: probed` (the server's own check) will still be slow after an unclean stop — that is expected until the tray handles Windows session end (not yet built).
+- [ ] Decide on the follow-up: make a start-menu reboot run the graceful stop
+  A reboot never reaches the server's disposers (the tray prevents implicit exits and does not handle Windows session end), so the marker still goes stale on every reboot. Needs a Rust change in `src-tauri/src/main.rs` / `supervisor.rs`, with a ~6 s stop window.
+
+---
+
 ## 2026-10-01 01:19 | slow-boot | Confirm the native recursive watch fixes the slow initial reconcile (#595)
 
 - [x] After the release containing this change is installed and the tray restarted (or the machine rebooted), check `http://localhost:4100/api/health`
