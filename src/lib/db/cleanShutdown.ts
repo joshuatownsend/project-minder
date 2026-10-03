@@ -281,6 +281,17 @@ export function markParentVerified(
   env[PARENT_VERIFIED_ENV] = String(now);
 }
 
+/**
+ * Clear the stamp. The host calls this right after creating the FIRST worker so
+ * the handoff is one-shot: a crash-respawn (the previous worker may have died
+ * mid-write) must not inherit it and must evaluate the real clean-shutdown state.
+ */
+export function consumeParentVerified(
+  env: Record<string, string | undefined> = process.env,
+): void {
+  delete env[PARENT_VERIFIED_ENV];
+}
+
 /** True when running in a worker thread whose parent verified the index recently. */
 export function parentVerifiedRecently(opts: {
   isWorkerThread: boolean;

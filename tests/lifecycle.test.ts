@@ -168,6 +168,23 @@ describe("shutdown timeout + budget", () => {
     expect(finished).toBe(true);
   });
 
+  // Copilot, PR #601: tasksDb runs before sqlite in LIFO order; a hung tasksDb
+  // must not spend the slice reserved for the sqlite close.
+  it("a hung `final` disposer cannot starve the next `final` one", async () => {
+    const sqlite = vi.fn(); // registered first → disposed LAST
+    const hangingFinal = vi.fn(() => new Promise<void>(() => {}));
+
+    onShutdown("sqlite", sqlite, { final: true });
+    onShutdown("tasksDb", hangingFinal, { final: true });
+
+    const p = shutdown("signal", { timeoutMs: 1000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    await p;
+
+    expect(hangingFinal).toHaveBeenCalledTimes(1);
+    expect(sqlite).toHaveBeenCalledTimes(1);
+  });
+
   it("re-registering without `final` demotes the disposer", async () => {
     const close = vi.fn();
     const hang = vi.fn(() => new Promise<void>(() => {}));

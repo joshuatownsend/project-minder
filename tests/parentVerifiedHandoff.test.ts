@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   PARENT_VERIFIED_ENV,
   PARENT_VERIFIED_MAX_AGE_MS,
+  consumeParentVerified,
   markParentVerified,
   parentVerifiedRecently,
   shouldRunQuickCheck,
@@ -62,5 +63,14 @@ describe("parent-verified quick_check handoff (#588)", () => {
       }),
     ).toBe(false);
     expect(parentVerifiedRecently({ isWorkerThread: true, env, now: at - 5 })).toBe(false);
+  });
+
+  it("is one-shot: consuming it (done after the first worker spawns) denies a crash-respawn", () => {
+    const env: Record<string, string | undefined> = {};
+    markParentVerified(env, 1_000);
+    expect(parentVerifiedRecently({ isWorkerThread: true, env, now: 2_000 })).toBe(true);
+    consumeParentVerified(env);
+    expect(env[PARENT_VERIFIED_ENV]).toBeUndefined();
+    expect(parentVerifiedRecently({ isWorkerThread: true, env, now: 2_000 })).toBe(false);
   });
 });

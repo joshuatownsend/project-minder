@@ -167,9 +167,18 @@ async function runShutdown(
   const finalNames = state.finalNames ?? new Set<string>();
   const reserveMs =
     finalNames.size > 0 ? Math.min(FINAL_RESERVE_MS, Math.floor(overallMs * 0.2)) : 0;
+  let finalsLeft = entries.filter(([name]) => finalNames.has(name)).length;
   for (const [name, fn] of entries) {
-    // Ordinary disposers stop short of the reserve; final ones get all of it.
-    const remaining = deadline - (finalNames.has(name) ? 0 : reserveMs) - Date.now();
+    // Ordinary disposers stop short of the reserve. Final ones split whatever is
+    // left evenly among those still to run, so one hanging `final` (tasksDb runs
+    // before sqlite in LIFO order) cannot spend the slice meant for the next —
+    // the last one still gets everything that remains.
+    const isFinal = finalNames.has(name);
+    const left = deadline - Date.now();
+    const remaining = isFinal
+      ? Math.floor(left / finalsLeft)
+      : left - reserveMs;
+    if (isFinal) finalsLeft--;
     const start = Date.now();
 
     if (remaining <= 0) {
