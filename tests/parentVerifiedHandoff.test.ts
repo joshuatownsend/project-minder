@@ -18,6 +18,12 @@ describe("parent-verified quick_check handoff (#588)", () => {
     ).toBe(false);
   });
 
+  it("never lets the handoff bypass the small-database always-check floor", () => {
+    expect(
+      shouldRunQuickCheck({ cleanShutdown: false, dbSizeBytes: 1_000_000, verifiedByParent: true }),
+    ).toBe(true);
+  });
+
   it("still runs when forced", () => {
     expect(
       shouldRunQuickCheck({

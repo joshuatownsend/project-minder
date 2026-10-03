@@ -51,6 +51,12 @@ interface LifecycleState {
    * find a `globalThis` state object created before this field existed.
    */
   finalNames?: Set<string>;
+  /**
+   * Ordinary (non-final) disposers that failed, timed out, or were skipped in
+   * the current shutdown. A timed-out disposer's promise is NOT cancelled, so a
+   * producer in this set may still be running when the `final` DB closes fire.
+   */
+  failedOrdinary?: Set<string>;
   shuttingDown: boolean;
   handlersInstalled: boolean;
   /**
@@ -109,6 +115,16 @@ export const FINAL_RESERVE_MS = 1_000;
  */
 export const ORDINARY_FLOOR_MS = 100;
 
+/**
+ * True when any ordinary disposer failed, timed out, or was skipped in the
+ * current shutdown — i.e. a producer may not have quiesced. The SQLite close
+ * uses this to withhold the clean-shutdown marker: it still closes, but it does
+ * not certify a stop it could not confirm (Copilot, PR #601).
+ */
+export function ordinaryDisposersFailed(): boolean {
+  return (state.failedOrdinary?.size ?? 0) > 0;
+}
+
 export function registeredDisposerCount(): number {
   return state.disposers.size;
 }
@@ -121,6 +137,7 @@ export function isShuttingDown(): boolean {
 export function _resetLifecycleForTesting(): void {
   state.disposers.clear();
   state.finalNames = new Set();
+  state.failedOrdinary = new Set();
   state.shuttingDown = false;
   state.handlersInstalled = false;
   state.shutdownPromise = null;
@@ -172,6 +189,7 @@ async function runShutdown(
   // LIFO: reverse of registration order.
   const entries = [...state.disposers.entries()].reverse();
   const finalNames = state.finalNames ?? new Set<string>();
+  state.failedOrdinary = new Set();
   const reserveMs =
     finalNames.size > 0 ? Math.min(FINAL_RESERVE_MS, Math.floor(overallMs * 0.2)) : 0;
   let finalsLeft = entries.filter(([name]) => finalNames.has(name)).length;
@@ -209,6 +227,7 @@ async function runShutdown(
         ok: false,
         ms: 0,
       });
+      if (!isFinal) state.failedOrdinary.add(name);
       continue;
     }
 
@@ -232,6 +251,7 @@ async function runShutdown(
         ms: Date.now() - start,
         error: (err as Error).message,
       });
+      if (!isFinal) state.failedOrdinary.add(name);
     }
   }
 

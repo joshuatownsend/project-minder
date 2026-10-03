@@ -250,10 +250,12 @@ export function shouldRunQuickCheck(opts: {
   alwaysCheckBelowBytes?: number;
 }): boolean {
   if (opts.force) return true;
-  if (opts.verifiedByParent) return false;
-  if (!opts.cleanShutdown) return true;
+  // The size floor comes first: below it the scan is milliseconds and stays
+  // unconditional, whoever else has verified (Copilot, PR #601).
   const threshold = opts.alwaysCheckBelowBytes ?? quickCheckAlwaysMaxBytes();
-  return opts.dbSizeBytes < threshold;
+  if (opts.dbSizeBytes < threshold) return true;
+  if (opts.verifiedByParent) return false;
+  return !opts.cleanShutdown;
 }
 
 // THE PARENT-VERIFIED HANDOFF (#588)

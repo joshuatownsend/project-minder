@@ -226,5 +226,25 @@ describe.skipIf(!driverAvailable)("quick_check skip — against a real database"
     expect(second.clean.parentVerifiedEnvFor({ first: true })).toEqual({});
     second.conn.closeDb();
   });
-});
 
+  it("withholds the clean marker when an ordinary disposer failed to quiesce", async () => {
+    const life = await import("@/lib/lifecycle");
+    life._resetLifecycleForTesting();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    life.onShutdown("ingest", () => {
+      throw new Error("worker did not stop");
+    });
+    await life.shutdown("test");
+    expect(life.ordinaryDisposersFailed()).toBe(true);
+
+    const { mig, conn, clean } = await reloadModules();
+    await mig.initDb();
+    conn.checkpointAndCloseDb();
+    // The close ran (WAL drained), but a stop we could not confirm is not certified.
+    expect(existsSync(clean.markerPathFor(conn.DB_PATH))).toBe(false);
+
+    life._resetLifecycleForTesting();
+  });
+});

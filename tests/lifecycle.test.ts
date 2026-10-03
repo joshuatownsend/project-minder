@@ -3,6 +3,7 @@ import {
   onShutdown,
   shutdown,
   registeredDisposerCount,
+  ordinaryDisposersFailed,
   isShuttingDown,
   _resetLifecycleForTesting,
 } from "@/lib/lifecycle";
@@ -201,6 +202,30 @@ describe("shutdown timeout + budget", () => {
 
     // Both producers stopped, and strictly before the DB closed.
     expect(order).toEqual(["cache", "dispatcher", "sqlite"]);
+  });
+
+  // Copilot, PR #601: a timed-out disposer's promise is not cancelled, so the SQLite
+  // close must be able to tell that a producer may not have quiesced.
+  it("reports a timed-out ordinary disposer, so the DB close can withhold the clean marker", async () => {
+    onShutdown("sqlite", () => {}, { final: true });
+    onShutdown("ingest", () => new Promise<void>(() => {}));
+
+    const p = shutdown("signal", { timeoutMs: 1000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    await p;
+
+    expect(ordinaryDisposersFailed()).toBe(true);
+  });
+
+  it("does not report when every ordinary disposer settles, or when only a final one fails", async () => {
+    onShutdown("sqlite", () => { throw new Error("close failed"); }, { final: true });
+    onShutdown("ingest", async () => {});
+
+    const p = shutdown("signal", { timeoutMs: 1000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    await p;
+
+    expect(ordinaryDisposersFailed()).toBe(false);
   });
 
   it("re-registering without `final` demotes the disposer", async () => {

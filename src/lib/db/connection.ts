@@ -4,6 +4,7 @@ import os from "os";
 import { promises as fs } from "fs";
 import type DatabaseT from "better-sqlite3";
 import { readCleanShutdownState, writeCleanShutdownMarker } from "./cleanShutdown";
+import { ordinaryDisposersFailed } from "../lifecycle";
 
 // Local SQLite index for Project Minder. Sits at ~/.minder/index.db.
 //
@@ -287,7 +288,12 @@ export function checkpointAndCloseDb(): void {
   // up. `cleanShutdown.test.ts` does pin the half that matters downstream — a
   // non-empty WAL is distrusted at open even when the marker matches perfectly
   // — so a marker that slipped through here would still not be believed.
-  if (readCleanShutdownState(DB_PATH).reason !== "wal-not-empty") {
+  //
+  // Also withheld when an ordinary disposer (ingest, above all) failed or timed
+  // out: its promise is not cancelled, so a producer may still be draining while
+  // we close. We close regardless — the process is exiting — but we do not
+  // certify a stop we could not confirm (Copilot, PR #601).
+  if (!ordinaryDisposersFailed() && readCleanShutdownState(DB_PATH).reason !== "wal-not-empty") {
     writeCleanShutdownMarker(DB_PATH);
   }
 }
