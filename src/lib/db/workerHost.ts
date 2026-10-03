@@ -2,7 +2,7 @@ import "server-only";
 import path from "path";
 import { Worker } from "node:worker_threads";
 import { serviceLog, type LogEntry } from "@/lib/serviceLog";
-import { consumeParentVerified } from "@/lib/db/cleanShutdown";
+import { parentVerifiedEnvFor } from "@/lib/db/cleanShutdown";
 import type { IngestWatcherMode } from "@/lib/types/init";
 
 // Main-thread orchestrator for the ingest worker.
@@ -87,6 +87,8 @@ type MessageSubscriber = (msg: unknown) => void;
 
 interface WorkerHostState {
   worker: Worker | null;
+  /** True once the first spawn has been offered the parent-verified handoff. */
+  parentVerifiedOffered?: boolean;
   /** Resolved worker-entry path, set at spawn time. Surfaced via getWorkerStatus. */
   workerEntry: string;
   startedAt: number | null;
@@ -741,11 +743,16 @@ function isFiniteNumber(x: unknown): x is number {
 }
 
 function spawnAndAttach(state: WorkerHostState, entry: string): void {
-  const worker = new Worker(entry, { stderr: false, stdout: false });
-  // The worker copied process.env at construction, so it has the server's
-  // "index already verified" stamp. Consume it now: only this first worker may
-  // skip quick_check; a crash-respawn must evaluate the real state (#601).
-  consumeParentVerified();
+  // Hand the server's "index already verified" stamp to the FIRST worker only,
+  // via explicit env. A crash-respawn (the previous worker may have died
+  // mid-write) gets none and evaluates the real clean-shutdown state (#601).
+  const first = !state.parentVerifiedOffered;
+  state.parentVerifiedOffered = true;
+  const worker = new Worker(entry, {
+    stderr: false,
+    stdout: false,
+    env: { ...process.env, ...parentVerifiedEnvFor({ first }) },
+  });
   state.worker = worker;
   state.startedAt = Date.now();
   // A crash-respawn reuses this WorkerHostState, so the previous isolate's

@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   PARENT_VERIFIED_ENV,
   PARENT_VERIFIED_MAX_AGE_MS,
-  consumeParentVerified,
   markParentVerified,
+  parentVerifiedEnvFor,
   parentVerifiedRecently,
   shouldRunQuickCheck,
 } from "@/lib/db/cleanShutdown";
@@ -32,10 +32,10 @@ describe("parent-verified quick_check handoff (#588)", () => {
     expect(shouldRunQuickCheck({ cleanShutdown: false, dbSizeBytes: BIG })).toBe(true);
   });
 
-  it("markParentVerified writes the timestamp the worker reads", () => {
-    const env: Record<string, string | undefined> = {};
-    markParentVerified(env, 1_000);
-    expect(env[PARENT_VERIFIED_ENV]).toBe("1000");
+  it("hands the stamp to the first spawn as explicit env, and the worker believes it", () => {
+    markParentVerified(1_000);
+    const env = parentVerifiedEnvFor({ first: true, now: 2_000 });
+    expect(env).toEqual({ [PARENT_VERIFIED_ENV]: "1000" });
     expect(parentVerifiedRecently({ isWorkerThread: true, env, now: 2_000 })).toBe(true);
   });
 
@@ -65,12 +65,39 @@ describe("parent-verified quick_check handoff (#588)", () => {
     expect(parentVerifiedRecently({ isWorkerThread: true, env, now: at - 5 })).toBe(false);
   });
 
-  it("is one-shot: consuming it (done after the first worker spawns) denies a crash-respawn", () => {
-    const env: Record<string, string | undefined> = {};
-    markParentVerified(env, 1_000);
-    expect(parentVerifiedRecently({ isWorkerThread: true, env, now: 2_000 })).toBe(true);
-    consumeParentVerified(env);
-    expect(env[PARENT_VERIFIED_ENV]).toBeUndefined();
-    expect(parentVerifiedRecently({ isWorkerThread: true, env, now: 2_000 })).toBe(false);
+  it("is one-shot: a crash-respawn gets nothing, even if the main thread re-stamps", () => {
+    markParentVerified(1_000);
+    expect(parentVerifiedEnvFor({ first: true, now: 2_000 })).not.toEqual({});
+    // The host's second spawn (crash-respawn) after a main-thread initDb retry:
+    markParentVerified(1_500);
+    expect(parentVerifiedEnvFor({ first: false, now: 2_000 })).toEqual({});
+  });
+
+  it("offers nothing when the stamp is stale or absent", () => {
+    markParentVerified(1_000);
+    expect(
+      parentVerifiedEnvFor({ first: true, now: 1_000 + PARENT_VERIFIED_MAX_AGE_MS + 1 }),
+    ).toEqual({});
+    expect(parentVerifiedEnvFor({ first: true, now: 2_000 })).toEqual({}); // consumed above
+  });
+
+  it("rejects a numeric-prefix stamp that parseInt would have accepted", () => {
+    const now = 5_000_000;
+    for (const raw of [`${now}junk`, `${now} `, `0x10`, `${now}.5`, `-${now}`, `1e6`]) {
+      expect(
+        parentVerifiedRecently({
+          isWorkerThread: true,
+          env: { [PARENT_VERIFIED_ENV]: raw },
+          now,
+        }),
+      ).toBe(false);
+    }
+    expect(
+      parentVerifiedRecently({
+        isWorkerThread: true,
+        env: { [PARENT_VERIFIED_ENV]: String(now) },
+        now,
+      }),
+    ).toBe(true);
   });
 });

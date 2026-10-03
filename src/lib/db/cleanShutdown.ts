@@ -273,23 +273,35 @@ export const PARENT_VERIFIED_ENV = "MINDER_QUICK_CHECK_VERIFIED_AT";
 /** How long a parent verification stays believable to a worker. */
 export const PARENT_VERIFIED_MAX_AGE_MS = 15 * 60 * 1000;
 
-/** Record that this process just verified (or trusted) the index. */
-export function markParentVerified(
-  env: Record<string, string | undefined> = process.env,
-  now: number = Date.now(),
-): void {
-  env[PARENT_VERIFIED_ENV] = String(now);
+// The stamp is held in a process-local global and handed to the worker by
+// EXPLICIT `env` on its first spawn only (`parentVerifiedEnvFor`). It is never
+// written to `process.env`: an ambient value would be inherited by every later
+// `new Worker`, including a crash-respawn after a worker died mid-write, and
+// any main-thread `initDb()` that re-stamped it (a `probeInitStatus` retry)
+// would silently re-arm the skip. (Copilot + Codex, PR #601.)
+const gv = globalThis as unknown as { __minderParentVerifiedAt?: number };
+
+/** Record that this (main) process just verified or trusted the index. */
+export function markParentVerified(now: number = Date.now()): void {
+  gv.__minderParentVerifiedAt = now;
 }
 
 /**
- * Clear the stamp. The host calls this right after creating the FIRST worker so
- * the handoff is one-shot: a crash-respawn (the previous worker may have died
- * mid-write) must not inherit it and must evaluate the real clean-shutdown state.
+ * The env additions for a worker spawn. Non-empty only for the FIRST spawn and
+ * only while the stamp is fresh; consumes the stamp either way so it cannot be
+ * offered twice.
  */
-export function consumeParentVerified(
-  env: Record<string, string | undefined> = process.env,
-): void {
-  delete env[PARENT_VERIFIED_ENV];
+export function parentVerifiedEnvFor(opts: {
+  first: boolean;
+  now?: number;
+  maxAgeMs?: number;
+}): Record<string, string> {
+  const at = gv.__minderParentVerifiedAt;
+  delete gv.__minderParentVerifiedAt;
+  if (!opts.first || typeof at !== "number") return {};
+  const age = (opts.now ?? Date.now()) - at;
+  if (age < 0 || age > (opts.maxAgeMs ?? PARENT_VERIFIED_MAX_AGE_MS)) return {};
+  return { [PARENT_VERIFIED_ENV]: String(at) };
 }
 
 /** True when running in a worker thread whose parent verified the index recently. */
@@ -301,9 +313,9 @@ export function parentVerifiedRecently(opts: {
 }): boolean {
   if (!opts.isWorkerThread) return false;
   const raw = (opts.env ?? process.env)[PARENT_VERIFIED_ENV];
-  const at = raw ? Number.parseInt(raw, 10) : NaN;
-  if (!Number.isFinite(at)) return false;
-  const age = (opts.now ?? Date.now()) - at;
+  // Whole-string match: parseInt would accept a numeric prefix ("123junk").
+  if (typeof raw !== "string" || !/^\d{1,15}$/.test(raw)) return false;
+  const age = (opts.now ?? Date.now()) - Number(raw);
   return age >= 0 && age <= (opts.maxAgeMs ?? PARENT_VERIFIED_MAX_AGE_MS);
 }
 
