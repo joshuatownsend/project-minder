@@ -6,10 +6,13 @@ import type DatabaseT from "better-sqlite3";
 import { DB_DIR, DB_PATH, getDb, getDbError, closeDb, isDriverLoaded } from "./connection";
 import {
   clearCleanShutdownMarker,
+  markParentVerified,
+  parentVerifiedRecently,
   quickCheckForced,
   readCleanShutdownState,
   shouldRunQuickCheck,
 } from "./cleanShutdown";
+import { isMainThread } from "worker_threads";
 import { renameWithRetry } from "../atomicWrite";
 import { resolveServerRoot } from "../serverRoot";
 import { sessionFileHomeKey } from "../platform";
@@ -1518,6 +1521,7 @@ export async function initDb(): Promise<InitResult> {
     cleanShutdown: cleanState.trusted,
     dbSizeBytes: dbFileSizeBytes(),
     force: quickCheckForced(),
+    verifiedByParent: parentVerifiedRecently({ isWorkerThread: !isMainThread }),
   });
   // Recorded as soon as the decision is made, not after the check completes:
   // the quarantine-then-failed-reopen path below returns early, and setting
@@ -1544,7 +1548,13 @@ export async function initDb(): Promise<InitResult> {
         });
         return result;
       }
+    } else if (isMainThread) {
+      // The ingest worker thread inherits this when it is created; see
+      // `parentVerifiedRecently` in cleanShutdown.ts. Only a PASSED check counts.
+      markParentVerified();
     }
+  } else if (isMainThread) {
+    markParentVerified(); // trusted-clean skip is a verification too
   }
 
   try {

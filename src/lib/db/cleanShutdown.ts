@@ -244,13 +244,56 @@ export function shouldRunQuickCheck(opts: {
   cleanShutdown: boolean;
   dbSizeBytes: number;
   force?: boolean;
+  /** True when the parent (HTTP server) already verified this index moments ago. */
+  verifiedByParent?: boolean;
   /** Override for the always-check threshold; defaults to the env-aware value. */
   alwaysCheckBelowBytes?: number;
 }): boolean {
   if (opts.force) return true;
+  if (opts.verifiedByParent) return false;
   if (!opts.cleanShutdown) return true;
   const threshold = opts.alwaysCheckBelowBytes ?? quickCheckAlwaysMaxBytes();
   return opts.dbSizeBytes < threshold;
+}
+
+// THE PARENT-VERIFIED HANDOFF (#588)
+//
+// After an unclean stop (a reboot kills the server without running disposers)
+// BOTH the HTTP server and the ingest worker thread open this DB at boot, and
+// each ran the full O(size) quick_check: 95 s then 31 s on the 2.6 GB index.
+// The worker's run adds no information — the server finished the same scan on
+// the same file seconds earlier — so the server leaves a timestamp in
+// `process.env`, which a worker thread inherits as a copy when it is created.
+// Worker-thread-only, short-lived, and never consulted by the main thread, so a
+// later in-process `initDb()` (tests, the in-process fallback) still checks.
+
+/** Env var carrying the epoch-ms at which the server's own check passed. */
+export const PARENT_VERIFIED_ENV = "MINDER_QUICK_CHECK_VERIFIED_AT";
+
+/** How long a parent verification stays believable to a worker. */
+export const PARENT_VERIFIED_MAX_AGE_MS = 15 * 60 * 1000;
+
+/** Record that this process just verified (or trusted) the index. */
+export function markParentVerified(
+  env: Record<string, string | undefined> = process.env,
+  now: number = Date.now(),
+): void {
+  env[PARENT_VERIFIED_ENV] = String(now);
+}
+
+/** True when running in a worker thread whose parent verified the index recently. */
+export function parentVerifiedRecently(opts: {
+  isWorkerThread: boolean;
+  env?: Record<string, string | undefined>;
+  now?: number;
+  maxAgeMs?: number;
+}): boolean {
+  if (!opts.isWorkerThread) return false;
+  const raw = (opts.env ?? process.env)[PARENT_VERIFIED_ENV];
+  const at = raw ? Number.parseInt(raw, 10) : NaN;
+  if (!Number.isFinite(at)) return false;
+  const age = (opts.now ?? Date.now()) - at;
+  return age >= 0 && age <= (opts.maxAgeMs ?? PARENT_VERIFIED_MAX_AGE_MS);
 }
 
 /** `MINDER_FORCE_QUICK_CHECK=1` — support escape hatch for a full scan. */

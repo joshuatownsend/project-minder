@@ -46,6 +46,11 @@ export type DisposerFn = () => void | Promise<void>;
 interface LifecycleState {
   /** Insertion-ordered; keyed by name so re-registration replaces in place. */
   disposers: Map<string, DisposerFn>;
+  /**
+   * Names registered with `{ final: true }`. Optional because an HMR re-run can
+   * find a `globalThis` state object created before this field existed.
+   */
+  finalNames?: Set<string>;
   shuttingDown: boolean;
   handlersInstalled: boolean;
   /**
@@ -77,9 +82,25 @@ export const SHUTDOWN_TIMEOUT_MS = 5_000;
  * again replaces the function without adding a second entry or changing its
  * position in the LIFO order (survives HMR re-runs of the bootstrap).
  */
-export function onShutdown(name: string, fn: DisposerFn): void {
+export function onShutdown(
+  name: string,
+  fn: DisposerFn,
+  opts?: { final?: boolean },
+): void {
   state.disposers.set(name, fn);
+  state.finalNames ??= new Set();
+  if (opts?.final) state.finalNames.add(name);
+  else state.finalNames.delete(name);
 }
+
+/**
+ * Share of the overall budget (capped at {@link FINAL_RESERVE_MS}) held back
+ * from ordinary disposers so `final` ones can still run. A slow early disposer
+ * used to spend the whole shared deadline, and the SQLite close — registered
+ * first, so disposed last — was skipped; that close is what records the
+ * clean-shutdown marker, so the next boot paid a multi-minute `quick_check`.
+ */
+export const FINAL_RESERVE_MS = 1_000;
 
 export function registeredDisposerCount(): number {
   return state.disposers.size;
@@ -92,6 +113,7 @@ export function isShuttingDown(): boolean {
 /** Test-only reset hook. */
 export function _resetLifecycleForTesting(): void {
   state.disposers.clear();
+  state.finalNames = new Set();
   state.shuttingDown = false;
   state.handlersInstalled = false;
   state.shutdownPromise = null;
@@ -142,8 +164,12 @@ async function runShutdown(
 
   // LIFO: reverse of registration order.
   const entries = [...state.disposers.entries()].reverse();
+  const finalNames = state.finalNames ?? new Set<string>();
+  const reserveMs =
+    finalNames.size > 0 ? Math.min(FINAL_RESERVE_MS, Math.floor(overallMs * 0.2)) : 0;
   for (const [name, fn] of entries) {
-    const remaining = deadline - Date.now();
+    // Ordinary disposers stop short of the reserve; final ones get all of it.
+    const remaining = deadline - (finalNames.has(name) ? 0 : reserveMs) - Date.now();
     const start = Date.now();
 
     if (remaining <= 0) {

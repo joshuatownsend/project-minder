@@ -291,7 +291,7 @@ const globalForWatcherStart = globalThis as unknown as {
  * stopping anyway. Short on purpose: the correctness guarantee is the
  * `isShuttingDown()` gate, not this wait.
  */
-const WATCHER_DRAIN_TIMEOUT_MS = 2_000;
+const WATCHER_DRAIN_TIMEOUT_MS = 1_000;
 
 function startInProcessWatcher(): Promise<void> {
   const existing = globalForWatcherStart.__minderWatcherStartInFlight;

@@ -70,7 +70,14 @@ export const DEFAULT_START_TIMEOUT_MS = 300_000;
 // a documented DB-corruption vector (FTS5 shadow tables are the usual
 // casualty) — so a clean `process.exit(0)` between transactions is
 // strongly preferred.
-const STOP_GRACE_MS = 5_000;
+//
+// Must fit INSIDE the ingest disposer's slice of the shutdown budget
+// (lifecycle's SHUTDOWN_TIMEOUT_MS less FINAL_RESERVE_MS = 4 s), together with
+// the watcher-start drain (WATCHER_DRAIN_TIMEOUT_MS = 1 s in
+// instrumentation-node.ts). At 5 s — the whole budget — a mid-ingest worker
+// starved the SQLite close, so no clean-shutdown marker was written and the
+// next boot ran a full quick_check.
+const STOP_GRACE_MS = 2_500;
 const CRASH_RESPAWN_BACKOFF_MS = [500, 2_000, 10_000];
 const MAX_RESPAWNS_PER_HOUR = 5;
 const ONE_HOUR_MS = 60 * 60 * 1000;

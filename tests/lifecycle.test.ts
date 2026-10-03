@@ -135,6 +135,52 @@ describe("shutdown timeout + budget", () => {
     expect(fast).toHaveBeenCalledTimes(1);
     expect(slow).toHaveBeenCalledTimes(1);
   });
+
+  // The 2026-10-01 stop: a slow `ingest` disposer spent the whole shared 5 s, so
+  // the SQLite close (registered first, disposed last) was skipped and no
+  // clean-shutdown marker was written.
+  it("a hung ordinary disposer cannot starve a `final` one", async () => {
+    const close = vi.fn(); // registered first → disposed LAST, but final
+    const hang = vi.fn(() => new Promise<void>(() => {}));
+
+    onShutdown("close", close, { final: true });
+    onShutdown("hang", hang);
+
+    const p = shutdown("signal", { timeoutMs: 1000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    await p;
+
+    expect(hang).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("without a final disposer the whole budget stays available to ordinary ones", async () => {
+    let finished = false;
+    onShutdown("slowish", async () => {
+      await new Promise((r) => setTimeout(r, 950));
+      finished = true;
+    });
+
+    const p = shutdown("signal", { timeoutMs: 1000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    await p;
+
+    expect(finished).toBe(true);
+  });
+
+  it("re-registering without `final` demotes the disposer", async () => {
+    const close = vi.fn();
+    const hang = vi.fn(() => new Promise<void>(() => {}));
+    onShutdown("close", close, { final: true });
+    onShutdown("close", close); // demoted: no reserve exists any more
+    onShutdown("hang", hang);
+
+    const p = shutdown("signal", { timeoutMs: 1000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    await p;
+
+    expect(close).not.toHaveBeenCalled();
+  });
 });
 
 describe("shutdown idempotency", () => {
