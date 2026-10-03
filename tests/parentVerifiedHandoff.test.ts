@@ -1,7 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   PARENT_VERIFIED_ENV,
   PARENT_VERIFIED_MAX_AGE_MS,
+  clearParentVerified,
   markParentVerified,
   parentVerifiedEnvFor,
   workerEnvFor,
@@ -9,7 +10,14 @@ import {
   shouldRunQuickCheck,
 } from "@/lib/db/cleanShutdown";
 
+import { nextWorkerEnv } from "@/lib/db/workerHost";
+
 const BIG = 2_600_000_000;
+
+// The stamp lives in process-global state and Vitest reuses workers, so another
+// file's initDb() can leave one behind. Reset around every test (Copilot, #601).
+beforeEach(() => clearParentVerified());
+afterEach(() => clearParentVerified());
 
 describe("parent-verified quick_check handoff (#588)", () => {
   it("skips the check for a worker whose parent just verified, even with no clean marker", () => {
@@ -124,5 +132,17 @@ describe("parent-verified quick_check handoff (#588)", () => {
     expect(first[PARENT_VERIFIED_ENV]).toBe("1000");
     markParentVerified(1_500);
     expect(workerEnvFor({ first: false, base: { PATH: "p" }, now: 2_000 })[PARENT_VERIFIED_ENV]).toBeUndefined();
+  });
+
+  it("nextWorkerEnv: the first spawn gets the stamp; a crash-respawn never does, even after a re-stamp", () => {
+    const state: { parentVerifiedOffered?: boolean } = {};
+    markParentVerified(Date.now());
+    const first = nextWorkerEnv(state, { PATH: "p" });
+    expect(first[PARENT_VERIFIED_ENV]).toMatch(/^\d+$/);
+    expect(first.PATH).toBe("p");
+
+    markParentVerified(Date.now()); // e.g. a main-thread initDb retry
+    const respawn = nextWorkerEnv(state, { PATH: "p" });
+    expect(respawn[PARENT_VERIFIED_ENV]).toBeUndefined();
   });
 });

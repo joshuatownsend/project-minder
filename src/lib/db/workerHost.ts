@@ -528,14 +528,26 @@ async function sendStartHandshake(
   });
 }
 
+export interface StopWorkerResult {
+  /**
+   * True when a worker that had reached `ready` did not exit within the grace
+   * period and had to be `terminate()`d. Such a worker may have been killed
+   * inside a better-sqlite3 write, so the caller must not certify the shutdown
+   * as clean (Codex, PR #601). A worker that never reached `ready` is not
+   * running ingest, so terminating it is not "forced".
+   */
+  forced: boolean;
+}
+
 /**
  * Terminate the worker if running. Suppresses crash-respawn. Idempotent.
  * Rejects any pending readyPromise so a stop-during-startup unblocks
  * the awaiting caller immediately.
  */
-export async function stopWorker(): Promise<void> {
+export async function stopWorker(): Promise<StopWorkerResult> {
   const state = g.__minderWorker;
-  if (!state) return;
+  if (!state) return { forced: false };
+  let forced = false;
   state.stopping = true;
   if (state.respawnTimer) {
     clearTimeout(state.respawnTimer);
@@ -587,6 +599,7 @@ export async function stopWorker(): Promise<void> {
       ]);
     }
     if (!exited) {
+      forced = state.lastReadyAt !== null;
       try {
         await worker.terminate();
       } catch {
@@ -596,6 +609,7 @@ export async function stopWorker(): Promise<void> {
     state.worker = null;
   }
   delete g.__minderWorker;
+  return { forced };
 }
 
 export function getWorkerStatus(): WorkerHostStatus {
@@ -742,16 +756,27 @@ function isFiniteNumber(x: unknown): x is number {
   return typeof x === "number" && Number.isFinite(x);
 }
 
-function spawnAndAttach(state: WorkerHostState, entry: string): void {
-  // Hand the server's "index already verified" stamp to the FIRST worker only,
-  // via explicit env. A crash-respawn (the previous worker may have died
-  // mid-write) gets none and evaluates the real clean-shutdown state (#601).
+/**
+ * The environment for the next worker spawn. Hands the server's "index already
+ * verified" stamp to the FIRST worker only, via explicit env; a crash-respawn
+ * (the previous worker may have died mid-write) gets none and evaluates the real
+ * clean-shutdown state (#601). Exported so the first-vs-respawn bookkeeping is
+ * testable without spawning a thread.
+ */
+export function nextWorkerEnv(
+  state: Pick<WorkerHostState, "parentVerifiedOffered">,
+  base?: Record<string, string | undefined>,
+): Record<string, string | undefined> {
   const first = !state.parentVerifiedOffered;
   state.parentVerifiedOffered = true;
+  return workerEnvFor({ first, base });
+}
+
+function spawnAndAttach(state: WorkerHostState, entry: string): void {
   const worker = new Worker(entry, {
     stderr: false,
     stdout: false,
-    env: workerEnvFor({ first }),
+    env: nextWorkerEnv(state),
   });
   state.worker = worker;
   state.startedAt = Date.now();

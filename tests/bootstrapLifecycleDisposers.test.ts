@@ -67,6 +67,18 @@ describe("service lifecycle registers disposers independently of MINDER_BOOTSTRA
     for (const name of REQUIRED) expect(registered).toContain(name);
   });
 
+  it("registers both DB closes as `final` so a slow disposer cannot starve the clean marker", async () => {
+    // Copilot, PR #601: dropping this option leaves every ordering test green
+    // while reintroducing the 2026-10-01 marker starvation.
+    await installUnderCollectorsOff();
+    const optsOf = (name: string) => onShutdown.mock.calls.find((c) => c[0] === name)?.[2];
+    expect(optsOf("sqlite")).toEqual({ final: true });
+    expect(optsOf("tasksDb")).toEqual({ final: true });
+    for (const name of ["dispatcher", "gitStatusCache", "githubActivityCache"]) {
+      expect(optsOf(name)?.final).not.toBe(true);
+    }
+  });
+
   it("registers them BEFORE installing the signal handlers", async () => {
     // A stop arriving in the window between the two would otherwise find an
     // empty registry — the same failure, just narrower.
