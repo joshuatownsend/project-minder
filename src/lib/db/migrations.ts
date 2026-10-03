@@ -1530,6 +1530,11 @@ export async function initDb(): Promise<InitResult> {
   // database. The field describes the decision, so it belongs with it.
   result.quickCheckSkipped = !runQuickCheck;
 
+  // Whether THIS file passed (or was trusted past) the check. The handoff stamp
+  // is recorded only on the success return below, never earlier: a later
+  // quarantine replaces the file, and a stamp for the old one must not excuse
+  // the first worker from checking the new one (Copilot, PR #601).
+  let checkPassed = false;
   if (runQuickCheck) {
     const integrity = db.prepare("PRAGMA quick_check").get() as {
       quick_check?: string;
@@ -1548,13 +1553,11 @@ export async function initDb(): Promise<InitResult> {
         });
         return result;
       }
-    } else if (isMainThread) {
-      // The ingest worker thread inherits this when it is created; see
-      // `parentVerifiedRecently` in cleanShutdown.ts. Only a PASSED check counts.
-      markParentVerified();
+    } else {
+      checkPassed = true;
     }
-  } else if (isMainThread) {
-    markParentVerified(); // trusted-clean skip is a verification too
+  } else {
+    checkPassed = true; // trusted-clean skip is a verification too
   }
 
   try {
@@ -1566,6 +1569,9 @@ export async function initDb(): Promise<InitResult> {
     // which by definition appear when no migration is pending.
     liftOtelAttributeColumns(db);
     pruneNotificationLog(db);
+    // See `parentVerifiedRecently` in cleanShutdown.ts. A file we quarantined
+    // and recreated (Path 1/2) is a different database: no stamp for it.
+    if (checkPassed && isMainThread && result.quarantined === null) markParentVerified();
     return result;
   } catch (err) {
     // Path 3: SchemaVersionMissingError — meta table exists but stamp is

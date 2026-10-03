@@ -102,6 +102,13 @@ export function onShutdown(
  */
 export const FINAL_RESERVE_MS = 1_000;
 
+/**
+ * Budget each ordinary disposer is guaranteed while `final` ones exist (scaled
+ * down for short budgets). Producers' stop hooks are synchronous and cheap, so
+ * this is ample; it is carved out of whichever earlier disposer is slow.
+ */
+export const ORDINARY_FLOOR_MS = 100;
+
 export function registeredDisposerCount(): number {
   return state.disposers.size;
 }
@@ -168,17 +175,29 @@ async function runShutdown(
   const reserveMs =
     finalNames.size > 0 ? Math.min(FINAL_RESERVE_MS, Math.floor(overallMs * 0.2)) : 0;
   let finalsLeft = entries.filter(([name]) => finalNames.has(name)).length;
+  let ordinaryLeft = entries.length - finalsLeft;
+  // With `final` disposers present, every ordinary disposer still to run keeps a
+  // small floor of the budget. Without it a slow first disposer (ingest) can
+  // spend its whole slice and the producers behind it (dispatcher, caches,
+  // watchers) are skipped while the `final` DB closes still run — closing the
+  // DBs under writers that were never told to stop (Copilot, PR #601).
+  const floorMs = finalsLeft > 0 ? Math.min(ORDINARY_FLOOR_MS, Math.floor(overallMs * 0.02)) : 0;
   for (const [name, fn] of entries) {
-    // Ordinary disposers stop short of the reserve. Final ones split whatever is
-    // left evenly among those still to run, so one hanging `final` (tasksDb runs
-    // before sqlite in LIFO order) cannot spend the slice meant for the next —
-    // the last one still gets everything that remains.
+    // Ordinary disposers stop short of the reserve and of the floors owed to the
+    // ordinary disposers behind them. Final ones split whatever is left evenly
+    // among those still to run, so one hanging `final` (tasksDb runs before
+    // sqlite in LIFO order) cannot spend the slice meant for the next — the last
+    // one still gets everything that remains.
     const isFinal = finalNames.has(name);
     const left = deadline - Date.now();
-    const remaining = isFinal
-      ? Math.floor(left / finalsLeft)
-      : left - reserveMs;
-    if (isFinal) finalsLeft--;
+    let remaining: number;
+    if (isFinal) {
+      remaining = Math.floor(left / finalsLeft);
+      finalsLeft--;
+    } else {
+      ordinaryLeft--;
+      remaining = left - reserveMs - floorMs * ordinaryLeft;
+    }
     const start = Date.now();
 
     if (remaining <= 0) {

@@ -194,4 +194,34 @@ describe.skipIf(!driverAvailable)("quick_check skip — against a real database"
       expect(statSync(wal).size).toBe(0);
     }
   });
+
+  // Copilot, PR #601: the first ingest worker may skip quick_check only if the
+  // file it will open is the one the server verified.
+  it("stamps the worker handoff after a successful open", async () => {
+    const { mig, conn, clean } = await reloadModules();
+    const result = await mig.initDb();
+    expect(result.available).toBe(true);
+    expect(clean.parentVerifiedEnvFor({ first: true })).toHaveProperty(
+      clean.PARENT_VERIFIED_ENV,
+    );
+    conn.closeDb();
+  });
+
+  it("does NOT stamp the handoff when the file was quarantined and recreated", async () => {
+    const first = await reloadModules();
+    await first.mig.initDb();
+    const db1 = await first.conn.getDb();
+    // Wipe the version stamp: the next initDb passes quick_check, THEN hits
+    // SchemaVersionMissingError and quarantines — the stamp must not survive.
+    db1!.prepare("DELETE FROM meta WHERE key='schema_version'").run();
+    first.conn.closeDb();
+    first.clean.parentVerifiedEnvFor({ first: false }); // drop any earlier stamp
+
+    const second = await reloadModules();
+    const result = await second.mig.initDb();
+    expect(result.quarantined).not.toBeNull();
+    expect(second.clean.parentVerifiedEnvFor({ first: true })).toEqual({});
+    second.conn.closeDb();
+  });
 });
+

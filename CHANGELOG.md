@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Boot after an unclean stop no longer runs the full-index `PRAGMA quick_check` twice (#588). The ingest worker now skips its own check when the server verified the same index minutes earlier, saving ~30 s of a ~3 min boot on a 2.6 GB index.
-- A slow ingest-worker stop can no longer starve the SQLite close during graceful shutdown. Ordinary shutdown disposers now stop 1 s short of the 5 s budget so the `sqlite`/`tasksDb` closes (the ones that record the clean-shutdown marker) always get to run; the worker stop grace dropped from 5 s to 2.5 s and the watcher-start drain from 2 s to 1 s to fit.
+- A slow ingest-worker stop can no longer starve the SQLite close during graceful shutdown. Ordinary shutdown disposers now stop 1 s short of the 5 s budget so the `sqlite`/`tasksDb` closes (the ones that record the clean-shutdown marker) always get to run; each ordinary disposer keeps a 100 ms floor so producers still stop before the DBs close; the worker stop grace dropped from 5 s to 2 s and the watcher-start drain from 2 s to 1 s to fit.
 
 ## [1.16.3] - 2026-10-01
 

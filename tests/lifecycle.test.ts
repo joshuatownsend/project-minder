@@ -185,6 +185,24 @@ describe("shutdown timeout + budget", () => {
     expect(sqlite).toHaveBeenCalledTimes(1);
   });
 
+  // Copilot, PR #601: a slow first disposer (ingest) must not make the producers
+  // behind it (dispatcher, caches) get skipped while the final DB closes still
+  // run — that closes the DBs under writers that were never told to stop.
+  it("a slow first ordinary disposer cannot cause later producers to be skipped", async () => {
+    const order: string[] = [];
+    onShutdown("sqlite", () => void order.push("sqlite"), { final: true }); // disposed LAST
+    onShutdown("dispatcher", () => void order.push("dispatcher")); // producer, mid-chain
+    onShutdown("cache", () => void order.push("cache")); // producer
+    onShutdown("ingest", () => new Promise<void>(() => {})); // disposed FIRST, hangs
+
+    const p = shutdown("signal", { timeoutMs: 1000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    await p;
+
+    // Both producers stopped, and strictly before the DB closed.
+    expect(order).toEqual(["cache", "dispatcher", "sqlite"]);
+  });
+
   it("re-registering without `final` demotes the disposer", async () => {
     const close = vi.fn();
     const hang = vi.fn(() => new Promise<void>(() => {}));
