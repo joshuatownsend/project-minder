@@ -87,8 +87,6 @@ type MessageSubscriber = (msg: unknown) => void;
 
 interface WorkerHostState {
   worker: Worker | null;
-  /** True once the first spawn has been offered the parent-verified handoff. */
-  parentVerifiedOffered?: boolean;
   /** Resolved worker-entry path, set at spawn time. Surfaced via getWorkerStatus. */
   workerEntry: string;
   startedAt: number | null;
@@ -757,26 +755,25 @@ function isFiniteNumber(x: unknown): x is number {
 }
 
 /**
- * The environment for the next worker spawn. Hands the server's "index already
- * verified" stamp to the FIRST worker only, via explicit env; a crash-respawn
- * (the previous worker may have died mid-write) gets none and evaluates the real
- * clean-shutdown state (#601). Exported so the first-vs-respawn bookkeeping is
- * testable without spawning a thread.
+ * The environment for the next worker spawn. The server's "index already
+ * verified" stamp goes to the first worker THIS PROCESS EVER SPAWNS and to no
+ * other — not a crash-respawn, not an `startWorker()` replacement host (the
+ * previous worker may have died mid-write). Those evaluate the real
+ * clean-shutdown state (#601). The once-only latch is process-global (see
+ * `cleanShutdown.ts`); this wrapper exists so the wiring is testable without
+ * spawning a thread.
  */
 export function nextWorkerEnv(
-  state: Pick<WorkerHostState, "parentVerifiedOffered">,
   base?: Record<string, string | undefined>,
 ): Record<string, string | undefined> {
-  const first = !state.parentVerifiedOffered;
-  state.parentVerifiedOffered = true;
-  return workerEnvFor({ first, base });
+  return workerEnvFor({ base });
 }
 
 function spawnAndAttach(state: WorkerHostState, entry: string): void {
   const worker = new Worker(entry, {
     stderr: false,
     stdout: false,
-    env: nextWorkerEnv(state),
+    env: nextWorkerEnv(),
   });
   state.worker = worker;
   state.startedAt = Date.now();

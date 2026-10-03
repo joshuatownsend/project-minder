@@ -281,7 +281,18 @@ export const PARENT_VERIFIED_MAX_AGE_MS = 15 * 60 * 1000;
 // `new Worker`, including a crash-respawn after a worker died mid-write, and
 // any main-thread `initDb()` that re-stamped it (a `probeInitStatus` retry)
 // would silently re-arm the skip. (Copilot + Codex, PR #601.)
-const gv = globalThis as unknown as { __minderParentVerifiedAt?: number };
+const gv = globalThis as unknown as {
+  __minderParentVerifiedAt?: number;
+  /**
+   * Set the first time ANY worker spawn asks for the handoff, and never cleared
+   * outside tests. Process-global rather than per-host-state on purpose: the
+   * supported idempotent `startWorker()` replace path builds a fresh host state,
+   * and a per-state flag would let that replacement worker inherit a stamp a
+   * later main-thread `initDb()` re-created — even after the old worker was
+   * force-terminated mid-write (Codex, PR #601).
+   */
+  __minderParentVerifiedOffered?: boolean;
+};
 
 /** Record that this (main) process just verified or trusted the index. */
 export function markParentVerified(now: number = Date.now()): void {
@@ -289,18 +300,19 @@ export function markParentVerified(now: number = Date.now()): void {
 }
 
 /**
- * The env additions for a worker spawn. Non-empty only for the FIRST spawn and
- * only while the stamp is fresh; consumes the stamp either way so it cannot be
- * offered twice.
+ * The env additions for a worker spawn. Non-empty only for the FIRST spawn this
+ * process ever makes and only while the stamp is fresh; consumes the stamp (and
+ * the one chance to offer it) either way, so it cannot be offered twice.
  */
 export function parentVerifiedEnvFor(opts: {
-  first: boolean;
   now?: number;
   maxAgeMs?: number;
-}): Record<string, string> {
+} = {}): Record<string, string> {
   const at = gv.__minderParentVerifiedAt;
   delete gv.__minderParentVerifiedAt;
-  if (!opts.first || typeof at !== "number") return {};
+  const first = !gv.__minderParentVerifiedOffered;
+  gv.__minderParentVerifiedOffered = true;
+  if (!first || typeof at !== "number") return {};
   const age = (opts.now ?? Date.now()) - at;
   if (age < 0 || age > (opts.maxAgeMs ?? PARENT_VERIFIED_MAX_AGE_MS)) return {};
   return { [PARENT_VERIFIED_ENV]: String(at) };
@@ -311,6 +323,12 @@ export function clearParentVerified(): void {
   delete gv.__minderParentVerifiedAt;
 }
 
+/** Test-only: forget both the stamp and the "already offered" latch. */
+export function _resetParentVerifiedForTesting(): void {
+  delete gv.__minderParentVerifiedAt;
+  delete gv.__minderParentVerifiedOffered;
+}
+
 /**
  * The environment for a worker spawn: a copy of `base` with any AMBIENT
  * `MINDER_QUICK_CHECK_VERIFIED_AT` removed, plus the one-shot stamp when
@@ -319,13 +337,12 @@ export function clearParentVerified(): void {
  * including crash-respawns (Codex + Copilot, PR #601).
  */
 export function workerEnvFor(opts: {
-  first: boolean;
   base?: Record<string, string | undefined>;
   now?: number;
-}): Record<string, string | undefined> {
+} = {}): Record<string, string | undefined> {
   const env = { ...(opts.base ?? process.env) };
   delete env[PARENT_VERIFIED_ENV];
-  return { ...env, ...parentVerifiedEnvFor({ first: opts.first, now: opts.now }) };
+  return { ...env, ...parentVerifiedEnvFor({ now: opts.now }) };
 }
 
 /** True when running in a worker thread whose parent verified the index recently. */

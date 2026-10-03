@@ -201,7 +201,7 @@ describe.skipIf(!driverAvailable)("quick_check skip — against a real database"
     const { mig, conn, clean } = await reloadModules();
     const result = await mig.initDb();
     expect(result.available).toBe(true);
-    expect(clean.parentVerifiedEnvFor({ first: true })).toHaveProperty(
+    expect(clean.parentVerifiedEnvFor()).toHaveProperty(
       clean.PARENT_VERIFIED_ENV,
     );
     conn.closeDb();
@@ -212,7 +212,8 @@ describe.skipIf(!driverAvailable)("quick_check skip — against a real database"
     await first.mig.initDb();
     // The first init stamped successfully and nothing consumed it (no worker has
     // spawned yet) — the second init, which quarantines, must not inherit it.
-    expect(first.clean.parentVerifiedEnvFor({ first: true })).not.toEqual({});
+    expect(first.clean.parentVerifiedEnvFor()).not.toEqual({});
+    first.clean._resetParentVerifiedForTesting(); // un-latch the probe above
     first.clean.markParentVerified();
     const db1 = await first.conn.getDb();
     // Wipe the version stamp: the next initDb passes quick_check, THEN hits
@@ -223,7 +224,7 @@ describe.skipIf(!driverAvailable)("quick_check skip — against a real database"
     const second = await reloadModules();
     const result = await second.mig.initDb();
     expect(result.quarantined).not.toBeNull();
-    expect(second.clean.parentVerifiedEnvFor({ first: true })).toEqual({});
+    expect(second.clean.parentVerifiedEnvFor()).toEqual({});
     second.conn.closeDb();
   });
 

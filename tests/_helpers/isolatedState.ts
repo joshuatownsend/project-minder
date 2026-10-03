@@ -245,6 +245,17 @@ export function installIsolatedState(
   let tmpHome = "";
   const savedEnv = new Map<string, string | undefined>();
 
+  // The quick_check handoff stamp is process-global and Vitest reuses workers, so
+  // a suite that calls initDb() can leave a valid one for the next file. Reset it
+  // at setup/teardown ONLY — not in clearGlobals(), which reload() also calls:
+  // wiping it mid-test would hide the very persistence some suites assert on
+  // (Copilot, PR #601).
+  const clearHandoff = (): void => {
+    const g = globalThis as Record<string, unknown>;
+    delete g.__minderParentVerifiedAt;
+    delete g.__minderParentVerifiedOffered;
+  };
+
   const clearGlobals = (): void => {
     const g = globalThis as Record<string, unknown>;
     delete g[DB_GLOBAL];
@@ -301,6 +312,7 @@ export function installIsolatedState(
     applyIsolationEnv();
     applyCallerEnv();
     clearGlobals();
+    clearHandoff();
     vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
   };
 
@@ -313,6 +325,7 @@ export function installIsolatedState(
     }
     savedEnv.clear();
     clearGlobals();
+    clearHandoff();
     await removeTempHome(tmpHome);
   };
 
