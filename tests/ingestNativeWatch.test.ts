@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import os from "os";
 import path from "path";
 import { promises as fs } from "fs";
-import { startNativeRecursiveWatch, type NativeWatch } from "@/lib/db/nativeWatch";
+import { startNativeRecursiveWatch, type NativeWatch, type JudgedOutcome } from "@/lib/db/nativeWatch";
 
 // #595 — the single recursive watch that replaces chokidar's per-file watches.
 // Real filesystem, real events: the point of the module is what the OS delivers,
@@ -115,12 +115,22 @@ describe("startNativeRecursiveWatch", () => {
       const past = new Date(Date.now() - HOUR);
       await fs.utimes(old, past, past);
       const changed: string[] = [];
-      watch = startNativeRecursiveWatch(root, {
-        onChange: (p) => changed.push(p),
-        onGone: () => {},
-        onError: () => {},
-      });
+      const judged: { file: string; outcome: JudgedOutcome }[] = [];
+      watch = startNativeRecursiveWatch(
+        root,
+        { onChange: (p) => changed.push(p), onGone: () => {}, onError: () => {} },
+        { onJudged: (file, outcome) => judged.push({ file, outcome }) }
+      );
       await new Promise((r) => setTimeout(r, 300)); // let the OS watch settle
+      /**
+       * Wait until the gate has RULED on the file under test: at least `n` decisions
+       * for it since `from`. This is what makes a "nothing was forwarded" assertion
+       * sound - the decision, not a sleep, is the barrier, so a late OS callback can
+       * no longer be discarded by teardown while the test passes (Codex, #605).
+       */
+      const judgedFor = (file: string) => judged.filter((j) => j.file === file).length;
+      const untilJudged = (file: string, from: number, n = 1) =>
+        waitFor(() => judgedFor(file) >= from + n);
       /**
        * Wait until the gate has had its say on everything done so far. The marker
        * append alone proves nothing: cross-file delivery order is not guaranteed
@@ -136,24 +146,29 @@ describe("startNativeRecursiveWatch", () => {
         await new Promise((r) => setTimeout(r, 250));
         await watch!.settled();
       };
-      return { old, marker, changed, flush };
+      return { old, marker, changed, judged, judgedFor, untilJudged, flush };
     }
 
     it("does not forward an access-time-only update of a transcript nobody wrote", async () => {
-      const { old, changed, flush } = await oldTranscriptWatched();
+      const { old, changed, judged, judgedFor, untilJudged, flush } = await oldTranscriptWatched();
       const st = await fs.stat(old);
+      const from = judgedFor(old);
       await fs.utimes(old, new Date(), st.mtime); // atime now, mtime untouched
+      await untilJudged(old, from); // the gate has ruled on it
       await flush();
+      expect(judged.filter((j) => j.file === old).every((j) => j.outcome === "old")).toBe(true);
       expect(changed).not.toContain(old);
     });
 
     it("does not forward a plain read of an old transcript", async () => {
-      const { old, changed, flush } = await oldTranscriptWatched();
+      const { old, changed, judged, judgedFor, untilJudged, flush } = await oldTranscriptWatched();
       const st = await fs.stat(old);
+      const from = judgedFor(old);
       await fs.utimes(old, new Date(Date.now() - 2 * HOUR), st.mtime); // age atime so the read bumps it
-      await new Promise((r) => setTimeout(r, 200));
+      await untilJudged(old, from);
       await fs.readFile(old);
       await flush();
+      expect(judged.filter((j) => j.file === old).every((j) => j.outcome === "old")).toBe(true);
       expect(changed).not.toContain(old);
     });
 
@@ -164,7 +179,7 @@ describe("startNativeRecursiveWatch", () => {
     });
 
     it("does not re-forward a read that follows a write it already forwarded", async () => {
-      const { old, changed, flush } = await oldTranscriptWatched();
+      const { old, changed, judged, judgedFor, untilJudged, flush } = await oldTranscriptWatched();
       await fs.appendFile(old, "{}\n");
       await waitFor(() => changed.includes(old));
       // One append can be reported twice (the write, then the close with the mtime
@@ -172,15 +187,17 @@ describe("startNativeRecursiveWatch", () => {
       // taking the baseline so only the READ is under test.
       await new Promise((r) => setTimeout(r, 500));
       const forwarded = changed.filter((p) => p === old).length;
+      const from = judgedFor(old);
 
       const st = await fs.stat(old);
       // Age the atime and leave mtime/size alone. NOT `st.mtime`: Node builds that Date
       // by ROUNDING, so passing it back shifts the mtime by up to 1 ms and the
       // file would look written again. A real read never touches mtime at all.
       await fs.utimes(old, new Date(Date.now() - 2 * HOUR), Math.floor(st.mtimeMs) / 1000);
-      await new Promise((r) => setTimeout(r, 200));
+      await untilJudged(old, from); // the gate ruled on the aged-atime event
       await fs.readFile(old);
       await flush();
+      expect(judged.filter((j) => j.file === old).slice(from).map((j) => j.outcome)).not.toContain("forwarded");
       expect(changed.filter((p) => p === old).length).toBe(forwarded);
     });
 
@@ -227,10 +244,11 @@ describe("startNativeRecursiveWatch", () => {
         await fs.utimes(f, past, past);
       }
       const changed: string[] = [];
+      const judged: string[] = [];
       watch = startNativeRecursiveWatch(
         root,
         { onChange: (p) => changed.push(p), onGone: () => {}, onError: () => {} },
-        { maxRemembered: 3 }
+        { maxRemembered: 3, onJudged: (f) => judged.push(f) }
       );
       await new Promise((r) => setTimeout(r, 300));
       const drain = async () => {
@@ -246,8 +264,9 @@ describe("startNativeRecursiveWatch", () => {
       }
       const bump = async (f: string) => {
         const st = await fs.stat(f);
+        const from = judged.filter((j) => j === f).length;
         await fs.utimes(f, new Date(Date.now() - 2 * HOUR), Math.floor(st.mtimeMs) / 1000);
-        await new Promise((r) => setTimeout(r, 200));
+        await waitFor(() => judged.filter((j) => j === f).length > from); // ruled on
         await fs.readFile(f);
         await drain();
       };

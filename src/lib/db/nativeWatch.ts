@@ -73,7 +73,15 @@ export interface NativeWatchOptions {
   maxRemembered?: number;
   /** Injectable clocks (tests): wall time in epoch ms, and a monotonic clock in ms. */
   clock?: { now(): number; monotonic(): number };
+  /**
+   * Observer told how each `change` event was ruled on (tests). Lets a test wait for
+   * the gate's actual decision on a file instead of sleeping and hoping the OS has
+   * delivered it. Production passes nothing, so no per-file state is kept for it.
+   */
+  onJudged?: (filePath: string, outcome: JudgedOutcome) => void;
 }
+
+export type JudgedOutcome = "forwarded" | "old" | "duplicate" | "unreadable";
 
 /**
  * Start the watch, or return `null` when it cannot be established (the root is
@@ -121,10 +129,14 @@ export function startNativeRecursiveWatch(
     const judged: Promise<void> = fs.promises.stat(filePath).then(
       (st) => {
         if (closed) return;
-        if (st.mtimeMs < writeThreshold()) return; // access-time bump on an old file
+        if (st.mtimeMs < writeThreshold()) {
+          opts.onJudged?.(filePath, "old"); // access-time bump on an old file
+          return;
+        }
         const prev = passed.get(filePath);
         if (prev && prev.size === st.size && Math.abs(prev.mtimeMs - st.mtimeMs) < MTIME_EPSILON_MS) {
-          return; // read after a write we already forwarded
+          opts.onJudged?.(filePath, "duplicate"); // read after a write we already forwarded
+          return;
         }
         passed.delete(filePath); // re-insert at the recent end
         if (passed.size >= maxRemembered) {
@@ -136,9 +148,12 @@ export function startNativeRecursiveWatch(
         }
         passed.set(filePath, { size: st.size, mtimeMs: st.mtimeMs });
         handlers.onChange(filePath);
+        opts.onJudged?.(filePath, "forwarded");
       },
       () => {
-        if (!closed) handlers.onChange(filePath);
+        if (closed) return;
+        handlers.onChange(filePath);
+        opts.onJudged?.(filePath, "unreadable");
       }
     ).then(() => {
       pending.delete(judged);
