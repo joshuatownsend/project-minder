@@ -57,8 +57,21 @@ export interface NativeWatch {
  */
 export const WRITE_GATE_SLACK_MS = 5_000;
 
-/** Cap on remembered signatures; cleared wholesale if exceeded (it only dedupes). */
+/** Default cap on remembered write signatures (it only dedupes; see below). */
 const MAX_REMEMBERED_SIGNATURES = 50_000;
+
+/**
+ * Two stats of an unwritten file can differ by a hair: tools that re-set a
+ * timestamp go through a `Date` (millisecond rounding), and not every filesystem
+ * round-trips fractional seconds exactly. A same-size rewrite inside this window
+ * is not a real write.
+ */
+const MTIME_EPSILON_MS = 2;
+
+export interface NativeWatchOptions {
+  /** Override the remembered-signature cap (tests). */
+  maxRemembered?: number;
+}
 
 /**
  * Start the watch, or return `null` when it cannot be established (the root is
@@ -67,14 +80,19 @@ const MAX_REMEMBERED_SIGNATURES = 50_000;
  */
 export function startNativeRecursiveWatch(
   root: string,
-  handlers: NativeWatchHandlers
+  handlers: NativeWatchHandlers,
+  opts: NativeWatchOptions = {}
 ): NativeWatch | null {
   let watcher: fs.FSWatcher;
   const armedAt = Date.now();
-  // Signature (`size:mtime`, in whole ms) of each file we have already passed on, so a read
-  // after a write is not mistaken for another write. Only files written during
-  // this process's lifetime ever get an entry, so it stays small.
-  const passed = new Map<string, string>();
+  const maxRemembered = Math.max(1, opts.maxRemembered ?? MAX_REMEMBERED_SIGNATURES);
+  // `size` and `mtime` of each file we have already passed on, so a read after a
+  // write is not mistaken for another write. Only files written during this
+  // process's lifetime ever get an entry. Insertion order is recency order (an
+  // updated file is re-inserted), so at the cap the OLDEST entries are evicted:
+  // wiping everything would make every still-active file look new to the next
+  // history-wide read and recreate the burst this exists to prevent.
+  const passed = new Map<string, { size: number; mtimeMs: number }>();
   let closed = false;
   const pending = new Set<Promise<void>>();
 
@@ -88,12 +106,19 @@ export function startNativeRecursiveWatch(
       (st) => {
         if (closed) return;
         if (st.mtimeMs < armedAt - WRITE_GATE_SLACK_MS) return; // access-time bump on an old file
-        // Whole milliseconds: tools that re-set a timestamp go through a `Date`, which
-        // drops the sub-millisecond part; a same-size rewrite within one ms is not real.
-        const sig = `${st.size}:${Math.floor(st.mtimeMs)}`;
-        if (passed.get(filePath) === sig) return; // read after a write we already forwarded
-        if (passed.size >= MAX_REMEMBERED_SIGNATURES) passed.clear();
-        passed.set(filePath, sig);
+        const prev = passed.get(filePath);
+        if (prev && prev.size === st.size && Math.abs(prev.mtimeMs - st.mtimeMs) < MTIME_EPSILON_MS) {
+          return; // read after a write we already forwarded
+        }
+        passed.delete(filePath); // re-insert at the recent end
+        if (passed.size >= maxRemembered) {
+          let evict = Math.max(1, Math.ceil(maxRemembered * 0.1));
+          for (const k of passed.keys()) {
+            if (evict-- <= 0) break;
+            passed.delete(k);
+          }
+        }
+        passed.set(filePath, { size: st.size, mtimeMs: st.mtimeMs });
         handlers.onChange(filePath);
       },
       () => {
@@ -120,7 +145,10 @@ export function startNativeRecursiveWatch(
       fs.promises.stat(filePath).then(
         () => handlers.onChange(filePath),
         (err: NodeJS.ErrnoException) => {
-          if (err?.code === "ENOENT") handlers.onGone(filePath);
+          if (err?.code === "ENOENT") {
+            passed.delete(filePath);
+            handlers.onGone(filePath);
+          }
           // Anything else (EBUSY mid-write, EPERM): the sweep will see the file.
         }
       );

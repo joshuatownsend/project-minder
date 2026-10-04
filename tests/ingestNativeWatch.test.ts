@@ -185,12 +185,82 @@ describe("startNativeRecursiveWatch", () => {
     });
 
     it("forwards a second real write even though the first was remembered", async () => {
-      const { old, changed } = await oldTranscriptWatched();
+      const { old, changed, flush } = await oldTranscriptWatched();
       await fs.appendFile(old, "{}\n");
       await waitFor(() => changed.filter((p) => p === old).length >= 1);
+      // The same append can be reported twice; drain before the baseline or the
+      // second report would satisfy the assertion below by itself (Copilot, #605).
+      await flush();
       const first = changed.filter((p) => p === old).length;
       await fs.appendFile(old, '{"more":true}\n');
       await waitFor(() => changed.filter((p) => p === old).length > first);
+    });
+
+    // Copilot (#605): NTFS only promises a current last-write time once writers
+    // close their handles. Measured: Node stats through a handle, so an OPEN append
+    // handle's mtime is already current when the event arrives (5 of 5 writes, none
+    // dropped). What Windows does delay is the NOTIFICATION itself for an unflushed
+    // open-handle write (one event, at close) - independent of this gate, and the
+    // 30 s sweep covers it - so the test flushes to make the notification arrive.
+    it("forwards a write made through an append handle that stays open", async () => {
+      const { old, changed } = await oldTranscriptWatched();
+      const fh = await fs.open(old, "a");
+      try {
+        await fh.write('{"held":true}\n');
+        await fh.sync();
+        await waitFor(() => changed.includes(old));
+      } finally {
+        await fh.close();
+      }
+    });
+
+    // Codex (#605): at the cap the oldest signatures go, not all of them.
+    it("at the cap, evicts the oldest remembered writes instead of forgetting every active file", async () => {
+      root = await fs.mkdtemp(path.join(os.tmpdir(), "pm-native-cap-"));
+      const dir = path.join(root, "p");
+      await fs.mkdir(dir, { recursive: true });
+      const names = ["f1", "f2", "f3", "f4"].map((n) => path.join(dir, n + ".jsonl"));
+      const marker = path.join(dir, "marker.jsonl");
+      const past = new Date(Date.now() - HOUR);
+      for (const f of [...names, marker]) {
+        await fs.writeFile(f, "{}\n");
+        await fs.utimes(f, past, past);
+      }
+      const changed: string[] = [];
+      watch = startNativeRecursiveWatch(
+        root,
+        { onChange: (p) => changed.push(p), onGone: () => {}, onError: () => {} },
+        { maxRemembered: 3 }
+      );
+      await new Promise((r) => setTimeout(r, 300));
+      const drain = async () => {
+        await new Promise((r) => setTimeout(r, 250));
+        await watch!.settled();
+      };
+      const count = (f: string) => changed.filter((p) => p === f).length;
+      // Four real writes, one at a time: the fourth pushes the cap and evicts f1 only.
+      for (const f of names) {
+        await fs.appendFile(f, "{}\n");
+        await waitFor(() => count(f) >= 1);
+        await drain();
+      }
+      const bump = async (f: string) => {
+        const st = await fs.stat(f);
+        await fs.utimes(f, new Date(Date.now() - 2 * HOUR), Math.floor(st.mtimeMs) / 1000);
+        await new Promise((r) => setTimeout(r, 200));
+        await fs.readFile(f);
+        await drain();
+      };
+      // After f4 the remembered set is {f2, f3, f4}: only f1, the oldest, was evicted.
+      // Checking f3 (a MIDDLE entry) is what tells oldest-first eviction from wiping
+      // everything: a wipe would keep only f4 and forget f3 as well.
+      const f3Before = count(names[2]);
+      await bump(names[2]); // still-active file: remembered -> not forwarded again
+      expect(count(names[2])).toBe(f3Before);
+      const f1Before = count(names[0]);
+      await bump(names[0]); // oldest write: evicted -> looks new -> forwarded once more
+      expect(count(names[0])).toBeGreaterThan(f1Before);
+      expect(changed).not.toContain(marker);
     });
   });
 });
