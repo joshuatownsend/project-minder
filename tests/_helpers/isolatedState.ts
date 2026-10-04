@@ -253,6 +253,7 @@ export function installIsolatedState(
   const clearHandoff = (): void => {
     const g = globalThis as Record<string, unknown>;
     delete g.__minderParentVerifiedAt;
+    delete g.__minderParentVerifiedId;
     delete g.__minderParentVerifiedOffered;
   };
 
