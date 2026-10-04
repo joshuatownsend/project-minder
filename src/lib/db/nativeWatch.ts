@@ -71,6 +71,8 @@ const MTIME_EPSILON_MS = 2;
 export interface NativeWatchOptions {
   /** Override the remembered-signature cap (tests). */
   maxRemembered?: number;
+  /** Injectable clocks (tests): wall time in epoch ms, and a monotonic clock in ms. */
+  clock?: { now(): number; monotonic(): number };
 }
 
 /**
@@ -84,7 +86,21 @@ export function startNativeRecursiveWatch(
   opts: NativeWatchOptions = {}
 ): NativeWatch | null {
   let watcher: fs.FSWatcher;
-  const armedAt = Date.now();
+  const clock = opts.clock ?? { now: () => Date.now(), monotonic: () => performance.now() };
+  const armedAt = clock.now();
+  const armedMono = clock.monotonic();
+  /**
+   * The write threshold, corrected for a wall clock set BACK since arming. Real
+   * writes get mtimes from the same wall clock, so after a rollback they fall below
+   * a fixed `armedAt` and would be rejected until the clock catches up (Codex,
+   * #605). The step is the wall-clock change not explained by monotonic time; only
+   * a backward step lowers the threshold (a forward step, e.g. after a suspend,
+   * must not raise it and start rejecting older real writes).
+   */
+  const writeThreshold = (): number => {
+    const step = clock.now() - armedAt - (clock.monotonic() - armedMono);
+    return armedAt - WRITE_GATE_SLACK_MS + Math.min(0, step);
+  };
   const maxRemembered = Math.max(1, opts.maxRemembered ?? MAX_REMEMBERED_SIGNATURES);
   // `size` and `mtime` of each file we have already passed on, so a read after a
   // write is not mistaken for another write. Only files written during this
@@ -105,7 +121,7 @@ export function startNativeRecursiveWatch(
     const judged: Promise<void> = fs.promises.stat(filePath).then(
       (st) => {
         if (closed) return;
-        if (st.mtimeMs < armedAt - WRITE_GATE_SLACK_MS) return; // access-time bump on an old file
+        if (st.mtimeMs < writeThreshold()) return; // access-time bump on an old file
         const prev = passed.get(filePath);
         if (prev && prev.size === st.size && Math.abs(prev.mtimeMs - st.mtimeMs) < MTIME_EPSILON_MS) {
           return; // read after a write we already forwarded

@@ -262,6 +262,29 @@ describe("startNativeRecursiveWatch", () => {
       expect(count(names[0])).toBeGreaterThan(f1Before);
       expect(changed).not.toContain(marker);
     });
+
+    // Codex (#605): a wall clock corrected BACKWARD after arming gives real writes
+    // mtimes below the arming time. Simulated with an injected clock that reads two
+    // minutes ahead when the watch arms and is then set back to the real time.
+    it("still forwards genuine writes after the wall clock is set back", async () => {
+      root = await fs.mkdtemp(path.join(os.tmpdir(), "pm-native-clock-"));
+      const old = path.join(root, "p", "old.jsonl");
+      await fs.mkdir(path.dirname(old), { recursive: true });
+      await fs.writeFile(old, "{}\n");
+      const past = new Date(Date.now() - HOUR);
+      await fs.utimes(old, past, past);
+      const skew = { aheadMs: 120_000 };
+      const changed: string[] = [];
+      watch = startNativeRecursiveWatch(
+        root,
+        { onChange: (p) => changed.push(p), onGone: () => {}, onError: () => {} },
+        { clock: { now: () => Date.now() + skew.aheadMs, monotonic: () => performance.now() } }
+      );
+      await new Promise((r) => setTimeout(r, 300));
+      skew.aheadMs = 0; // the clock is corrected back by two minutes
+      await fs.appendFile(old, "{}\n");
+      await waitFor(() => changed.includes(old));
+    });
   });
 });
 
