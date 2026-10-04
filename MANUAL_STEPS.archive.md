@@ -305,3 +305,49 @@ the critical path. The updater work (free) can proceed in parallel while you wai
   screenshot. The tool should return TSX with no markdown fences.
 
 ---
+
+## 2026-09-29 23:10 | slow-boot | Get the #584/#585/#586 fixes into the running tray and verify them
+
+> archived 2026-10-04 — all four checks observed; Check 1 closed by the v1.16.4 restart (tray read "slow to respond" ~1 min, then "running").
+
+- [x] Install the v1.16.2 tray build (cut 2026-09-30; both fixes are in it: #587 and #589)
+  The fixes live in two places, and the running tray on :4100 (v1.16.1) has none of them. Tray binary (Rust): 10 s health-probe timeout and the "slow to respond" label (#587). Packaged server (TS): the efficiency-grade sweep deferred behind the initial reconcile (#587), the ingest worker's start-handshake budget 60 s → 5 min, and durable failure logging (#589).
+  Pushing the `v1.16.2` tag fires `release.yml` (creates the GitHub Release) and `release-installers.yml` (four platform bundles + `latest.json` for the updater, ~15-25 min). Install once the installers run is green, via the in-app updater or `Project.Minder.Tray_1.16.2_x64-setup.exe` from the release.
+  For future releases: do **not** run `gh release create` — it races the workflow, and whichever loses fails (that is what turned the v1.9.0/v1.9.1 `Release` runs red). Let the tag create the Release, then swap in curated notes with `gh release edit vX.Y.Z --notes-file <file> --latest`.
+- [x] Reboot with the new build installed
+  The four checks below were run after the 12:23 EDT reboot on 2026-09-30. (#586 was auto-closed by GitHub when #589 merged, before they ran; it was re-verified by them and the evidence is commented on the issue.)
+- [x] Check 1 — tray: it never reads "not responding" while the server is up and busy
+  Either "slow to respond" (the health probe timed out but the port still accepts connections) or "running" (the probe answered within the 10 s budget) is a pass — with the boot-load fixes the server may answer in time and never show the slow state. "not responding" is the failure.
+  Observed (user): "running" about five minutes after the 12:23 boot, while the reconcile was still running in the worker (it finished 12:47). NOT observed: the first ~2.5 min (main-thread DB probe 12:23:41-12:25:07, scan to 12:26:01). Tick when seen, or waive.
+  Result 2026-10-04 (v1.16.4, graceful restart; user report): the tray read "slow to respond" for about a minute after launch, then "running". Server log: port open +2 s, `/api/health` first answered 200 at ~+68 s (the project scan blocks it), so "slow to respond" was the correct label and the early window is now observed. Not reported: whether the first few seconds, before the port opened, read "not responding".
+- [x] Check 2 — `http://localhost:4100/api/health`: `ingest.mode` is `"worker"` with `crashesLastHour: 0`
+  It was `"in-process"` on every boot since ~09-26.
+  Result 2026-09-30: `"worker"`, `crashesLastHour: 0`, version 1.16.2 (tray exe 1.16.2 too).
+- [x] Check 3 — `~/.minder/logs/minder.log`: a `watcher armed after N ms` line and no failure lines, from THIS boot only
+  The file is append-only until it rotates, so read only the lines after the last `starting service-mode boot sequence…` entry; an older boot's failure line proves nothing about this one. Expect `watcher armed after N ms` with a `phaseMs` breakdown showing where startup time went (`initDb` was ~21 s warm on the 2.5 GB index), and **no** `start handshake failed` / `worker failed before ready` lines. If one is present it names the reason, elapsed time and timeout.
+  Result 2026-09-30: no failure lines on either 1.16.2 boot. `watcher armed after` 106.7 s (09:18 graceful restart; worker `initDb` 76.7 s) and 64.5 s (12:23 reboot; `initDb` 34.4 s) — both over the old 60 s budget, which would have fallen back (#586, #588).
+- [x] Check 4 — `~/.minder/index.db` → `indexer_runs`: this boot has ONE `reconcile` row
+  Every boot since 09-26 produced an aborted/orphaned ~60 s run followed by a second one. Also compare the row's duration with 689 s from 2026-09-29; if it did not shorten, the grade sweep was not the main contributor.
+  Result 2026-09-30: ONE `reconcile` row per boot (no aborted/orphaned pair). Duration did NOT shorten: 1261 s vs the 689 s baseline (849 s at 09:20) — the grade sweep was not the main cost; tracked in #595.
+- [x] Record the outcome of Checks 1-4, then close out
+  All four pass → close #586 and archive this entry. Check 2 still shows `"in-process"` → the log line from Check 3 is the diagnosis; the known follow-ups are #588 (the duplicate `PRAGMA quick_check` that spends ~21 s of the handshake budget on every start) and #585 (the usage cache is smaller than the corpus, so later whole-history sweeps still re-parse most of it). Either way this item is done once the result is written down.
+  Unrelated: #590 is a flaky Windows CI test (10 s hook timeout in `subagentBillingBoundary.test.ts` and other DB-backed tests), not a product problem.
+
+  Recorded 2026-09-30: #586 verified fixed (closed); #588 updated with the worker-`initDb` numbers; slow reconcile filed as #595. The entry stayed open only for Check 1's unobserved early window (observed 2026-10-04, see Check 1).
+---
+
+## 2026-10-01 01:19 | slow-boot | Confirm the native recursive watch fixes the slow initial reconcile (#595)
+
+> archived 2026-10-04 — all three checks observed on v1.16.3/v1.16.4 (reconcile 10 s, native watcher, live events ~265 ms).
+
+- [x] After the release containing this change is installed and the tray restarted (or the machine rebooted), check `http://localhost:4100/api/health`
+  `ingest.watcherMode` should be `"native"` immediately (it used to sit on `"arming"` for minutes).
+  Result 2026-10-03 (16:42 EDT reboot, v1.16.3): `ingest.mode` `"worker"`, `watcherMode` `"native"`, `crashesLastHour` 0, `initialReconcileMs` 10307.
+- [x] Check `~/.minder/logs/minder.log` for the `reconcile finished in N ms` line
+  Expect tens of seconds, not the 689 -> 849 -> 1261 s seen before. Lab measurement on the real corpus: 24.9 s total, 20.4 s of it in `prune` (a separate open question - the next thing to look at).
+  Result 2026-10-03: `reconcile finished in 10302 ms` (`prune` 90 ms, so the 20 s was chokidar contention). `watcher armed after 31403 ms`. The remaining ~3.3 min of slow boot is `PRAGMA quick_check` (main probe 95 s + worker initDb 31 s) because the clean-shutdown marker is stale (#588).
+- [x] Edit a transcript (any Claude Code session) and confirm the dashboard sees it without waiting for the 30 s sweep
+  Not covered by the lab run: it only measured the reconcile, not live event delivery on the real tree.
+  Result 2026-10-04 (v1.16.4, real tree): used this very session's transcript as the event source and compared the file with `sessions.byte_offset`/`turn_count` in `index.db`, polling every 250 ms for ~80 s (57 file growths). Start gap 0 B; the index reached each write after a median of 265 ms (n=18; p90 2.4 s, max 2.9 s during back-to-back bursts) against a 30 s sweep, and `/api/health` `ingest.eventsHandled` went 0 (at arm time, so no replay of existing files) -> 27 -> 43 -> 70. Measured the INDEX, not a browser tab: the dashboard reads the index, but the UI refresh itself was not timed.
+
+---
