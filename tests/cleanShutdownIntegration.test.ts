@@ -228,23 +228,34 @@ describe.skipIf(!driverAvailable)("quick_check skip — against a real database"
     second.conn.closeDb();
   });
 
-  it("withholds the clean marker when an ordinary disposer failed to quiesce", async () => {
+  it("withholds the clean marker, and removes an earlier one, when an ordinary disposer failed to quiesce", async () => {
     const life = await import("@/lib/lifecycle");
     life._resetLifecycleForTesting();
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // A previous, genuinely clean stop leaves a trusted marker behind.
+    const first = await reloadModules();
+    await first.mig.initDb();
+    first.conn.checkpointAndCloseDb();
+    const markerPath = first.clean.markerPathFor(first.conn.DB_PATH);
+    expect(existsSync(markerPath)).toBe(true);
+
+    // This run: the DB is reopened (trusted marker, no write), then a producer
+    // fails to quiesce on shutdown.
     life.onShutdown("ingest", () => {
       throw new Error("worker did not stop");
     });
     await life.shutdown("test");
     expect(life.ordinaryDisposersFailed()).toBe(true);
 
-    const { mig, conn, clean } = await reloadModules();
-    await mig.initDb();
-    conn.checkpointAndCloseDb();
-    // The close ran (WAL drained), but a stop we could not confirm is not certified.
-    expect(existsSync(clean.markerPathFor(conn.DB_PATH))).toBe(false);
+    const second = await reloadModules();
+    await second.mig.initDb();
+    second.conn.checkpointAndCloseDb();
+    // The close ran, but a stop we could not confirm is not certified — and the
+    // old marker, which still matches an unwritten DB, must not survive it.
+    expect(existsSync(markerPath)).toBe(false);
 
     life._resetLifecycleForTesting();
   });

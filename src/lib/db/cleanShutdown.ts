@@ -264,9 +264,10 @@ export function shouldRunQuickCheck(opts: {
 // BOTH the HTTP server and the ingest worker thread open this DB at boot, and
 // each ran the full O(size) quick_check: 95 s then 31 s on the 2.6 GB index.
 // The worker's run adds no information — the server finished the same scan on
-// the same file seconds earlier — so the server leaves a timestamp in
-// `process.env`, which a worker thread inherits as a copy when it is created.
-// Worker-thread-only, short-lived, and never consulted by the main thread, so a
+// the same file seconds earlier — so the server records a timestamp in
+// process-local state and hands it to the FIRST worker it spawns as explicit
+// `env` (never via ambient `process.env` — see below). Worker-thread-only,
+// once-per-process, short-lived, and never consulted by the main thread, so a
 // later in-process `initDb()` (tests, the in-process fallback) still checks.
 
 /** Env var carrying the epoch-ms at which the server's own check passed. */

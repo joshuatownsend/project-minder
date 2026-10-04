@@ -3,7 +3,11 @@ import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
 import type DatabaseT from "better-sqlite3";
-import { readCleanShutdownState, writeCleanShutdownMarker } from "./cleanShutdown";
+import {
+  clearCleanShutdownMarker,
+  readCleanShutdownState,
+  writeCleanShutdownMarker,
+} from "./cleanShutdown";
 import { ordinaryDisposersFailed } from "../lifecycle";
 
 // Local SQLite index for Project Minder. Sits at ~/.minder/index.db.
@@ -293,8 +297,15 @@ export function checkpointAndCloseDb(): void {
   // out: its promise is not cancelled, so a producer may still be draining while
   // we close. We close regardless — the process is exiting — but we do not
   // certify a stop we could not confirm (Copilot, PR #601).
+  //
+  // Withholding is not enough on its own: the marker is deliberately
+  // non-consuming and bound to the DB file's size+mtime, so a marker left by an
+  // EARLIER clean stop still matches if this run wrote nothing. Whenever the stop
+  // cannot be certified, remove any existing marker (Copilot, PR #601).
   if (!ordinaryDisposersFailed() && readCleanShutdownState(DB_PATH).reason !== "wal-not-empty") {
     writeCleanShutdownMarker(DB_PATH);
+  } else {
+    clearCleanShutdownMarker(DB_PATH);
   }
 }
 
