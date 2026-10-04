@@ -121,11 +121,20 @@ describe("startNativeRecursiveWatch", () => {
         onError: () => {},
       });
       await new Promise((r) => setTimeout(r, 300)); // let the OS watch settle
-      /** Events arrive in order, so once the marker's write is seen, anything earlier already was. */
+      /**
+       * Wait until the gate has had its say on everything done so far. The marker
+       * append alone proves nothing: cross-file delivery order is not guaranteed
+       * and each event is judged by its own async `stat`, so the marker's can finish
+       * first. So: let the OS deliver (marker seen + a pause), then drain the gate
+       * (`settled()`), and only then assert. Closing earlier would discard a late
+       * callback and let a regression pass (Copilot + Codex, PR #605).
+       */
       const flush = async () => {
         const before = changed.filter((p) => p === marker).length;
         await fs.appendFile(marker, "{}\n");
         await waitFor(() => changed.filter((p) => p === marker).length > before);
+        await new Promise((r) => setTimeout(r, 250));
+        await watch!.settled();
       };
       return { old, marker, changed, flush };
     }

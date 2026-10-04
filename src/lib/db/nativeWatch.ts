@@ -38,6 +38,14 @@ export interface NativeWatchHandlers {
 
 export interface NativeWatch {
   close(): void;
+  /**
+   * Resolves once every event delivered so far has been judged by the write gate
+   * (each `change` is decided by its own asynchronous `stat`). Production never
+   * calls this; it exists so a test can assert "nothing was forwarded" without
+   * guessing how long the gate takes (a late callback would otherwise be
+   * discarded by `close()` and the assertion would pass for the wrong reason).
+   */
+  settled(): Promise<void>;
 }
 
 /**
@@ -68,6 +76,7 @@ export function startNativeRecursiveWatch(
   // this process's lifetime ever get an entry, so it stays small.
   const passed = new Map<string, string>();
   let closed = false;
+  const pending = new Set<Promise<void>>();
 
   /**
    * Forward a `change` only if the file was actually written. Fails open: if the
@@ -75,7 +84,7 @@ export function startNativeRecursiveWatch(
    * also have produced a `rename`, and the 30 s sweep is the net for the rest).
    */
   const forwardIfWritten = (filePath: string): void => {
-    fs.promises.stat(filePath).then(
+    const judged: Promise<void> = fs.promises.stat(filePath).then(
       (st) => {
         if (closed) return;
         if (st.mtimeMs < armedAt - WRITE_GATE_SLACK_MS) return; // access-time bump on an old file
@@ -90,7 +99,10 @@ export function startNativeRecursiveWatch(
       () => {
         if (!closed) handlers.onChange(filePath);
       }
-    );
+    ).then(() => {
+      pending.delete(judged);
+    });
+    pending.add(judged);
   };
 
   try {
@@ -121,6 +133,10 @@ export function startNativeRecursiveWatch(
     close: () => {
       closed = true;
       watcher.close();
+    },
+    settled: async () => {
+      // Events judged while we wait can add more; loop until the set is empty.
+      while (pending.size > 0) await Promise.all([...pending]);
     },
   };
 }
