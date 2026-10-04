@@ -98,4 +98,91 @@ describe("startNativeRecursiveWatch", () => {
       })
     ).toBeNull();
   });
+
+  // #604 — an access-time bump is delivered as `change`. On this class of volume
+  // one full read of the corpus used to queue a no-op reconcile per file.
+  describe("access-time events (#604)", () => {
+    const HOUR = 3_600_000;
+
+    /** A transcript last WRITTEN an hour ago, with a watch already running. */
+    async function oldTranscriptWatched() {
+      root = await fs.mkdtemp(path.join(os.tmpdir(), "pm-native-atime-"));
+      const old = path.join(root, "p", "old.jsonl");
+      const marker = path.join(root, "p", "marker.jsonl");
+      await fs.mkdir(path.dirname(old), { recursive: true });
+      await fs.writeFile(old, "{}\n");
+      await fs.writeFile(marker, "{}\n");
+      const past = new Date(Date.now() - HOUR);
+      await fs.utimes(old, past, past);
+      const changed: string[] = [];
+      watch = startNativeRecursiveWatch(root, {
+        onChange: (p) => changed.push(p),
+        onGone: () => {},
+        onError: () => {},
+      });
+      await new Promise((r) => setTimeout(r, 300)); // let the OS watch settle
+      /** Events arrive in order, so once the marker's write is seen, anything earlier already was. */
+      const flush = async () => {
+        const before = changed.filter((p) => p === marker).length;
+        await fs.appendFile(marker, "{}\n");
+        await waitFor(() => changed.filter((p) => p === marker).length > before);
+      };
+      return { old, marker, changed, flush };
+    }
+
+    it("does not forward an access-time-only update of a transcript nobody wrote", async () => {
+      const { old, changed, flush } = await oldTranscriptWatched();
+      const st = await fs.stat(old);
+      await fs.utimes(old, new Date(), st.mtime); // atime now, mtime untouched
+      await flush();
+      expect(changed).not.toContain(old);
+    });
+
+    it("does not forward a plain read of an old transcript", async () => {
+      const { old, changed, flush } = await oldTranscriptWatched();
+      const st = await fs.stat(old);
+      await fs.utimes(old, new Date(Date.now() - 2 * HOUR), st.mtime); // age atime so the read bumps it
+      await new Promise((r) => setTimeout(r, 200));
+      await fs.readFile(old);
+      await flush();
+      expect(changed).not.toContain(old);
+    });
+
+    it("still forwards a genuine append to an old transcript", async () => {
+      const { old, changed } = await oldTranscriptWatched();
+      await fs.appendFile(old, "{}\n");
+      await waitFor(() => changed.includes(old));
+    });
+
+    it("does not re-forward a read that follows a write it already forwarded", async () => {
+      const { old, changed, flush } = await oldTranscriptWatched();
+      await fs.appendFile(old, "{}\n");
+      await waitFor(() => changed.includes(old));
+      // One append can be reported twice (the write, then the close with the mtime
+      // updated), and both are legitimately forwarded; let that settle before
+      // taking the baseline so only the READ is under test.
+      await new Promise((r) => setTimeout(r, 500));
+      const forwarded = changed.filter((p) => p === old).length;
+
+      const st = await fs.stat(old);
+      // Age the atime and leave mtime/size alone. NOT `st.mtime`: Node builds that Date
+      // by ROUNDING, so passing it back shifts the mtime by up to 1 ms and the
+      // file would look written again. A real read never touches mtime at all.
+      await fs.utimes(old, new Date(Date.now() - 2 * HOUR), Math.floor(st.mtimeMs) / 1000);
+      await new Promise((r) => setTimeout(r, 200));
+      await fs.readFile(old);
+      await flush();
+      expect(changed.filter((p) => p === old).length).toBe(forwarded);
+    });
+
+    it("forwards a second real write even though the first was remembered", async () => {
+      const { old, changed } = await oldTranscriptWatched();
+      await fs.appendFile(old, "{}\n");
+      await waitFor(() => changed.filter((p) => p === old).length >= 1);
+      const first = changed.filter((p) => p === old).length;
+      await fs.appendFile(old, '{"more":true}\n');
+      await waitFor(() => changed.filter((p) => p === old).length > first);
+    });
+  });
 });
+

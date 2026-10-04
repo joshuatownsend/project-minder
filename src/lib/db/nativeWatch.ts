@@ -16,6 +16,13 @@ import path from "path";
 //     net, exactly as it was for chokidar.
 //   - No add/change/unlink distinction: `rename` means "something appeared or
 //     went away", so we `stat` to find out which.
+//   - Reads look like writes. On a volume with last-access updates enabled (the
+//     Windows default for large volumes: "System Managed"), the OS reports an
+//     access-time bump as a `change` just like a write. One full read of the
+//     corpus (a history-wide sweep) then queued a no-op reconcile for ~9-13k
+//     files and inflated `eventsHandled` (#604, reproduced with `utimes` and a
+//     plain `readFileSync`; a bare `stat` does not trigger it). `change` events
+//     are therefore gated on the file actually having been written, below.
 //   - No `awaitWriteFinish`. The caller's per-file debounce coalesces bursts, and
 //     the reconcile already tolerates a half-written trailing line (the sweep
 //     reads files with no stability gate at all).
@@ -34,6 +41,18 @@ export interface NativeWatch {
 }
 
 /**
+ * A `change` for a file whose mtime predates the watch by more than this cannot
+ * have been caused by a write made while we were watching, so it is an
+ * access-time or attribute event. Slack covers clock granularity and the window
+ * between the initial reconcile starting and the watch arming (a write in that
+ * window has an mtime inside the slack and is let through).
+ */
+export const WRITE_GATE_SLACK_MS = 5_000;
+
+/** Cap on remembered signatures; cleared wholesale if exceeded (it only dedupes). */
+const MAX_REMEMBERED_SIGNATURES = 50_000;
+
+/**
  * Start the watch, or return `null` when it cannot be established (the root is
  * missing, or recursive watching is unsupported here). Never throws: the caller
  * falls back to chokidar, which also copes with a root that appears later.
@@ -43,6 +62,37 @@ export function startNativeRecursiveWatch(
   handlers: NativeWatchHandlers
 ): NativeWatch | null {
   let watcher: fs.FSWatcher;
+  const armedAt = Date.now();
+  // Signature (`size:mtime`, in whole ms) of each file we have already passed on, so a read
+  // after a write is not mistaken for another write. Only files written during
+  // this process's lifetime ever get an entry, so it stays small.
+  const passed = new Map<string, string>();
+  let closed = false;
+
+  /**
+   * Forward a `change` only if the file was actually written. Fails open: if the
+   * file cannot be stat'ed, let the caller's own gate decide (a missing file will
+   * also have produced a `rename`, and the 30 s sweep is the net for the rest).
+   */
+  const forwardIfWritten = (filePath: string): void => {
+    fs.promises.stat(filePath).then(
+      (st) => {
+        if (closed) return;
+        if (st.mtimeMs < armedAt - WRITE_GATE_SLACK_MS) return; // access-time bump on an old file
+        // Whole milliseconds: tools that re-set a timestamp go through a `Date`, which
+        // drops the sub-millisecond part; a same-size rewrite within one ms is not real.
+        const sig = `${st.size}:${Math.floor(st.mtimeMs)}`;
+        if (passed.get(filePath) === sig) return; // read after a write we already forwarded
+        if (passed.size >= MAX_REMEMBERED_SIGNATURES) passed.clear();
+        passed.set(filePath, sig);
+        handlers.onChange(filePath);
+      },
+      () => {
+        if (!closed) handlers.onChange(filePath);
+      }
+    );
+  };
+
   try {
     watcher = fs.watch(root, { recursive: true, persistent: true }, (event, filename) => {
       // `filename` is relative to `root`, and can be null on some platforms.
@@ -50,7 +100,7 @@ export function startNativeRecursiveWatch(
       if (!filename || !filename.toString().endsWith(".jsonl")) return;
       const filePath = path.join(root, filename.toString());
       if (event === "change") {
-        handlers.onChange(filePath);
+        forwardIfWritten(filePath);
         return;
       }
       // `rename`: appeared or vanished. Deletion triggers a full prune pass, so
@@ -67,5 +117,10 @@ export function startNativeRecursiveWatch(
     return null;
   }
   watcher.on("error", (err) => handlers.onError(err));
-  return { close: () => watcher.close() };
+  return {
+    close: () => {
+      closed = true;
+      watcher.close();
+    },
+  };
 }
