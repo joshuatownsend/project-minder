@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.16.5] - 2026-10-04
+
+*A small release about a watcher that was reporting reads as writes. After v1.16.4 made boot trustworthy, measuring a live install showed `eventsHandled` jumping to 8-13k within minutes of a restart even though only one transcript had been written. The cause was Windows itself: with last-access updates enabled, the OS reports a file being merely read as a change, so the post-boot history sweeps looked like thousands of edits and each queued a pointless reconcile. The live watcher now forwards a change only if the file was actually written, so `eventsHandled` counts real writes and the reconcile queue stays quiet. Genuine appends are unaffected and the 30 s sweep remains the safety net.*
+
 ### Fixed
 
 - The live transcript watcher no longer queues a no-op reconcile for every access-time update (#604). On a Windows volume with last-access updates enabled, one full read of the transcripts (the history-wide sweeps after boot) was reported by the OS as thousands of file changes: `eventsHandled` in `/api/health` jumped to 8-13k within minutes of a restart with only one transcript actually written. A `change` is now forwarded only if the file was written after the watch started (its mtime is not older than the watch, less a 5 s slack) and its size/mtime differ from the last write already forwarded; real appends are unaffected, and the 30 s sweep remains the safety net. `eventsHandled` now counts real writes.
