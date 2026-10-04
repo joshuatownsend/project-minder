@@ -769,6 +769,27 @@ export function nextWorkerEnv(
   return workerEnvFor({ base });
 }
 
+/**
+ * Forget everything the previous isolate told us. A crash-respawn reuses this
+ * WorkerHostState, so without this the old isolate's memory/watcher snapshots
+ * would be served for the freshly spawned worker until its first
+ * `memory`/`started` message arrives — `/api/health` reporting a dead isolate's
+ * heap and watcherMode (Copilot, PR #563). They are cleared so the accessors
+ * report `null` (not stale) until the new worker speaks.
+ *
+ * `lastReadyAt` too (Codex, PR #601): `stopWorker()` reads it as "has the CURRENT
+ * worker reached ready", i.e. may it be mid-ingest. A stale value made a
+ * replacement that had not finished loading look force-terminated, withholding
+ * the clean marker for a worker that never touched the DB.
+ */
+export function resetPerWorkerState(
+  state: Pick<WorkerHostState, "memory" | "watcher" | "lastReadyAt">,
+): void {
+  state.memory = null;
+  state.watcher = null;
+  state.lastReadyAt = null;
+}
+
 function spawnAndAttach(state: WorkerHostState, entry: string): void {
   const worker = new Worker(entry, {
     stderr: false,
@@ -777,13 +798,7 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
   });
   state.worker = worker;
   state.startedAt = Date.now();
-  // A crash-respawn reuses this WorkerHostState, so the previous isolate's
-  // memory/watcher snapshots would otherwise be served for the freshly spawned
-  // worker until its first `memory`/`started` message arrives — `/api/health`
-  // reporting a dead isolate's heap and watcherMode (Copilot, PR #563). Clear
-  // them so the accessors report `null` (not stale) until the new worker speaks.
-  state.memory = null;
-  state.watcher = null;
+  resetPerWorkerState(state);
 
   state.readyPromise = new Promise<void>((resolve, reject) => {
     state.readyResolve = resolve;
