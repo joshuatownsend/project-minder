@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.16.4] - 2026-10-03
+
+*A release about the other half of slow boot. v1.16.3 cut the initial reconcile from 11-21 minutes to about 10 seconds, which exposed what was left of a ~3 minute boot after an unclean stop: the 2.6 GB index was getting its full integrity scan (`PRAGMA quick_check`) twice, once in the server and again in the ingest worker, and the clean-shutdown marker that lets a boot skip the scan was not being written because a slow worker stop could spend the entire shutdown budget before the database close ran. The worker no longer repeats a scan the server just did (only for the same file, only once per process, never below the small-database floor), and the database close now always gets its turn. A stop that cannot be confirmed clean, including a worker that had to be force-terminated, now removes the marker instead of risking trust in it. What this does not change: a Windows start-menu reboot still never reaches the server's shutdown code, so the marker still goes stale after a reboot and the server's own scan still runs; that needs a change in the tray app.*
+
 ### Fixed
 
 - Boot after an unclean stop no longer runs the full-index `PRAGMA quick_check` twice (#588). The ingest worker now skips its own check when the server verified the same index minutes earlier, saving ~30 s of a ~3 min boot on a 2.6 GB index.
