@@ -7,6 +7,7 @@ import { DB_DIR, DB_PATH, getDb, getDbError, closeDb, isDriverLoaded } from "./c
 import {
   clearCleanShutdownMarker,
   clearParentVerified,
+  dbIdentity,
   markParentVerified,
   parentVerifiedRecently,
   quickCheckForced,
@@ -1525,7 +1526,10 @@ export async function initDb(): Promise<InitResult> {
     cleanShutdown: cleanState.trusted,
     dbSizeBytes: dbFileSizeBytes(),
     force: quickCheckForced(),
-    verifiedByParent: parentVerifiedRecently({ isWorkerThread: !isMainThread }),
+    verifiedByParent: parentVerifiedRecently({
+      isWorkerThread: !isMainThread,
+      currentDbId: dbIdentity(DB_PATH),
+    }),
   });
   // Recorded as soon as the decision is made, not after the check completes:
   // the quarantine-then-failed-reopen path below returns early, and setting
@@ -1575,7 +1579,9 @@ export async function initDb(): Promise<InitResult> {
     pruneNotificationLog(db);
     // See `parentVerifiedRecently` in cleanShutdown.ts. A file we quarantined
     // and recreated (Path 1/2) is a different database: no stamp for it.
-    if (checkPassed && isMainThread && result.quarantined === null) markParentVerified();
+    if (checkPassed && isMainThread && result.quarantined === null) {
+      markParentVerified(Date.now(), dbIdentity(DB_PATH));
+    }
     return result;
   } catch (err) {
     // Path 3: SchemaVersionMissingError — meta table exists but stamp is

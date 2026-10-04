@@ -259,4 +259,46 @@ describe.skipIf(!driverAvailable)("quick_check skip — against a real database"
 
     life._resetLifecycleForTesting();
   });
+
+  // Copilot, PR #601: a main process with no open handle (MINDER_BOOTSTRAP=0 with
+  // worker-hosted ingest) returned early and never reached the marker cleanup.
+  it("removes an earlier marker on an uncertified stop even when this process never opened the DB", async () => {
+    const life = await import("@/lib/lifecycle");
+    life._resetLifecycleForTesting();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const first = await reloadModules();
+    await first.mig.initDb();
+    first.conn.checkpointAndCloseDb();
+    const markerPath = first.clean.markerPathFor(first.conn.DB_PATH);
+    expect(existsSync(markerPath)).toBe(true);
+
+    life.onShutdown("ingest", () => {
+      throw new Error("worker did not stop");
+    });
+    await life.shutdown("test");
+
+    // Fresh modules and NO initDb()/getDb(): there is no handle to flush.
+    const second = await reloadModules();
+    second.conn.checkpointAndCloseDb();
+    expect(existsSync(markerPath)).toBe(false);
+
+    life._resetLifecycleForTesting();
+  });
+
+  it("leaves a trusted marker alone when this process never opened the DB and the stop was clean", async () => {
+    const life = await import("@/lib/lifecycle");
+    life._resetLifecycleForTesting();
+    const first = await reloadModules();
+    await first.mig.initDb();
+    first.conn.checkpointAndCloseDb();
+    const markerPath = first.clean.markerPathFor(first.conn.DB_PATH);
+
+    const second = await reloadModules();
+    second.conn.checkpointAndCloseDb(); // no handle, nothing failed
+    expect(existsSync(markerPath)).toBe(true);
+  });
 });
+

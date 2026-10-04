@@ -273,6 +273,12 @@ export function shouldRunQuickCheck(opts: {
 /** Env var carrying the epoch-ms at which the server's own check passed. */
 export const PARENT_VERIFIED_ENV = "MINDER_QUICK_CHECK_VERIFIED_AT";
 
+/**
+ * Env var carrying the identity of the file the server verified (see
+ * {@link dbIdentity}). The worker skips only if it is opening THAT file.
+ */
+export const PARENT_VERIFIED_ID_ENV = "MINDER_QUICK_CHECK_VERIFIED_DB_ID";
+
 /** How long a parent verification stays believable to a worker. */
 export const PARENT_VERIFIED_MAX_AGE_MS = 15 * 60 * 1000;
 
@@ -284,6 +290,7 @@ export const PARENT_VERIFIED_MAX_AGE_MS = 15 * 60 * 1000;
 // would silently re-arm the skip. (Copilot + Codex, PR #601.)
 const gv = globalThis as unknown as {
   __minderParentVerifiedAt?: number;
+  __minderParentVerifiedId?: string;
   /**
    * Set the first time ANY worker spawn asks for the handoff, and never cleared
    * outside tests. Process-global rather than per-host-state on purpose: the
@@ -295,9 +302,36 @@ const gv = globalThis as unknown as {
   __minderParentVerifiedOffered?: boolean;
 };
 
-/** Record that this (main) process just verified or trusted the index. */
-export function markParentVerified(now: number = Date.now()): void {
+/**
+ * Identity of the database FILE at `dbPath` (device, file id, creation time) —
+ * deliberately NOT size or mtime, which legitimate writes move between the
+ * server's check and the worker's open. It changes if the file is replaced,
+ * restored over, or quarantined-and-recreated, which is exactly when a
+ * verification stops applying ("this boot, on this file", #588). Null when it
+ * cannot be read, and a null identity never authorises a skip.
+ */
+export function dbIdentity(dbPath: string): string | null {
+  try {
+    const st = statSync(dbPath, { bigint: true });
+    return `${st.dev}:${st.ino}:${st.birthtimeNs}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Record that this (main) process just verified or trusted the index file whose
+ * identity is `dbId`. Without an identity nothing is recorded: a bare timestamp
+ * cannot prove the worker is opening the same file (Copilot, PR #601).
+ */
+export function markParentVerified(now: number = Date.now(), dbId: string | null = null): void {
+  if (!dbId) {
+    delete gv.__minderParentVerifiedAt;
+    delete gv.__minderParentVerifiedId;
+    return;
+  }
   gv.__minderParentVerifiedAt = now;
+  gv.__minderParentVerifiedId = dbId;
 }
 
 /**
@@ -310,23 +344,27 @@ export function parentVerifiedEnvFor(opts: {
   maxAgeMs?: number;
 } = {}): Record<string, string> {
   const at = gv.__minderParentVerifiedAt;
+  const id = gv.__minderParentVerifiedId;
   delete gv.__minderParentVerifiedAt;
+  delete gv.__minderParentVerifiedId;
   const first = !gv.__minderParentVerifiedOffered;
   gv.__minderParentVerifiedOffered = true;
-  if (!first || typeof at !== "number") return {};
+  if (!first || typeof at !== "number" || !id) return {};
   const age = (opts.now ?? Date.now()) - at;
   if (age < 0 || age > (opts.maxAgeMs ?? PARENT_VERIFIED_MAX_AGE_MS)) return {};
-  return { [PARENT_VERIFIED_ENV]: String(at) };
+  return { [PARENT_VERIFIED_ENV]: String(at), [PARENT_VERIFIED_ID_ENV]: id };
 }
 
 /** Drop any pending stamp (a main-thread `initDb` is starting; nothing is proven yet). */
 export function clearParentVerified(): void {
   delete gv.__minderParentVerifiedAt;
+  delete gv.__minderParentVerifiedId;
 }
 
 /** Test-only: forget both the stamp and the "already offered" latch. */
 export function _resetParentVerifiedForTesting(): void {
   delete gv.__minderParentVerifiedAt;
+  delete gv.__minderParentVerifiedId;
   delete gv.__minderParentVerifiedOffered;
 }
 
@@ -343,12 +381,15 @@ export function workerEnvFor(opts: {
 } = {}): Record<string, string | undefined> {
   const env = { ...(opts.base ?? process.env) };
   delete env[PARENT_VERIFIED_ENV];
+  delete env[PARENT_VERIFIED_ID_ENV];
   return { ...env, ...parentVerifiedEnvFor({ now: opts.now }) };
 }
 
 /** True when running in a worker thread whose parent verified the index recently. */
 export function parentVerifiedRecently(opts: {
   isWorkerThread: boolean;
+  /** Identity of the file THIS process is about to check; must match the stamp's. */
+  currentDbId: string | null;
   env?: Record<string, string | undefined>;
   now?: number;
   maxAgeMs?: number;
@@ -357,6 +398,8 @@ export function parentVerifiedRecently(opts: {
   const raw = (opts.env ?? process.env)[PARENT_VERIFIED_ENV];
   // Whole-string match: parseInt would accept a numeric prefix ("123junk").
   if (typeof raw !== "string" || !/^\d{1,15}$/.test(raw)) return false;
+  const stampedId = (opts.env ?? process.env)[PARENT_VERIFIED_ID_ENV];
+  if (!opts.currentDbId || stampedId !== opts.currentDbId) return false;
   const age = (opts.now ?? Date.now()) - Number(raw);
   return age >= 0 && age <= (opts.maxAgeMs ?? PARENT_VERIFIED_MAX_AGE_MS);
 }

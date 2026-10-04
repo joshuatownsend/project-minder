@@ -259,7 +259,14 @@ export function closeDb(): void {
  */
 export function checkpointAndCloseDb(): void {
   const db = state.db;
-  if (!db) return; // driver missing, or no connection open — nothing to flush
+  if (!db) {
+    // Driver missing, or no connection open — nothing to flush. A main process
+    // with no handle (MINDER_BOOTSTRAP=0, worker-hosted ingest) can still have
+    // an uncertified stop, and an earlier clean marker would still match a DB
+    // this run never wrote — so clear it here too (Copilot, PR #601).
+    if (ordinaryDisposersFailed()) clearCleanShutdownMarker(DB_PATH);
+    return;
+  }
   try {
     // TRUNCATE resets the WAL to zero length after checkpointing, leaving the
     // cleanest on-disk state for the next open.
