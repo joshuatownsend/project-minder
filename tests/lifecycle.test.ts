@@ -3,6 +3,7 @@ import {
   onShutdown,
   shutdown,
   registeredDisposerCount,
+  ordinaryDisposersFailed,
   isShuttingDown,
   _resetLifecycleForTesting,
 } from "@/lib/lifecycle";
@@ -134,6 +135,111 @@ describe("shutdown timeout + budget", () => {
 
     expect(fast).toHaveBeenCalledTimes(1);
     expect(slow).toHaveBeenCalledTimes(1);
+  });
+
+  // The 2026-10-01 stop: a slow `ingest` disposer spent the whole shared 5 s, so
+  // the SQLite close (registered first, disposed last) was skipped and no
+  // clean-shutdown marker was written.
+  it("a hung ordinary disposer cannot starve a `final` one", async () => {
+    const close = vi.fn(); // registered first → disposed LAST, but final
+    const hang = vi.fn(() => new Promise<void>(() => {}));
+
+    onShutdown("close", close, { final: true });
+    onShutdown("hang", hang);
+
+    const p = shutdown("signal", { timeoutMs: 1000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    await p;
+
+    expect(hang).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("without a final disposer the whole budget stays available to ordinary ones", async () => {
+    let finished = false;
+    onShutdown("slowish", async () => {
+      await new Promise((r) => setTimeout(r, 950));
+      finished = true;
+    });
+
+    const p = shutdown("signal", { timeoutMs: 1000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    await p;
+
+    expect(finished).toBe(true);
+  });
+
+  // Copilot, PR #601: tasksDb runs before sqlite in LIFO order; a hung tasksDb
+  // must not spend the slice reserved for the sqlite close.
+  it("a hung `final` disposer cannot starve the next `final` one", async () => {
+    const sqlite = vi.fn(); // registered first → disposed LAST
+    const hangingFinal = vi.fn(() => new Promise<void>(() => {}));
+
+    onShutdown("sqlite", sqlite, { final: true });
+    onShutdown("tasksDb", hangingFinal, { final: true });
+
+    const p = shutdown("signal", { timeoutMs: 1000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    await p;
+
+    expect(hangingFinal).toHaveBeenCalledTimes(1);
+    expect(sqlite).toHaveBeenCalledTimes(1);
+  });
+
+  // Copilot, PR #601: a slow first disposer (ingest) must not make the producers
+  // behind it (dispatcher, caches) get skipped while the final DB closes still
+  // run — that closes the DBs under writers that were never told to stop.
+  it("a slow first ordinary disposer cannot cause later producers to be skipped", async () => {
+    const order: string[] = [];
+    onShutdown("sqlite", () => void order.push("sqlite"), { final: true }); // disposed LAST
+    onShutdown("dispatcher", () => void order.push("dispatcher")); // producer, mid-chain
+    onShutdown("cache", () => void order.push("cache")); // producer
+    onShutdown("ingest", () => new Promise<void>(() => {})); // disposed FIRST, hangs
+
+    const p = shutdown("signal", { timeoutMs: 1000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    await p;
+
+    // Both producers stopped, and strictly before the DB closed.
+    expect(order).toEqual(["cache", "dispatcher", "sqlite"]);
+  });
+
+  // Copilot, PR #601: a timed-out disposer's promise is not cancelled, so the SQLite
+  // close must be able to tell that a producer may not have quiesced.
+  it("reports a timed-out ordinary disposer, so the DB close can withhold the clean marker", async () => {
+    onShutdown("sqlite", () => {}, { final: true });
+    onShutdown("ingest", () => new Promise<void>(() => {}));
+
+    const p = shutdown("signal", { timeoutMs: 1000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    await p;
+
+    expect(ordinaryDisposersFailed()).toBe(true);
+  });
+
+  it("does not report when every ordinary disposer settles, or when only a final one fails", async () => {
+    onShutdown("sqlite", () => { throw new Error("close failed"); }, { final: true });
+    onShutdown("ingest", async () => {});
+
+    const p = shutdown("signal", { timeoutMs: 1000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    await p;
+
+    expect(ordinaryDisposersFailed()).toBe(false);
+  });
+
+  it("re-registering without `final` demotes the disposer", async () => {
+    const close = vi.fn();
+    const hang = vi.fn(() => new Promise<void>(() => {}));
+    onShutdown("close", close, { final: true });
+    onShutdown("close", close); // demoted: no reserve exists any more
+    onShutdown("hang", hang);
+
+    const p = shutdown("signal", { timeoutMs: 1000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    await p;
+
+    expect(close).not.toHaveBeenCalled();
   });
 });
 

@@ -288,11 +288,11 @@ async function registerServiceDisposers(): Promise<void> {
     onShutdown("sqlite", async () => {
       const { checkpointAndCloseDb } = await import("@/lib/db/connection");
       checkpointAndCloseDb();
-    });
+    }, { final: true });
     onShutdown("tasksDb", async () => {
       const { checkpointAndCloseTasksDb } = await import("@/lib/tasksDb/connection");
       await checkpointAndCloseTasksDb();
-    });
+    }, { final: true });
     onShutdown("dispatcher", async () => {
       const { isDispatcherRunning, stopDispatcher } = await import("@/lib/tasks/dispatcher");
       // await: stopDispatcher() resolves once any in-flight tick has settled,

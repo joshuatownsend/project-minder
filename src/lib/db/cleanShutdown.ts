@@ -244,13 +244,164 @@ export function shouldRunQuickCheck(opts: {
   cleanShutdown: boolean;
   dbSizeBytes: number;
   force?: boolean;
+  /** True when the parent (HTTP server) already verified this index moments ago. */
+  verifiedByParent?: boolean;
   /** Override for the always-check threshold; defaults to the env-aware value. */
   alwaysCheckBelowBytes?: number;
 }): boolean {
   if (opts.force) return true;
-  if (!opts.cleanShutdown) return true;
+  // The size floor comes first: below it the scan is milliseconds and stays
+  // unconditional, whoever else has verified (Copilot, PR #601).
   const threshold = opts.alwaysCheckBelowBytes ?? quickCheckAlwaysMaxBytes();
-  return opts.dbSizeBytes < threshold;
+  if (opts.dbSizeBytes < threshold) return true;
+  if (opts.verifiedByParent) return false;
+  return !opts.cleanShutdown;
+}
+
+// THE PARENT-VERIFIED HANDOFF (#588)
+//
+// After an unclean stop (a reboot kills the server without running disposers)
+// BOTH the HTTP server and the ingest worker thread open this DB at boot, and
+// each ran the full O(size) quick_check: 95 s then 31 s on the 2.6 GB index.
+// The worker's run adds no information — the server finished the same scan on
+// the same file seconds earlier — so the server records a timestamp in
+// process-local state and hands it to the FIRST worker it spawns as explicit
+// `env` (never via ambient `process.env` — see below). Worker-thread-only,
+// once-per-process, short-lived, and never consulted by the main thread, so a
+// later in-process `initDb()` (tests, the in-process fallback) still checks.
+
+/** Env var carrying the epoch-ms at which the server's own check passed. */
+export const PARENT_VERIFIED_ENV = "MINDER_QUICK_CHECK_VERIFIED_AT";
+
+/**
+ * Env var carrying the identity of the file the server verified (see
+ * {@link dbIdentity}). The worker skips only if it is opening THAT file.
+ */
+export const PARENT_VERIFIED_ID_ENV = "MINDER_QUICK_CHECK_VERIFIED_DB_ID";
+
+/** How long a parent verification stays believable to a worker. */
+export const PARENT_VERIFIED_MAX_AGE_MS = 15 * 60 * 1000;
+
+// The stamp is held in a process-local global and handed to the worker by
+// EXPLICIT `env` on its first spawn only (`parentVerifiedEnvFor`). It is never
+// written to `process.env`: an ambient value would be inherited by every later
+// `new Worker`, including a crash-respawn after a worker died mid-write, and
+// any main-thread `initDb()` that re-stamped it (a `probeInitStatus` retry)
+// would silently re-arm the skip. (Copilot + Codex, PR #601.)
+const gv = globalThis as unknown as {
+  __minderParentVerifiedAt?: number;
+  __minderParentVerifiedId?: string;
+  /**
+   * Set the first time ANY worker spawn asks for the handoff, and never cleared
+   * outside tests. Process-global rather than per-host-state on purpose: the
+   * supported idempotent `startWorker()` replace path builds a fresh host state,
+   * and a per-state flag would let that replacement worker inherit a stamp a
+   * later main-thread `initDb()` re-created — even after the old worker was
+   * force-terminated mid-write (Codex, PR #601).
+   */
+  __minderParentVerifiedOffered?: boolean;
+};
+
+/**
+ * Identity of the database FILE at `dbPath` (device, file id, creation time) —
+ * deliberately NOT size or mtime, which legitimate writes move between the
+ * server's check and the worker's open. It changes if the file is replaced,
+ * restored over, or quarantined-and-recreated, which is exactly when a
+ * verification stops applying ("this boot, on this file", #588). Null when it
+ * cannot be read, and a null identity never authorises a skip.
+ */
+export function dbIdentity(dbPath: string): string | null {
+  try {
+    const st = statSync(dbPath, { bigint: true });
+    return `${st.dev}:${st.ino}:${st.birthtimeNs}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Record that this (main) process just verified or trusted the index file whose
+ * identity is `dbId`. Without an identity nothing is recorded: a bare timestamp
+ * cannot prove the worker is opening the same file (Copilot, PR #601).
+ */
+export function markParentVerified(now: number = Date.now(), dbId: string | null = null): void {
+  if (!dbId) {
+    delete gv.__minderParentVerifiedAt;
+    delete gv.__minderParentVerifiedId;
+    return;
+  }
+  gv.__minderParentVerifiedAt = now;
+  gv.__minderParentVerifiedId = dbId;
+}
+
+/**
+ * The env additions for a worker spawn. Non-empty only for the FIRST spawn this
+ * process ever makes and only while the stamp is fresh; consumes the stamp (and
+ * the one chance to offer it) either way, so it cannot be offered twice.
+ */
+export function parentVerifiedEnvFor(opts: {
+  now?: number;
+  maxAgeMs?: number;
+} = {}): Record<string, string> {
+  const at = gv.__minderParentVerifiedAt;
+  const id = gv.__minderParentVerifiedId;
+  delete gv.__minderParentVerifiedAt;
+  delete gv.__minderParentVerifiedId;
+  const first = !gv.__minderParentVerifiedOffered;
+  gv.__minderParentVerifiedOffered = true;
+  if (!first || typeof at !== "number" || !id) return {};
+  const age = (opts.now ?? Date.now()) - at;
+  if (age < 0 || age > (opts.maxAgeMs ?? PARENT_VERIFIED_MAX_AGE_MS)) return {};
+  return { [PARENT_VERIFIED_ENV]: String(at), [PARENT_VERIFIED_ID_ENV]: id };
+}
+
+/** Drop any pending stamp (a main-thread `initDb` is starting; nothing is proven yet). */
+export function clearParentVerified(): void {
+  delete gv.__minderParentVerifiedAt;
+  delete gv.__minderParentVerifiedId;
+}
+
+/** Test-only: forget both the stamp and the "already offered" latch. */
+export function _resetParentVerifiedForTesting(): void {
+  delete gv.__minderParentVerifiedAt;
+  delete gv.__minderParentVerifiedId;
+  delete gv.__minderParentVerifiedOffered;
+}
+
+/**
+ * The environment for a worker spawn: a copy of `base` with any AMBIENT
+ * `MINDER_QUICK_CHECK_VERIFIED_AT` removed, plus the one-shot stamp when
+ * {@link parentVerifiedEnvFor} offers one. Stripping matters: a server launched
+ * with the variable already set would otherwise hand it to every worker,
+ * including crash-respawns (Codex + Copilot, PR #601).
+ */
+export function workerEnvFor(opts: {
+  base?: Record<string, string | undefined>;
+  now?: number;
+} = {}): Record<string, string | undefined> {
+  const env = { ...(opts.base ?? process.env) };
+  delete env[PARENT_VERIFIED_ENV];
+  delete env[PARENT_VERIFIED_ID_ENV];
+  return { ...env, ...parentVerifiedEnvFor({ now: opts.now }) };
+}
+
+/** True when running in a worker thread whose parent verified the index recently. */
+export function parentVerifiedRecently(opts: {
+  isWorkerThread: boolean;
+  /** Identity of the file THIS process is about to check; must match the stamp's. */
+  currentDbId: string | null;
+  env?: Record<string, string | undefined>;
+  now?: number;
+  maxAgeMs?: number;
+}): boolean {
+  if (!opts.isWorkerThread) return false;
+  const raw = (opts.env ?? process.env)[PARENT_VERIFIED_ENV];
+  // Whole-string match: parseInt would accept a numeric prefix ("123junk").
+  if (typeof raw !== "string" || !/^\d{1,15}$/.test(raw)) return false;
+  const stampedId = (opts.env ?? process.env)[PARENT_VERIFIED_ID_ENV];
+  if (!opts.currentDbId || stampedId !== opts.currentDbId) return false;
+  const age = (opts.now ?? Date.now()) - Number(raw);
+  return age >= 0 && age <= (opts.maxAgeMs ?? PARENT_VERIFIED_MAX_AGE_MS);
 }
 
 /** `MINDER_FORCE_QUICK_CHECK=1` — support escape hatch for a full scan. */

@@ -3,7 +3,12 @@ import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
 import type DatabaseT from "better-sqlite3";
-import { readCleanShutdownState, writeCleanShutdownMarker } from "./cleanShutdown";
+import {
+  clearCleanShutdownMarker,
+  readCleanShutdownState,
+  writeCleanShutdownMarker,
+} from "./cleanShutdown";
+import { ordinaryDisposersFailed } from "../lifecycle";
 
 // Local SQLite index for Project Minder. Sits at ~/.minder/index.db.
 //
@@ -254,7 +259,14 @@ export function closeDb(): void {
  */
 export function checkpointAndCloseDb(): void {
   const db = state.db;
-  if (!db) return; // driver missing, or no connection open — nothing to flush
+  if (!db) {
+    // Driver missing, or no connection open — nothing to flush. A main process
+    // with no handle (MINDER_BOOTSTRAP=0, worker-hosted ingest) can still have
+    // an uncertified stop, and an earlier clean marker would still match a DB
+    // this run never wrote — so clear it here too (Copilot, PR #601).
+    if (ordinaryDisposersFailed()) clearCleanShutdownMarker(DB_PATH);
+    return;
+  }
   try {
     // TRUNCATE resets the WAL to zero length after checkpointing, leaving the
     // cleanest on-disk state for the next open.
@@ -287,8 +299,20 @@ export function checkpointAndCloseDb(): void {
   // up. `cleanShutdown.test.ts` does pin the half that matters downstream — a
   // non-empty WAL is distrusted at open even when the marker matches perfectly
   // — so a marker that slipped through here would still not be believed.
-  if (readCleanShutdownState(DB_PATH).reason !== "wal-not-empty") {
+  //
+  // Also withheld when an ordinary disposer (ingest, above all) failed or timed
+  // out: its promise is not cancelled, so a producer may still be draining while
+  // we close. We close regardless — the process is exiting — but we do not
+  // certify a stop we could not confirm (Copilot, PR #601).
+  //
+  // Withholding is not enough on its own: the marker is deliberately
+  // non-consuming and bound to the DB file's size+mtime, so a marker left by an
+  // EARLIER clean stop still matches if this run wrote nothing. Whenever the stop
+  // cannot be certified, remove any existing marker (Copilot, PR #601).
+  if (!ordinaryDisposersFailed() && readCleanShutdownState(DB_PATH).reason !== "wal-not-empty") {
     writeCleanShutdownMarker(DB_PATH);
+  } else {
+    clearCleanShutdownMarker(DB_PATH);
   }
 }
 

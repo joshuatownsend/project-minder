@@ -236,8 +236,14 @@ async function registerIngestDisposer(): Promise<void> {
           if (drainTimer) clearTimeout(drainTimer);
         }
       }
-      await stopWorker();
+      const stopped = await stopWorker();
       await stopIngestWatcher();
+      // A worker that had to be force-terminated may have died mid-write. Fail
+      // the disposer (after the watcher is stopped) so lifecycle reports an
+      // un-quiesced producer and the SQLite close withholds the clean marker.
+      if (stopped?.forced) {
+        throw new Error("ingest worker did not exit within its grace period and was terminated");
+      }
     });
   } catch (err) {
     // eslint-disable-next-line no-console
@@ -291,7 +297,7 @@ const globalForWatcherStart = globalThis as unknown as {
  * stopping anyway. Short on purpose: the correctness guarantee is the
  * `isShuttingDown()` gate, not this wait.
  */
-const WATCHER_DRAIN_TIMEOUT_MS = 2_000;
+const WATCHER_DRAIN_TIMEOUT_MS = 1_000;
 
 function startInProcessWatcher(): Promise<void> {
   const existing = globalForWatcherStart.__minderWatcherStartInFlight;

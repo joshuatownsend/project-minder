@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Boot after an unclean stop no longer runs the full-index `PRAGMA quick_check` twice (#588). The ingest worker now skips its own check when the server verified the same index minutes earlier, saving ~30 s of a ~3 min boot on a 2.6 GB index.
+- A slow ingest-worker stop can no longer starve the SQLite close during graceful shutdown. Ordinary shutdown disposers now stop 1 s short of the 5 s budget so the `sqlite`/`tasksDb` closes (the ones that record the clean-shutdown marker) always get to run; each ordinary disposer keeps a 100 ms floor so producers still stop before the DBs close; the worker stop grace dropped from 5 s to 2 s and the watcher-start drain from 2 s to 1 s to fit. The clean-shutdown marker is withheld when an ordinary disposer (ingest above all) failed or timed out, or when the ingest worker had to be force-terminated after missing its grace period, since its work may still be draining, and any marker from an earlier clean stop is removed so it cannot vouch for this one; the DB still closes. The worker's `quick_check` handoff never applies below the 256 MB always-check floor. The handoff is bound to the verified database file's identity (device, file id, creation time), so a file replaced or restored in between is checked normally.
+
 ## [1.16.3] - 2026-10-01
 
 *A release about where the boot time actually went. v1.16.2 stopped the tray from crying wolf, but the initial index pass was still taking 11-21 minutes on a large history. Measuring it showed the cause was not the indexing work itself — chokidar's per-file watch setup starved the reconcile of I/O — so the watcher is now a single recursive OS watch on Windows and macOS, and a lab run on the real corpus finished the reconcile in about 25 seconds. This release also adds the per-phase timing line that found it.*

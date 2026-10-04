@@ -6,10 +6,15 @@ import type DatabaseT from "better-sqlite3";
 import { DB_DIR, DB_PATH, getDb, getDbError, closeDb, isDriverLoaded } from "./connection";
 import {
   clearCleanShutdownMarker,
+  clearParentVerified,
+  dbIdentity,
+  markParentVerified,
+  parentVerifiedRecently,
   quickCheckForced,
   readCleanShutdownState,
   shouldRunQuickCheck,
 } from "./cleanShutdown";
+import { isMainThread } from "worker_threads";
 import { renameWithRetry } from "../atomicWrite";
 import { resolveServerRoot } from "../serverRoot";
 import { sessionFileHomeKey } from "../platform";
@@ -1462,6 +1467,9 @@ function dbFileSizeBytes(): number {
 }
 
 export async function initDb(): Promise<InitResult> {
+  // A stamp from an earlier init proves nothing about whatever this one ends up
+  // opening (it may quarantine and recreate the file). Re-earn it on success.
+  if (isMainThread) clearParentVerified();
   const result: InitResult = {
     available: false,
     appliedMigrations: [],
@@ -1518,6 +1526,10 @@ export async function initDb(): Promise<InitResult> {
     cleanShutdown: cleanState.trusted,
     dbSizeBytes: dbFileSizeBytes(),
     force: quickCheckForced(),
+    verifiedByParent: parentVerifiedRecently({
+      isWorkerThread: !isMainThread,
+      currentDbId: dbIdentity(DB_PATH),
+    }),
   });
   // Recorded as soon as the decision is made, not after the check completes:
   // the quarantine-then-failed-reopen path below returns early, and setting
@@ -1526,6 +1538,11 @@ export async function initDb(): Promise<InitResult> {
   // database. The field describes the decision, so it belongs with it.
   result.quickCheckSkipped = !runQuickCheck;
 
+  // Whether THIS file passed (or was trusted past) the check. The handoff stamp
+  // is recorded only on the success return below, never earlier: a later
+  // quarantine replaces the file, and a stamp for the old one must not excuse
+  // the first worker from checking the new one (Copilot, PR #601).
+  let checkPassed = false;
   if (runQuickCheck) {
     const integrity = db.prepare("PRAGMA quick_check").get() as {
       quick_check?: string;
@@ -1544,7 +1561,11 @@ export async function initDb(): Promise<InitResult> {
         });
         return result;
       }
+    } else {
+      checkPassed = true;
     }
+  } else {
+    checkPassed = true; // trusted-clean skip is a verification too
   }
 
   try {
@@ -1556,6 +1577,11 @@ export async function initDb(): Promise<InitResult> {
     // which by definition appear when no migration is pending.
     liftOtelAttributeColumns(db);
     pruneNotificationLog(db);
+    // See `parentVerifiedRecently` in cleanShutdown.ts. A file we quarantined
+    // and recreated (Path 1/2) is a different database: no stamp for it.
+    if (checkPassed && isMainThread && result.quarantined === null) {
+      markParentVerified(Date.now(), dbIdentity(DB_PATH));
+    }
     return result;
   } catch (err) {
     // Path 3: SchemaVersionMissingError — meta table exists but stamp is

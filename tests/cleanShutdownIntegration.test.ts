@@ -194,4 +194,111 @@ describe.skipIf(!driverAvailable)("quick_check skip — against a real database"
       expect(statSync(wal).size).toBe(0);
     }
   });
+
+  // Copilot, PR #601: the first ingest worker may skip quick_check only if the
+  // file it will open is the one the server verified.
+  it("stamps the worker handoff after a successful open", async () => {
+    const { mig, conn, clean } = await reloadModules();
+    const result = await mig.initDb();
+    expect(result.available).toBe(true);
+    expect(clean.parentVerifiedEnvFor()).toHaveProperty(
+      clean.PARENT_VERIFIED_ENV,
+    );
+    conn.closeDb();
+  });
+
+  it("does NOT stamp the handoff when the file was quarantined and recreated", async () => {
+    const first = await reloadModules();
+    await first.mig.initDb();
+    // The first init stamped successfully and nothing consumed it (no worker has
+    // spawned yet) — the second init, which quarantines, must not inherit it.
+    expect(first.clean.parentVerifiedEnvFor()).not.toEqual({});
+    first.clean._resetParentVerifiedForTesting(); // un-latch the probe above
+    first.clean.markParentVerified();
+    const db1 = await first.conn.getDb();
+    // Wipe the version stamp: the next initDb passes quick_check, THEN hits
+    // SchemaVersionMissingError and quarantines — the stamp must not survive.
+    db1!.prepare("DELETE FROM meta WHERE key='schema_version'").run();
+    first.conn.closeDb();
+
+    const second = await reloadModules();
+    const result = await second.mig.initDb();
+    expect(result.quarantined).not.toBeNull();
+    expect(second.clean.parentVerifiedEnvFor()).toEqual({});
+    second.conn.closeDb();
+  });
+
+  it("withholds the clean marker, and removes an earlier one, when an ordinary disposer failed to quiesce", async () => {
+    const life = await import("@/lib/lifecycle");
+    life._resetLifecycleForTesting();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // A previous, genuinely clean stop leaves a trusted marker behind.
+    const first = await reloadModules();
+    await first.mig.initDb();
+    first.conn.checkpointAndCloseDb();
+    const markerPath = first.clean.markerPathFor(first.conn.DB_PATH);
+    expect(existsSync(markerPath)).toBe(true);
+
+    // This run: the DB is reopened (trusted marker, no write), then a producer
+    // fails to quiesce on shutdown.
+    life.onShutdown("ingest", () => {
+      throw new Error("worker did not stop");
+    });
+    await life.shutdown("test");
+    expect(life.ordinaryDisposersFailed()).toBe(true);
+
+    const second = await reloadModules();
+    await second.mig.initDb();
+    second.conn.checkpointAndCloseDb();
+    // The close ran, but a stop we could not confirm is not certified — and the
+    // old marker, which still matches an unwritten DB, must not survive it.
+    expect(existsSync(markerPath)).toBe(false);
+
+    life._resetLifecycleForTesting();
+  });
+
+  // Copilot, PR #601: a main process with no open handle (MINDER_BOOTSTRAP=0 with
+  // worker-hosted ingest) returned early and never reached the marker cleanup.
+  it("removes an earlier marker on an uncertified stop even when this process never opened the DB", async () => {
+    const life = await import("@/lib/lifecycle");
+    life._resetLifecycleForTesting();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const first = await reloadModules();
+    await first.mig.initDb();
+    first.conn.checkpointAndCloseDb();
+    const markerPath = first.clean.markerPathFor(first.conn.DB_PATH);
+    expect(existsSync(markerPath)).toBe(true);
+
+    life.onShutdown("ingest", () => {
+      throw new Error("worker did not stop");
+    });
+    await life.shutdown("test");
+
+    // Fresh modules and NO initDb()/getDb(): there is no handle to flush.
+    const second = await reloadModules();
+    second.conn.checkpointAndCloseDb();
+    expect(existsSync(markerPath)).toBe(false);
+
+    life._resetLifecycleForTesting();
+  });
+
+  it("leaves a trusted marker alone when this process never opened the DB and the stop was clean", async () => {
+    const life = await import("@/lib/lifecycle");
+    life._resetLifecycleForTesting();
+    const first = await reloadModules();
+    await first.mig.initDb();
+    first.conn.checkpointAndCloseDb();
+    const markerPath = first.clean.markerPathFor(first.conn.DB_PATH);
+
+    const second = await reloadModules();
+    second.conn.checkpointAndCloseDb(); // no handle, nothing failed
+    expect(existsSync(markerPath)).toBe(true);
+  });
 });
+

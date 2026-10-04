@@ -19,6 +19,7 @@ const startIngestWatcher = vi.fn(async (_opts?: WatcherOpts) => {
   await watcherGate;
   return { running: true, initialReconcileMs: null };
 });
+const stopWorker = vi.fn(async (): Promise<{ forced: boolean } | void> => {});
 const startWorker = vi.fn(async () => ({ running: true, workerEntry: "w.mjs" }));
 
 vi.mock("@/lib/db/ingestWatcher", () => ({
@@ -27,7 +28,7 @@ vi.mock("@/lib/db/ingestWatcher", () => ({
 }));
 vi.mock("@/lib/db/workerHost", () => ({
   startWorker,
-  stopWorker: vi.fn(async () => {}),
+  stopWorker,
   onWorkerMessage: vi.fn(),
 }));
 /** Flips the gate that decides whether the ingest shutdown disposer registers. */
@@ -241,6 +242,23 @@ describe("startIngest — ingest startup must not block register() (#413)", () =
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("fails the ingest disposer when the worker had to be force-terminated (Codex, PR #601)", async () => {
+    // A terminate() can land inside a better-sqlite3 write. The disposer must
+    // reject so lifecycle reports an un-quiesced producer and the SQLite close
+    // withholds the clean marker — stopWorker() resolving normally is not enough.
+    bootstrapRan = true;
+    const { startIngest } = await import("../instrumentation-node");
+    await startIngest();
+    await waitForWatcherCall();
+    const disposer = onShutdown.mock.calls.find((c) => c[0] === "ingest")?.[1] as () => Promise<void>;
+
+    stopWorker.mockResolvedValueOnce({ forced: true });
+    await expect(disposer()).rejects.toThrow(/terminated/);
+
+    stopWorker.mockResolvedValueOnce({ forced: false });
+    await expect(disposer()).resolves.toBeUndefined();
   });
 
   it("starts no watcher at all when MINDER_INDEXER=0", async () => {

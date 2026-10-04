@@ -1,9 +1,22 @@
+## 2026-10-03 18:00 | slow-boot | Verify the clean-shutdown marker and single quick_check after installing the #588 fix (PR #601)
+
+- [ ] After the release containing PR #601 is installed, do a graceful tray Quit (or restart from the tray), then check `~/.minder/index.db.clean`
+  Its mtime/`closedAt` should be the moment of the stop. Before the fix it was stuck at 2026-09-30 13:14Z because a slow `ingest` disposer spent the whole 5 s shutdown budget and the `sqlite` close was skipped. Also check `minder.log`: the `shutdown initiated` block should end with `disposer ok` for `sqlite`, no `skipped (shutdown budget exhausted)` lines.
+- [ ] After an UNCLEAN stop (reboot, or `taskkill /F`), confirm only ONE `quick_check` runs at the next boot
+  In `minder.log` the `watcher armed after N ms` line's `phaseMs.initDb` should be near 0 (it was 31,401 ms at the 2026-10-03 16:42 EDT boot, when the worker repeated the server's 95 s scan). `db: probed` (the server's own check) will still be slow after an unclean stop — that is expected until the tray handles Windows session end (not yet built).
+- [ ] Decide on the follow-up: make a start-menu reboot run the graceful stop
+  A reboot never reaches the server's disposers (the tray prevents implicit exits and does not handle Windows session end), so the marker still goes stale on every reboot. Needs a Rust change in `src-tauri/src/main.rs` / `supervisor.rs`, with a ~6 s stop window.
+
+---
+
 ## 2026-10-01 01:19 | slow-boot | Confirm the native recursive watch fixes the slow initial reconcile (#595)
 
-- [ ] After the release containing this change is installed and the tray restarted (or the machine rebooted), check `http://localhost:4100/api/health`
+- [x] After the release containing this change is installed and the tray restarted (or the machine rebooted), check `http://localhost:4100/api/health`
   `ingest.watcherMode` should be `"native"` immediately (it used to sit on `"arming"` for minutes).
-- [ ] Check `~/.minder/logs/minder.log` for the `reconcile finished in N ms` line
+  Result 2026-10-03 (16:42 EDT reboot, v1.16.3): `ingest.mode` `"worker"`, `watcherMode` `"native"`, `crashesLastHour` 0, `initialReconcileMs` 10307.
+- [x] Check `~/.minder/logs/minder.log` for the `reconcile finished in N ms` line
   Expect tens of seconds, not the 689 -> 849 -> 1261 s seen before. Lab measurement on the real corpus: 24.9 s total, 20.4 s of it in `prune` (a separate open question - the next thing to look at).
+  Result 2026-10-03: `reconcile finished in 10302 ms` (`prune` 90 ms, so the 20 s was chokidar contention). `watcher armed after 31403 ms`. The remaining ~3.3 min of slow boot is `PRAGMA quick_check` (main probe 95 s + worker initDb 31 s) because the clean-shutdown marker is stale (#588).
 - [ ] Edit a transcript (any Claude Code session) and confirm the dashboard sees it without waiting for the 30 s sweep
   Not covered by the lab run: it only measured the reconcile, not live event delivery on the real tree.
 

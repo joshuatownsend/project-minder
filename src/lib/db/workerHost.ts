@@ -2,6 +2,7 @@ import "server-only";
 import path from "path";
 import { Worker } from "node:worker_threads";
 import { serviceLog, type LogEntry } from "@/lib/serviceLog";
+import { workerEnvFor } from "@/lib/db/cleanShutdown";
 import type { IngestWatcherMode } from "@/lib/types/init";
 
 // Main-thread orchestrator for the ingest worker.
@@ -70,7 +71,14 @@ export const DEFAULT_START_TIMEOUT_MS = 300_000;
 // a documented DB-corruption vector (FTS5 shadow tables are the usual
 // casualty) — so a clean `process.exit(0)` between transactions is
 // strongly preferred.
-const STOP_GRACE_MS = 5_000;
+//
+// Must fit INSIDE the ingest disposer's slice of the shutdown budget
+// (lifecycle's SHUTDOWN_TIMEOUT_MS less FINAL_RESERVE_MS and the floors owed to
+// the six ordinary disposers behind ingest = 3.4 s), together with the
+// watcher-start drain (WATCHER_DRAIN_TIMEOUT_MS = 1 s in instrumentation-node.ts).
+// At 5 s — the whole budget — a mid-ingest worker starved the SQLite close, so
+// no clean-shutdown marker was written and the next boot ran a full quick_check.
+const STOP_GRACE_MS = 2_000;
 const CRASH_RESPAWN_BACKOFF_MS = [500, 2_000, 10_000];
 const MAX_RESPAWNS_PER_HOUR = 5;
 const ONE_HOUR_MS = 60 * 60 * 1000;
@@ -518,14 +526,26 @@ async function sendStartHandshake(
   });
 }
 
+export interface StopWorkerResult {
+  /**
+   * True when a worker that had reached `ready` did not exit within the grace
+   * period and had to be `terminate()`d. Such a worker may have been killed
+   * inside a better-sqlite3 write, so the caller must not certify the shutdown
+   * as clean (Codex, PR #601). A worker that never reached `ready` is not
+   * running ingest, so terminating it is not "forced".
+   */
+  forced: boolean;
+}
+
 /**
  * Terminate the worker if running. Suppresses crash-respawn. Idempotent.
  * Rejects any pending readyPromise so a stop-during-startup unblocks
  * the awaiting caller immediately.
  */
-export async function stopWorker(): Promise<void> {
+export async function stopWorker(): Promise<StopWorkerResult> {
   const state = g.__minderWorker;
-  if (!state) return;
+  if (!state) return { forced: false };
+  let forced = false;
   state.stopping = true;
   if (state.respawnTimer) {
     clearTimeout(state.respawnTimer);
@@ -577,6 +597,7 @@ export async function stopWorker(): Promise<void> {
       ]);
     }
     if (!exited) {
+      forced = state.lastReadyAt !== null;
       try {
         await worker.terminate();
       } catch {
@@ -586,6 +607,7 @@ export async function stopWorker(): Promise<void> {
     state.worker = null;
   }
   delete g.__minderWorker;
+  return { forced };
 }
 
 export function getWorkerStatus(): WorkerHostStatus {
@@ -732,17 +754,51 @@ function isFiniteNumber(x: unknown): x is number {
   return typeof x === "number" && Number.isFinite(x);
 }
 
-function spawnAndAttach(state: WorkerHostState, entry: string): void {
-  const worker = new Worker(entry, { stderr: false, stdout: false });
-  state.worker = worker;
-  state.startedAt = Date.now();
-  // A crash-respawn reuses this WorkerHostState, so the previous isolate's
-  // memory/watcher snapshots would otherwise be served for the freshly spawned
-  // worker until its first `memory`/`started` message arrives — `/api/health`
-  // reporting a dead isolate's heap and watcherMode (Copilot, PR #563). Clear
-  // them so the accessors report `null` (not stale) until the new worker speaks.
+/**
+ * The environment for the next worker spawn. The server's "index already
+ * verified" stamp goes to the first worker THIS PROCESS EVER SPAWNS and to no
+ * other — not a crash-respawn, not an `startWorker()` replacement host (the
+ * previous worker may have died mid-write). Those evaluate the real
+ * clean-shutdown state (#601). The once-only latch is process-global (see
+ * `cleanShutdown.ts`); this wrapper exists so the wiring is testable without
+ * spawning a thread.
+ */
+export function nextWorkerEnv(
+  base?: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+  return workerEnvFor({ base });
+}
+
+/**
+ * Forget everything the previous isolate told us. A crash-respawn reuses this
+ * WorkerHostState, so without this the old isolate's memory/watcher snapshots
+ * would be served for the freshly spawned worker until its first
+ * `memory`/`started` message arrives — `/api/health` reporting a dead isolate's
+ * heap and watcherMode (Copilot, PR #563). They are cleared so the accessors
+ * report `null` (not stale) until the new worker speaks.
+ *
+ * `lastReadyAt` too (Codex, PR #601): `stopWorker()` reads it as "has the CURRENT
+ * worker reached ready", i.e. may it be mid-ingest. A stale value made a
+ * replacement that had not finished loading look force-terminated, withholding
+ * the clean marker for a worker that never touched the DB.
+ */
+export function resetPerWorkerState(
+  state: Pick<WorkerHostState, "memory" | "watcher" | "lastReadyAt">,
+): void {
   state.memory = null;
   state.watcher = null;
+  state.lastReadyAt = null;
+}
+
+function spawnAndAttach(state: WorkerHostState, entry: string): void {
+  const worker = new Worker(entry, {
+    stderr: false,
+    stdout: false,
+    env: nextWorkerEnv(),
+  });
+  state.worker = worker;
+  state.startedAt = Date.now();
+  resetPerWorkerState(state);
 
   state.readyPromise = new Promise<void>((resolve, reject) => {
     state.readyResolve = resolve;

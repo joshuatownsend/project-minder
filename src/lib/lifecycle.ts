@@ -46,6 +46,17 @@ export type DisposerFn = () => void | Promise<void>;
 interface LifecycleState {
   /** Insertion-ordered; keyed by name so re-registration replaces in place. */
   disposers: Map<string, DisposerFn>;
+  /**
+   * Names registered with `{ final: true }`. Optional because an HMR re-run can
+   * find a `globalThis` state object created before this field existed.
+   */
+  finalNames?: Set<string>;
+  /**
+   * Ordinary (non-final) disposers that failed, timed out, or were skipped in
+   * the current shutdown. A timed-out disposer's promise is NOT cancelled, so a
+   * producer in this set may still be running when the `final` DB closes fire.
+   */
+  failedOrdinary?: Set<string>;
   shuttingDown: boolean;
   handlersInstalled: boolean;
   /**
@@ -77,8 +88,41 @@ export const SHUTDOWN_TIMEOUT_MS = 5_000;
  * again replaces the function without adding a second entry or changing its
  * position in the LIFO order (survives HMR re-runs of the bootstrap).
  */
-export function onShutdown(name: string, fn: DisposerFn): void {
+export function onShutdown(
+  name: string,
+  fn: DisposerFn,
+  opts?: { final?: boolean },
+): void {
   state.disposers.set(name, fn);
+  state.finalNames ??= new Set();
+  if (opts?.final) state.finalNames.add(name);
+  else state.finalNames.delete(name);
+}
+
+/**
+ * Share of the overall budget (capped at {@link FINAL_RESERVE_MS}) held back
+ * from ordinary disposers so `final` ones can still run. A slow early disposer
+ * used to spend the whole shared deadline, and the SQLite close — registered
+ * first, so disposed last — was skipped; that close is what records the
+ * clean-shutdown marker, so the next boot paid a multi-minute `quick_check`.
+ */
+export const FINAL_RESERVE_MS = 1_000;
+
+/**
+ * Budget each ordinary disposer is guaranteed while `final` ones exist (scaled
+ * down for short budgets). Producers' stop hooks are synchronous and cheap, so
+ * this is ample; it is carved out of whichever earlier disposer is slow.
+ */
+export const ORDINARY_FLOOR_MS = 100;
+
+/**
+ * True when any ordinary disposer failed, timed out, or was skipped in the
+ * current shutdown — i.e. a producer may not have quiesced. The SQLite close
+ * uses this to withhold the clean-shutdown marker: it still closes, but it does
+ * not certify a stop it could not confirm (Copilot, PR #601).
+ */
+export function ordinaryDisposersFailed(): boolean {
+  return (state.failedOrdinary?.size ?? 0) > 0;
 }
 
 export function registeredDisposerCount(): number {
@@ -92,6 +136,8 @@ export function isShuttingDown(): boolean {
 /** Test-only reset hook. */
 export function _resetLifecycleForTesting(): void {
   state.disposers.clear();
+  state.finalNames = new Set();
+  state.failedOrdinary = new Set();
   state.shuttingDown = false;
   state.handlersInstalled = false;
   state.shutdownPromise = null;
@@ -142,8 +188,34 @@ async function runShutdown(
 
   // LIFO: reverse of registration order.
   const entries = [...state.disposers.entries()].reverse();
+  const finalNames = state.finalNames ?? new Set<string>();
+  state.failedOrdinary = new Set();
+  const reserveMs =
+    finalNames.size > 0 ? Math.min(FINAL_RESERVE_MS, Math.floor(overallMs * 0.2)) : 0;
+  let finalsLeft = entries.filter(([name]) => finalNames.has(name)).length;
+  let ordinaryLeft = entries.length - finalsLeft;
+  // With `final` disposers present, every ordinary disposer still to run keeps a
+  // small floor of the budget. Without it a slow first disposer (ingest) can
+  // spend its whole slice and the producers behind it (dispatcher, caches,
+  // watchers) are skipped while the `final` DB closes still run — closing the
+  // DBs under writers that were never told to stop (Copilot, PR #601).
+  const floorMs = finalsLeft > 0 ? Math.min(ORDINARY_FLOOR_MS, Math.floor(overallMs * 0.02)) : 0;
   for (const [name, fn] of entries) {
-    const remaining = deadline - Date.now();
+    // Ordinary disposers stop short of the reserve and of the floors owed to the
+    // ordinary disposers behind them. Final ones split whatever is left evenly
+    // among those still to run, so one hanging `final` (tasksDb runs before
+    // sqlite in LIFO order) cannot spend the slice meant for the next — the last
+    // one still gets everything that remains.
+    const isFinal = finalNames.has(name);
+    const left = deadline - Date.now();
+    let remaining: number;
+    if (isFinal) {
+      remaining = Math.floor(left / finalsLeft);
+      finalsLeft--;
+    } else {
+      ordinaryLeft--;
+      remaining = left - reserveMs - floorMs * ordinaryLeft;
+    }
     const start = Date.now();
 
     if (remaining <= 0) {
@@ -155,6 +227,7 @@ async function runShutdown(
         ok: false,
         ms: 0,
       });
+      if (!isFinal) state.failedOrdinary.add(name);
       continue;
     }
 
@@ -178,6 +251,7 @@ async function runShutdown(
         ms: Date.now() - start,
         error: (err as Error).message,
       });
+      if (!isFinal) state.failedOrdinary.add(name);
     }
   }
 
