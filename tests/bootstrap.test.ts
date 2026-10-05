@@ -55,15 +55,23 @@ vi.mock("@/lib/mcpHealthEnqueue", () => ({
 vi.mock("@/lib/claudeStatus/cache", () => ({
   getCurrentStatus: vi.fn().mockResolvedValue({ source: "live" }),
 }));
+// Real lifecycle, except `isShuttingDown` is a spy: one test makes it throw from
+// inside the detached boot sequence, where no step's own try/catch covers it.
+vi.mock("@/lib/lifecycle", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/lifecycle")>()),
+  isShuttingDown: vi.fn(() => false),
+}));
 
 import {
   shouldBootstrap,
   shouldInstallServiceLifecycle,
   runBootstrap,
+  awaitBootSteps,
   _resetBootstrapForTesting,
 } from "@/lib/bootstrap";
 import { demoMode } from "@/lib/demo/demoMode";
 import { probeInitStatus } from "@/lib/data";
+import { isShuttingDown } from "@/lib/lifecycle";
 import { scanAllProjects } from "@/lib/scanner";
 import { setCachedScan } from "@/lib/cache";
 import { readConfig } from "@/lib/config";
@@ -188,6 +196,7 @@ describe("runBootstrap (orchestration + idempotency)", () => {
     vi.stubEnv("MINDER_BOOTSTRAP", undefined);
 
     await runBootstrap();
+    await awaitBootSteps();
 
     expect(scanAllProjects).not.toHaveBeenCalled();
     expect(manualStepsWatcher.init).not.toHaveBeenCalled();
@@ -198,6 +207,7 @@ describe("runBootstrap (orchestration + idempotency)", () => {
     vi.mocked(demoMode).mockResolvedValue(true);
 
     await runBootstrap();
+    await awaitBootSteps();
 
     expect(probeInitStatus).not.toHaveBeenCalled();
     expect(scanAllProjects).not.toHaveBeenCalled();
@@ -211,6 +221,7 @@ describe("runBootstrap (orchestration + idempotency)", () => {
     vi.stubEnv("NODE_ENV", "production");
 
     await runBootstrap();
+    await awaitBootSteps();
 
     expect(probeInitStatus).toHaveBeenCalledTimes(1);
     expect(scanAllProjects).toHaveBeenCalledTimes(1);
@@ -245,6 +256,7 @@ describe("runBootstrap (orchestration + idempotency)", () => {
       .mockResolvedValueOnce(cfg);
 
     await runBootstrap();
+    await awaitBootSteps();
 
     expect(mcpConfigWatcher.ensureStarted).not.toHaveBeenCalled();
     expect(enqueueMcpHealth).not.toHaveBeenCalled();
@@ -267,6 +279,7 @@ describe("runBootstrap (orchestration + idempotency)", () => {
       .mockResolvedValueOnce(cfg);
 
     await runBootstrap();
+    await awaitBootSteps();
 
     expect(mcpConfigWatcher.ensureStarted).toHaveBeenCalledTimes(1);
     expect(enqueueMcpHealth).toHaveBeenCalledTimes(1);
@@ -284,6 +297,7 @@ describe("runBootstrap (orchestration + idempotency)", () => {
     });
 
     await runBootstrap();
+    await awaitBootSteps();
 
     expect(enqueueProjectCaches).toHaveBeenCalledTimes(1);
     expect(enqueueProjectCaches).toHaveBeenCalledWith(
@@ -296,8 +310,11 @@ describe("runBootstrap (orchestration + idempotency)", () => {
     vi.stubEnv("NODE_ENV", "production");
 
     await runBootstrap();
+    await awaitBootSteps();
     await runBootstrap();
+    await awaitBootSteps();
     await runBootstrap();
+    await awaitBootSteps();
 
     expect(scanAllProjects).toHaveBeenCalledTimes(1);
     expect(manualStepsWatcher.init).toHaveBeenCalledTimes(1);
@@ -308,11 +325,60 @@ describe("runBootstrap (orchestration + idempotency)", () => {
     vi.stubEnv("NODE_ENV", "production");
 
     await runBootstrap();
+    await awaitBootSteps();
     expect(scanAllProjects).toHaveBeenCalledTimes(1);
 
     _resetBootstrapForTesting();
     await runBootstrap();
+    await awaitBootSteps();
     expect(scanAllProjects).toHaveBeenCalledTimes(2);
+  });
+
+  // Next holds every request until register() resolves, so anything runBootstrap
+  // awaits is time /api/health answers nothing (the tray's "slow to respond").
+  it("returns once the DB is probed, without waiting for the project scan", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    let finishScan!: () => void;
+    vi.mocked(scanAllProjects).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishScan = () =>
+            resolve({
+              projects: [],
+              portConflicts: [],
+              hiddenCount: 0,
+              scannedAt: "2026-01-01T00:00:00.000Z",
+              catalogLintFindings: [],
+            });
+        })
+    );
+
+    await runBootstrap(); // would hang here if the scan were still on the critical path
+
+    expect(probeInitStatus).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(scanAllProjects).toHaveBeenCalledTimes(1));
+    // Scan still pending: nothing downstream of it has started.
+    expect(manualStepsWatcher.init).not.toHaveBeenCalled();
+    expect(getCurrentStatus).not.toHaveBeenCalled();
+
+    finishScan();
+    await awaitBootSteps();
+
+    expect(setCachedScan).toHaveBeenCalledTimes(1);
+    expect(manualStepsWatcher.init).toHaveBeenCalledTimes(1);
+    expect(getCurrentStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let a failure in the detached steps escape as an unhandled rejection", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    // 1st call: the check right after bootDb in runBootstrap. 2nd: inside the detached
+    // sequence, outside every step's own try/catch, so only the outer .catch covers it.
+    vi.mocked(isShuttingDown).mockReturnValueOnce(false).mockImplementationOnce(() => {
+      throw new Error("boom outside any step");
+    });
+
+    await runBootstrap();
+    await expect(awaitBootSteps()).resolves.toBeUndefined();
   });
 
   it("one subsystem failing does not prevent the others from starting", async () => {
@@ -320,6 +386,7 @@ describe("runBootstrap (orchestration + idempotency)", () => {
     vi.mocked(scanAllProjects).mockRejectedValueOnce(new Error("scan boom"));
 
     await expect(runBootstrap()).resolves.not.toThrow();
+    await awaitBootSteps();
 
     expect(manualStepsWatcher.init).toHaveBeenCalledTimes(1);
     expect(mcpConfigWatcher.ensureStarted).toHaveBeenCalledTimes(1);

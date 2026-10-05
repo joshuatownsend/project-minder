@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The server answers `/api/health` within seconds of starting instead of after the project scan (#584). Next holds every request until `register()` returns, and the boot warm-up awaited the whole project scan (~72 s on 63 projects, almost all of it one `claudelint` process per project) before reaching the dispatcher, the ingest worker and the first request, which is the "slow to respond" minute after every start. Only the DB probe stays on that path now; the scan, background caches and watchers run detached, and a failure in them is logged rather than crashing the process.
+- Concurrent project scans are now one scan. A full scan is ~60 s of CPU and callers routinely arrive while one is running (the boot warm-up, now detached, and ~20 routes that fall back to scanning on a cold cache), so each used to start its own. They share the in-flight scan; a rescan requested after a cache invalidation (a config edit, a board write) never joins a scan that began before it.
+
 ## [1.16.5] - 2026-10-04
 
 *A small release about a watcher that was reporting reads as writes. After v1.16.4 made boot trustworthy, measuring a live install showed `eventsHandled` jumping to 8-13k within minutes of a restart even though only one transcript had been written. The cause was Windows itself: with last-access updates enabled, the OS reports a file being merely read as a change, so the post-boot history sweeps looked like thousands of edits and each queued a pointless reconcile. The live watcher now forwards a change only if the file was actually written, so `eventsHandled` counts real writes and the reconcile queue stays quiet. Genuine appends are unaffected and the 30 s sweep remains the safety net.*

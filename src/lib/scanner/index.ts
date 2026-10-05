@@ -419,7 +419,32 @@ function detectPortConflicts(projects: ProjectData[]): PortConflict[] {
   return conflicts.sort((a, b) => a.port - b.port);
 }
 
-export async function scanAllProjects(): Promise<ScanResult> {
+// One scan at a time, shared by every caller. A scan is ~60 s of CPU on a large
+// tree (one lint process per project), and the callers that arrive while it runs
+// are not rare: the boot warm-up now runs detached from `register()`, so the first
+// dashboard load usually lands in the middle of it, and ~20 routes fall back to
+// `scanAllProjects()` on a cold cache. Without sharing, each started its own.
+// Keyed to the cache generation so a rescan requested AFTER an `invalidateCache()`
+// (a config edit, a board write) never joins a scan that began before it and may
+// have read the old state. On `globalThis` because the instrumentation bundle and
+// the route bundles each get their own copy of this module.
+const scanShare = globalThis as unknown as {
+  __scanInFlight?: { generation: number; promise: Promise<ScanResult> };
+  __scanGeneration?: number;
+};
+
+export function scanAllProjects(): Promise<ScanResult> {
+  const generation = scanShare.__scanGeneration ?? 0;
+  const inFlight = scanShare.__scanInFlight;
+  if (inFlight && inFlight.generation === generation) return inFlight.promise;
+  const promise: Promise<ScanResult> = scanAllProjectsUncached().finally(() => {
+    if (scanShare.__scanInFlight?.promise === promise) scanShare.__scanInFlight = undefined;
+  });
+  scanShare.__scanInFlight = { generation, promise };
+  return promise;
+}
+
+async function scanAllProjectsUncached(): Promise<ScanResult> {
   const config = await readConfig();
   // Demo mode short-circuits the real filesystem walk with synthetic fixtures
   // (projects + board + insights + manual-steps + ops all ride on ProjectData,

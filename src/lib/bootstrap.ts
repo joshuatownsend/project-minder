@@ -42,6 +42,8 @@ interface BootstrapStatus {
 const g = globalThis as unknown as {
   __minderBootstrapped?: boolean;
   __minderBootstrapStatus?: BootstrapStatus;
+  /** The detached post-DB boot steps; see `awaitBootSteps`. */
+  __minderBootSteps?: Promise<void>;
   /** Set once signal handlers are installed — i.e. once anything exists that
    *  can FIRE a shutdown disposer. See `isServiceLifecycleInstalled` (#296). */
   __minderLifecycleInstalled?: boolean;
@@ -123,6 +125,7 @@ export function shouldInstallServiceLifecycle(
 export function _resetBootstrapForTesting(): void {
   delete g.__minderBootstrapped;
   delete g.__minderBootstrapStatus;
+  delete g.__minderBootSteps;
   delete g.__minderLifecycleInstalled;
 }
 
@@ -223,8 +226,41 @@ export async function runBootstrap(): Promise<void> {
   // Gate each subsequent boot step on isShuttingDown(): if a signal arrived
   // mid-boot, stop starting new subsystems (which would keep writing / open
   // fs.watch handles after the disposers already ran).
+  // Only the DB probe is awaited here. Next awaits `register()` before it
+  // dispatches a single request (#413), so everything awaited by this function
+  // is time the server answers nothing: the first `/api/health` waited out the
+  // whole ~72 s project scan, which the tray rendered as "slow to respond"
+  // (#584) and which also held the dispatcher and the ingest worker back. The
+  // DB probe stays on the critical path because the ingest worker's
+  // `quick_check` handoff (#588) needs the main-thread `initDb` to have run
+  // first; the warm probe is ~0.1 s (a stale marker costs the full check, a
+  // separate known cost).
   await bootDb();
   if (isShuttingDown()) return abortBoot();
+
+  // The rest warms caches and starts watchers; none of it is needed to serve a
+  // request (`/api/projects` and friends scan on demand, and share this scan
+  // while it is in flight). Detached, with its own catch: an unhandled
+  // rejection out of a floating promise would take the process down.
+  const startedAt = Date.now();
+  g.__minderBootSteps = runBootSteps(startedAt).catch((err) => {
+    bwarn("boot steps failed", err);
+  });
+}
+
+/**
+ * Resolves once the detached boot steps have finished (or immediately when
+ * there are none). Production never waits on this — that is the point of
+ * detaching them — it exists so tests, and anything that must observe the fully
+ * booted state, have something to await.
+ */
+export function awaitBootSteps(): Promise<void> {
+  return g.__minderBootSteps ?? Promise.resolve();
+}
+
+/** The post-DB boot sequence, run in the background after `runBootstrap` returns. */
+async function runBootSteps(startedAt: number): Promise<void> {
+  const { isShuttingDown } = await import("@/lib/lifecycle");
   const projects = await bootScan();
   if (isShuttingDown()) return abortBoot();
   await bootProjectCaches(projects);
@@ -239,7 +275,10 @@ export async function runBootstrap(): Promise<void> {
   if (isShuttingDown()) return abortBoot();
   await bootMemoryMonitor();
 
-  blog("boot sequence complete", { subsystems: getBootstrapStatus().subsystems });
+  blog("boot sequence complete", {
+    subsystems: getBootstrapStatus().subsystems,
+    backgroundMs: Date.now() - startedAt,
+  });
 }
 
 /**
