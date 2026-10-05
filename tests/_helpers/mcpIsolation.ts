@@ -113,7 +113,9 @@ export function installMcpIsolation(
     delete g.__usageCache;
     delete g.__usageFileCache;
     delete g.__usageAllSessionsInFlight;
-    delete g.__minderMcpScanInFlight;
+    delete g.__scanInFlight;
+    delete g.__scanGeneration;
+    delete g.__scanResultGeneration;
     delete g.__sessionsCache;
     delete g.__sessionIndex;
     vi.resetModules();

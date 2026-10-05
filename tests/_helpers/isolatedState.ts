@@ -77,7 +77,9 @@ export const USAGE_CACHE_KEYS = [
 
 export const SESSION_CACHE_KEYS = ["__sessionsCache", "__sessionIndex"] as const;
 
-export const SCAN_CACHE_KEYS = ["__scanCache", "__minderMcpScanInFlight"] as const;
+// `__scanInFlight` / `__scanGeneration` / `__scanResultGeneration` are the shared-scan state of
+// `scanAllProjects` (the MCP helper's own single-flight global is gone, #609).
+export const SCAN_CACHE_KEYS = ["__scanCache", "__scanInFlight", "__scanGeneration", "__scanResultGeneration"] as const;
 
 export type IsolationLifetime = "perTest" | "perFile";
 
