@@ -1,12 +1,4 @@
-## 2026-10-04 13:45 | slow-boot | Confirm access-time events no longer inflate ingest.eventsHandled (#604, PR #605)
 
-- [ ] After the release containing PR #605 is installed and the tray restarted, wait ~5 minutes and read `http://localhost:4100/api/health` -> `ingest.eventsHandled`
-  It should stay in the single digits until a transcript is actually written (each real write adds a few). Before the fix it was 8,666 at uptime 202 s with one transcript written, and 12,706 at 533 s after the 2026-10-03 reboot.
-  To make sure the history-wide read has happened first, let the dashboard run a few minutes (the post-boot grade/usage sweeps are what touch every transcript). `fsutil behavior query disablelastaccess` should still say last-access updates are ENABLED on this machine, otherwise the test proves nothing.
-- [ ] Optional: confirm a real write is still seen live
-  Re-run the lag probe (transcript size vs `sessions.byte_offset`) or just watch `eventsHandled` rise while a Claude Code session is active; the index should still lag a write by well under the 30 s sweep (v1.16.4 measured a median of 265 ms).
-
----
 
 ## 2026-10-03 18:00 | slow-boot | Verify the clean-shutdown marker and single quick_check after installing the #588 fix (PR #601)
 

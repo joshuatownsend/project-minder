@@ -351,3 +351,16 @@ the critical path. The updater work (free) can proceed in parallel while you wai
   Result 2026-10-04 (v1.16.4, real tree): used this very session's transcript as the event source and compared the file with `sessions.byte_offset`/`turn_count` in `index.db`, polling every 250 ms for ~80 s (57 file growths). Start gap 0 B; the index reached each write after a median of 265 ms (n=18; p90 2.4 s, max 2.9 s during back-to-back bursts) against a 30 s sweep, and `/api/health` `ingest.eventsHandled` went 0 (at arm time, so no replay of existing files) -> 27 -> 43 -> 70. Measured the INDEX, not a browser tab: the dashboard reads the index, but the UI refresh itself was not timed.
 
 ---
+
+## 2026-10-04 13:45 | slow-boot | Confirm access-time events no longer inflate ingest.eventsHandled (#604, PR #605)
+> archived 2026-10-05 — both checks done on v1.16.5
+
+- [x] After the release containing PR #605 is installed and the tray restarted, wait ~5 minutes and read `http://localhost:4100/api/health` -> `ingest.eventsHandled`
+  It should stay in the single digits until a transcript is actually written (each real write adds a few). Before the fix it was 8,666 at uptime 202 s with one transcript written, and 12,706 at 533 s after the 2026-10-03 reboot.
+  To make sure the history-wide read has happened first, let the dashboard run a few minutes (the post-boot grade/usage sweeps are what touch every transcript). `fsutil behavior query disablelastaccess` should still say last-access updates are ENABLED on this machine, otherwise the test proves nothing.
+  Result 2026-10-05 (v1.16.5): last-access updates ENABLED (`DisableLastAccess = 2`). 7 min after the tray restart, with the post-boot grade/usage sweeps enqueued at 15:20:08Z and a ~6.4 s initial reconcile, `eventsHandled` was **0** (was 8,666 at 202 s / 12,706 at 533 s). `watcherMode: native`, `crashesLastHour: 0`.
+- [x] Optional: confirm a real write is still seen live
+  Re-run the lag probe (transcript size vs `sessions.byte_offset`) or just watch `eventsHandled` rise while a Claude Code session is active; the index should still lag a write by well under the 30 s sweep (v1.16.4 measured a median of 265 ms).
+  Result 2026-10-05: this session's own transcript writes moved `eventsHandled` 0 -> 12 within ~15 s, then it held at 12 across three further reads with no writes: real writes are counted, reads are not.
+
+---
