@@ -431,13 +431,19 @@ function detectPortConflicts(projects: ProjectData[]): PortConflict[] {
 const scanShare = globalThis as unknown as {
   __scanInFlight?: { generation: number; promise: Promise<ScanResult> };
   __scanGeneration?: number;
+  __scanResultGeneration?: WeakMap<ScanResult, number>;
 };
 
 export function scanAllProjects(): Promise<ScanResult> {
   const generation = scanShare.__scanGeneration ?? 0;
   const inFlight = scanShare.__scanInFlight;
   if (inFlight && inFlight.generation === generation) return inFlight.promise;
-  const promise: Promise<ScanResult> = scanAllProjectsUncached().finally(() => {
+  const promise: Promise<ScanResult> = scanAllProjectsUncached().then((result) => {
+    // Stamp the generation this scan STARTED under so `setCachedScan` can refuse to
+    // publish it if an invalidation happened while it ran.
+    (scanShare.__scanResultGeneration ??= new WeakMap()).set(result, generation);
+    return result;
+  }).finally(() => {
     if (scanShare.__scanInFlight?.promise === promise) scanShare.__scanInFlight = undefined;
   });
   scanShare.__scanInFlight = { generation, promise };

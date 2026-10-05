@@ -10,6 +10,8 @@ const g = globalThis as unknown as {
   __scanCache?: { result: ScanResult; cachedAt: number };
   /** Bumped by every `invalidateCache()`; `scanAllProjects` only shares an in-flight scan started at the same generation. */
   __scanGeneration?: number;
+  /** Generation each `scanAllProjects()` result was started under (see `setCachedScan`). */
+  __scanResultGeneration?: WeakMap<ScanResult, number>;
 };
 
 export function getCachedScan(): ScanResult | null {
@@ -21,6 +23,12 @@ export function getCachedScan(): ScanResult | null {
 }
 
 export function setCachedScan(result: ScanResult): void {
+  // A scan that began before an `invalidateCache()` must not publish: it can finish
+  // AFTER the post-invalidation scan and would put pre-invalidation data back for the
+  // whole TTL, undoing the invalidation. Results are tagged with the generation they
+  // started under by `scanAllProjects`; anything untagged (a hand-built result) publishes as before.
+  const startedAt = g.__scanResultGeneration?.get(result);
+  if (startedAt !== undefined && startedAt !== (g.__scanGeneration ?? 0)) return;
   g.__scanCache = { result, cachedAt: Date.now() };
 }
 

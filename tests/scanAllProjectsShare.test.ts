@@ -28,8 +28,10 @@ vi.mock("@/lib/config", () => ({
 }));
 
 import { scanAllProjects } from "@/lib/scanner";
+import { getCachedScan, invalidateCache, setCachedScan } from "@/lib/cache";
+import type { ScanResult } from "@/lib/types";
 
-const g = globalThis as unknown as { __scanInFlight?: unknown; __scanGeneration?: number };
+const g = globalThis as unknown as { __scanInFlight?: unknown; __scanGeneration?: number; __scanCache?: unknown };
 
 /** Let the pending `readConfig` of the n-th started scan resolve. */
 async function releaseScan(n: number) {
@@ -42,6 +44,7 @@ describe("scanAllProjects shares one in-flight scan", () => {
     readConfig.mockClear();
     gates.length = 0;
     delete g.__scanInFlight;
+    delete g.__scanCache;
     g.__scanGeneration = 0;
   });
 
@@ -67,7 +70,7 @@ describe("scanAllProjects shares one in-flight scan", () => {
 
   it("does not join a scan that began before an invalidation", async () => {
     const stale = scanAllProjects();
-    g.__scanGeneration = (g.__scanGeneration ?? 0) + 1; // what invalidateCache() does
+    invalidateCache(); // the real one: bumps the generation the scan guard keys on
     const fresh = scanAllProjects();
     expect(fresh).not.toBe(stale);
     // ...and later callers join the FRESH one, not the stale one.
@@ -80,6 +83,46 @@ describe("scanAllProjects shares one in-flight scan", () => {
     await releaseScan(1);
     await fresh;
     expect(readConfig).toHaveBeenCalledTimes(2);
+  });
+
+  // The generation guard only picks which promise a caller gets. The result of a scan
+  // that began before an invalidation must also never be PUBLISHED, or finishing last it
+  // would put pre-invalidation data back in the cache for the whole TTL (Codex + Copilot, #609).
+  it("refuses to cache a scan that was overtaken by an invalidation, even when it finishes last", async () => {
+    const stale = scanAllProjects();
+    invalidateCache();
+    const fresh = scanAllProjects();
+
+    await releaseScan(1); // the post-invalidation scan finishes FIRST...
+    setCachedScan(await fresh);
+    expect(getCachedScan()).toBe(await fresh);
+
+    await releaseScan(0); // ...then the older one finishes and tries to publish
+    const staleResult = await stale;
+    setCachedScan(staleResult);
+    expect(getCachedScan()).toBe(await fresh);
+    expect(getCachedScan()).not.toBe(staleResult);
+  });
+
+  it("leaves the cache empty rather than caching a stale scan when nothing newer has published", async () => {
+    const stale = scanAllProjects();
+    invalidateCache();
+    await releaseScan(0);
+    setCachedScan(await stale);
+    expect(getCachedScan()).toBeNull();
+  });
+
+  it("still caches a scan nothing invalidated, and a result that did not come from a scan", async () => {
+    const scan = scanAllProjects();
+    await releaseScan(0);
+    const result = await scan;
+    setCachedScan(result);
+    expect(getCachedScan()).toBe(result);
+
+    invalidateCache();
+    const handBuilt = { projects: [] } as unknown as ScanResult;
+    setCachedScan(handBuilt);
+    expect(getCachedScan()).toBe(handBuilt);
   });
 
   it("does not stay stuck on a scan that failed", async () => {

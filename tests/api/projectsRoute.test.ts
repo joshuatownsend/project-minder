@@ -78,6 +78,9 @@ function mockConfig(featureFlags?: MinderConfig["featureFlags"]) {
 describe("GET /api/projects", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks keeps queued `mockReturnValueOnce` values; reset so one test's unused
+    // queue entry cannot answer the next test's cache read.
+    vi.mocked(getCachedScan).mockReset();
     vi.mocked(githubActivityCache.get).mockReturnValue(null);
     mockConfig(undefined);
   });
@@ -94,10 +97,8 @@ describe("GET /api/projects", () => {
   });
 
   it("calls scanAllProjects once on cache miss and returns the stored result (cache miss)", async () => {
-    // First call (before scan) returns null; second call (after setCachedScan) returns result.
-    vi.mocked(getCachedScan)
-      .mockReturnValueOnce(null)
-      .mockReturnValueOnce(fakeScanResult);
+    // The route reads the cache once (a miss), then serves the scan it awaited.
+    vi.mocked(getCachedScan).mockReturnValue(null);
 
     vi.mocked(scanAllProjects).mockResolvedValue(fakeScanResult);
 
@@ -111,17 +112,19 @@ describe("GET /api/projects", () => {
     expect(body).toMatchObject({ projects: fakeScanResult.projects });
   });
 
-  it("returns empty fallback when cache is still null after scan completes", async () => {
-    // Both cache reads return null (simulates pathological scan failure edge case)
+  it("serves the scan it awaited even when the cache refuses to hold it", async () => {
+    // `setCachedScan` drops a result whose scan was overtaken by an invalidation, so the
+    // cache can legitimately still be empty after the scan completes. The caller waited
+    // for that scan: it must get it, not an empty dashboard (#609).
     vi.mocked(getCachedScan).mockReturnValue(null);
     vi.mocked(scanAllProjects).mockResolvedValue(fakeScanResult);
 
     const res = await GET();
 
-    // Handler returns the zero-state fallback JSON
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ projects: [] });
+    expect(body).toMatchObject({ projects: fakeScanResult.projects });
+    expect(setCachedScan).toHaveBeenCalledWith(fakeScanResult);
   });
 
   describe("githubActivity flag gating (Portfolio Command Deck — Phase 4)", () => {
