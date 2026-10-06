@@ -47,7 +47,7 @@ describe("getCachedOrFreshScan (MCP) honours cache invalidation", () => {
   beforeEach(() => {
     readConfig.mockClear();
     gates.length = 0;
-    for (const k of ["__scanCache", "__scanInFlight", "__scanGeneration", "__scanResultGeneration"]) delete g[k];
+    for (const k of ["__scanCache", "__scanInFlight", "__scanLatest", "__scanGeneration", "__scanResultGeneration"]) delete g[k];
   });
 
   it("cold concurrent callers share one scan", async () => {
@@ -70,8 +70,10 @@ describe("getCachedOrFreshScan (MCP) honours cache invalidation", () => {
     expect(getCachedScan()).toBe(freshResult);
 
     await release(0); // the older scan finishes last
-    const staleResult = await stale;
-    expect(staleResult).not.toBe(freshResult);
-    expect(getCachedScan()).toBe(freshResult); // and did not overwrite the cache
+    // Its data predates the invalidation: the caller is handed the newer scan instead, and the
+    // cache still holds that one.
+    expect(await stale).toBe(freshResult);
+    expect(getCachedScan()).toBe(freshResult);
+    expect(gates.length).toBe(2); // no third scan
   });
 });

@@ -233,8 +233,11 @@ describe("scanAllProjects — skipped WSL roots", () => {
     expect(fresh.projects.map((p) => p.slug).sort()).toEqual(["win-app", "wsl-app"]);
 
     release(); // the obsolete scan finishes last
+    // The caller of the obsolete scan is handed the newer scan, never the old world...
     const old = await obsolete;
-    expect(old.projects.map((p) => p.slug)).toContain("old-app"); // it did see the old world
+    expect(old.projects.map((p) => p.slug).sort()).toEqual(["win-app", "wsl-app"]);
+    // ...but that scan still RAN to completion and tried to write its snapshots: only the
+    // generation guard on the carry-forward write keeps them from replacing the fresh ones.
 
     // The distro stops: the carry-forward must serve the FRESH snapshot.
     wslState({ ok: false, distro: "Ubuntu-26.04", reason: "wsl-stopped" });

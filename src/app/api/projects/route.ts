@@ -26,7 +26,9 @@ export async function GET() {
   // result we awaited rather than re-reading the cache: `setCachedScan` refuses a
   // result whose scan was overtaken by an invalidation, and the cache would be empty.
   const result = await scanAllProjects();
-  setCachedScan(result);
-  if (!isDemo) enqueueProjectCaches(result.projects, flags);
+  // Serve what we awaited, but only warm caches from a result the cache accepted (or the newer
+  // one that replaced it): an overtaken scan's paths would be deduped-in by slug for the TTL.
+  const warmFrom = setCachedScan(result) ? result : getCachedScan();
+  if (!isDemo && warmFrom) enqueueProjectCaches(warmFrom.projects, flags);
   return NextResponse.json(withGroups(result, config));
 }

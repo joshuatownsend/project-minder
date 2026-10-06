@@ -25,7 +25,8 @@ vi.mock("@/lib/scanner", () => ({
   }),
 }));
 vi.mock("@/lib/cache", () => ({
-  setCachedScan: vi.fn(),
+  // true = the cache accepted (stored) the scan; false = refused it as stale (#609).
+  setCachedScan: vi.fn(() => true),
   getCachedScan: vi.fn(),
   invalidateCache: vi.fn(),
 }));
@@ -73,7 +74,7 @@ import { demoMode } from "@/lib/demo/demoMode";
 import { probeInitStatus } from "@/lib/data";
 import { isShuttingDown } from "@/lib/lifecycle";
 import { scanAllProjects } from "@/lib/scanner";
-import { setCachedScan } from "@/lib/cache";
+import { setCachedScan, getCachedScan } from "@/lib/cache";
 import { readConfig } from "@/lib/config";
 import { enqueueProjectCaches } from "@/lib/projectCacheEnqueue";
 import { manualStepsWatcher } from "@/lib/manualStepsWatcher";
@@ -379,6 +380,45 @@ describe("runBootstrap (orchestration + idempotency)", () => {
 
     await runBootstrap();
     await expect(awaitBootSteps()).resolves.toBeUndefined();
+  });
+
+  // A scan overtaken by an invalidation is refused by the cache. Warming the git/GitHub queues
+  // from it would dedupe the fresh enqueue by slug and keep old-path data for the TTL (Codex, #609).
+  it("does not warm project caches from a boot scan the cache refused", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.mocked(scanAllProjects).mockResolvedValueOnce({
+      projects: [{ slug: "old-path", path: "C:\\dev\\old" }] as unknown as ProjectData[],
+      portConflicts: [], hiddenCount: 0, scannedAt: "2026-01-01T00:00:00.000Z", catalogLintFindings: [],
+    });
+    vi.mocked(setCachedScan).mockReturnValueOnce(false);
+    vi.mocked(getCachedScan).mockReturnValue(null);
+
+    await runBootstrap();
+    await awaitBootSteps();
+
+    expect(enqueueProjectCaches).not.toHaveBeenCalled();
+  });
+
+  it("warms project caches from the newer scan when the boot scan was refused", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.mocked(scanAllProjects).mockResolvedValueOnce({
+      projects: [{ slug: "old-path", path: "C:\\dev\\old" }] as unknown as ProjectData[],
+      portConflicts: [], hiddenCount: 0, scannedAt: "2026-01-01T00:00:00.000Z", catalogLintFindings: [],
+    });
+    vi.mocked(setCachedScan).mockReturnValueOnce(false);
+    vi.mocked(getCachedScan).mockReturnValue({
+      projects: [{ slug: "new-path", path: "C:\\dev\\new" }] as unknown as ProjectData[],
+      portConflicts: [], hiddenCount: 0, scannedAt: "2026-01-02T00:00:00.000Z", catalogLintFindings: [],
+    });
+
+    await runBootstrap();
+    await awaitBootSteps();
+
+    expect(enqueueProjectCaches).toHaveBeenCalledTimes(1);
+    expect(enqueueProjectCaches).toHaveBeenCalledWith(
+      [{ slug: "new-path", path: "C:\\dev\\new" }],
+      {}
+    );
   });
 
   it("one subsystem failing does not prevent the others from starting", async () => {

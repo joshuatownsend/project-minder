@@ -22,14 +22,17 @@ export function getCachedScan(): ScanResult | null {
   return null;
 }
 
-export function setCachedScan(result: ScanResult): void {
+/** Returns whether the result was stored. `false` means it was refused as stale, so a caller
+ *  that goes on to act on the result (warm caches from it) must not. */
+export function setCachedScan(result: ScanResult): boolean {
   // A scan that began before an `invalidateCache()` must not publish: it can finish
   // AFTER the post-invalidation scan and would put pre-invalidation data back for the
   // whole TTL, undoing the invalidation. Results are tagged with the generation they
   // started under by `scanAllProjects`; anything untagged (a hand-built result) publishes as before.
   const startedAt = g.__scanResultGeneration?.get(result);
-  if (startedAt !== undefined && startedAt !== (g.__scanGeneration ?? 0)) return;
+  if (startedAt !== undefined && startedAt !== (g.__scanGeneration ?? 0)) return false;
   g.__scanCache = { result, cachedAt: Date.now() };
+  return true;
 }
 
 export function invalidateCache(): void {

@@ -432,16 +432,47 @@ const scanShare = globalThis as unknown as {
   __scanInFlight?: { generation: number; promise: Promise<ScanResult> };
   __scanGeneration?: number;
   __scanResultGeneration?: WeakMap<ScanResult, number>;
+  /** The newest completed scan, kept so a waiter that was overtaken can take it without rescanning. */
+  __scanLatest?: { generation: number; result: ScanResult };
 };
 
-export function scanAllProjects(): Promise<ScanResult> {
-  const generation = scanShare.__scanGeneration ?? 0;
+/** How many times a caller will wait out a scan that an invalidation overtook before giving up. */
+const MAX_OVERTAKEN_RESCANS = 2;
+
+/**
+ * Resolves to a scan that no invalidation overtook while it ran, so a caller never acts on
+ * data that predates a change it could already have observed (warming caches from it,
+ * resolving project paths, keying a per-slug cache). The consumers that do that are many and
+ * growing, so the guarantee lives here instead of in each of them (#609). When an
+ * invalidation lands mid-scan the caller takes the scan for the new generation: the cached
+ * one if it already finished, else the in-flight or a fresh one. After `MAX_OVERTAKEN_RESCANS`
+ * (a config being edited in a loop) the latest result is returned anyway; it is still
+ * tagged with its start generation, so `setCachedScan` refuses to cache it.
+ */
+export async function scanAllProjects(): Promise<ScanResult> {
+  for (let attempt = 0; ; attempt++) {
+    const generation = scanShare.__scanGeneration ?? 0;
+    const result = await shareScan(generation);
+    if ((scanShare.__scanGeneration ?? 0) === generation || attempt >= MAX_OVERTAKEN_RESCANS) {
+      return result;
+    }
+    const latest = scanShare.__scanLatest;
+    if (latest && latest.generation === (scanShare.__scanGeneration ?? 0)) {
+      return latest.result; // the scan for the new generation already finished
+    }
+  }
+}
+
+function shareScan(generation: number): Promise<ScanResult> {
   const inFlight = scanShare.__scanInFlight;
   if (inFlight && inFlight.generation === generation) return inFlight.promise;
   const promise: Promise<ScanResult> = scanAllProjectsUncached(generation).then((result) => {
     // Stamp the generation this scan STARTED under so `setCachedScan` can refuse to
     // publish it if an invalidation happened while it ran.
     (scanShare.__scanResultGeneration ??= new WeakMap()).set(result, generation);
+    if (!scanShare.__scanLatest || generation >= scanShare.__scanLatest.generation) {
+      scanShare.__scanLatest = { generation, result };
+    }
     return result;
   }).finally(() => {
     if (scanShare.__scanInFlight?.promise === promise) scanShare.__scanInFlight = undefined;

@@ -396,12 +396,22 @@ async function bootScan(): Promise<ScannedProjects> {
   const config = await readConfig();
   try {
     const { scanAllProjects } = await import("@/lib/scanner");
-    const { setCachedScan } = await import("@/lib/cache");
+    const { setCachedScan, getCachedScan } = await import("@/lib/cache");
     const result = await scanAllProjects();
-    setCachedScan(result);
-    blog("scan: cached projects", { count: result.projects.length });
+    // An invalidation can overtake this scan while it runs; the cache then refuses it. Warming
+    // the git/GitHub queues from it anyway would dedupe the fresh enqueue by slug and keep data
+    // from the old path for the TTL, so warm from what the cache holds now (or nothing).
+    const stored = setCachedScan(result);
+    const current = stored ? result : getCachedScan();
+    if (stored) {
+      blog("scan: cached projects", { count: result.projects.length });
+    } else {
+      blog("scan: superseded by a cache invalidation, result not cached", {
+        warmingFrom: current ? "newer cached scan" : "nothing",
+      });
+    }
     recordSubsystem("scan");
-    return { projects: result.projects, flags: config.featureFlags };
+    return { projects: current?.projects ?? [], flags: config.featureFlags };
   } catch (err) {
     bwarn("scan: failed", err);
     return { projects: [], flags: config.featureFlags };
