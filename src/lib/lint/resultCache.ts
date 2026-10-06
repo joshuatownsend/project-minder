@@ -100,7 +100,13 @@ function keyFor(projectPath: string): string {
 
 // ---- fingerprint ------------------------------------------------------------------------
 
-class WalkLimitError extends Error {}
+/** Thrown to abandon a fingerprint that cannot be made complete; the caller then does not cache. */
+class UncacheableError extends Error {}
+
+/** Files above this are recorded by size + mtime instead of being read (none of the config is this big). */
+const MAX_HASH_BYTES = 2 * 1024 * 1024;
+/** `extends` files followed per project; more than this is not worth tracking. */
+const MAX_EXTENDS = 20;
 
 /**
  * Hash of every file the CLI could read for `projectPath`, plus `cliVersion`.
@@ -115,19 +121,58 @@ export async function lintFingerprint(
   const lines: string[] = [`cli:${cliVersion}`];
   let visited = 0;
 
-  const note = async (abs: string, rel: string) => {
+  const followed = new Set<string>();
+
+  /**
+   * Record a file by CONTENT, not size + mtime: an equal-length rewrite with a preserved or
+   * same-tick timestamp must still miss. A config that `extends` another file is followed, so
+   * editing the base invalidates too.
+   */
+  const note = async (abs: string, rel: string, parseExtends = false): Promise<void> => {
+    let buf: Buffer;
     try {
       const st = await fs.stat(abs);
-      lines.push(`${rel}|${st.size}|${Math.trunc(st.mtimeMs)}`);
+      if (st.size > MAX_HASH_BYTES) {
+        lines.push(`${rel}|big|${st.size}|${Math.trunc(st.mtimeMs)}`);
+        return;
+      }
+      buf = await fs.readFile(abs);
     } catch {
-      // vanished between readdir and stat: the next scan sees the change
+      return; // vanished between readdir and read: the next scan sees the change
+    }
+    lines.push(`${rel}|${createHash("sha1").update(buf).digest("hex")}`);
+    const base = path.basename(abs);
+    if (parseExtends || base === ".claudelintrc.json" || base === "package.json") {
+      await followExtends(abs, buf.toString("utf-8"), parseExtends || base === ".claudelintrc.json");
+    }
+  };
+
+  const followExtends = async (abs: string, text: string, wholeFileIsConfig: boolean): Promise<void> => {
+    let cfg: unknown;
+    try {
+      cfg = JSON.parse(text);
+    } catch {
+      return; // unparseable: the CLI fails on it too, and its bytes are already in the hash
+    }
+    const section = wholeFileIsConfig ? cfg : (cfg as { claudelint?: unknown } | null)?.claudelint;
+    const ext = (section as { extends?: unknown } | null | undefined)?.extends;
+    for (const entry of ext === undefined ? [] : Array.isArray(ext) ? ext : [ext]) {
+      if (typeof entry !== "string") throw new UncacheableError();
+      if (entry.startsWith("claudelint:")) continue; // built-in preset: covered by the CLI version
+      // A package or any other form we cannot resolve and hash: do not cache.
+      if (!entry.startsWith("./") && !entry.startsWith("../") && !path.isAbsolute(entry)) throw new UncacheableError();
+      const target = path.resolve(path.dirname(abs), entry);
+      if (followed.has(target)) continue; // also stops an extends cycle
+      if (followed.size >= MAX_EXTENDS) throw new UncacheableError();
+      followed.add(target);
+      await note(target, `ext:${target}`, true);
     }
   };
 
   const walk = async (dir: string, rel: string, inConfig: boolean): Promise<void> => {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     visited += entries.length;
-    if (visited > maxEntries) throw new WalkLimitError();
+    if (visited > maxEntries) throw new UncacheableError();
     const stats: Promise<void>[] = [];
     const subdirs: Array<() => Promise<void>> = [];
     for (const e of entries) {
@@ -136,6 +181,9 @@ export async function lintFingerprint(
         if (SKIP_DIRS.has(e.name)) continue;
         const childAbs = path.join(dir, e.name);
         subdirs.push(() => walk(childAbs, childRel, inConfig || CONFIG_DIRS.has(e.name)));
+      } else if (e.isSymbolicLink() && (inConfig || CONFIG_FILES.has(e.name) || CONFIG_DIRS.has(e.name))) {
+        // The CLI may follow it; hashing the target safely (cycles, dangling) is not worth it.
+        throw new UncacheableError();
       } else if (e.isFile() && (inConfig || CONFIG_FILES.has(e.name))) {
         stats.push(note(path.join(dir, e.name), childRel));
       }

@@ -108,6 +108,62 @@ describe("lintFingerprint", () => {
     expect(await lintFingerprint(project, "1.0.0")).not.toBe(before);
   });
 
+  it("changes on an equal-length rewrite whose mtime is preserved (content, not metadata)", async () => {
+    write("CLAUDE.md", "# aaaa\n");
+    const when = new Date("2026-01-01T00:00:00Z");
+    fs.utimesSync(path.join(project, "CLAUDE.md"), when, when);
+    const before = await lintFingerprint(project, "1.0.0");
+    write("CLAUDE.md", "# bbbb\n");
+    fs.utimesSync(path.join(project, "CLAUDE.md"), when, when);
+    expect(await lintFingerprint(project, "1.0.0")).not.toBe(before);
+  });
+
+  describe("extends", () => {
+    it("changes when a relatively extended config is edited", async () => {
+      write(".claudelintrc.json", JSON.stringify({ extends: "./base.json" }));
+      write("base.json", JSON.stringify({ rules: { a: "off" } }));
+      const before = await lintFingerprint(project, "1.0.0");
+      write("base.json", JSON.stringify({ rules: { a: "warn" } }));
+      expect(await lintFingerprint(project, "1.0.0")).not.toBe(before);
+    });
+
+    it("follows a chain of extends and tolerates a cycle", async () => {
+      write(".claudelintrc.json", JSON.stringify({ extends: ["./a.json"] }));
+      write("a.json", JSON.stringify({ extends: "./b.json" }));
+      write("b.json", JSON.stringify({ extends: "./a.json" }));
+      const before = await lintFingerprint(project, "1.0.0");
+      expect(before).not.toBeNull();
+      write("b.json", JSON.stringify({ extends: "./a.json", rules: { x: "off" } }));
+      expect(await lintFingerprint(project, "1.0.0")).not.toBe(before);
+    });
+
+    it("follows an extends declared in package.json's claudelint key", async () => {
+      write("package.json", JSON.stringify({ claudelint: { extends: "./shared.json" } }));
+      write("shared.json", "{}");
+      const before = await lintFingerprint(project, "1.0.0");
+      write("shared.json", '{"rules":{}}');
+      expect(await lintFingerprint(project, "1.0.0")).not.toBe(before);
+    });
+
+    it("accepts a built-in preset but will not cache an npm-package extends", async () => {
+      write(".claudelintrc.json", JSON.stringify({ extends: "claudelint:recommended" }));
+      expect(await lintFingerprint(project, "1.0.0")).not.toBeNull();
+      write(".claudelintrc.json", JSON.stringify({ extends: "some-shared-config" }));
+      expect(await lintFingerprint(project, "1.0.0")).toBeNull();
+    });
+  });
+
+  it("will not cache a project whose config is reached through a symlink", async (ctx) => {
+    fs.mkdirSync(path.join(project, ".claude"), { recursive: true });
+    fs.mkdirSync(path.join(root, "shared"));
+    try {
+      fs.symlinkSync(path.join(root, "shared"), path.join(project, ".claude", "skills"), "junction");
+    } catch {
+      return ctx.skip(); // no symlink privilege on this machine
+    }
+    expect(await lintFingerprint(project, "1.0.0")).toBeNull();
+  });
+
   it("changes with the CLI version", async () => {
     expect(await lintFingerprint(project, "1.0.0")).not.toBe(await lintFingerprint(project, "1.0.1"));
   });
