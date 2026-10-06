@@ -197,6 +197,16 @@ describe("lintFingerprint", () => {
     });
   });
 
+  it("returns null for a config file too large to compare by content", async () => {
+    write("CLAUDE.md", "x".repeat(3 * 1024 * 1024));
+    expect(await lintFingerprint(project, "1.0.0")).toBeNull();
+  });
+
+  it("returns null when the project has executable custom rules", async () => {
+    write(".claudelint/rules/mine.ts", "export {};\n");
+    expect(await lintFingerprint(project, "1.0.0")).toBeNull();
+  });
+
   it("changes with the CLI version", async () => {
     expect(await lintFingerprint(project, "1.0.0")).not.toBe(await lintFingerprint(project, "1.0.1"));
   });
@@ -252,6 +262,32 @@ describe("runLibraryCli caching", () => {
     expect(mockSpawn).toHaveBeenCalledTimes(2);
     await run(); // the successful run WAS stored
     expect(mockSpawn).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not store a result if a file the CLI reads changed while it ran", async () => {
+    mockSpawn.mockImplementationOnce(() => {
+      write(".claude/agents/appeared.md", "---\nname: appeared\n---\n"); // changes mid-run
+      return fakeProcess(REPORT);
+    });
+    await run();
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    // The tree returns to the state that was fingerprinted before the run (A -> B -> A). Had the
+    // run's report been stored under A, this would be a hit serving B's result.
+    fs.rmSync(path.join(project, ".claude", "agents", "appeared.md"));
+    await run();
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+    await run(); // a stable run IS stored
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats a malformed cached report as a miss instead of crashing the scan", async () => {
+    for (const bad of [{ validators: {} }, { validators: [{ name: "X", errors: "nope" }] }, { validators: [null] }]) {
+      _resetLintCacheForTesting();
+      await putCachedLintReport(project, "fp", bad as never);
+      await flushLintCache();
+      _resetLintCacheForTesting();
+      expect(await getCachedLintReport(project, "fp")).toBeNull();
+    }
   });
 
   it("survives a restart: the report is read back from disk", async () => {

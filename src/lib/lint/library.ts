@@ -127,7 +127,10 @@ export async function runLibraryCli(
     return [];
   }
 
-  if (fingerprint) {
+  // Store only if nothing the CLI reads changed while it ran: otherwise this result may describe
+  // a state the fingerprint does not (A -> B during the run, then back to A, would serve B's
+  // report as a hit for A).
+  if (fingerprint && (await lintFingerprint(projectPath, version)) === fingerprint) {
     await putCachedLintReport(projectPath, fingerprint, {
       validators: (report.validators ?? []).map((v) => ({ name: v.name, errors: v.errors, warnings: v.warnings })),
     });

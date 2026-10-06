@@ -68,6 +68,25 @@ const CONFIG_FILES = new Set([
 /** Looked up in the project AND every ancestor (the CLI walks up to find its config). */
 const ANCESTOR_FILES = [".claudelintrc.json", ".claudelintignore", "package.json", "pnpm-workspace.yaml"];
 
+/** A cached report is trusted only if it has the shape `reportToFindings` reads; anything else is a miss. */
+function isCliReport(r: unknown): r is CachedCliReport {
+  const messages = (m: unknown) =>
+    m === undefined ||
+    (Array.isArray(m) && m.every((x) => x !== null && typeof x === "object" && typeof (x as { message?: unknown }).message === "string"));
+  const validators = (r as { validators?: unknown } | null)?.validators;
+  return (
+    Array.isArray(validators) &&
+    validators.every(
+      (v) =>
+        v !== null &&
+        typeof v === "object" &&
+        typeof (v as { name?: unknown }).name === "string" &&
+        messages((v as { errors?: unknown }).errors) &&
+        messages((v as { warnings?: unknown }).warnings),
+    )
+  );
+}
+
 const g = globalThis as unknown as { __minderLintCache?: CacheState };
 
 export function lintCacheEnabled(): boolean {
@@ -96,7 +115,7 @@ function keyFor(projectPath: string): string {
 /** Thrown to abandon a fingerprint that cannot be made complete; the caller then does not cache. */
 class UncacheableError extends Error {}
 
-/** Files above this are recorded by size + mtime instead of being read (none of the config is this big). */
+/** A file above this makes the project uncacheable rather than being compared by metadata. */
 const MAX_HASH_BYTES = 2 * 1024 * 1024;
 /** `extends` files followed per project; more than this is not worth tracking. */
 const MAX_EXTENDS = 20;
@@ -122,16 +141,19 @@ export async function lintFingerprint(
    * editing the base invalidates too.
    */
   const note = async (abs: string, rel: string, parseExtends = false): Promise<void> => {
-    let buf: Buffer;
+    let st: Awaited<ReturnType<typeof fs.stat>>;
     try {
-      const st = await fs.stat(abs);
-      if (st.size > MAX_HASH_BYTES) {
-        lines.push(`${rel}|big|${st.size}|${Math.trunc(st.mtimeMs)}`);
-        return;
-      }
-      buf = await fs.readFile(abs);
+      st = await fs.stat(abs);
     } catch {
       return; // vanished between readdir and read: the next scan sees the change
+    }
+    // No config file is this big; one that is cannot be compared by content, so do not cache.
+    if (st.size > MAX_HASH_BYTES) throw new UncacheableError();
+    let buf: Buffer;
+    try {
+      buf = await fs.readFile(abs);
+    } catch {
+      return;
     }
     lines.push(`${rel}|${createHash("sha1").update(buf).digest("hex")}`);
     const base = path.basename(abs);
@@ -216,6 +238,10 @@ export async function lintFingerprint(
       if (e.isDirectory()) {
         if (SKIP_DIRS.has(e.name)) continue;
         const childAbs = path.join(dir, e.name);
+        // Custom rules are executable code that can import anything: not trackable, so not cached.
+        if (e.name === ".claudelint" && (await fs.stat(path.join(childAbs, "rules")).then(() => true, () => false))) {
+          throw new UncacheableError();
+        }
         subdirs.push(() => walk(childAbs, childRel, inConfig || CONFIG_DIRS.has(e.name)));
       } else if (e.isSymbolicLink() && (inConfig || CONFIG_FILES.has(e.name) || CONFIG_DIRS.has(e.name))) {
         // The CLI may follow it; hashing the target safely (cycles, dangling) is not worth it.
@@ -256,7 +282,7 @@ function getState(): CacheState {
       const parsed = JSON.parse(await fs.readFile(file, "utf-8")) as CacheFile;
       if (parsed?.version !== FILE_VERSION || typeof parsed.entries !== "object") return;
       for (const [k, v] of Object.entries(parsed.entries)) {
-        if (v && typeof v.fingerprint === "string" && typeof v.savedAt === "number" && v.report?.validators) {
+        if (v && typeof v.fingerprint === "string" && typeof v.savedAt === "number" && isCliReport(v.report)) {
           entries.set(k, v);
         }
       }
