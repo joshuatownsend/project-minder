@@ -15,13 +15,23 @@ import type { LintReport } from "@/lib/types";
 
 const mockSpawn = vi.mocked(spawn);
 
+function emitWhenListening(proc: ChildProcess, event: string, emit: () => void) {
+  const on = proc.on.bind(proc);
+  proc.on = ((ev: string, fn: (...a: unknown[]) => void) => {
+    on(ev, fn);
+    if (ev === event) setImmediate(emit);
+    return proc;
+  }) as ChildProcess["on"];
+}
+
 function makeFakeProcess(stdout: string, exitCode = 0): ChildProcess {
   const stdoutEmitter = new EventEmitter();
   const proc = new EventEmitter() as ChildProcess;
   (proc as unknown as { stdout: EventEmitter }).stdout = stdoutEmitter;
 
-  // Emit stdout + close on next tick.
-  Promise.resolve().then(() => {
+  // Emit once the code under test attaches its "close" listener: it awaits a fingerprint
+  // before spawning, so anything emitted at creation time would fire into the void.
+  emitWhenListening(proc, "close", () => {
     stdoutEmitter.emit("data", Buffer.from(stdout));
     proc.emit("close", exitCode);
   });
@@ -92,7 +102,7 @@ describe("runLibraryCli", () => {
   it("records engineError and returns [] on spawn error", async () => {
     const proc = new EventEmitter() as ChildProcess;
     (proc as unknown as { stdout: EventEmitter }).stdout = new EventEmitter();
-    Promise.resolve().then(() => proc.emit("error", new Error("ENOENT")));
+    emitWhenListening(proc, "error", () => proc.emit("error", new Error("ENOENT")));
     mockSpawn.mockReturnValue(proc);
 
     const errors: LintReport["engineErrors"] = [];
