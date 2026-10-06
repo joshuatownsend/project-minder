@@ -61,6 +61,7 @@ import { scanClaudeHooks } from "@/lib/scanner/claudeHooks";
 import { scanMcpServers } from "@/lib/scanner/mcpServers";
 import { scanCiCd } from "@/lib/scanner/cicd";
 import { scanAllProjects } from "@/lib/scanner";
+import { invalidateCache } from "@/lib/cache";
 
 const mockReaddir = vi.mocked(fs.readdir);
 const mockStat = vi.mocked(fs.stat);
@@ -132,6 +133,9 @@ beforeEach(() => {
   // so tests are order-independent.
   (globalThis as Record<string, unknown>).__minderLastGoodRootScans = undefined;
   (globalThis as Record<string, unknown>).__scanCache = undefined;
+  // Shared-scan state (one in-flight scan per cache generation, #609).
+  (globalThis as Record<string, unknown>).__scanInFlight = undefined;
+  (globalThis as Record<string, unknown>).__scanGeneration = undefined;
 });
 
 describe("scanAllProjects — skipped WSL roots", () => {
@@ -196,6 +200,46 @@ describe("scanAllProjects — skipped WSL roots", () => {
     const result = await scanAllProjects();
     expect(result.projects.map((p) => p.slug).sort()).toEqual(["win-app", "wsl-app"]);
     expect(result.skippedRoots?.[0]?.reason).toBe("unreadable");
+  });
+
+  // Codex (#609): a scan that began before an invalidation and finishes AFTER the fresh scan
+  // must not overwrite the carry-forward snapshots, or a later skipped root would resurrect
+  // pre-invalidation projects (here: one removed from the root while the old scan ran).
+  it("an obsolete scan finishing last does not overwrite the carry-forward snapshot", async () => {
+    setup({ [WIN_ROOT]: ["win-app"], [WSL_ROOT]: ["wsl-app", "old-app"] });
+    wslState({ ok: true, distro: "Ubuntu-26.04" });
+
+    // Hold the obsolete scan open at old-app's git scan.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const benign = { branch: "main", isDirty: false, uncommittedCount: 0 };
+    vi.mocked(scanGit).mockImplementation((async (p: string) => {
+      if (String(p).includes("old-app")) await held;
+      return benign;
+    }) as never);
+
+    const obsolete = scanAllProjects(); // generation 0
+    await vi.waitFor(() =>
+      expect(vi.mocked(scanGit).mock.calls.some((c) => String(c[0]).includes("old-app"))).toBe(true)
+    );
+
+    invalidateCache(); // e.g. the user removed old-app from the root / edited config
+    mockReaddir.mockImplementation(async (p: unknown) => {
+      if (String(p) === WIN_ROOT) return [dirent("win-app")] as never;
+      if (String(p) === WSL_ROOT) return [dirent("wsl-app")] as never;
+      throw new Error("ENOENT");
+    });
+    const fresh = await scanAllProjects(); // generation 1, finishes first
+    expect(fresh.projects.map((p) => p.slug).sort()).toEqual(["win-app", "wsl-app"]);
+
+    release(); // the obsolete scan finishes last
+    const old = await obsolete;
+    expect(old.projects.map((p) => p.slug)).toContain("old-app"); // it did see the old world
+
+    // The distro stops: the carry-forward must serve the FRESH snapshot.
+    wslState({ ok: false, distro: "Ubuntu-26.04", reason: "wsl-stopped" });
+    const carried = await scanAllProjects();
+    expect(carried.projects.map((p) => p.slug).sort()).toEqual(["win-app", "wsl-app"]);
   });
 
   it("reports a never-scanned stopped root without inventing projects", async () => {

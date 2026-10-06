@@ -438,7 +438,7 @@ export function scanAllProjects(): Promise<ScanResult> {
   const generation = scanShare.__scanGeneration ?? 0;
   const inFlight = scanShare.__scanInFlight;
   if (inFlight && inFlight.generation === generation) return inFlight.promise;
-  const promise: Promise<ScanResult> = scanAllProjectsUncached().then((result) => {
+  const promise: Promise<ScanResult> = scanAllProjectsUncached(generation).then((result) => {
     // Stamp the generation this scan STARTED under so `setCachedScan` can refuse to
     // publish it if an invalidation happened while it ran.
     (scanShare.__scanResultGeneration ??= new WeakMap()).set(result, generation);
@@ -450,7 +450,13 @@ export function scanAllProjects(): Promise<ScanResult> {
   return promise;
 }
 
-async function scanAllProjectsUncached(): Promise<ScanResult> {
+async function scanAllProjectsUncached(generation: number): Promise<ScanResult> {
+  // Everything this scan writes OUTSIDE its own return value must be guarded by this: once an
+  // `invalidateCache()` has happened, this scan is obsolete and a newer one may already have
+  // published; letting it write shared state when it finishes last would restore the
+  // pre-invalidation world (#609). Today that is the carry-forward snapshots below; the result
+  // itself is guarded in `setCachedScan`.
+  const isCurrent = (): boolean => (scanShare.__scanGeneration ?? 0) === generation;
   const config = await readConfig();
   // Demo mode short-circuits the real filesystem walk with synthetic fixtures
   // (projects + board + insights + manual-steps + ops all ride on ProjectData,
@@ -637,10 +643,12 @@ async function scanAllProjectsUncached(): Promise<ScanResult> {
     // Store CLONES: the status/port-override pass below mutates the returned
     // projects in place, and the stored copy must stay pristine (pre-override)
     // so a later carry-forward re-applies whatever overrides exist THEN.
-    lastGood.set(normalizePathKey(devRoot), {
-      projects: structuredClone(rootProjects),
-      walks: rootWalks,
-    });
+    if (isCurrent()) {
+      lastGood.set(normalizePathKey(devRoot), {
+        projects: structuredClone(rootProjects),
+        walks: rootWalks,
+      });
+    }
     allProjects.push(...rootProjects);
   }
 
