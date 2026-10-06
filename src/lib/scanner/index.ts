@@ -419,7 +419,75 @@ function detectPortConflicts(projects: ProjectData[]): PortConflict[] {
   return conflicts.sort((a, b) => a.port - b.port);
 }
 
+// One scan at a time, shared by every caller. A scan is ~60 s of CPU on a large
+// tree (one lint process per project), and the callers that arrive while it runs
+// are not rare: the boot warm-up now runs detached from `register()`, so the first
+// dashboard load usually lands in the middle of it, and ~20 routes fall back to
+// `scanAllProjects()` on a cold cache. Without sharing, each started its own.
+// Keyed to the cache generation so a rescan requested AFTER an `invalidateCache()`
+// (a config edit, a board write) never joins a scan that began before it and may
+// have read the old state. On `globalThis` because the instrumentation bundle and
+// the route bundles each get their own copy of this module.
+const scanShare = globalThis as unknown as {
+  __scanInFlight?: { generation: number; promise: Promise<ScanResult> };
+  __scanGeneration?: number;
+  __scanResultGeneration?: WeakMap<ScanResult, number>;
+  /** The newest completed scan, kept so a waiter that was overtaken can take it without rescanning. */
+  __scanLatest?: { generation: number; result: ScanResult };
+};
+
+/** How many times a caller will wait out a scan that an invalidation overtook before giving up. */
+const MAX_OVERTAKEN_RESCANS = 2;
+
+/**
+ * Resolves to a scan that no invalidation overtook while it ran, so a caller never acts on
+ * data that predates a change it could already have observed (warming caches from it,
+ * resolving project paths, keying a per-slug cache). The consumers that do that are many and
+ * growing, so the guarantee lives here instead of in each of them (#609). When an
+ * invalidation lands mid-scan the caller takes the scan for the new generation: the cached
+ * one if it already finished, else the in-flight or a fresh one. After `MAX_OVERTAKEN_RESCANS`
+ * (a config being edited in a loop) the latest result is returned anyway; it is still
+ * tagged with its start generation, so `setCachedScan` refuses to cache it.
+ */
 export async function scanAllProjects(): Promise<ScanResult> {
+  for (let attempt = 0; ; attempt++) {
+    const generation = scanShare.__scanGeneration ?? 0;
+    const result = await shareScan(generation);
+    if ((scanShare.__scanGeneration ?? 0) === generation || attempt >= MAX_OVERTAKEN_RESCANS) {
+      return result;
+    }
+    const latest = scanShare.__scanLatest;
+    if (latest && latest.generation === (scanShare.__scanGeneration ?? 0)) {
+      return latest.result; // the scan for the new generation already finished
+    }
+  }
+}
+
+function shareScan(generation: number): Promise<ScanResult> {
+  const inFlight = scanShare.__scanInFlight;
+  if (inFlight && inFlight.generation === generation) return inFlight.promise;
+  const promise: Promise<ScanResult> = scanAllProjectsUncached(generation).then((result) => {
+    // Stamp the generation this scan STARTED under so `setCachedScan` can refuse to
+    // publish it if an invalidation happened while it ran.
+    (scanShare.__scanResultGeneration ??= new WeakMap()).set(result, generation);
+    if (!scanShare.__scanLatest || generation >= scanShare.__scanLatest.generation) {
+      scanShare.__scanLatest = { generation, result };
+    }
+    return result;
+  }).finally(() => {
+    if (scanShare.__scanInFlight?.promise === promise) scanShare.__scanInFlight = undefined;
+  });
+  scanShare.__scanInFlight = { generation, promise };
+  return promise;
+}
+
+async function scanAllProjectsUncached(generation: number): Promise<ScanResult> {
+  // Everything this scan writes OUTSIDE its own return value must be guarded by this: once an
+  // `invalidateCache()` has happened, this scan is obsolete and a newer one may already have
+  // published; letting it write shared state when it finishes last would restore the
+  // pre-invalidation world (#609). Today that is the carry-forward snapshots below; the result
+  // itself is guarded in `setCachedScan`.
+  const isCurrent = (): boolean => (scanShare.__scanGeneration ?? 0) === generation;
   const config = await readConfig();
   // Demo mode short-circuits the real filesystem walk with synthetic fixtures
   // (projects + board + insights + manual-steps + ops all ride on ProjectData,
@@ -606,10 +674,12 @@ export async function scanAllProjects(): Promise<ScanResult> {
     // Store CLONES: the status/port-override pass below mutates the returned
     // projects in place, and the stored copy must stay pristine (pre-override)
     // so a later carry-forward re-applies whatever overrides exist THEN.
-    lastGood.set(normalizePathKey(devRoot), {
-      projects: structuredClone(rootProjects),
-      walks: rootWalks,
-    });
+    if (isCurrent()) {
+      lastGood.set(normalizePathKey(devRoot), {
+        projects: structuredClone(rootProjects),
+        walks: rootWalks,
+      });
+    }
     allProjects.push(...rootProjects);
   }
 

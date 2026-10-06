@@ -6,8 +6,6 @@ import { readConfig } from "@/lib/config";
 import { demoMode } from "@/lib/demo/demoMode";
 import { withGroups } from "@/lib/groups/withGroups";
 
-let scanInProgress: Promise<void> | null = null;
-
 export async function GET() {
   const config = await readConfig();
   const flags = config.featureFlags;
@@ -23,26 +21,14 @@ export async function GET() {
     return NextResponse.json(withGroups(cached, config));
   }
 
-  // Prevent multiple concurrent scans
-  if (!scanInProgress) {
-    scanInProgress = scanAllProjects()
-      .then((result) => {
-        setCachedScan(result);
-      })
-      .finally(() => {
-        scanInProgress = null;
-      });
-  }
-
-  await scanInProgress;
-
-  const result = getCachedScan();
-  if (result) {
-    if (!isDemo) enqueueProjectCaches(result.projects, flags);
-    return NextResponse.json(withGroups(result, config));
-  }
-
-  return NextResponse.json(
-    { projects: [], portConflicts: [], hiddenCount: 0, scannedAt: new Date().toISOString() }
-  );
+  // `scanAllProjects` already shares one in-flight scan per cache generation, so no
+  // route-local guard here (it could keep joining a pre-invalidation scan). Serve the
+  // result we awaited rather than re-reading the cache: `setCachedScan` refuses a
+  // result whose scan was overtaken by an invalidation, and the cache would be empty.
+  const result = await scanAllProjects();
+  // Serve what we awaited, but only warm caches from a result the cache accepted (or the newer
+  // one that replaced it): an overtaken scan's paths would be deduped-in by slug for the TTL.
+  const warmFrom = setCachedScan(result) ? result : getCachedScan();
+  if (!isDemo && warmFrom) enqueueProjectCaches(warmFrom.projects, flags);
+  return NextResponse.json(withGroups(result, config));
 }

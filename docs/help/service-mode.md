@@ -93,7 +93,7 @@ Service mode respects these environment variables:
 
 | Variable | Value | Notes |
 |----------|-------|-------|
-| `MINDER_BOOTSTRAP` | `0`, `1` | Controls whether the boot-time scan / cache warm-up runs. Default is on in service mode. Set to `0` to disable. |
+| `MINDER_BOOTSTRAP` | `0`, `1` | Controls whether the boot-time scan / cache warm-up runs (in the background, so it does not delay `/api/health`). Default is on in service mode. Set to `0` to disable. |
 | `NODE_ENV` | `production` | Automatically set by the service scripts; do not override. |
 | `MINDER_USE_DB` | `0` | Optional: set to disable the SQLite index and fall back to direct JSONL parsing. Default is on (uses the index). |
 | `MINDER_DEMO` | `1` | Optional: enable demo mode with synthetic fixtures. Default is off. |
@@ -121,7 +121,7 @@ The service scripts prefer the standalone package (lower overhead) but fall back
 
 ## Health Check Endpoint
 
-The `/api/health` endpoint is a lightweight liveness + readiness probe designed for the tray app (and monitoring systems) to poll periodically. It completes in under 100ms with no network calls or subprocess spawning.
+The `/api/health` endpoint is a lightweight liveness + readiness probe designed for the tray app (and monitoring systems) to poll periodically. It completes in under 100ms with no network calls or subprocess spawning. It no longer waits for the boot-time project scan, which runs in the background (see `bootstrap` below). Other startup work can still delay the first answer, notably the index's integrity check after an unclean stop; see the section on how that check is scheduled.
 
 **Request:**
 ```
@@ -178,7 +178,7 @@ GET /api/health
 - `uptimeSec` — seconds since the server started
 - `demoMode` — whether demo-mode synthetic data is active
 - `db` — database initialization state (`idle`, `in-flight`, `success`, `transient-failed`, or `permanent-failed`)
-- `bootstrap` — boot-time scan status: whether it ran and which subsystems it started
+- `bootstrap` — boot-time warm-up status: whether it ran and which subsystems it has started so far. The project scan, caches and watchers start in the background after the database step (`scan`, `projectCaches`, `manualStepsWatcher`, ... appear as they come up), so this list can still be growing for a while after the server starts answering. A dashboard load in that window shares the scan already in progress rather than starting another
 - `watchers` — counts of active background watchers (git dirty status, GitHub activity, manual steps, task dispatcher, shutdown disposers)
 - `memory` — the process's resident set and V8 heap figures in megabytes, plus the ingest worker's last self-reported heap (`null` when no worker is running). `rssMb` is the number to watch: it is what the tray app's restart guard reads, and it is the figure that grows when memory is held outside the JavaScript heap.
 - `ingest` — which ingest pipeline is running (`worker`, `in-process`, or `off`) and how it hears about transcript changes. `watcherMode` is `native` when a single recursive OS watch is live (Windows and macOS; live immediately, with no initial scan), `chokidar` when the per-file fallback watcher is live, `arming` while chokidar is still finishing its initial scan (events already flow; the 30-second sweep covers the rest), and `sweep-only` when the watcher failed and only the sweep remains. `crashesLastHour` counts worker restarts.

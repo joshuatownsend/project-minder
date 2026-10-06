@@ -11,7 +11,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Mock dependencies before importing the route so vi.mock hoisting works.
 vi.mock("@/lib/cache", () => ({
   getCachedScan: vi.fn(),
-  setCachedScan: vi.fn(),
+  // true = stored; false = refused as stale (a scan an invalidation overtook, #609).
+  setCachedScan: vi.fn(() => true),
 }));
 
 vi.mock("@/lib/scanner", () => ({
@@ -78,6 +79,9 @@ function mockConfig(featureFlags?: MinderConfig["featureFlags"]) {
 describe("GET /api/projects", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks keeps queued `mockReturnValueOnce` values; reset so one test's unused
+    // queue entry cannot answer the next test's cache read.
+    vi.mocked(getCachedScan).mockReset();
     vi.mocked(githubActivityCache.get).mockReturnValue(null);
     mockConfig(undefined);
   });
@@ -94,10 +98,8 @@ describe("GET /api/projects", () => {
   });
 
   it("calls scanAllProjects once on cache miss and returns the stored result (cache miss)", async () => {
-    // First call (before scan) returns null; second call (after setCachedScan) returns result.
-    vi.mocked(getCachedScan)
-      .mockReturnValueOnce(null)
-      .mockReturnValueOnce(fakeScanResult);
+    // The route reads the cache once (a miss), then serves the scan it awaited.
+    vi.mocked(getCachedScan).mockReturnValue(null);
 
     vi.mocked(scanAllProjects).mockResolvedValue(fakeScanResult);
 
@@ -111,17 +113,40 @@ describe("GET /api/projects", () => {
     expect(body).toMatchObject({ projects: fakeScanResult.projects });
   });
 
-  it("returns empty fallback when cache is still null after scan completes", async () => {
-    // Both cache reads return null (simulates pathological scan failure edge case)
+  it("serves the scan it awaited even when the cache refuses to hold it", async () => {
+    // `setCachedScan` drops a result whose scan was overtaken by an invalidation, so the
+    // cache can legitimately still be empty after the scan completes. The caller waited
+    // for that scan: it must get it, not an empty dashboard (#609).
     vi.mocked(getCachedScan).mockReturnValue(null);
+    vi.mocked(setCachedScan).mockReturnValueOnce(false);
     vi.mocked(scanAllProjects).mockResolvedValue(fakeScanResult);
 
     const res = await GET();
 
-    // Handler returns the zero-state fallback JSON
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ projects: [] });
+    expect(body).toMatchObject({ projects: fakeScanResult.projects });
+    expect(setCachedScan).toHaveBeenCalledWith(fakeScanResult);
+    // ...but it does not warm the git/GitHub queues from a scan an invalidation overtook:
+    // their by-slug dedupe would keep its (possibly old-path) data for the TTL (Codex, #609).
+    expect(githubActivityCache.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("warms caches from the newer cached scan when the awaited one was refused", async () => {
+    const newer: ScanResult = {
+      ...fakeScanResult,
+      projects: [{ ...fakeScanResult.projects[0], slug: "new-path", name: "new-path" }],
+    };
+    vi.mocked(getCachedScan).mockReturnValueOnce(null).mockReturnValue(newer);
+    vi.mocked(setCachedScan).mockReturnValueOnce(false);
+    vi.mocked(scanAllProjects).mockResolvedValue(fakeScanResult);
+
+    const res = await GET();
+
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as ScanResult).projects[0].slug).toBe("my-app"); // what we awaited
+    const items = vi.mocked(githubActivityCache.enqueue).mock.calls[0][0] as Array<{ slug: string }>;
+    expect(items.map((i) => i.slug)).toEqual(["new-path"]); // warmed from the newer one
   });
 
   describe("githubActivity flag gating (Portfolio Command Deck — Phase 4)", () => {
