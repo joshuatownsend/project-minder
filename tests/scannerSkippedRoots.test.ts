@@ -135,6 +135,8 @@ beforeEach(() => {
   (globalThis as Record<string, unknown>).__scanCache = undefined;
   // Shared-scan state (one in-flight scan per cache generation, #609).
   (globalThis as Record<string, unknown>).__scanInFlight = undefined;
+  (globalThis as Record<string, unknown>).__scanLatest = undefined;
+  (globalThis as Record<string, unknown>).__scanResultGeneration = undefined;
   (globalThis as Record<string, unknown>).__scanGeneration = undefined;
 });
 
