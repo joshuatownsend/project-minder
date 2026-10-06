@@ -5,7 +5,6 @@ import type { LintFinding, LintReport, LintTarget } from "../types";
 import {
   getCachedLintReport,
   lintCacheEnabled,
-  lintCliCacheDir,
   lintFingerprint,
   putCachedLintReport,
 } from "./resultCache";
@@ -106,8 +105,10 @@ export async function runLibraryCli(
 
   const { stdout, error } = await spawnClaudelint(
     "check-all",
-    // The CLI would otherwise write `.claudelint-cache/` into the project (#610).
-    ["--format", "json", "--cache-location", lintCliCacheDir(projectPath)],
+    // `--no-cache`: the CLI's own cache would write `.claudelint-cache/` into the project
+    // (#610), and it can return a stale validator result when a file is ADDED (it only rechecks
+    // files present in its previous result). `resultCache.ts` owns reuse instead.
+    ["--format", "json", "--no-cache"],
     projectPath,
     timeoutMs,
   );

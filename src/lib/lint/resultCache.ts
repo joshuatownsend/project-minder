@@ -48,11 +48,12 @@ const FLUSH_DELAY_MS = 1000;
 /** Directory entries visited while fingerprinting; a tree bigger than this is not cached. */
 export const MAX_WALK_ENTRIES = 25_000;
 
-/** Never contain lintable config; skipping them is what keeps the walk cheap. */
-const SKIP_DIRS = new Set([
-  "node_modules", ".git", ".next", ".turbo", ".cache", "target", "__pycache__",
-  ".venv", "venv", "coverage", ".claudelint-cache",
-]);
+/**
+ * Exactly what the CLI ignores by default (`DEFAULT_IGNORES`, gitignore semantics, so at any
+ * depth), plus its own cache directory. Nothing else may be skipped: the CLI globs `**` and
+ * would lint a `CLAUDE.md` under `.next/` or `target/`, so a change there has to miss.
+ */
+const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "coverage", ".claudelint-cache"]);
 /** Everything under these is fingerprinted, whatever it is called. */
 const CONFIG_DIRS = new Set([
   ".claude", ".claude-plugin", ".claudelint", "skills", "agents", "commands", "hooks",
@@ -79,14 +80,6 @@ function stateDir(): string {
 
 function cacheFilePath(): string {
   return path.join(stateDir(), "lint-cache.json");
-}
-
-/**
- * The directory handed to the CLI as `--cache-location`. Without it the CLI writes
- * `.claudelint-cache/` into every project it checks, which most projects do not gitignore (#610).
- */
-export function lintCliCacheDir(projectPath: string): string {
-  return path.join(stateDir(), "claudelint-cache", keyFor(projectPath).slice(0, 16));
 }
 
 function normalizeKey(projectPath: string): string {
@@ -145,6 +138,49 @@ export async function lintFingerprint(
     if (parseExtends || base === ".claudelintrc.json" || base === "package.json") {
       await followExtends(abs, buf.toString("utf-8"), parseExtends || base === ".claudelintrc.json");
     }
+    if (base.endsWith(".json") && buf.includes('"hooks"')) await followHookScripts(abs, buf.toString("utf-8"));
+  };
+
+  const scripts = new Set<string>();
+
+  /**
+   * `hooks-missing-script` checks that a hook command written as a bare `./x` or `../x` path
+   * exists, relative to the project root (settings files) or to the config's directory (other
+   * hook files). Record each such path's existence and content under both bases, so creating,
+   * deleting or editing the script changes the fingerprint.
+   */
+  const followHookScripts = async (abs: string, text: string): Promise<void> => {
+    let cfg: unknown;
+    try {
+      cfg = JSON.parse(text);
+    } catch {
+      return;
+    }
+    const hooks = (cfg as { hooks?: unknown } | null)?.hooks;
+    if (!hooks || typeof hooks !== "object") return;
+    for (const groups of Object.values(hooks as Record<string, unknown>)) {
+      if (!Array.isArray(groups)) continue;
+      for (const group of groups) {
+        const handlers = (group as { hooks?: unknown } | null)?.hooks;
+        if (!Array.isArray(handlers)) continue;
+        for (const h of handlers) {
+          const cmd = (h as { command?: unknown } | null)?.command;
+          if (typeof cmd !== "string" || !(cmd.startsWith("./") || cmd.startsWith("../")) || /\s/.test(cmd)) continue;
+          for (const base of new Set([root, path.dirname(abs)])) {
+            const target = path.resolve(base, cmd);
+            if (scripts.has(target)) continue;
+            scripts.add(target);
+            try {
+              const st = await fs.stat(target);
+              if (st.isFile()) await note(target, `hook:${target}`);
+              else lines.push(`hook:${target}|not-a-file`);
+            } catch {
+              lines.push(`hook:${target}|missing`);
+            }
+          }
+        }
+      }
+    }
   };
 
   const followExtends = async (abs: string, text: string, wholeFileIsConfig: boolean): Promise<void> => {
@@ -188,8 +224,7 @@ export async function lintFingerprint(
         stats.push(note(path.join(dir, e.name), childRel));
       }
     }
-    await Promise.all(stats);
-    for (const next of subdirs) await next();
+    await Promise.all([...stats, ...subdirs.map((next) => next())]);
   };
 
   try {

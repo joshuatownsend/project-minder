@@ -164,6 +164,39 @@ describe("lintFingerprint", () => {
     expect(await lintFingerprint(project, "1.0.0")).toBeNull();
   });
 
+  it("does NOT skip build-output directories the CLI still globs (e.g. .next, target)", async () => {
+    const before = await lintFingerprint(project, "1.0.0");
+    write(".next/server/CLAUDE.md", "# generated\n");
+    expect(await lintFingerprint(project, "1.0.0")).not.toBe(before);
+    const mid = await lintFingerprint(project, "1.0.0");
+    write("target/.mcp.json", "{}");
+    expect(await lintFingerprint(project, "1.0.0")).not.toBe(mid);
+  });
+
+  describe("hook scripts (hooks-missing-script)", () => {
+    const settings = (cmd: string) =>
+      JSON.stringify({ hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: cmd }] }] } });
+
+    it("changes when a referenced ./ script is created, edited, then deleted", async () => {
+      write(".claude/settings.json", settings("./scripts/check.sh"));
+      const missing = await lintFingerprint(project, "1.0.0");
+      write("scripts/check.sh", "echo a\n");
+      const created = await lintFingerprint(project, "1.0.0");
+      expect(created).not.toBe(missing);
+      write("scripts/check.sh", "echo b\n");
+      expect(await lintFingerprint(project, "1.0.0")).not.toBe(created);
+      fs.rmSync(path.join(project, "scripts", "check.sh"));
+      expect(await lintFingerprint(project, "1.0.0")).toBe(missing);
+    });
+
+    it("ignores inline commands, which the rule does not check", async () => {
+      write(".claude/settings.json", settings("node ./scripts/check.js --flag"));
+      const before = await lintFingerprint(project, "1.0.0");
+      write("scripts/check.js", "// new\n");
+      expect(await lintFingerprint(project, "1.0.0")).toBe(before);
+    });
+  });
+
   it("changes with the CLI version", async () => {
     expect(await lintFingerprint(project, "1.0.0")).not.toBe(await lintFingerprint(project, "1.0.1"));
   });
@@ -173,6 +206,9 @@ describe("lintFingerprint", () => {
     write("src/index.ts", "export const changed = true;\n");
     write("node_modules/dep/CLAUDE.md", "# vendored\n");
     write(".claudelint-cache/x.json", "{}");
+    write("dist/CLAUDE.md", "# built\n"); // the CLI's own default ignores
+    write("build/.mcp.json", "{}");
+    write("coverage/CLAUDE.md", "# c\n");
     expect(await lintFingerprint(project, "1.0.0")).toBe(before);
   });
 
@@ -234,14 +270,11 @@ describe("runLibraryCli caching", () => {
     expect(mockSpawn).toHaveBeenCalledTimes(1);
   });
 
-  it("points the CLI's own cache under the state dir, never into the project (#610)", async () => {
+  it("runs the CLI with --no-cache so it neither writes into the project (#610) nor serves a stale result", async () => {
     await run();
     const args = mockSpawn.mock.calls[0][1] as string[];
-    const at = args.indexOf("--cache-location");
-    expect(at).toBeGreaterThan(-1);
-    const dir = args[at + 1];
-    expect(dir.startsWith(path.join(root, "state"))).toBe(true);
-    expect(dir.startsWith(project)).toBe(false);
+    expect(args).toContain("--no-cache");
+    expect(args).not.toContain("--cache-location");
   });
 
   it("MINDER_LINT_CACHE=0 always spawns and writes nothing", async () => {
