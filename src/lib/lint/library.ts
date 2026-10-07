@@ -105,7 +105,7 @@ export async function runLibraryCli(
     if (hit) return reportToFindings(hit as CliReport); // stored from a CliReport below
   }
 
-  const { stdout, error } = await spawnClaudelint(
+  const { stdout, error, signal } = await spawnClaudelint(
     "check-all",
     // `--no-cache`: the CLI's own cache would write `.claudelint-cache/` into the project
     // (#610), and it can return a stale validator result when a file is ADDED (it only rechecks
@@ -116,6 +116,11 @@ export async function runLibraryCli(
   );
   if (error) {
     engineErrors.push({ engine: "library", message: error });
+    return [];
+  }
+
+  if (signal) {
+    engineErrors.push({ engine: "library", message: `claudelint was terminated (${signal}), probably after ${timeoutMs} ms` });
     return [];
   }
 
@@ -190,7 +195,7 @@ export function spawnClaudelint(
   args: string[],
   cwd: string,
   timeoutMs: number,
-): Promise<{ stdout: string; error?: string }> {
+): Promise<{ stdout: string; error?: string; signal?: string }> {
   return new Promise((resolve) => {
     let cliBin: string;
     try {
@@ -211,7 +216,9 @@ export function spawnClaudelint(
     let out = "";
     child.stdout.on("data", (chunk: Buffer) => { out += chunk.toString(); });
     // Non-zero exit is normal; resolve with whatever stdout arrived.
-    child.on("close", () => resolve({ stdout: out }));
+    // `signal` is set when the process was killed (the `timeout` option sends SIGTERM): that is a
+    // failure, not a short run, and its partial stdout must not be trusted.
+    child.on("close", (_code, signal) => resolve({ stdout: out, ...(signal ? { signal } : {}) }));
     child.on("error", (err) => resolve({ stdout: out, error: String(err) }));
   });
 }

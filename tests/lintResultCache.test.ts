@@ -243,6 +243,22 @@ describe("lintFingerprint", () => {
     expect(await lintFingerprint(project, "1.0.0")).not.toBe(before);
   });
 
+  it("abandons a wide tree at the cap instead of reading all of it", async () => {
+    for (let i = 0; i < 60; i++) write(`pkg${i}/src/index.ts`, "");
+    const readdir = vi.spyOn(fs.promises, "readdir");
+    try {
+      // 62 entries at the root, then 60 + 60 more below: over the cap of 100 part-way through.
+      expect(await lintFingerprint(project, "1.0.0", 100)).toBeNull();
+      await new Promise((resolve) => setTimeout(resolve, 50)); // let any straggling reads show up
+      // Unbounded scheduling would have read all 121 directories; abandoning stops short of that.
+      expect(readdir.mock.calls.length).toBeLessThan(100);
+    } finally {
+      readdir.mockRestore();
+    }
+    // and the walk is reusable afterwards (no leaked limiter state)
+    expect(await lintFingerprint(project, "1.0.0")).not.toBeNull();
+  });
+
   it("changes with the CLI version", async () => {
     expect(await lintFingerprint(project, "1.0.0")).not.toBe(await lintFingerprint(project, "1.0.1"));
   });
@@ -337,6 +353,26 @@ describe("runLibraryCli caching", () => {
     expect(mockSpawn).toHaveBeenCalledTimes(2);
   });
 
+  it("does not trust or cache the output of a CLI that was killed (timeout)", async () => {
+    mockSpawn.mockImplementationOnce(() => {
+      const out = new EventEmitter();
+      const proc = new EventEmitter() as ChildProcess;
+      (proc as unknown as { stdout: EventEmitter }).stdout = out;
+      setImmediate(() => {
+        out.emit("data", Buffer.from(REPORT)); // valid-looking JSON emitted before the kill
+        proc.emit("close", null, "SIGTERM");
+      });
+      return proc;
+    });
+    const killed = await run();
+    expect(killed.findings).toEqual([]);
+    expect(killed.errors).toHaveLength(1);
+    expect(killed.errors[0].message).toMatch(/SIGTERM/);
+    const next = await run(); // nothing was stored, so this spawns and succeeds
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+    expect(next.findings).toHaveLength(1);
+  });
+
   it("treats a malformed cached report as a miss instead of crashing the scan", async () => {
     for (const bad of [
       { validators: {} },
@@ -396,6 +432,18 @@ describe("clearLintCache (forced rescan)", () => {
     expect(await getCachedLintReport(project, "fp")).toBeNull();
     _resetLintCacheForTesting();
     expect(await getCachedLintReport(project, "fp")).toBeNull(); // not resurrected from disk
+  });
+});
+
+describe("clearLintCache with caching disabled", () => {
+  it("still erases what is on disk, so re-enabling cannot resurrect it", async () => {
+    await putCachedLintReport(project, "fp", { validators: [] });
+    await flushLintCache();
+    const file = path.join(root, "state", "lint-cache.json");
+    expect(Object.keys(JSON.parse(fs.readFileSync(file, "utf-8")).entries)).toHaveLength(1);
+    process.env.MINDER_LINT_CACHE = "0";
+    await clearLintCache();
+    expect(Object.keys(JSON.parse(fs.readFileSync(file, "utf-8")).entries)).toHaveLength(0);
   });
 });
 

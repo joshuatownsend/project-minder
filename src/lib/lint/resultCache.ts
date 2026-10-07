@@ -130,6 +130,8 @@ class UncacheableError extends Error {}
 const MAX_HASH_BYTES = 2 * 1024 * 1024;
 /** `extends` files followed per project; more than this is not worth tracking. */
 const MAX_EXTENDS = 20;
+/** Concurrent filesystem calls while fingerprinting one project (scans fingerprint ten at a time). */
+const IO_CONCURRENCY = 8;
 
 /**
  * Hash of every file the CLI could read for `projectPath`, plus `cliVersion`.
@@ -144,6 +146,26 @@ export async function lintFingerprint(
   const lines: string[] = [`cli:${cliVersion}`];
   let visited = 0;
 
+  let aborted = false;
+  let active = 0;
+  const waiters: Array<() => void> = [];
+  /** Run leaf I/O under a small concurrency cap; stop scheduling as soon as the walk is abandoned. */
+  const io = async <T,>(fn: () => Promise<T>): Promise<T> => {
+    if (aborted) throw new UncacheableError();
+    if (active >= IO_CONCURRENCY) await new Promise<void>((resolve) => waiters.push(resolve));
+    if (aborted) {
+      waiters.shift()?.();
+      throw new UncacheableError();
+    }
+    active++;
+    try {
+      return await fn();
+    } finally {
+      active--;
+      waiters.shift()?.();
+    }
+  };
+
   const followed = new Set<string>();
 
   /**
@@ -154,8 +176,9 @@ export async function lintFingerprint(
   const note = async (abs: string, rel: string, parseExtends = false): Promise<void> => {
     let st: Awaited<ReturnType<typeof fs.stat>>;
     try {
-      st = await fs.stat(abs);
-    } catch {
+      st = await io(() => fs.stat(abs));
+    } catch (err) {
+      if (err instanceof UncacheableError) throw err;
       return; // vanished between readdir and read: the next scan sees the change
     }
     // No config file is this big; one that is cannot be compared by content, so do not cache.
@@ -166,8 +189,9 @@ export async function lintFingerprint(
     if (name === "plugin.json" || name === "marketplace.json") throw new UncacheableError();
     let buf: Buffer;
     try {
-      buf = await fs.readFile(abs);
-    } catch {
+      buf = await io(() => fs.readFile(abs));
+    } catch (err) {
+      if (err instanceof UncacheableError) throw err;
       return;
     }
     const base = path.basename(abs);
@@ -244,9 +268,12 @@ export async function lintFingerprint(
   };
 
   const walk = async (dir: string, rel: string, inConfig: boolean): Promise<void> => {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
+    const entries = await io(() => fs.readdir(dir, { withFileTypes: true }));
     visited += entries.length;
-    if (visited > maxEntries) throw new UncacheableError();
+    if (visited > maxEntries) {
+      aborted = true;
+      throw new UncacheableError();
+    }
     const stats: Promise<void>[] = [];
     const subdirs: Array<() => Promise<void>> = [];
     for (const e of entries) {
@@ -279,6 +306,7 @@ export async function lintFingerprint(
       if (path.dirname(dir) === dir) break;
     }
   } catch {
+    aborted = true;
     return null; // walk limit, or the project directory itself is unreadable
   }
 
@@ -364,11 +392,15 @@ export async function flushLintCache(): Promise<void> {
     clearTimeout(state.timer);
     state.timer = null;
   }
-  const newest = [...state.entries.entries()].sort((a, b) => b[1].savedAt - a[1].savedAt).slice(0, MAX_ENTRIES);
-  const body: CacheFile = { version: FILE_VERSION, entries: Object.fromEntries(newest) };
   try {
     await fs.mkdir(path.dirname(state.file), { recursive: true });
-    await withFileLock(state.file, () => writeFileAtomic(state.file, JSON.stringify(body)));
+    // The snapshot is taken INSIDE the lock, so queued flushes always write the current state:
+    // an older flush that waited behind a clear cannot overwrite it with a stale copy.
+    await withFileLock(state.file, () => {
+      const newest = [...state.entries.entries()].sort((a, b) => b[1].savedAt - a[1].savedAt).slice(0, MAX_ENTRIES);
+      const body: CacheFile = { version: FILE_VERSION, entries: Object.fromEntries(newest) };
+      return writeFileAtomic(state.file, JSON.stringify(body));
+    });
   } catch {
     // best-effort
   }
@@ -376,7 +408,8 @@ export async function flushLintCache(): Promise<void> {
 
 /** Forget every cached report, in memory and on disk (a forced rescan: the user wants fresh lint). */
 export async function clearLintCache(): Promise<void> {
-  if (!lintCacheEnabled()) return;
+  // Regardless of `MINDER_LINT_CACHE`: clearing is the escape hatch, and entries left on disk
+  // would come back if caching were re-enabled within their lifetime.
   g.__minderLintEpoch = lintCacheEpoch() + 1;
   const state = getState();
   await state.loaded;
