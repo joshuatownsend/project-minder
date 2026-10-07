@@ -338,7 +338,14 @@ describe("runLibraryCli caching", () => {
   });
 
   it("treats a malformed cached report as a miss instead of crashing the scan", async () => {
-    for (const bad of [{ validators: {} }, { validators: [{ name: "X", errors: "nope" }] }, { validators: [null] }]) {
+    for (const bad of [
+      { validators: {} },
+      { validators: [{ name: "X", errors: "nope" }] },
+      { validators: [null] },
+      { validators: [{ name: "X", errors: [{ message: "m" }] }] }, // no severity: would be served as a warning
+      { validators: [{ name: "X", errors: [{ message: "m", severity: "fatal" }] }] },
+      { validators: [{ name: "X", warnings: [{ message: "m", severity: "warning", ruleId: 7 }] }] },
+    ]) {
       _resetLintCacheForTesting();
       await putCachedLintReport(project, "fp", bad as never);
       await flushLintCache();

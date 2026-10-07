@@ -71,9 +71,19 @@ const ANCESTOR_FILES = [".claudelintrc.json", ".claudelintignore", ".gitignore",
 
 /** A cached report is trusted only if it has the shape `reportToFindings` reads; anything else is a miss. */
 function isCliReport(r: unknown): r is CachedCliReport {
-  const messages = (m: unknown) =>
-    m === undefined ||
-    (Array.isArray(m) && m.every((x) => x !== null && typeof x === "object" && typeof (x as { message?: unknown }).message === "string"));
+  const optString = (x: unknown) => x === undefined || typeof x === "string";
+  // Every field `reportToFindings`/`toFinding` reads must have its expected type; a wrong
+  // `severity` would otherwise be silently served as a warning.
+  const message = (x: unknown) => {
+    if (x === null || typeof x !== "object") return false;
+    const m = x as Record<string, unknown>;
+    return (
+      typeof m.message === "string" &&
+      (m.severity === "error" || m.severity === "warning" || m.severity === "info") &&
+      optString(m.file) && optString(m.ruleId) && optString(m.explanation) && optString(m.howToFix)
+    );
+  };
+  const messages = (m: unknown) => m === undefined || (Array.isArray(m) && m.every(message));
   const validators = (r as { validators?: unknown } | null)?.validators;
   return (
     Array.isArray(validators) &&
