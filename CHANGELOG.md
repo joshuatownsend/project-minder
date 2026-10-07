@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.16.6] - 2026-10-07
+
+*A release about the slow-boot minute. After v1.16.5 the server could answer quickly only if nothing else was happening, and measurement showed the rest of the wait was the project scan: one `claudelint` process per project, about 72 s of a cold scan on 63 projects. `/api/health` no longer waits for the scan, concurrent scans share one run, lint results are cached per project (with a Rescan escape hatch), the lint CLI stops writing `.claudelint-cache/` into every project, and the CLI itself moves to 0.10.0. On an isolated boot the full scan went from 54 s cold to 30 s warm; the first health answer arrives in about 2.5 s either way.*
+
 ### Fixed
 
 - The server no longer makes `/api/health` wait for the project scan (#584). Next holds every request until `register()` returns, and the boot warm-up awaited the whole project scan (~72 s on 63 projects, almost all of it one `claudelint` process per project) before reaching the dispatcher, the ingest worker and the first request, which is the "slow to respond" minute after every start. Only the DB probe stays on that path now, so a warm start answers in seconds; after an unclean stop the probe's integrity check (a separate cost, #588) can still hold the first answer. The scan, background caches and watchers run detached, and a failure in them is logged rather than crashing the process.
