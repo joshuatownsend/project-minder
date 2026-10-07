@@ -294,8 +294,9 @@ export async function lintFingerprint(
         if (e.name === ".claudelint" && (await fs.stat(path.join(childAbs, "rules")).then(() => true, () => false))) {
           throw new UncacheableError();
         }
-        // A config directory's existence is itself lintable (e.g. a deprecated empty `commands/`).
-        if (CONFIG_DIRS.has(e.name)) lines.push(`dir:${childRel}`);
+        // A directory's existence inside a config scope is itself lintable (a deprecated empty
+        // `commands/`, or `skill-deep-nesting` counting empty nested directories).
+        if (inConfig || CONFIG_DIRS.has(e.name)) lines.push(`dir:${childRel}`);
         subdirs.push(() => walk(childAbs, childRel, inConfig || CONFIG_DIRS.has(e.name)));
       } else if (e.isSymbolicLink() && (inConfig || CONFIG_FILES.has(e.name) || CONFIG_DIRS.has(e.name))) {
         // The CLI may follow it; hashing the target safely (cycles, dangling) is not worth it.

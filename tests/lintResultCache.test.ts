@@ -282,6 +282,19 @@ describe("lintFingerprint", () => {
     });
   });
 
+  it("changes when an empty directory appears deep inside a config scope (skill-deep-nesting)", async () => {
+    write("skills/foo/SKILL.md", "# foo\n");
+    const before = await lintFingerprint(project, "1.0.0");
+    fs.mkdirSync(path.join(project, "skills", "foo", "a", "b", "c", "d"), { recursive: true });
+    expect(await lintFingerprint(project, "1.0.0")).not.toBe(before);
+  });
+
+  it("does not record directories outside any config scope", async () => {
+    const before = await lintFingerprint(project, "1.0.0");
+    fs.mkdirSync(path.join(project, "src", "empty", "nested"), { recursive: true });
+    expect(await lintFingerprint(project, "1.0.0")).toBe(before);
+  });
+
   it("changes with the CLI version", async () => {
     expect(await lintFingerprint(project, "1.0.0")).not.toBe(await lintFingerprint(project, "1.0.1"));
   });
