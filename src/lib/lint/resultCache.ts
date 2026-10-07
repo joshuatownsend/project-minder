@@ -42,7 +42,8 @@ interface CacheState {
 }
 
 const FILE_VERSION = 1;
-export const MAX_AGE_MS = 12 * 60 * 60 * 1000;
+/** Bounds the damage of any input the fingerprint does not cover; a forced rescan clears the cache outright. */
+export const MAX_AGE_MS = 4 * 60 * 60 * 1000;
 const MAX_ENTRIES = 500;
 const FLUSH_DELAY_MS = 1000;
 /** Directory entries visited while fingerprinting; a tree bigger than this is not cached. */
@@ -62,11 +63,11 @@ const CONFIG_DIRS = new Set([
 /** Fingerprinted wherever they appear (the CLI globs `**` for several of these). */
 const CONFIG_FILES = new Set([
   "CLAUDE.md", "CLAUDE.local.md", ".mcp.json", "plugin.json", "marketplace.json",
-  "settings.json", "settings.local.json", "lsp.json", ".claudelintrc.json", ".claudelintignore",
+  "settings.json", "settings.local.json", "lsp.json", ".lsp.json", ".claudelintrc.json", ".claudelintignore", ".gitignore",
   "package.json", "pnpm-workspace.yaml",
 ]);
 /** Looked up in the project AND every ancestor (the CLI walks up to find its config). */
-const ANCESTOR_FILES = [".claudelintrc.json", ".claudelintignore", "package.json", "pnpm-workspace.yaml"];
+const ANCESTOR_FILES = [".claudelintrc.json", ".claudelintignore", ".gitignore", "package.json", "pnpm-workspace.yaml"];
 
 /** A cached report is trusted only if it has the shape `reportToFindings` reads; anything else is a miss. */
 function isCliReport(r: unknown): r is CachedCliReport {
@@ -149,14 +150,19 @@ export async function lintFingerprint(
     }
     // No config file is this big; one that is cannot be compared by content, so do not cache.
     if (st.size > MAX_HASH_BYTES) throw new UncacheableError();
+    // The CLI also stats paths these declare (a plugin manifest's components, marketplace source
+    // directories, `apiKeyHelper`). They are open-ended, so a project that has one is not cached.
+    const name = path.basename(abs);
+    if (name === "plugin.json" || name === "marketplace.json") throw new UncacheableError();
     let buf: Buffer;
     try {
       buf = await fs.readFile(abs);
     } catch {
       return;
     }
-    lines.push(`${rel}|${createHash("sha1").update(buf).digest("hex")}`);
     const base = path.basename(abs);
+    if (/^settings(\.local)?\.json$/.test(base) && buf.includes("apiKeyHelper")) throw new UncacheableError();
+    lines.push(`${rel}|${createHash("sha1").update(buf).digest("hex")}`);
     if (parseExtends || base === ".claudelintrc.json" || base === "package.json") {
       await followExtends(abs, buf.toString("utf-8"), parseExtends || base === ".claudelintrc.json");
     }
@@ -342,6 +348,15 @@ export async function flushLintCache(): Promise<void> {
   } catch {
     // best-effort
   }
+}
+
+/** Forget every cached report, in memory and on disk (a forced rescan: the user wants fresh lint). */
+export async function clearLintCache(): Promise<void> {
+  if (!lintCacheEnabled()) return;
+  const state = getState();
+  await state.loaded;
+  state.entries.clear();
+  await flushLintCache();
 }
 
 export function _resetLintCacheForTesting(): void {

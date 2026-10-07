@@ -23,6 +23,7 @@ import {
   getCachedLintReport,
   lintFingerprint,
   putCachedLintReport,
+  clearLintCache,
 } from "@/lib/lint/resultCache";
 import type { LintReport } from "@/lib/types";
 
@@ -207,6 +208,35 @@ describe("lintFingerprint", () => {
     expect(await lintFingerprint(project, "1.0.0")).toBeNull();
   });
 
+  it.each([
+    ["a root .lsp.json appears", () => write(".lsp.json", "{}")],
+    ["a .gitignore is edited", () => write(".gitignore", "build/\n")],
+  ])("changes when %s", async (_name, change) => {
+    const before = await lintFingerprint(project, "1.0.0");
+    change();
+    expect(await lintFingerprint(project, "1.0.0")).not.toBe(before);
+  });
+
+  it("changes when a .gitignore in a parent directory changes", async () => {
+    const before = await lintFingerprint(project, "1.0.0");
+    fs.writeFileSync(path.join(root, ".gitignore"), "*.md\n");
+    expect(await lintFingerprint(project, "1.0.0")).not.toBe(before);
+  });
+
+  it.each([
+    ["a plugin manifest", () => write(".claude-plugin/plugin.json", "{}")],
+    ["a marketplace manifest", () => write(".claude-plugin/marketplace.json", "{}")],
+    ["a settings file using apiKeyHelper", () => write(".claude/settings.json", JSON.stringify({ apiKeyHelper: "./get-key.sh" }))],
+  ])("returns null for a project with %s (it names paths the CLI then checks)", async (_name, change) => {
+    change();
+    expect(await lintFingerprint(project, "1.0.0")).toBeNull();
+  });
+
+  it("does not treat an ordinary settings file as uncacheable", async () => {
+    write(".claude/settings.json", JSON.stringify({ permissions: { allow: [] } }));
+    expect(await lintFingerprint(project, "1.0.0")).not.toBeNull();
+  });
+
   it("changes with the CLI version", async () => {
     expect(await lintFingerprint(project, "1.0.0")).not.toBe(await lintFingerprint(project, "1.0.1"));
   });
@@ -323,8 +353,20 @@ describe("runLibraryCli caching", () => {
   });
 });
 
+describe("clearLintCache (forced rescan)", () => {
+  it("drops every entry, in memory and on disk", async () => {
+    await putCachedLintReport(project, "fp", { validators: [] });
+    await flushLintCache();
+    expect(await getCachedLintReport(project, "fp")).not.toBeNull();
+    await clearLintCache();
+    expect(await getCachedLintReport(project, "fp")).toBeNull();
+    _resetLintCacheForTesting();
+    expect(await getCachedLintReport(project, "fp")).toBeNull(); // not resurrected from disk
+  });
+});
+
 describe("cache entry freshness", () => {
-  it("expires after MAX_AGE_MS, bounding a file the fingerprint missed", async () => {
+  it("expires after MAX_AGE_MS, bounding an input the fingerprint missed", async () => {
     const report = { validators: [] };
     await putCachedLintReport(project, "fp", report, 1_000);
     expect(await getCachedLintReport(project, "fp", 1_000 + MAX_AGE_MS)).toBe(report);
