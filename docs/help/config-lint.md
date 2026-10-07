@@ -43,7 +43,7 @@ After Apply, the control reports which files actually changed. Files the formatt
 Config Lint uses a three-pass engine:
 
 1. **Adapter pass** — re-emits CLAUDE.md audit findings without re-running the audit.
-2. **Library pass** — runs the `claude-code-lint` CLI subprocess per project and maps its findings.
+2. **Library pass** — runs the `claude-code-lint` CLI subprocess per project and maps its findings. The result is cached in `~/.minder/lint-cache.json` and reused until a file the CLI could read changes (config under `.claude/`, `CLAUDE.md`, `.mcp.json`, `.lsp.json`, `.gitignore`, a `.claudelintrc.json` in the project or a parent), the CLI is upgraded, or 4 hours pass (the **Rescan** button clears it entirely), so an unchanged project is not re-linted on every scan. Files are compared by content, a local config that `extends` another file is followed, and a hook's `./script` is tracked by existence and content. A project whose skills or config are reached through a symlink, has custom rules under `.claudelint/rules`, whose `.claudelintrc.json` extends an npm package, or that is a plugin or marketplace repository (has a `plugin.json` or `marketplace.json`) or sets `apiKeyHelper`, is never cached and is linted on every scan. Set `MINDER_LINT_CACHE=0` to lint every time. Minder runs the CLI with its own cache off, so nothing is written into your projects.
 3. **Vendored pass** — runs cross-scope rules that require Project Minder's aggregated view (e.g., MCP name collisions across six sources).
 
 The **Engine errors** section at the bottom of the panel appears when any pass fails to run. Engine errors do not suppress findings from the other passes — a broken library pass still shows vendored and adapter findings.

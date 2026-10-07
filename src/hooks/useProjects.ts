@@ -33,7 +33,7 @@ export function useProjects() {
   const rescan = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetch("/api/scan", { method: "POST" });
+      const res = await fetch("/api/scan?fresh=1", { method: "POST" });
       if (!res.ok) throw new Error("Failed to rescan");
       const result = await res.json();
       setData(result);

@@ -15,9 +15,13 @@ import { gitStatusCache } from "@/lib/gitStatusCache";
 import { githubActivityCache } from "@/lib/githubActivityCache";
 import { readConfig } from "@/lib/config";
 import { withGroups } from "@/lib/groups/withGroups";
+import { clearLintCache } from "@/lib/lint/resultCache";
 
-export async function POST() {
+export async function POST(request: Request) {
   invalidateCache();
+  // `?fresh=1` (the Rescan button): also drop the cached lint results, so a stale finding the
+  // cache could not see is re-linted. Other callers (settings pages) keep them.
+  if (new URL(request.url).searchParams.get("fresh") === "1") await clearLintCache();
   // Manual rescan is user-initiated: drop the cached WSL distro snapshot so a
   // just-started distro's root is scanned now, not skipped for the 30s TTL —
   // and purge the caches' stopped-WSL sentinels so dirty status and GitHub

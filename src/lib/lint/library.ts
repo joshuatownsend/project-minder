@@ -1,6 +1,14 @@
 import { spawn } from "child_process";
+import { readFileSync } from "fs";
 import path from "path";
 import type { LintFinding, LintReport, LintTarget } from "../types";
+import {
+  getCachedLintReport,
+  lintCacheEnabled,
+  lintCacheEpoch,
+  lintFingerprint,
+  putCachedLintReport,
+} from "./resultCache";
 
 // Map library validator names → our LintTarget values.
 // "CLAUDE.md Validator" is intentionally absent — the adapter pass handles it.
@@ -59,10 +67,24 @@ export function resolveClaudelintBin(): string {
   return path.join(pkgRoot, "bin", "claudelint");
 }
 
+/** The installed CLI's version: part of the cache key, so an upgrade re-lints everything. */
+let cliVersionMemo: string | undefined;
+function claudelintVersion(): string {
+  if (cliVersionMemo !== undefined) return cliVersionMemo;
+  try {
+    const pkgPath = path.join(path.dirname(resolveClaudelintBin()), "..", "package.json");
+    cliVersionMemo = String((JSON.parse(readFileSync(pkgPath, "utf-8")) as { version?: string }).version ?? "unknown");
+  } catch {
+    cliVersionMemo = "unknown";
+  }
+  return cliVersionMemo;
+}
+
 /**
- * Spawn `claude-code-lint check-all --format json` in the given project
- * directory, parse the output, and return findings. Any failure (spawn error,
- * timeout, JSON parse error) is recorded in `engineErrors` and returns [].
+ * Lint a project with `claude-code-lint check-all --format json` and return findings. The CLI
+ * costs ~2 s per project, so a result is reused while nothing it could read has changed
+ * (`resultCache.ts`). Any failure (spawn error, timeout, JSON parse error) is recorded in
+ * `engineErrors`, returns [], and is never cached.
  *
  * Non-zero CLI exit is expected when linting errors are found; we always
  * resolve on process close and parse whatever stdout arrived.
@@ -72,14 +94,33 @@ export async function runLibraryCli(
   engineErrors: LintReport["engineErrors"],
   timeoutMs = 20_000,
 ): Promise<LintFinding[]> {
-  const { stdout, error } = await spawnClaudelint(
+  const cacheOn = lintCacheEnabled();
+  const epoch = lintCacheEpoch();
+  const version = cacheOn ? claudelintVersion() : "";
+  // Computed BEFORE the spawn: if a file changes while the CLI runs, the stored fingerprint
+  // is already stale and the next scan misses, rather than blessing a result it never saw.
+  const fingerprint = cacheOn && version !== "unknown" ? await lintFingerprint(projectPath, version) : null;
+  if (fingerprint) {
+    const hit = await getCachedLintReport(projectPath, fingerprint);
+    if (hit) return reportToFindings(hit as CliReport); // stored from a CliReport below
+  }
+
+  const { stdout, error, signal } = await spawnClaudelint(
     "check-all",
-    ["--format", "json"],
+    // `--no-cache`: the CLI's own cache would write `.claudelint-cache/` into the project
+    // (#610), and it can return a stale validator result when a file is ADDED (it only rechecks
+    // files present in its previous result). `resultCache.ts` owns reuse instead.
+    ["--format", "json", "--no-cache"],
     projectPath,
     timeoutMs,
   );
   if (error) {
     engineErrors.push({ engine: "library", message: error });
+    return [];
+  }
+
+  if (signal) {
+    engineErrors.push({ engine: "library", message: `claudelint was terminated (${signal}), probably after ${timeoutMs} ms` });
     return [];
   }
 
@@ -93,6 +134,24 @@ export async function runLibraryCli(
     return [];
   }
 
+  // Store only if the tree looks the same after the run as before it. This narrows the window
+  // in which the report could describe a state the fingerprint does not (a file edited
+  // mid-run); it cannot see a change that is made and reverted within the run, which the 4 h
+  // age limit and the Rescan button cover. `epoch` drops the store if the cache was cleared
+  // (a forced rescan) while this run was in flight.
+  if (fingerprint && (await lintFingerprint(projectPath, version)) === fingerprint) {
+    await putCachedLintReport(
+      projectPath,
+      fingerprint,
+      { validators: (report.validators ?? []).map((v) => ({ name: v.name, errors: v.errors, warnings: v.warnings })) },
+      Date.now(),
+      epoch,
+    );
+  }
+  return reportToFindings(report);
+}
+
+function reportToFindings(report: CliReport): LintFinding[] {
   const findings: LintFinding[] = [];
   for (const validator of report.validators ?? []) {
     const target = VALIDATOR_TARGET[validator.name];
@@ -136,7 +195,7 @@ export function spawnClaudelint(
   args: string[],
   cwd: string,
   timeoutMs: number,
-): Promise<{ stdout: string; error?: string }> {
+): Promise<{ stdout: string; error?: string; signal?: string }> {
   return new Promise((resolve) => {
     let cliBin: string;
     try {
@@ -157,7 +216,9 @@ export function spawnClaudelint(
     let out = "";
     child.stdout.on("data", (chunk: Buffer) => { out += chunk.toString(); });
     // Non-zero exit is normal; resolve with whatever stdout arrived.
-    child.on("close", () => resolve({ stdout: out }));
+    // `signal` is set when the process was killed (the `timeout` option sends SIGTERM): that is a
+    // failure, not a short run, and its partial stdout must not be trusted.
+    child.on("close", (_code, signal) => resolve({ stdout: out, ...(signal ? { signal } : {}) }));
     child.on("error", (err) => resolve({ stdout: out, error: String(err) }));
   });
 }
