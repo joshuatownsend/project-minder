@@ -132,6 +132,39 @@ const MAX_HASH_BYTES = 2 * 1024 * 1024;
 const MAX_EXTENDS = 20;
 /** Concurrent filesystem calls while fingerprinting one project (scans fingerprint ten at a time). */
 const IO_CONCURRENCY = 8;
+/** `@import` / link targets tracked per project, and imported files read; more is not worth tracking. */
+const MAX_REFS = 2000;
+const MAX_IMPORTED_FILES = 200;
+/** What the CLI's `fileExists` calls "does not exist": a failed `stat` of any kind. These we can reproduce. */
+const ABSENT_CODES = new Set(["ENOENT", "ENOTDIR", "EINVAL", "ENAMETOOLONG", "ELOOP", "ERR_INVALID_ARG_VALUE"]);
+
+// Both mirror claude-code-lint (`extractImportsWithLineNumbers` / `isImportPath`, and
+// `skill-referenced-file-not-found`'s link pattern), minus its code-fence handling. tests/
+// lintFingerprintConformance.test.ts runs the real CLI under an fs tracer and fails if it
+// ever touches a path these miss.
+const IMPORT_RE = /(?:^|\s)@(\S+)/g;
+const isImportPath = (p: string): boolean => p.includes("/") || /\.\w{1,5}$/.test(p);
+const SKILL_LINK_RE = /\[([^\]]+)\]\((?!https?:\/\/|#|\/|mailto:)(?:\.\/)?([^)]+)\)/g;
+
+/**
+ * Whether a settings file defines `apiKeyHelper`, the command the CLI then goes on to check. Decided
+ * on the PARSED keys: `"apiKeyHelper"` is the same key to the CLI but not a substring match.
+ * A file that does not parse falls back to a byte search that also treats any escape as a hit.
+ */
+function declaresApiKeyHelper(buf: Buffer): boolean {
+  let cfg: unknown;
+  try {
+    cfg = JSON.parse(buf.toString("utf-8"));
+  } catch {
+    return buf.includes("apiKeyHelper") || buf.includes("\\u");
+  }
+  const has = (v: unknown, depth: number): boolean => {
+    if (depth > 20 || v === null || typeof v !== "object") return depth > 20;
+    if (Array.isArray(v)) return v.some((x) => has(x, depth + 1));
+    return Object.entries(v).some(([k, x]) => k === "apiKeyHelper" || has(x, depth + 1));
+  };
+  return has(cfg, 0);
+}
 
 /**
  * Hash of every file the CLI could read for `projectPath`, plus `cliVersion`.
@@ -204,12 +237,89 @@ export async function lintFingerprint(
       return gone(err);
     }
     const base = path.basename(abs);
-    if (/^settings(\.local)?\.json$/.test(base) && buf.includes("apiKeyHelper")) throw new UncacheableError();
+    if (/^settings(\.local)?\.json$/.test(base) && declaresApiKeyHelper(buf)) throw new UncacheableError();
     lines.push(`${rel}|${createHash("sha1").update(buf).digest("hex")}`);
+    if (base.endsWith(".md")) await followReferences(abs, buf.toString("utf-8"));
     if (parseExtends || base === ".claudelintrc.json" || base === "package.json") {
       await followExtends(abs, buf.toString("utf-8"), parseExtends || base === ".claudelintrc.json");
     }
     if (base.endsWith(".json") && buf.includes('"hooks"')) await followHookScripts(abs, buf.toString("utf-8"));
+  };
+
+  const refs = new Set<string>();
+  let importedFiles = 0;
+
+  /** Whether the CLI would find nothing at this path: it treats every failed `stat` as "absent". */
+  const absent = (err: unknown): boolean => {
+    if (err instanceof UncacheableError) throw err;
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    if (code !== undefined && ABSENT_CODES.has(code)) return true;
+    throw new UncacheableError(); // permissions or a transient failure: the answer is unknown
+  };
+
+  /**
+   * `claude-md-import-missing` (and the circular / depth / read-failed rules) `stat` and read the
+   * file an `@import` names, resolved against the importing file's directory, wherever that is -
+   * including outside the project - and follow the imports inside it. Record its existence and
+   * content, and recurse. Matching is looser than the CLI's (code fences and inline code are not
+   * skipped), so this tracks a superset.
+   */
+  const noteImport = async (target: string): Promise<void> => {
+    const key = `imp:${target}`;
+    if (refs.has(key)) return;
+    refs.add(key);
+    if (refs.size > MAX_REFS) throw new UncacheableError();
+    let st: Awaited<ReturnType<typeof fs.stat>>;
+    try {
+      st = await io(() => fs.stat(target));
+    } catch (err) {
+      absent(err);
+      lines.push(`${key}|none`);
+      return;
+    }
+    if (!st.isFile()) {
+      lines.push(`${key}|other`);
+      return;
+    }
+    if (st.size > MAX_HASH_BYTES || ++importedFiles > MAX_IMPORTED_FILES) throw new UncacheableError();
+    let buf: Buffer;
+    try {
+      buf = await io(() => fs.readFile(target));
+    } catch (err) {
+      absent(err);
+      lines.push(`${key}|none`);
+      return;
+    }
+    lines.push(`${key}|${createHash("sha1").update(buf).digest("hex")}`);
+    await followImports(target, buf.toString("utf-8"));
+  };
+
+  const followImports = async (abs: string, text: string): Promise<void> => {
+    for (const m of text.matchAll(IMPORT_RE)) {
+      if (isImportPath(m[1])) await noteImport(path.resolve(path.join(path.dirname(abs), m[1])));
+    }
+  };
+
+  /** `skill-referenced-file-not-found` only `stat`s a SKILL.md link's target, so existence and type are enough. */
+  const noteLink = async (target: string): Promise<void> => {
+    const key = `lnk:${target}`;
+    if (refs.has(key)) return;
+    refs.add(key);
+    if (refs.size > MAX_REFS) throw new UncacheableError();
+    try {
+      const st = await io(() => fs.stat(target));
+      lines.push(`${key}|${st.isDirectory() ? "dir" : "file"}`);
+    } catch (err) {
+      absent(err);
+      lines.push(`${key}|none`);
+    }
+  };
+
+  /** The files a markdown config file points at: `@imports` anywhere, relative links in a SKILL.md. */
+  const followReferences = async (abs: string, text: string): Promise<void> => {
+    await followImports(abs, text);
+    if (path.basename(abs) !== "SKILL.md") return;
+    for (const m of text.matchAll(SKILL_LINK_RE)) await noteLink(path.resolve(path.join(path.dirname(abs), m[2])));
   };
 
   const scripts = new Set<string>();

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The lint result cache now follows the files a config file points at (#617), closing the gaps v1.16.6 listed. Creating, editing or deleting a file that a `CLAUDE.md` `@import`s, or that a `SKILL.md` links to, now re-lints the project: imports are read and followed through chains (including targets outside the project, and a circular import), and a skill's relative links are checked for existence, which is all the CLI does with them. A settings file is recognised as defining `apiKeyHelper` by its parsed keys, so a key that spells one of its letters with a JSON unicode escape no longer slips past; a project with an import chain over 200 files, over 2,000 import or link targets, or a target that cannot be inspected is simply not cached. The global gitignore, which v1.16.6 listed as a gap, was never one: tracing the CLI showed it reads no `.gitignore` at all. A new test runs the installed `claude-code-lint` under an `fs` tracer over a fixture that exercises its file-reading rules and fails if any path it touches does not move the fingerprint, so a CLI upgrade that starts reading something new is caught when the bump is made rather than by a stale result.
+
 ## [1.16.6] - 2026-10-07
 
 *A release about the slow-boot minute. After v1.16.5 the server could answer quickly only if nothing else was happening, and measurement showed the rest of the wait was the project scan: one `claudelint` process per project, about 72 s of a cold scan on 63 projects. `/api/health` no longer waits for the scan, concurrent scans share one run, lint results are cached per project (with a Rescan escape hatch), the lint CLI stops writing `.claudelint-cache/` into every project, and the CLI itself moves to 0.10.0. On an isolated boot the full scan went from 54 s cold to 30 s warm; the first health answer arrives in about 2.5 s either way.*
