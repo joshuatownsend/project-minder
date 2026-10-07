@@ -5,6 +5,7 @@ import type { LintFinding, LintReport, LintTarget } from "../types";
 import {
   getCachedLintReport,
   lintCacheEnabled,
+  lintCacheEpoch,
   lintFingerprint,
   putCachedLintReport,
 } from "./resultCache";
@@ -94,6 +95,7 @@ export async function runLibraryCli(
   timeoutMs = 20_000,
 ): Promise<LintFinding[]> {
   const cacheOn = lintCacheEnabled();
+  const epoch = lintCacheEpoch();
   const version = cacheOn ? claudelintVersion() : "";
   // Computed BEFORE the spawn: if a file changes while the CLI runs, the stored fingerprint
   // is already stale and the next scan misses, rather than blessing a result it never saw.
@@ -127,13 +129,19 @@ export async function runLibraryCli(
     return [];
   }
 
-  // Store only if nothing the CLI reads changed while it ran: otherwise this result may describe
-  // a state the fingerprint does not (A -> B during the run, then back to A, would serve B's
-  // report as a hit for A).
+  // Store only if the tree looks the same after the run as before it. This narrows the window
+  // in which the report could describe a state the fingerprint does not (a file edited
+  // mid-run); it cannot see a change that is made and reverted within the run, which the 4 h
+  // age limit and the Rescan button cover. `epoch` drops the store if the cache was cleared
+  // (a forced rescan) while this run was in flight.
   if (fingerprint && (await lintFingerprint(projectPath, version)) === fingerprint) {
-    await putCachedLintReport(projectPath, fingerprint, {
-      validators: (report.validators ?? []).map((v) => ({ name: v.name, errors: v.errors, warnings: v.warnings })),
-    });
+    await putCachedLintReport(
+      projectPath,
+      fingerprint,
+      { validators: (report.validators ?? []).map((v) => ({ name: v.name, errors: v.errors, warnings: v.warnings })) },
+      Date.now(),
+      epoch,
+    );
   }
   return reportToFindings(report);
 }

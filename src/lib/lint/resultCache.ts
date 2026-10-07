@@ -88,7 +88,7 @@ function isCliReport(r: unknown): r is CachedCliReport {
   );
 }
 
-const g = globalThis as unknown as { __minderLintCache?: CacheState };
+const g = globalThis as unknown as { __minderLintCache?: CacheState; __minderLintEpoch?: number };
 
 export function lintCacheEnabled(): boolean {
   return process.env.MINDER_LINT_CACHE !== "0";
@@ -248,6 +248,8 @@ export async function lintFingerprint(
         if (e.name === ".claudelint" && (await fs.stat(path.join(childAbs, "rules")).then(() => true, () => false))) {
           throw new UncacheableError();
         }
+        // A config directory's existence is itself lintable (e.g. a deprecated empty `commands/`).
+        if (CONFIG_DIRS.has(e.name)) lines.push(`dir:${childRel}`);
         subdirs.push(() => walk(childAbs, childRel, inConfig || CONFIG_DIRS.has(e.name)));
       } else if (e.isSymbolicLink() && (inConfig || CONFIG_FILES.has(e.name) || CONFIG_DIRS.has(e.name))) {
         // The CLI may follow it; hashing the target safely (cycles, dangling) is not worth it.
@@ -315,14 +317,26 @@ export async function getCachedLintReport(
   return entry.report;
 }
 
+/**
+ * Bumped by `clearLintCache`. A caller reads it BEFORE it starts linting and passes it to
+ * `putCachedLintReport`, so a run that was already in flight when the cache was cleared cannot
+ * repopulate it afterwards with a result the clear was meant to discard.
+ */
+export function lintCacheEpoch(): number {
+  return g.__minderLintEpoch ?? 0;
+}
+
 export async function putCachedLintReport(
   projectPath: string,
   fingerprint: string,
   report: CachedCliReport,
   now = Date.now(),
+  epoch?: number,
 ): Promise<void> {
+  if (epoch !== undefined && epoch !== lintCacheEpoch()) return;
   const state = getState();
   await state.loaded;
+  if (epoch !== undefined && epoch !== lintCacheEpoch()) return;
   state.entries.set(keyFor(projectPath), { fingerprint, savedAt: now, report });
   if (state.timer) return;
   state.timer = setTimeout(() => {
@@ -353,6 +367,7 @@ export async function flushLintCache(): Promise<void> {
 /** Forget every cached report, in memory and on disk (a forced rescan: the user wants fresh lint). */
 export async function clearLintCache(): Promise<void> {
   if (!lintCacheEnabled()) return;
+  g.__minderLintEpoch = lintCacheEpoch() + 1;
   const state = getState();
   await state.loaded;
   state.entries.clear();

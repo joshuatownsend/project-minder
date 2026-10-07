@@ -237,6 +237,12 @@ describe("lintFingerprint", () => {
     expect(await lintFingerprint(project, "1.0.0")).not.toBeNull();
   });
 
+  it("changes when an empty config directory appears (a deprecated empty commands/ is itself a finding)", async () => {
+    const before = await lintFingerprint(project, "1.0.0");
+    fs.mkdirSync(path.join(project, ".claude", "commands"), { recursive: true });
+    expect(await lintFingerprint(project, "1.0.0")).not.toBe(before);
+  });
+
   it("changes with the CLI version", async () => {
     expect(await lintFingerprint(project, "1.0.0")).not.toBe(await lintFingerprint(project, "1.0.1"));
   });
@@ -307,6 +313,27 @@ describe("runLibraryCli caching", () => {
     await run();
     expect(mockSpawn).toHaveBeenCalledTimes(2);
     await run(); // a stable run IS stored
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+  });
+
+  it("a run in flight when the cache is cleared cannot repopulate it (forced rescan)", async () => {
+    let release: () => void = () => {};
+    mockSpawn.mockImplementationOnce(() => {
+      const out = new EventEmitter();
+      const proc = new EventEmitter() as ChildProcess;
+      (proc as unknown as { stdout: EventEmitter }).stdout = out;
+      release = () => {
+        out.emit("data", Buffer.from(REPORT));
+        proc.emit("close", 1);
+      };
+      return proc;
+    });
+    const inFlight = run();
+    await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledTimes(1));
+    await clearLintCache(); // the user hit Rescan while that lint was running
+    release();
+    await inFlight;
+    await run(); // not served from the pre-clear run's result
     expect(mockSpawn).toHaveBeenCalledTimes(2);
   });
 
