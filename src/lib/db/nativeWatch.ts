@@ -83,17 +83,34 @@ export interface NativeWatchOptions {
 
 export type JudgedOutcome = "forwarded" | "old" | "duplicate" | "unreadable";
 
+export interface WriteGateOptions {
+  /** What the gate learns about a file. Production: `fs.promises.stat`. */
+  stat(filePath: string): Promise<{ size: number; mtimeMs: number }>;
+  /** Called for each `change` the gate lets through (including a fail-open one). */
+  onChange(filePath: string): void;
+  clock?: { now(): number; monotonic(): number };
+  maxRemembered?: number;
+  onJudged?: (filePath: string, outcome: JudgedOutcome) => void;
+}
+
+export interface WriteGate {
+  /** Rule on a `change` event for `filePath`. Asynchronous; see `settled`. */
+  judge(filePath: string): void;
+  /** Drop what is remembered about a file that no longer exists. */
+  forget(filePath: string): void;
+  /** Resolves once every event handed to `judge` so far has been ruled on. */
+  settled(): Promise<void>;
+  /** Stop forwarding: rulings still in flight are discarded. */
+  close(): void;
+}
+
 /**
- * Start the watch, or return `null` when it cannot be established (the root is
- * missing, or recursive watching is unsupported here). Never throws: the caller
- * falls back to chokidar, which also copes with a root that appears later.
+ * The write gate, separated from the OS watch so it can be driven by a fake `stat`
+ * and a fake clock (#606). The real-filesystem tests can only wait for an event the
+ * OS may deliver late; here every input is the caller's, so a "nothing was
+ * forwarded" assertion cannot pass for want of an event that never arrived.
  */
-export function startNativeRecursiveWatch(
-  root: string,
-  handlers: NativeWatchHandlers,
-  opts: NativeWatchOptions = {}
-): NativeWatch | null {
-  let watcher: fs.FSWatcher;
+export function createWriteGate(opts: WriteGateOptions): WriteGate {
   const clock = opts.clock ?? { now: () => Date.now(), monotonic: () => performance.now() };
   const armedAt = clock.now();
   const armedMono = clock.monotonic();
@@ -125,8 +142,8 @@ export function startNativeRecursiveWatch(
    * file cannot be stat'ed, let the caller's own gate decide (a missing file will
    * also have produced a `rename`, and the 30 s sweep is the net for the rest).
    */
-  const forwardIfWritten = (filePath: string): void => {
-    const judged: Promise<void> = fs.promises.stat(filePath).then(
+  const judge = (filePath: string): void => {
+    const judged: Promise<void> = opts.stat(filePath).then(
       (st) => {
         if (closed) return;
         if (st.mtimeMs < writeThreshold()) {
@@ -147,12 +164,12 @@ export function startNativeRecursiveWatch(
           }
         }
         passed.set(filePath, { size: st.size, mtimeMs: st.mtimeMs });
-        handlers.onChange(filePath);
+        opts.onChange(filePath);
         opts.onJudged?.(filePath, "forwarded");
       },
       () => {
         if (closed) return;
-        handlers.onChange(filePath);
+        opts.onChange(filePath);
         opts.onJudged?.(filePath, "unreadable");
       }
     ).then(() => {
@@ -161,6 +178,40 @@ export function startNativeRecursiveWatch(
     pending.add(judged);
   };
 
+  return {
+    judge,
+    forget: (filePath) => {
+      passed.delete(filePath);
+    },
+    settled: async () => {
+      // Events judged while we wait can add more; loop until the set is empty.
+      while (pending.size > 0) await Promise.all([...pending]);
+    },
+    close: () => {
+      closed = true;
+    },
+  };
+}
+
+/**
+ * Start the watch, or return `null` when it cannot be established (the root is
+ * missing, or recursive watching is unsupported here). Never throws: the caller
+ * falls back to chokidar, which also copes with a root that appears later.
+ */
+export function startNativeRecursiveWatch(
+  root: string,
+  handlers: NativeWatchHandlers,
+  opts: NativeWatchOptions = {}
+): NativeWatch | null {
+  let watcher: fs.FSWatcher;
+  const gate = createWriteGate({
+    stat: (filePath) => fs.promises.stat(filePath),
+    onChange: handlers.onChange,
+    clock: opts.clock,
+    maxRemembered: opts.maxRemembered,
+    onJudged: opts.onJudged,
+  });
+
   try {
     watcher = fs.watch(root, { recursive: true, persistent: true }, (event, filename) => {
       // `filename` is relative to `root`, and can be null on some platforms.
@@ -168,7 +219,7 @@ export function startNativeRecursiveWatch(
       if (!filename || !filename.toString().endsWith(".jsonl")) return;
       const filePath = path.join(root, filename.toString());
       if (event === "change") {
-        forwardIfWritten(filePath);
+        gate.judge(filePath);
         return;
       }
       // `rename`: appeared or vanished. Deletion triggers a full prune pass, so
@@ -177,7 +228,7 @@ export function startNativeRecursiveWatch(
         () => handlers.onChange(filePath),
         (err: NodeJS.ErrnoException) => {
           if (err?.code === "ENOENT") {
-            passed.delete(filePath);
+            gate.forget(filePath);
             handlers.onGone(filePath);
           }
           // Anything else (EBUSY mid-write, EPERM): the sweep will see the file.
@@ -190,12 +241,9 @@ export function startNativeRecursiveWatch(
   watcher.on("error", (err) => handlers.onError(err));
   return {
     close: () => {
-      closed = true;
+      gate.close();
       watcher.close();
     },
-    settled: async () => {
-      // Events judged while we wait can add more; loop until the set is empty.
-      while (pending.size > 0) await Promise.all([...pending]);
-    },
+    settled: () => gate.settled(),
   };
 }
