@@ -296,6 +296,8 @@ export async function lintFingerprint(
 
   const followImports = async (abs: string, text: string): Promise<void> => {
     for (const m of text.matchAll(IMPORT_RE)) {
+      // join, not resolve: the CLI's resolvePath() is resolve(join(dir, p)), so an absolute-looking
+      // "@/x.md" stays under the importing file's directory (the conformance fixture pins this).
       if (isImportPath(m[1])) await noteImport(path.resolve(path.join(path.dirname(abs), m[1])));
     }
   };

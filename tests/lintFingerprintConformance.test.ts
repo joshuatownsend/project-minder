@@ -72,6 +72,11 @@ beforeAll(() => {
   buildFixture();
 
   const traceFile = path.join(base, "trace.txt");
+  // Run the tracer from a path containing a space, as a Windows profile or checkout can: NODE_OPTIONS
+  // splits on spaces unless the value is quoted, so an unquoted --require would load a truncated path.
+  const tracer = path.join(base, "trace tools", "fsTrace.cjs");
+  fs.mkdirSync(path.dirname(tracer), { recursive: true });
+  fs.copyFileSync(TRACER, tracer);
   const result = spawnSync(process.execPath, [resolveClaudelintBin(), "check-all", "--format", "json", "--no-cache"], {
     cwd: project,
     encoding: "utf-8",
@@ -82,7 +87,7 @@ beforeAll(() => {
       USERPROFILE: home,
       XDG_CONFIG_HOME: path.join(home, ".config"),
       FSTRACE_OUT: traceFile,
-      NODE_OPTIONS: `--require ${TRACER.split(path.sep).join("/")}`,
+      NODE_OPTIONS: `--require "${tracer.split(path.sep).join("/")}"`,
     },
   });
   // exit 1 just means findings were reported; the run must still have produced a report
