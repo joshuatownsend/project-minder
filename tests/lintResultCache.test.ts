@@ -259,6 +259,29 @@ describe("lintFingerprint", () => {
     expect(await lintFingerprint(project, "1.0.0")).not.toBeNull();
   });
 
+  describe("unreadable inputs", () => {
+    const failRead = (code: string) =>
+      vi.spyOn(fs.promises, "readFile").mockRejectedValue(Object.assign(new Error(code), { code }));
+
+    it("returns null when a config file cannot be read (permissions, a transient error)", async () => {
+      const spy = failRead("EACCES");
+      try {
+        expect(await lintFingerprint(project, "1.0.0")).toBeNull();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("treats a file that vanished mid-walk (ENOENT) as absent, not as a reason to give up", async () => {
+      const spy = failRead("ENOENT");
+      try {
+        expect(await lintFingerprint(project, "1.0.0")).not.toBeNull();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
   it("changes with the CLI version", async () => {
     expect(await lintFingerprint(project, "1.0.0")).not.toBe(await lintFingerprint(project, "1.0.1"));
   });

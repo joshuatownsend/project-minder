@@ -166,6 +166,17 @@ export async function lintFingerprint(
     }
   };
 
+  /**
+   * A file that vanished between `readdir` and read (ENOENT) is simply absent: the next scan sees
+   * the change. Any other failure (permissions, a transient error) means an input could not be
+   * read, so the fingerprint cannot be trusted to describe it.
+   */
+  const gone = (err: unknown): void => {
+    if (err instanceof UncacheableError) throw err;
+    if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") return;
+    throw new UncacheableError();
+  };
+
   const followed = new Set<string>();
 
   /**
@@ -178,8 +189,7 @@ export async function lintFingerprint(
     try {
       st = await io(() => fs.stat(abs));
     } catch (err) {
-      if (err instanceof UncacheableError) throw err;
-      return; // vanished between readdir and read: the next scan sees the change
+      return gone(err);
     }
     // No config file is this big; one that is cannot be compared by content, so do not cache.
     if (st.size > MAX_HASH_BYTES) throw new UncacheableError();
@@ -191,8 +201,7 @@ export async function lintFingerprint(
     try {
       buf = await io(() => fs.readFile(abs));
     } catch (err) {
-      if (err instanceof UncacheableError) throw err;
-      return;
+      return gone(err);
     }
     const base = path.basename(abs);
     if (/^settings(\.local)?\.json$/.test(base) && buf.includes("apiKeyHelper")) throw new UncacheableError();
