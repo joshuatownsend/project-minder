@@ -56,6 +56,14 @@ export default defineConfig({
     // prevents is a red pre-commit hook on an unrelated change, which teaches
     // people to re-run until green.
     testTimeout: 60000,
+    // The same guard for hooks (#590). `installIsolatedState`'s `afterEach`
+    // already bounds its own work (the temp-home removal gives up after 2 s),
+    // yet `subagentBillingBoundary.test.ts` failed `verify-windows` once with
+    // "Hook timed out in 10000ms" in that teardown while its sibling tests
+    // took 7-19 s each: the runner's disk and scheduler were slow, not the
+    // hook. Hooks fell back to vitest's 10 s default when only `testTimeout`
+    // was raised, so the starvation moved from the test body to its teardown.
+    hookTimeout: 60000,
     execArgv: ["--max-old-space-size=4096"],
     // Cap fork concurrency to avoid Windows VirtualAlloc failures when running
     // 200+ test files in parallel child processes.
