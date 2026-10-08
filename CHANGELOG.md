@@ -6,8 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.16.7] - 2026-10-08
+
+*A release about trusting the lint cache. v1.16.6 cached each project's lint result behind a fingerprint of everything the CLI could read, and listed the gaps it knew of: files a `CLAUDE.md` imports or a `SKILL.md` links to. Those gaps are now closed, and a conformance test runs the real lint CLI under an `fs` tracer so a future CLI upgrade that reads something new fails the bump instead of serving a stale result. Next moves to 16.3.8, checked with the four-cold-boot gate against a known-bad control.*
+
 ### Changed
 
+- Next.js is now 16.3.8 (was 16.3.3). Verified with the cold-boot gate on a copy of the live index: one cold boot per route (`/api/sessions`, `/api/usage`, `/api/stats`, `/api/skills`) on the packaged server, plus a known-bad 16.3.0 control that fails as expected.
 - The lint result cache now follows the files a config file points at (#617), closing the gaps v1.16.6 listed. Creating, editing or deleting a file that a `CLAUDE.md` `@import`s, or creating or deleting a file that a `SKILL.md` links to (only its existence matters), now re-lints the project: imports are read and followed through chains (including targets outside the project, and a circular import), and a skill's relative links are checked for existence, which is all the CLI does with them. A settings file is recognised as defining `apiKeyHelper` by its parsed keys, so a key that spells one of its letters with a JSON unicode escape no longer slips past; a project with an import chain over 200 files, over 2,000 import or link targets, or a target that cannot be inspected is simply not cached. The global gitignore, which v1.16.6 listed as a gap, was never one: tracing the CLI showed it reads no `.gitignore` at all. A new test runs the installed `claude-code-lint` under an `fs` tracer over a fixture that exercises its file-reading rules and fails if any path it touches does not move the fingerprint, so a CLI upgrade that starts reading something new is caught when the bump is made rather than by a stale result.
 
 ## [1.16.6] - 2026-10-07
