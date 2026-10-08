@@ -25,6 +25,7 @@ interface MarksState {
 
 const FILE_VERSION = 1;
 const FLUSH_DELAY_MS = 2000;
+const FUTURE_TOLERANCE_MS = 60_000;
 const g = globalThis as unknown as { __minderInsightsMarks?: MarksState };
 
 function marksFile(): string {
@@ -71,7 +72,12 @@ export async function getSyncMark(projectPath: string): Promise<SyncMark | undef
 
 export function setSyncMark(projectPath: string, mark: SyncMark): void {
   const state = getState();
-  state.marks.set(keyFor(projectPath), mark);
+  const key = keyFor(projectPath);
+  // Monotonic: overlapping scan generations can finish out of order, and the older one must not
+  // move a newer mark back (that would re-read the range the newer one already covered).
+  const existing = state.marks.get(key);
+  if (existing && existing.at > mark.at) return;
+  state.marks.set(key, mark);
   if (state.timer) return;
   state.timer = setTimeout(() => {
     state.timer = null;
@@ -103,7 +109,14 @@ export async function flushSyncMarks(): Promise<void> {
  * The time before which session files can be skipped.
  * `insightsMtimeMs` is INSIGHTS.md's mtime, or null when the file does not exist.
  */
-export function watermarkFor(insightsMtimeMs: number | null, mark: SyncMark | undefined): number {
+export function watermarkFor(
+  insightsMtimeMs: number | null,
+  rawMark: SyncMark | undefined,
+  now: number = Date.now(),
+): number {
+  // A mark from the future (clock set back, hand-edited file) would hide every normally timestamped
+  // transcript until the clock catches up; ignore it rather than trust it.
+  const mark = rawMark && rawMark.at <= now + FUTURE_TOLERANCE_MS ? rawMark : undefined;
   if (insightsMtimeMs === null) {
     // No file. A mark recorded when there was none says "scanned everything, found nothing":
     // trust it. A mark recorded WITH a file means it was deleted since, so start over.

@@ -3,7 +3,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { scanInsightsMd } from "@/lib/scanner/insightsMd";
-import { flushSyncMarks } from "@/lib/scanner/insightsSyncMarks";
+import { flushSyncMarks, setSyncMark, watermarkFor } from "@/lib/scanner/insightsSyncMarks";
 
 // #612 — the sync that pulls insights out of session transcripts must not re-read transcripts it has
 // already looked at. Its watermark used to be INSIGHTS.md's mtime alone, which only moves when
@@ -51,7 +51,8 @@ beforeEach(() => {
   }) as typeof fs.promises.readFile);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await flushSyncMarks(); // cancels the pending flush timer so it cannot fire inside the next test
   readSpy.mockRestore();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -60,6 +61,11 @@ afterEach(() => {
 });
 
 const OLD = Date.parse("2026-09-01T00:00:00Z");
+
+// The sync starts its mark 1 s early (so a file written as it begins is re-read once), and a file's
+// ctime is its creation/utimes time (it cannot be backdated). So fixtures must age past that second
+// before the scan that is meant to record them.
+const settle = () => new Promise<void>((r) => setTimeout(r, 1100));
 
 describe("insights sync watermark (#612)", () => {
   it("does not re-read sessions newer than a stale INSIGHTS.md once they have been looked at", async () => {
@@ -71,8 +77,9 @@ describe("insights sync watermark (#612)", () => {
     delete g.__minderInsightsMarks; // as if this install predates the marks: only the stale mtime to go on
 
     jsonlReads = [];
-    await scanInsightsMd(project); // reads b once, finds nothing new, records the sync
-    expect(jsonlReads).toEqual(["b.jsonl"]);
+    await settle();
+    await scanInsightsMd(project); // reads what is newer than INSIGHTS.md once, finds nothing new, records the sync
+    expect([...jsonlReads].sort()).toEqual(["a.jsonl", "b.jsonl"]); // both are newer than the stale INSIGHTS.md (a's ctime is fresh)
 
     jsonlReads = [];
     await scanInsightsMd(project);
@@ -95,6 +102,7 @@ describe("insights sync watermark (#612)", () => {
   it("does not re-read sessions of a project that has no insights and so no INSIGHTS.md", async () => {
     session("a", null, Date.now() - 60_000);
     session("b", null, Date.now() - 60_000);
+    await settle();
     expect(await scanInsightsMd(project)).toBeUndefined();
     expect(fs.existsSync(path.join(project, "INSIGHTS.md"))).toBe(false);
 
@@ -134,6 +142,7 @@ describe("insights sync watermark (#612)", () => {
 
   it("remembers the sync across a restart (marks are persisted)", async () => {
     session("a", null, Date.now() - 60_000);
+    await settle();
     await scanInsightsMd(project);
     await flushSyncMarks();
     expect(fs.existsSync(path.join(root, "state", "insights-sync.json"))).toBe(true);
@@ -150,5 +159,36 @@ describe("insights sync watermark (#612)", () => {
     session("a", "alpha insight", Date.now() - 60_000);
     const info = await scanInsightsMd(project);
     expect(info?.entries.map((e) => e.content)).toEqual(["alpha insight"]);
+  });
+
+  it("reads a transcript that arrives later with an OLD mtime preserved (backup restore, copy)", async () => {
+    session("a", null, Date.now() - 60_000);
+    await scanInsightsMd(project);
+    // restored from a backup: mtime says last month, but the file only now exists here (fresh ctime)
+    session("restored", "restored insight", OLD);
+    const info = await scanInsightsMd(project);
+    expect(info?.entries.map((e) => e.content)).toEqual(["restored insight"]);
+  });
+});
+
+describe("sync mark bookkeeping (#612)", () => {
+  it("ignores a mark from the future instead of hiding every transcript until the clock catches up", () => {
+    const now = 1_000_000_000_000;
+    expect(watermarkFor(null, { at: now + 3_600_000, hadFile: false }, now)).toBe(0);
+    expect(watermarkFor(5, { at: now + 3_600_000, hadFile: true }, now)).toBe(5);
+    expect(watermarkFor(null, { at: now - 1000, hadFile: false }, now)).toBe(now - 1000);
+  });
+
+  it("never moves a mark backwards (overlapping scans finish out of order)", async () => {
+    const mark = async () => {
+      session("a", null, Date.now() - 60_000);
+      await settle();
+      await scanInsightsMd(project);
+    };
+    await mark();
+    setSyncMark(project, { at: Date.now() - 3_600_000, hadFile: false }); // a stale generation finishing late
+    jsonlReads = [];
+    await scanInsightsMd(project);
+    expect(jsonlReads).toEqual([]);
   });
 });

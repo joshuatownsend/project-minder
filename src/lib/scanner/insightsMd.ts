@@ -359,7 +359,9 @@ async function syncInsightsFromSessions(projectPath: string): Promise<string | n
         const filePath = path.join(dirPath, file);
         try {
           const fstat = await fs.stat(filePath);
-          if (fstat.mtimeMs <= watermarkMs) return [];
+          // ctime as well as mtime: a transcript restored or copied in with its OLD mtime preserved
+          // (backup restore, another machine) still has a fresh change time, and must not be skipped.
+          if (Math.max(fstat.mtimeMs, fstat.ctimeMs) <= watermarkMs) return [];
           if (fstat.size > 50 * 1024 * 1024) return [];
           const content = await fs.readFile(filePath, "utf-8");
           const sessionId = path.basename(file, ".jsonl");
