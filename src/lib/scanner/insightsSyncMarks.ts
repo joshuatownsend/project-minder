@@ -1,0 +1,114 @@
+import { promises as fs } from "fs";
+import os from "os";
+import path from "path";
+import { withFileLock, writeFileAtomic } from "../atomicWrite";
+import { normalizePathKey } from "../platform";
+
+// #612 — when each project's insights were last synced from session transcripts. INSIGHTS.md's mtime
+// only moves when something NEW is written, so alone it leaves the watermark stale for a project that
+// has nothing new (or no INSIGHTS.md at all) and every scan re-reads its newer transcripts.
+// Best-effort: a missing, corrupt or unwritable file just means the old (slower) behaviour.
+
+export interface SyncMark {
+  /** Wall-clock ms at which the sync that recorded this mark STARTED (files written during it are re-read once). */
+  at: number;
+  /** Whether INSIGHTS.md existed when the sync finished (a mark made without one stops applying if it was since deleted). */
+  hadFile: boolean;
+}
+
+interface MarksState {
+  marks: Map<string, SyncMark>;
+  loaded: Promise<void>;
+  file: string;
+  timer: NodeJS.Timeout | null;
+}
+
+const FILE_VERSION = 1;
+const FLUSH_DELAY_MS = 2000;
+const g = globalThis as unknown as { __minderInsightsMarks?: MarksState };
+
+function marksFile(): string {
+  return path.join(process.env.MINDER_STATE_DIR || path.join(os.homedir(), ".minder"), "insights-sync.json");
+}
+
+function keyFor(projectPath: string): string {
+  return normalizePathKey(path.resolve(projectPath));
+}
+
+function isMark(v: unknown): v is SyncMark {
+  const m = v as Partial<SyncMark> | null;
+  return !!m && typeof m.at === "number" && Number.isFinite(m.at) && typeof m.hadFile === "boolean";
+}
+
+function getState(): MarksState {
+  const file = marksFile();
+  // Re-created when the state dir changes (tests point MINDER_STATE_DIR at a temp directory per case).
+  if (g.__minderInsightsMarks && g.__minderInsightsMarks.file === file) return g.__minderInsightsMarks;
+  const marks = new Map<string, SyncMark>();
+  const state: MarksState = {
+    marks,
+    file,
+    timer: null,
+    loaded: (async () => {
+      try {
+        const parsed = JSON.parse(await fs.readFile(file, "utf-8")) as { version?: number; marks?: Record<string, unknown> };
+        if (parsed.version !== FILE_VERSION || !parsed.marks) return;
+        for (const [k, v] of Object.entries(parsed.marks)) if (isMark(v)) marks.set(k, v);
+      } catch {
+        // no file yet, or unreadable: start empty
+      }
+    })(),
+  };
+  g.__minderInsightsMarks = state;
+  return state;
+}
+
+export async function getSyncMark(projectPath: string): Promise<SyncMark | undefined> {
+  const state = getState();
+  await state.loaded;
+  return state.marks.get(keyFor(projectPath));
+}
+
+export function setSyncMark(projectPath: string, mark: SyncMark): void {
+  const state = getState();
+  state.marks.set(keyFor(projectPath), mark);
+  if (state.timer) return;
+  state.timer = setTimeout(() => {
+    state.timer = null;
+    void flushSyncMarks();
+  }, FLUSH_DELAY_MS);
+  state.timer.unref?.();
+}
+
+/** Write the marks to disk now. Best-effort. */
+export async function flushSyncMarks(): Promise<void> {
+  const state = g.__minderInsightsMarks;
+  if (!state) return;
+  if (state.timer) {
+    clearTimeout(state.timer);
+    state.timer = null;
+  }
+  try {
+    await state.loaded;
+    await fs.mkdir(path.dirname(state.file), { recursive: true });
+    await withFileLock(state.file, () =>
+      writeFileAtomic(state.file, JSON.stringify({ version: FILE_VERSION, marks: Object.fromEntries(state.marks) })),
+    );
+  } catch {
+    // best-effort
+  }
+}
+
+/**
+ * The time before which session files can be skipped.
+ * `insightsMtimeMs` is INSIGHTS.md's mtime, or null when the file does not exist.
+ */
+export function watermarkFor(insightsMtimeMs: number | null, mark: SyncMark | undefined): number {
+  if (insightsMtimeMs === null) {
+    // No file. A mark recorded when there was none says "scanned everything, found nothing":
+    // trust it. A mark recorded WITH a file means it was deleted since, so start over.
+    return mark && !mark.hadFile ? mark.at : 0;
+  }
+  // File exists: an edit or append is itself a sync point, so never go earlier than its mtime.
+  return Math.max(insightsMtimeMs, mark?.at ?? 0);
+}

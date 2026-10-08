@@ -5,6 +5,7 @@ import crypto from "crypto";
 import { InsightEntry, InsightsInfo } from "../types";
 import { encodePath, toSlug } from "./claudeConversations";
 import { writeFileAtomic, withFileLock } from "../atomicWrite";
+import { getSyncMark, setSyncMark, watermarkFor } from "./insightsSyncMarks";
 
 // ─── Dedup ID ────────────────────────────────────────────────────────────────
 
@@ -310,15 +311,18 @@ export function parseInsightsMd(content: string): {
 async function syncInsightsFromSessions(projectPath: string): Promise<string | null> {
   const claudeProjectsDir = path.join(os.homedir(), ".claude", "projects");
 
-  // Watermark: skip JSONL files not modified since last INSIGHTS.md write
+  // Watermark: skip JSONL files not modified since the last sync (#612). INSIGHTS.md's mtime alone
+  // is not enough: it only moves when something new is written, so a project with changing sessions
+  // and nothing new to extract would re-read the same files on every scan.
+  const syncStartedAt = Date.now() - 1000; // slack: a file written as the sync begins is re-read once
   const insightsMdPath = path.join(projectPath, "INSIGHTS.md");
-  let watermarkMs = 0;
+  let insightsMtimeMs: number | null = null;
   try {
-    const stat = await fs.stat(insightsMdPath);
-    watermarkMs = stat.mtimeMs;
+    insightsMtimeMs = (await fs.stat(insightsMdPath)).mtimeMs;
   } catch {
-    // No INSIGHTS.md yet — scan all JSONL files
+    // No INSIGHTS.md yet
   }
+  const watermarkMs = watermarkFor(insightsMtimeMs, await getSyncMark(projectPath));
 
   const encoded = encodePath(projectPath).toLowerCase();
   const projectSlug = toSlug(path.basename(projectPath));
@@ -336,6 +340,9 @@ async function syncInsightsFromSessions(projectPath: string): Promise<string | n
   });
 
   const allInsights: InsightEntry[] = [];
+  // Any directory or file we could not read means this pass did not see everything, so it must not
+  // advance the watermark past what it missed.
+  let incomplete = false;
 
   for (const dir of matchingDirs) {
     const dirPath = path.join(claudeProjectsDir, dir);
@@ -343,6 +350,7 @@ async function syncInsightsFromSessions(projectPath: string): Promise<string | n
     try {
       files = (await fs.readdir(dirPath)).filter((f) => f.endsWith(".jsonl"));
     } catch {
+      incomplete = true;
       continue;
     }
 
@@ -357,6 +365,7 @@ async function syncInsightsFromSessions(projectPath: string): Promise<string | n
           const sessionId = path.basename(file, ".jsonl");
           return parseInsightsFromJsonl(content, sessionId, projectSlug, projectPath);
         } catch {
+          incomplete = true;
           return [];
         }
       })
@@ -365,8 +374,12 @@ async function syncInsightsFromSessions(projectPath: string): Promise<string | n
     allInsights.push(...fileInsights.flat());
   }
 
-  if (allInsights.length === 0) return null;
-  const { content } = await appendInsights(projectPath, allInsights);
+  // A throw from appendInsights skips the mark below, so the next scan looks again.
+  const content = allInsights.length > 0 ? (await appendInsights(projectPath, allInsights)).content : null;
+  if (!incomplete) {
+    // Anything appended means the file exists now; otherwise nothing changed since the first stat.
+    setSyncMark(projectPath, { at: syncStartedAt, hadFile: allInsights.length > 0 || insightsMtimeMs !== null });
+  }
   return content;
 }
 

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A project scan no longer re-reads the same session transcripts for insights on every run (#612). The sync that copies `★ Insight` blocks from transcripts into `INSIGHTS.md` skipped only files older than `INSIGHTS.md`'s modification time, which moves only when something new is written, so a project whose sessions kept changing but held nothing new (or no insights at all, hence no `INSIGHTS.md`) re-read and re-parsed every newer transcript each time: 2,284 files / 1.2 GB for one project, about 10 s of a serial scan. Minder now remembers when each project was last synced (`~/.minder/insights-sync.json`) and reads only what changed since. A pass that could not read some file does not advance the mark, a deleted `INSIGHTS.md` starts that project over, and a missing or corrupt marks file just means the old behaviour.
+
 ## [1.16.7] - 2026-10-08
 
 *A release about trusting the lint cache. v1.16.6 cached each project's lint result behind a fingerprint of everything the CLI could read, and listed the gaps it knew of: files a `CLAUDE.md` imports or a `SKILL.md` links to. Those gaps are now closed, and a conformance test runs the real lint CLI under an `fs` tracer so a future CLI upgrade that reads something new fails the bump instead of serving a stale result. Next moves to 16.3.8, checked with the four-cold-boot gate against a known-bad control.*
