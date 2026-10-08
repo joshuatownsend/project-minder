@@ -339,8 +339,10 @@ async function registerServiceDisposers(): Promise<void> {
       if (isDispatcherRunning()) await stopDispatcher();
     });
     onShutdown("insightsSyncMarks", async () => {
-      const { flushSyncMarks } = await import("@/lib/scanner/insightsSyncMarks");
-      await flushSyncMarks();
+      // Synchronous and never throws: a disposer that fails or overruns its small budget would make
+      // the lifecycle withhold the database's clean-shutdown marker (a multi-minute check next boot).
+      const { flushSyncMarksSync } = await import("@/lib/scanner/insightsSyncMarks");
+      flushSyncMarksSync();
     });
     onShutdown("gitStatusCache", async () => {
       const { gitStatusCache } = await import("@/lib/gitStatusCache");

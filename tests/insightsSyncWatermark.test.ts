@@ -3,7 +3,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { scanInsightsMd } from "@/lib/scanner/insightsMd";
-import { flushSyncMarks, setSyncMark, watermarkFor } from "@/lib/scanner/insightsSyncMarks";
+import { flushSyncMarks, flushSyncMarksSync, setSyncMark, watermarkFor } from "@/lib/scanner/insightsSyncMarks";
 
 // #612 — the sync that pulls insights out of session transcripts must not re-read transcripts it has
 // already looked at. Its watermark used to be INSIGHTS.md's mtime alone, which only moves when
@@ -174,9 +174,9 @@ describe("insights sync watermark (#612)", () => {
 describe("sync mark bookkeeping (#612)", () => {
   it("ignores a mark from the future instead of hiding every transcript until the clock catches up", () => {
     const now = 1_000_000_000_000;
-    expect(watermarkFor(null, { at: now + 3_600_000, hadFile: false }, now)).toBe(0);
-    expect(watermarkFor(5, { at: now + 3_600_000, hadFile: true }, now)).toBe(5);
-    expect(watermarkFor(null, { at: now - 1000, hadFile: false }, now)).toBe(now - 1000);
+    expect(watermarkFor(null, { at: now + 3_600_000, hadFile: false, dirs: [] }, now)).toBe(0);
+    expect(watermarkFor(5, { at: now + 3_600_000, hadFile: true, dirs: [] }, now)).toBe(5);
+    expect(watermarkFor(null, { at: now - 1000, hadFile: false, dirs: [] }, now)).toBe(now - 1000);
   });
 
   it("never moves a mark backwards (overlapping scans finish out of order)", async () => {
@@ -186,7 +186,7 @@ describe("sync mark bookkeeping (#612)", () => {
       await scanInsightsMd(project);
     };
     await mark();
-    setSyncMark(project, { at: Date.now() - 3_600_000, hadFile: false }); // a stale generation finishing late
+    setSyncMark(project, { at: Date.now() - 3_600_000, hadFile: false, dirs: [] }); // a stale generation finishing late
     jsonlReads = [];
     await scanInsightsMd(project);
     expect(jsonlReads).toEqual([]);
@@ -194,11 +194,49 @@ describe("sync mark bookkeeping (#612)", () => {
 
   it("replaces a future-dated mark after a successful scan instead of re-reading everything until the clock catches up", async () => {
     session("a", null, Date.now() - 60_000);
-    setSyncMark(project, { at: Date.now() + 3_600_000, hadFile: false }); // clock rollback / hand edit
+    setSyncMark(project, { at: Date.now() + 3_600_000, hadFile: false, dirs: [] }); // clock rollback / hand edit
     await settle();
     await scanInsightsMd(project); // ignores the bad mark, reads, records a real one
     jsonlReads = [];
     await scanInsightsMd(project);
     expect(jsonlReads).toEqual([]);
+  });
+
+  it("reads a transcript directory the last sync never saw, even if its files are older than the mark", async () => {
+    const known = sessionsDir;
+    const restored = `${sessionsDir}--claude-worktrees-restored`; // a worktree dir mounted into place later
+    session("a", null, OLD);
+    fs.mkdirSync(restored);
+    const text = ["`★ Insight ─────────────────────────────────────`", "restored dir insight", "`─────────────────────────────────────────────────`"].join("\n");
+    fs.writeFileSync(path.join(restored, "r.jsonl"), JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text }] } }) + "\n");
+    fs.utimesSync(path.join(restored, "r.jsonl"), OLD / 1000, OLD / 1000);
+    await settle(); // every file's ctime is now older than the mark below
+    setSyncMark(project, { at: Date.now(), hadFile: false, dirs: [path.basename(known)] });
+
+    jsonlReads = [];
+    const info = await scanInsightsMd(project);
+    expect(jsonlReads).toEqual(["r.jsonl"]); // the known dir's a.jsonl is skipped, the new dir is read in full
+    expect(info?.entries.map((e) => e.content)).toEqual(["restored dir insight"]);
+  });
+
+  it("flushes the marks synchronously for shutdown, and never throws when it cannot", async () => {
+    session("a", null, Date.now() - 60_000);
+    await settle();
+    await scanInsightsMd(project);
+    flushSyncMarksSync();
+    expect(JSON.parse(fs.readFileSync(path.join(root, "state", "insights-sync.json"), "utf-8")).version).toBe(1);
+
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    fs.writeFileSync(path.join(root, "state"), "a file where the directory should be");
+    expect(() => flushSyncMarksSync()).not.toThrow();
+  });
+
+  it("records only this project's transcript directories in the mark", async () => {
+    session("a", null, Date.now() - 60_000);
+    fs.mkdirSync(path.join(path.dirname(sessionsDir), "some-other-project"));
+    await scanInsightsMd(project);
+    await flushSyncMarks();
+    const file = JSON.parse(fs.readFileSync(path.join(root, "state", "insights-sync.json"), "utf-8"));
+    expect(Object.values<{ dirs: string[] }>(file.marks).map((m) => m.dirs)).toEqual([[path.basename(sessionsDir)]]);
   });
 });

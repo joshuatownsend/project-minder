@@ -1,4 +1,4 @@
-import { promises as fs } from "fs";
+import { promises as fs, mkdirSync, renameSync, writeFileSync } from "fs";
 import os from "os";
 import path from "path";
 import { withFileLock, writeFileAtomic } from "../atomicWrite";
@@ -14,6 +14,8 @@ export interface SyncMark {
   at: number;
   /** Whether INSIGHTS.md existed when the sync finished. A mark made WITH one stops applying if the file is later deleted; a mark made without one stays valid while the file is absent. */
   hadFile: boolean;
+  /** The transcript directories this sync saw; one not listed here is new since, and is read in full. */
+  dirs: string[];
 }
 
 interface MarksState {
@@ -38,7 +40,10 @@ function keyFor(projectPath: string): string {
 
 function isMark(v: unknown): v is SyncMark {
   const m = v as Partial<SyncMark> | null;
-  return !!m && typeof m.at === "number" && Number.isFinite(m.at) && typeof m.hadFile === "boolean";
+  return (
+    !!m && typeof m.at === "number" && Number.isFinite(m.at) && typeof m.hadFile === "boolean" &&
+    Array.isArray(m.dirs) && m.dirs.every((d) => typeof d === "string")
+  );
 }
 
 function getState(): MarksState {
@@ -77,7 +82,7 @@ export function setSyncMark(projectPath: string, mark: SyncMark): void {
   // move a newer mark back (that would re-read the range the newer one already covered).
   const existing = state.marks.get(key);
   // A future-dated existing mark is one watermarkFor already ignores, so it must not block its replacement.
-  if (existing && existing.at <= Date.now() + FUTURE_TOLERANCE_MS && existing.at > mark.at) return;
+  if (effectiveMark(existing) && existing!.at > mark.at) return;
   state.marks.set(key, mark);
   if (state.timer) return;
   state.timer = setTimeout(() => {
@@ -85,6 +90,28 @@ export function setSyncMark(projectPath: string, mark: SyncMark): void {
     void flushSyncMarks();
   }, FLUSH_DELAY_MS);
   state.timer.unref?.();
+}
+
+/**
+ * Write the marks to disk now, synchronously and without ever throwing. For shutdown: the lifecycle
+ * treats a disposer that fails or overruns its (small) budget as an unconfirmed stop and withholds
+ * the database's clean-shutdown marker, so best-effort cache persistence must be instant and silent.
+ */
+export function flushSyncMarksSync(): void {
+  const state = g.__minderInsightsMarks;
+  if (!state) return;
+  if (state.timer) {
+    clearTimeout(state.timer);
+    state.timer = null;
+  }
+  try {
+    mkdirSync(path.dirname(state.file), { recursive: true });
+    const tmp = `${state.file}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ version: FILE_VERSION, marks: Object.fromEntries(state.marks) }));
+    renameSync(tmp, state.file);
+  } catch {
+    // best-effort
+  }
 }
 
 /** Write the marks to disk now. Best-effort. */
@@ -107,6 +134,14 @@ export async function flushSyncMarks(): Promise<void> {
 }
 
 /**
+ * A mark from the future (clock set back, hand-edited file) would hide every normally timestamped
+ * transcript until the clock catches up; it is ignored rather than trusted.
+ */
+export function effectiveMark(mark: SyncMark | undefined, now: number = Date.now()): SyncMark | undefined {
+  return mark && mark.at <= now + FUTURE_TOLERANCE_MS ? mark : undefined;
+}
+
+/**
  * The time before which session files can be skipped.
  * `insightsMtimeMs` is INSIGHTS.md's mtime, or null when the file does not exist.
  */
@@ -115,9 +150,7 @@ export function watermarkFor(
   rawMark: SyncMark | undefined,
   now: number = Date.now(),
 ): number {
-  // A mark from the future (clock set back, hand-edited file) would hide every normally timestamped
-  // transcript until the clock catches up; ignore it rather than trust it.
-  const mark = rawMark && rawMark.at <= now + FUTURE_TOLERANCE_MS ? rawMark : undefined;
+  const mark = effectiveMark(rawMark, now);
   if (insightsMtimeMs === null) {
     // No file. A mark recorded when there was none says "scanned everything, found nothing":
     // trust it. A mark recorded WITH a file means it was deleted since, so start over.

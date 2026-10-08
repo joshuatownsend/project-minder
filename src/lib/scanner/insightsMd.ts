@@ -5,7 +5,7 @@ import crypto from "crypto";
 import { InsightEntry, InsightsInfo } from "../types";
 import { encodePath, toSlug } from "./claudeConversations";
 import { writeFileAtomic, withFileLock } from "../atomicWrite";
-import { getSyncMark, setSyncMark, watermarkFor } from "./insightsSyncMarks";
+import { effectiveMark, getSyncMark, setSyncMark, watermarkFor } from "./insightsSyncMarks";
 
 // ─── Dedup ID ────────────────────────────────────────────────────────────────
 
@@ -322,7 +322,11 @@ async function syncInsightsFromSessions(projectPath: string): Promise<string | n
   } catch {
     // No INSIGHTS.md yet
   }
-  const watermarkMs = watermarkFor(insightsMtimeMs, await getSyncMark(projectPath));
+  const mark = effectiveMark(await getSyncMark(projectPath));
+  const watermarkMs = watermarkFor(insightsMtimeMs, mark);
+  // A transcript directory the last sync did not see (a project dir restored, renamed or mounted into
+  // place) holds files that keep their OLD mtime/ctime, so only the INSIGHTS.md watermark applies there.
+  const baseWatermarkMs = watermarkFor(insightsMtimeMs, undefined);
 
   const encoded = encodePath(projectPath).toLowerCase();
   const projectSlug = toSlug(path.basename(projectPath));
@@ -345,6 +349,7 @@ async function syncInsightsFromSessions(projectPath: string): Promise<string | n
   let incomplete = false;
 
   for (const dir of matchingDirs) {
+    const dirWatermarkMs = mark?.dirs.includes(dir) ? watermarkMs : baseWatermarkMs;
     const dirPath = path.join(claudeProjectsDir, dir);
     let files: string[];
     try {
@@ -361,7 +366,7 @@ async function syncInsightsFromSessions(projectPath: string): Promise<string | n
           const fstat = await fs.stat(filePath);
           // ctime as well as mtime: a transcript restored or copied in with its OLD mtime preserved
           // (backup restore, another machine) still has a fresh change time, and must not be skipped.
-          if (Math.max(fstat.mtimeMs, fstat.ctimeMs) <= watermarkMs) return [];
+          if (Math.max(fstat.mtimeMs, fstat.ctimeMs) <= dirWatermarkMs) return [];
           if (fstat.size > 50 * 1024 * 1024) return [];
           const content = await fs.readFile(filePath, "utf-8");
           const sessionId = path.basename(file, ".jsonl");
@@ -380,7 +385,7 @@ async function syncInsightsFromSessions(projectPath: string): Promise<string | n
   const content = allInsights.length > 0 ? (await appendInsights(projectPath, allInsights)).content : null;
   if (!incomplete) {
     // Anything appended means the file exists now; otherwise nothing changed since the first stat.
-    setSyncMark(projectPath, { at: syncStartedAt, hadFile: allInsights.length > 0 || insightsMtimeMs !== null });
+    setSyncMark(projectPath, { at: syncStartedAt, hadFile: allInsights.length > 0 || insightsMtimeMs !== null, dirs: matchingDirs });
   }
   return content;
 }
