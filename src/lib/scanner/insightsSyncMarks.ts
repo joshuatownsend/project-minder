@@ -12,7 +12,7 @@ import { normalizePathKey } from "../platform";
 export interface SyncMark {
   /** Wall-clock ms at which the sync that recorded this mark STARTED (files written during it are re-read once). */
   at: number;
-  /** Whether INSIGHTS.md existed when the sync finished (a mark made without one stops applying if it was since deleted). */
+  /** Whether INSIGHTS.md existed when the sync finished. A mark made WITH one stops applying if the file is later deleted; a mark made without one stays valid while the file is absent. */
   hadFile: boolean;
 }
 
@@ -76,7 +76,8 @@ export function setSyncMark(projectPath: string, mark: SyncMark): void {
   // Monotonic: overlapping scan generations can finish out of order, and the older one must not
   // move a newer mark back (that would re-read the range the newer one already covered).
   const existing = state.marks.get(key);
-  if (existing && existing.at > mark.at) return;
+  // A future-dated existing mark is one watermarkFor already ignores, so it must not block its replacement.
+  if (existing && existing.at <= Date.now() + FUTURE_TOLERANCE_MS && existing.at > mark.at) return;
   state.marks.set(key, mark);
   if (state.timer) return;
   state.timer = setTimeout(() => {

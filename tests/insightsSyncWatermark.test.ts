@@ -191,4 +191,14 @@ describe("sync mark bookkeeping (#612)", () => {
     await scanInsightsMd(project);
     expect(jsonlReads).toEqual([]);
   });
+
+  it("replaces a future-dated mark after a successful scan instead of re-reading everything until the clock catches up", async () => {
+    session("a", null, Date.now() - 60_000);
+    setSyncMark(project, { at: Date.now() + 3_600_000, hadFile: false }); // clock rollback / hand edit
+    await settle();
+    await scanInsightsMd(project); // ignores the bad mark, reads, records a real one
+    jsonlReads = [];
+    await scanInsightsMd(project);
+    expect(jsonlReads).toEqual([]);
+  });
 });
