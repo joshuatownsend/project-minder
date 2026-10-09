@@ -20,7 +20,8 @@ export function isValidLlmEndpoint(endpoint: unknown): endpoint is string {
 /** True for Anthropic's own API hosts (matched on the parsed hostname, not a substring of the URL). */
 export function isAnthropicHost(endpoint: string): boolean {
   try {
-    const host = new URL(endpoint).hostname;
+    // A fully qualified name may carry one trailing root dot (api.anthropic.com.) and is the same host.
+    const host = new URL(endpoint).hostname.replace(/\.$/, "");
     return host === "anthropic.com" || host.endsWith(".anthropic.com");
   } catch {
     return false;

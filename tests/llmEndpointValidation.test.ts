@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { NextRequest } from "next/server";
 
 // #630 — the stored LLM API key is attached to whatever endpoint a call uses, so a request-supplied
 // URL must be held to the same rule as the saved setting, and never receive the key otherwise.
@@ -38,6 +37,7 @@ describe("isAnthropicHost", () => {
     expect(isAnthropicHost("https://api.anthropic.com/v1/messages")).toBe(true);
     expect(isAnthropicHost("https://evil.example/anthropic.com")).toBe(false);
     expect(isAnthropicHost("https://anthropic.com.evil.example/x")).toBe(false);
+    expect(isAnthropicHost("https://api.anthropic.com./v1/messages")).toBe(true); // trailing root dot, same host
   });
 });
 
@@ -59,14 +59,10 @@ describe("the stored key never reaches an unacceptable endpoint", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("POST /api/llm/test with a hostile endpoint is a 400 and sends nothing", async () => {
-    const req = new NextRequest("http://localhost:4100/api/llm/test", {
-      method: "POST",
-      body: JSON.stringify({ endpoint: "http://evil.test/collect" }),
-    });
-    const res = await POST(req);
-    expect(res.status).toBe(400);
-    expect(fetchSpy).not.toHaveBeenCalled();
+  it("POST /api/llm/test takes no request input and only ever contacts the saved endpoint (the default here)", async () => {
+    const res = await POST();
+    expect(res.status).toBeLessThan(600);
+    expect(fetchSpy.mock.calls.map((c) => String(c[0]))).toEqual(["https://api.anthropic.com/v1/messages"]);
   });
 
   it("an acceptable endpoint still gets the request (key as x-api-key only for Anthropic hosts)", async () => {
