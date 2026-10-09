@@ -236,7 +236,7 @@ function installSignalHandlers() {
   // (CVE-2024-27980 / batch-file injection mitigation). The DEP0190 warning
   // about un-escaped args is acceptable here — args are hardcoded literals,
   // not user input.
-  server = spawn(NEXT_BIN, ['start', '-p', String(PORT)], {
+  server = spawn(NEXT_BIN, ['start', '-p', String(PORT), '-H', '127.0.0.1'], {
     cwd: REPO_ROOT,
     stdio: ['ignore', 'inherit', 'inherit'],
     shell: IS_WIN,
