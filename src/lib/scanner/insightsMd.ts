@@ -324,10 +324,6 @@ async function syncInsightsFromSessions(projectPath: string): Promise<string | n
   }
   const mark = effectiveMark(await getSyncMark(projectPath));
   const watermarkMs = watermarkFor(insightsMtimeMs, mark);
-  // A transcript directory the last sync did not see (a project dir restored, renamed or mounted into
-  // place) holds files that keep their OLD mtime/ctime, so only the INSIGHTS.md watermark applies there.
-  const baseWatermarkMs = watermarkFor(insightsMtimeMs, undefined);
-
   const encoded = encodePath(projectPath).toLowerCase();
   const projectSlug = toSlug(path.basename(projectPath));
 
@@ -349,7 +345,9 @@ async function syncInsightsFromSessions(projectPath: string): Promise<string | n
   let incomplete = false;
 
   for (const dir of matchingDirs) {
-    const dirWatermarkMs = mark?.dirs.includes(dir) ? watermarkMs : baseWatermarkMs;
+    // With a prior mark, a directory it did not see (restored, renamed or mounted into place later) holds
+    // files that keep their OLD mtime/ctime, so it is read in full. Without one there is nothing to compare.
+    const dirWatermarkMs = mark && !mark.dirs.includes(dir) ? 0 : watermarkMs;
     const dirPath = path.join(claudeProjectsDir, dir);
     let files: string[];
     try {

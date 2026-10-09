@@ -87,7 +87,8 @@ export function setSyncMark(projectPath: string, mark: SyncMark): void {
   if (state.timer) return;
   state.timer = setTimeout(() => {
     state.timer = null;
-    void flushSyncMarks();
+    // The state may have been replaced since (state dir changed): flush only if it is still the live one.
+    if (g.__minderInsightsMarks === state) void flushSyncMarks();
   }, FLUSH_DELAY_MS);
   state.timer.unref?.();
 }
