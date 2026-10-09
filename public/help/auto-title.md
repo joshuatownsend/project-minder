@@ -30,4 +30,4 @@ Your API key is stored in `~/.minder/secrets.json` with `chmod 0o600` on POSIX s
 
 ## OpenAI-compatible endpoints
 
-Set the endpoint to your provider's `/chat/completions` URL (e.g. `http://localhost:11434/v1/chat/completions` for Ollama). Project Minder auto-detects the Anthropic message format vs OpenAI format based on whether the URL contains `anthropic.com`.
+Set the endpoint to your provider's `/chat/completions` URL (e.g. `http://localhost:11434/v1/chat/completions` for Ollama). Project Minder auto-detects the Anthropic message format vs OpenAI format based on whether the URL's host is `anthropic.com` or one of its subdomains (for example `api.anthropic.com`). The Test button always tests the endpoint you have saved.

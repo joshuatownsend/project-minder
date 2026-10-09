@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security
+
+- The stored LLM API key can no longer be sent to an arbitrary URL (#630). `POST /api/llm/test` forwarded a request-supplied `endpoint` to the title generator, which attached the stored key to it without the HTTPS-or-localhost check that saving the setting applies. The route now ignores the request body and tests only the saved endpoint and model. That check is now one shared rule (`isValidLlmEndpoint`) enforced where the key is attached, in the title and session-distill callers, so every path is covered; an unacceptable endpoint returns 400 and nothing is sent. The Anthropic header choice now matches the parsed hostname rather than a substring of the URL, and the request no longer follows a redirect with the key attached.
+
 ## [1.16.8] - 2026-10-09
 
 *Two background-work costs that kept scaling with the size of the history, found by measuring the real install. A project scan stops re-reading session transcripts it has already looked at for insights, and cleaning up deleted sessions stops costing about two seconds each. Neither changes what you see, only how much work happens behind it.*
