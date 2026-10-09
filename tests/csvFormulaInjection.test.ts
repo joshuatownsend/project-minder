@@ -5,7 +5,7 @@ import { escapeCell, toCsv } from "@/lib/csv";
 // spreadsheet, and SQL results carry repository/session/tool-controlled values.
 
 describe("CSV formula injection (#641)", () => {
-  it.each(["=1+1", "+1+1", "-1+1", "@SUM(A1)", "\tcmd", "\rcmd", "\n=1+1",'=HYPERLINK("http://evil","x")'])(
+  it.each(["=1+1", "+1+1", "-1+1", "@SUM(A1)", "\tcmd", "\rcmd", "\n=1+1", "＝1+1", "＋1", "－1", "＠SUM(A1)", '=HYPERLINK("http://evil","x")'])(
     "defuses text %j with a leading apostrophe",
     (v) => {
       const out = escapeCell(v);
