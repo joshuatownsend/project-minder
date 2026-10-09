@@ -19,6 +19,7 @@ import { invalidateClaudeUsageCache } from "@/lib/server/queries/stats";
 import { invalidateSessionCategoryCounts } from "@/lib/memory/seedCategoryCounts";
 import { validateNotificationRules } from "@/lib/notifications/rules/validate";
 import { homeDedupeKey, getClaudeHomes } from "@/lib/claudeHome";
+import { isValidLlmEndpoint } from "@/lib/llm/endpoint";
 import {
   isShortcutActionId,
   isValidCombo,
@@ -365,13 +366,7 @@ export async function PATCH(request: NextRequest) {
       if (typeof endpoint !== "string") {
         return NextResponse.json({ error: "autoTitle.endpoint must be a string" }, { status: 400 });
       }
-      try {
-        const u = new URL(endpoint as string);
-        const isLocalhost = u.hostname === "localhost" || u.hostname === "127.0.0.1";
-        if (u.protocol !== "https:" && !(u.protocol === "http:" && isLocalhost)) {
-          throw new Error("not https");
-        }
-      } catch {
+      if (!isValidLlmEndpoint(endpoint)) {
         return NextResponse.json({ error: "autoTitle.endpoint must be an HTTPS URL (or http://localhost)" }, { status: 400 });
       }
     }

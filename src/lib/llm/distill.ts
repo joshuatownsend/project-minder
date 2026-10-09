@@ -2,6 +2,7 @@ import "server-only";
 import { getSecret } from "./secretsStore";
 import { DEFAULT_ENDPOINT, DEFAULT_MODEL } from "./defaults";
 import { LLMError, isAnthropic } from "./autoTitle";
+import { isValidLlmEndpoint } from "./endpoint";
 import type { TitleTurn } from "./autoTitle";
 
 const MAX_TURN_CHARS = 800;
@@ -34,6 +35,7 @@ function buildUserMessage(turns: TitleTurn[]): string {
 export async function distillSession(opts: DistillOpts): Promise<{ text: string }> {
   const endpoint = opts.endpoint ?? DEFAULT_ENDPOINT;
   const model = opts.model ?? DEFAULT_MODEL;
+  if (!isValidLlmEndpoint(endpoint)) throw new LLMError("LLM endpoint must be an HTTPS URL (or http://localhost)", 400);
   const apiKey = await getSecret("llm.api_key");
   if (!apiKey) throw new LLMError("LLM API key not configured", 400);
 
@@ -41,6 +43,7 @@ export async function distillSession(opts: DistillOpts): Promise<{ text: string 
 
   if (isAnthropic(endpoint)) {
     const res = await fetch(endpoint, {
+      redirect: "error", // the key header must not follow a redirect to another host
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -65,6 +68,7 @@ export async function distillSession(opts: DistillOpts): Promise<{ text: string 
   }
 
   const res = await fetch(endpoint, {
+    redirect: "error",
     method: "POST",
     headers: {
       "Content-Type": "application/json",
