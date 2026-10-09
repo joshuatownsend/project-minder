@@ -52,6 +52,14 @@ export async function POST(request: Request, { params }: Params): Promise<NextRe
       );
     }
 
+    // A Windows stream task gets its prompt on stdin and stdin is then closed (#632), so it cannot take answers.
+    if (!child.stdin || child.stdin.writableEnded || child.stdin.destroyed) {
+      return NextResponse.json(
+        { error: "This task's input is closed — decision cannot be delivered" },
+        { status: 409 }
+      );
+    }
+
     // Write answer to child stdin
     await new Promise<void>((resolve, reject) => {
       child.stdin!.write(answer + "\n", (err) => {

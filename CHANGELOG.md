@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security
+
+- On Windows a task's prompt (taken from TODO/BOARD text) is now sent to `claude` on stdin instead of on the `cmd.exe` command line, where shell metacharacters in it would have been interpreted (#632). A stream-mode task on Windows can therefore no longer receive human-in-the-loop answers after it starts; delivering one now returns 409. A task whose model or skill name contains anything beyond letters, digits and `. _ : - [ ]` fails before it is spawned.
+
 ## [1.16.9] - 2026-10-09
 
 *A security release. An automated review of the whole repository turned up fourteen findings; this release closes the six that were cheapest to fix and most exposed: the dashboard can no longer be reached from the network by a source run, nor framed or poked by another website, the stored LLM key can only go to an acceptable endpoint, the hook installer and template routes refuse input that could reach a shell or a recursive delete, and CSV downloads no longer carry live spreadsheet formulas. The rest are tracked as issues #632–#640.*
