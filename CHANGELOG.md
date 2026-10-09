@@ -476,6 +476,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
+- Installing the live-activity hooks can no longer plant a shell command (#631). The installer checked only the parsed hostname of `hookUrl`, then interpolated the original string inside a double-quoted `curl` command written to your user-wide Claude settings, so `$(...)` or quote-breaking syntax in a loopback URL would run when a lifecycle hook fired. The URL must now be a plain `http(s)` URL to `localhost`, `127.0.0.1` or `[::1]` (no credentials, query, fragment, quotes, `$`, backticks, `%` or spaces); the normalized URL is what gets installed and saved, and both command builders refuse anything else.
 - **Sixteen alerts closed by refreshing vulnerable transitives** — `hono` 4.12.25 → **4.13.3** (7 alerts), `fast-uri` 3.1.2 → **3.1.5** (3), `ip-address` 10.2.0 → **10.5.0** (3), `@hono/node-server` 1.19.14 → **1.19.17**, `nanoid` 3.3.17 → **3.3.18**, and `body-parser` 2.2.2 → **2.3.0**.
 
   The root cause was one line: a `pnpm.overrides` entry pinning `hono` to `4.12.25`, added to pin the tree *up* to a patched version, which had since expired into pinning it *below* one. It accounted for seven alerts by itself. **The override was removed rather than re-pinned higher** — a fresh exact pin would expire into causing the same problem on the next advisory, and the MCP SDK's own range (`^4.11.4`) already admits the patched release, so nothing needed to be forced. No package upgrades were required; the lockfile simply had to be allowed to move.

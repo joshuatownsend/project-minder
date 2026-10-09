@@ -6,6 +6,7 @@ import {
   getLiveActivityHookStatus,
 } from "@/lib/hooks/applyLiveActivity";
 import { getLastHookReceivedAt } from "@/lib/hooks/buffer";
+import { safeHookUrl } from "@/lib/hooks/curlCommand";
 
 /** GET /api/live-activity/install — return current install status including registered hookUrl. */
 export async function GET(): Promise<NextResponse> {
@@ -31,26 +32,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "hookUrl required" }, { status: 400 });
   }
 
-  // Validate hookUrl: must target loopback only (localhost / 127.0.0.1 / ::1)
-  try {
-    const u = new URL(hookUrl);
-    const isLoopback =
-      u.hostname === "localhost" || u.hostname === "127.0.0.1" || u.hostname === "[::1]";
-    if (!isLoopback) {
-      return NextResponse.json(
-        { error: "hookUrl must target localhost or 127.0.0.1" },
-        { status: 400 },
-      );
-    }
-  } catch {
-    return NextResponse.json({ error: "hookUrl is not a valid URL" }, { status: 400 });
+  // Validate hookUrl: a plain http(s) URL to loopback only. It ends up inside a shell command in the
+  // user's Claude settings, so the NORMALIZED url is what gets installed and persisted (#631).
+  const safeUrl = safeHookUrl(hookUrl);
+  if (!safeUrl) {
+    return NextResponse.json(
+      { error: "hookUrl must be a plain http(s) URL to localhost, 127.0.0.1 or [::1] (no query, credentials or special characters)" },
+      { status: 400 },
+    );
   }
 
   try {
-    await installLiveActivityHooks(hookUrl);
+    await installLiveActivityHooks(safeUrl);
     // Persist hookUrl to MinderConfig so Settings UI can display it
     await mutateConfig((c) => {
-      c.liveActivity = { ...(c.liveActivity ?? {}), hookUrl };
+      c.liveActivity = { ...(c.liveActivity ?? {}), hookUrl: safeUrl };
     });
     const status = await getLiveActivityHookStatus();
     return NextResponse.json({ ok: true, ...status, hookUrl, lastReceivedAt: getLastHookReceivedAt() });
