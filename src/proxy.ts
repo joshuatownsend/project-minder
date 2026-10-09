@@ -96,6 +96,8 @@ export interface EvaluateInput {
   host: string | null;
   origin: string | null;
   pathname: string;
+  /** The `Sec-Fetch-Site` request header, when the client sent one (browsers always do). */
+  secFetchSite?: string | null;
 }
 
 export interface EvaluateResult {
@@ -119,6 +121,7 @@ export function evaluateRequest(
     host,
     origin,
     pathname,
+    secFetchSite,
   }: EvaluateInput,
   allowedHosts: Set<string> = ALLOWED_HOSTS,
 ): EvaluateResult {
@@ -153,6 +156,17 @@ export function evaluateRequest(
     // same-origin GETs frequently omit Origin, and non-browser callers (curl,
     // MCP tools, the in-process dev-server tools) have no confused browser to
     // exploit. The Host check above still guards these against DNS rebinding.
+    //
+    // One exception: a browser that says the request came from ANOTHER site. A cross-site `<img>`,
+    // `<script>` or navigation sends no Origin but does send `Sec-Fetch-Site: cross-site` (or
+    // `same-site` from a page on another localhost port), and an unauthenticated GET that has side
+    // effects (/api/pulse drains one-shot notification queues) would otherwise fire for any web page
+    // the user has open (#642). `same-origin` (the dashboard itself), `none` (typed URL) and an absent
+    // header (curl, MCP tools, the tray) stay allowed.
+    const site = secFetchSite?.toLowerCase();
+    if (site === "cross-site" || site === "same-site") {
+      return { allow: false, reason: "cross-site request blocked" };
+    }
     return { allow: true };
   }
 
@@ -177,6 +191,7 @@ export function proxy(request: NextRequest) {
     host: request.headers.get("host"),
     origin: request.headers.get("origin"),
     pathname: request.nextUrl.pathname,
+    secFetchSite: request.headers.get("sec-fetch-site"),
   });
 
   if (!result.allow) {

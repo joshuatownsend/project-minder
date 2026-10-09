@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
+- A web page you have open can no longer fire the dashboard's side-effecting GETs (#642). The API guard let through any request with no `Origin` header, and a cross-site `<img>` or frame sends exactly that, so `/api/pulse?since=` (which drains the one-shot permission and OS-notification queues) could be triggered, and the notifications lost, by any page. The guard now also refuses an origin-less request the browser marks `Sec-Fetch-Site: cross-site` or `same-site`; the dashboard itself (`same-origin`), a typed URL, and non-browser clients such as curl, MCP tools and the tray (no header) are unaffected.
 - The stored LLM API key can no longer be sent to an arbitrary URL (#630). `POST /api/llm/test` forwarded a request-supplied `endpoint` to the title generator, which attached the stored key to it without the HTTPS-or-localhost check that saving the setting applies. The route now ignores the request body and tests only the saved endpoint and model. That check is now one shared rule (`isValidLlmEndpoint`) enforced where the key is attached, in the title and session-distill callers, so every path is covered; an unacceptable endpoint returns 400 and nothing is sent. The Anthropic header choice now matches the parsed hostname rather than a substring of the URL, and the request no longer follows a redirect with the key attached.
 
 ## [1.16.8] - 2026-10-09
