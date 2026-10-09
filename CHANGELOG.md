@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
+- `pnpm dev` and `pnpm start` now listen on `127.0.0.1` only (#629). They passed no hostname, so Next bound every interface, and because the dashboard's API (SQL browser, task runner, MCP endpoint) is unauthenticated and its Host/Origin guard reads headers a network peer controls, anyone on the same network could reach it while a source run was up. The service, tray and standalone launches already bound loopback; the production screenshot script did not and now does.
+
+### Security
+
 - The stored LLM API key can no longer be sent to an arbitrary URL (#630). `POST /api/llm/test` forwarded a request-supplied `endpoint` to the title generator, which attached the stored key to it without the HTTPS-or-localhost check that saving the setting applies. The route now ignores the request body and tests only the saved endpoint and model. That check is now one shared rule (`isValidLlmEndpoint`) enforced where the key is attached, in the title and session-distill callers, so every path is covered; an unacceptable endpoint returns 400 and nothing is sent. The Anthropic header choice now matches the parsed hostname rather than a substring of the URL, and the request no longer follows a redirect with the key attached.
 
 ## [1.16.8] - 2026-10-09

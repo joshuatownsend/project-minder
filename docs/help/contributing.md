@@ -14,6 +14,8 @@ pnpm setup-hooks   # installs the pre-commit hook
 pnpm dev           # dashboard runs on http://localhost:4100
 ```
 
+`pnpm dev` and `pnpm start` bind to `127.0.0.1` only. The dashboard's API has no authentication (it relies on being local), so don't pass a wider `-H` to expose it on your network.
+
 ## Pre-commit hook
 
 `pnpm setup-hooks` writes a pre-commit hook that runs `pnpm typecheck && pnpm test --pool=forks` before every commit. Set it up once after cloning. CI enforces the same checks, but catching failures locally is faster.
