@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
-- On Windows a task's prompt (taken from TODO/BOARD text) is now sent to `claude` on stdin instead of on the `cmd.exe` command line, where shell metacharacters in it would have been interpreted (#632). A stream-mode task on Windows can therefore no longer receive human-in-the-loop answers after it starts; delivering one now returns 409. A task whose model or skill name contains anything beyond letters, digits and `. _ : - [ ]` fails before it is spawned.
+- On Windows a task's prompt (taken from TODO/BOARD text) is now sent to `claude` on stdin instead of on the `cmd.exe` command line, where shell metacharacters in it would have been interpreted (#632). A stream-mode task on Windows can therefore no longer receive human-in-the-loop answers after it starts; delivering one now returns 409. A task whose model or skill name is longer than 200 characters, does not start with a letter or digit, or contains anything beyond letters, digits and `. _ : @ / - [ ]` fails before it is spawned.
 
 ## [1.16.9] - 2026-10-09
 

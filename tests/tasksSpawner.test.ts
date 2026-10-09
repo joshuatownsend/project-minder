@@ -21,7 +21,12 @@ vi.mock("fs", () => {
     },
   };
 });
-vi.mock("../src/lib/platform", () => ({ isWindows: false }));
+const platform = vi.hoisted(() => ({ win: false }));
+vi.mock("../src/lib/platform", () => ({
+  get isWindows() {
+    return platform.win;
+  },
+}));
 vi.mock("../src/lib/tasks/store", () => ({
   completeTask: vi.fn().mockResolvedValue(null),
   failTask: vi.fn().mockResolvedValue(null),
@@ -455,5 +460,57 @@ describe("buildClaudeInvocation (#632)", () => {
     expect(r.status).toBe("failed");
     expect(spawnFn).not.toHaveBeenCalled();
     expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts Vertex ids and Bedrock inference-profile ARNs", () => {
+    for (const model of ["claude-sonnet-4@20250514", "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4"]) {
+      expect(buildClaudeInvocation(makeTask({ model }), [], true).args).toContain(model);
+    }
+  });
+});
+
+// The runtime path on a Windows host: prompt reaches the child on stdin, which is then closed.
+describe("Windows runtime path (#632)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    platform.win = true;
+  });
+  afterEach(() => {
+    platform.win = false;
+  });
+
+  function withStdin(proc: Partial<ChildProcess>) {
+    const stdin = { on: vi.fn(), end: vi.fn() };
+    (proc as { stdin: unknown }).stdin = stdin;
+    return stdin;
+  }
+
+  it("classic: spawns through cmd.exe without the prompt in argv and ends stdin with it", async () => {
+    const { proc, emitClose } = makeChildProcess();
+    const stdin = withStdin(proc);
+    const spawnFn = vi.fn().mockReturnValue(proc);
+    const evil = 'a" & calc & "%PATH%';
+    const p = runClassicTask(makeTask({ title: evil, description: undefined }), spawnFn as never);
+    emitClose(0);
+    await p;
+    const [cmd, args, opts] = spawnFn.mock.calls[0] as [string, string[], { stdio: string[] }];
+    expect(cmd).toBe("cmd.exe");
+    expect(args.join(" ")).not.toContain("calc");
+    expect(opts.stdio[0]).toBe("pipe");
+    expect(stdin.end).toHaveBeenCalledWith(evil);
+  });
+
+  it("stream: ends stdin with the prompt, drops DECISION but keeps INBOX", async () => {
+    const { proc, emitOutput, emitClose } = makeChildProcess();
+    const stdin = withStdin(proc);
+    const spawnFn = vi.fn().mockReturnValue(proc);
+    const onDecision = vi.fn().mockResolvedValue(undefined);
+    const p = runStreamTask(makeTask({ execution_mode: "stream", title: "go", description: undefined }), spawnFn as never, onDecision);
+    emitOutput("DECISION: overwrite? [yes, no]\nINBOX: scanning\n");
+    emitClose(0);
+    await p;
+    expect(stdin.end).toHaveBeenCalledWith("go");
+    expect(onDecision).toHaveBeenCalledTimes(1);
+    expect(onDecision.mock.calls[0][1]).toMatchObject({ kind: "inbox" });
   });
 });

@@ -176,8 +176,9 @@ function buildPrompt(task: Task): string {
   return [task.title, task.description].filter(Boolean).join("\n\n");
 }
 
-/** Model ids and skill names are interpolated into a command line; accept only plain identifier characters (#632). */
-const SAFE_FLAG_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:\-\[\]]{0,99}$/;
+/** Model ids and skill names are interpolated into a command line; accept only plain identifier characters,
+ *  including the `@` and `/` of Vertex ids and Bedrock inference-profile ARNs (#632). */
+const SAFE_FLAG_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:@/\-\[\]]{0,199}$/;
 
 function appendTaskFlags(args: string[], task: Task): void {
   if (task.assigned_skill) {
