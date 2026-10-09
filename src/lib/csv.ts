@@ -1,6 +1,12 @@
-/** Escape a single value per RFC-4180. */
+/**
+ * Escape a single value per RFC-4180, and defuse spreadsheet formulas (#641): a TEXT value that begins
+ * with `=`, `+`, `-`, `@`, TAB or CR is evaluated by Excel/Sheets/LibreOffice when the file is opened,
+ * and these values come from repositories, sessions, tools and providers. Such text gets a leading
+ * apostrophe. Real numbers (a negative one starts with `-`) are not text and are left alone.
+ */
 export function escapeCell(val: unknown): string {
-  const str = val === null || val === undefined ? "" : String(val);
+  let str = val === null || val === undefined ? "" : String(val);
+  if (typeof val === "string" && /^[=+\-@\t\r]/.test(str)) str = `'${str}`;
   if (str.includes('"') || str.includes(",") || str.includes("\n") || str.includes("\r")) {
     return `"${str.replace(/"/g, '""')}"`;
   }
