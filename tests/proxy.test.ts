@@ -214,6 +214,24 @@ describe("evaluateRequest", () => {
   });
 });
 
+describe("Sec-Fetch-Site on origin-less requests (#642)", () => {
+  const base = { method: "GET", host: ALLOWED_HOST, origin: null, pathname: "/api/pulse" } as const;
+
+  it.each(["cross-site", "same-site", "Cross-Site"])("blocks %s", (site) => {
+    const r = evaluateRequest({ ...base, secFetchSite: site });
+    expect(r.allow).toBe(false);
+    expect(r.reason).toBe("cross-site request blocked");
+  });
+
+  it.each(["same-origin", "none", null, undefined])("allows %s", (site) => {
+    expect(evaluateRequest({ ...base, secFetchSite: site }).allow).toBe(true);
+  });
+
+  it("does not turn on for non-API paths", () => {
+    expect(evaluateRequest({ ...base, pathname: "/projects", secFetchSite: "cross-site" }).allow).toBe(true);
+  });
+});
+
 describe("buildAllowedHosts (bound-port allowlist)", () => {
   it("is exactly the loopback trio for the bound port — nothing else", () => {
     const hosts = buildAllowedHosts(4199);

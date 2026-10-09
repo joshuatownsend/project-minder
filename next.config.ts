@@ -40,6 +40,21 @@ const nextConfig: NextConfig = {
   devIndicators: {
     position: "bottom-right",
   },
+  // The dashboard must never be framed by another site (#642). A hostile page could otherwise embed
+  // http://localhost:4100/ in an <iframe>; the framed dashboard's own same-origin fetches (the global
+  // pulse poll drains one-shot notification queues) would then run with Sec-Fetch-Site: same-origin and
+  // pass the API guard. Its own srcDoc iframes are children, not framings of it, so they are unaffected.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+        ],
+      },
+    ];
+  },
   // Emit a self-contained `.next/standalone/` server (a pruned copy of
   // node_modules containing only traced production dependencies, plus
   // server.js) so the app can be copied to another machine/directory and

@@ -37,15 +37,20 @@ import { buildAllowedHosts, resolveBoundPort } from "./lib/boundPort";
 //      the same host allowlist. This applies to GET/HEAD too: this dashboard
 //      is same-origin-only, so a cross-origin browser fetch/XHR is never
 //      legitimate regardless of method. This only catches requests that CARRY
-//      an Origin (scripted fetch/XHR); an origin-less cross-site GET (e.g. an
-//      `<img>` subresource) still passes, so side-effecting GETs were ALSO
-//      removed at the source — the task dispatcher now starts at server boot
-//      (instrumentation-node.ts), not on a GET to /api/tasks or /api/swarms.
+//      an Origin (scripted fetch/XHR). An origin-less cross-site GET (e.g. an
+//      `<img>` subresource) is caught by the Sec-Fetch-Site rule below
+//      (`cross-site` / `same-site` refused; #642), and the dashboard cannot be
+//      framed by another site (next.config.ts sends frame-ancestors 'none'), so
+//      a framed page's own same-origin calls cannot launder one. Side-effecting
+//      GETs were ALSO removed at the source where possible — the task dispatcher
+//      now starts at server boot (instrumentation-node.ts), not on a GET to
+//      /api/tasks or /api/swarms.
 //
 //      If `Origin` is ABSENT, the request is allowed through this second
 //      check (the Host check above still applies to it). Browser-driven
-//      CSRF always carries an Origin header, so its absence means the
-//      request isn't coming from a browser's fetch/XHR machinery at all —
+//      CSRF from a fetch/XHR always carries an Origin header, so its absence
+//      means the request isn't coming from that machinery — unless the browser
+//      reports it as cross-site/same-site via Sec-Fetch-Site, which is refused —
 //      it's curl, a local script, or another server-to-server caller (e.g.
 //      the MCP server's own dev-server tools running in the same process).
 //      Those callers have no "confused browser" to exploit, so there is no
@@ -96,6 +101,8 @@ export interface EvaluateInput {
   host: string | null;
   origin: string | null;
   pathname: string;
+  /** The `Sec-Fetch-Site` request header, when the client sent one (browsers always do). */
+  secFetchSite?: string | null;
 }
 
 export interface EvaluateResult {
@@ -119,6 +126,7 @@ export function evaluateRequest(
     host,
     origin,
     pathname,
+    secFetchSite,
   }: EvaluateInput,
   allowedHosts: Set<string> = ALLOWED_HOSTS,
 ): EvaluateResult {
@@ -144,15 +152,27 @@ export function evaluateRequest(
   // Layer 2 — Origin allowlist, applied to ALL methods (including GET/HEAD).
   // This dashboard is same-origin-only, so a cross-origin browser fetch/XHR
   // (which always carries an Origin) is never legitimate regardless of method —
-  // block it. This catches scripted cross-origin requests; it does NOT stop an
+  // block it. This catches scripted cross-origin requests; the Origin check alone does not stop an
   // origin-less cross-site GET (an `<img>` subresource sends no Origin), so
-  // side-effecting GETs are removed at the source instead (the task dispatcher
-  // starts at boot, not on a GET). Applying the check to GET is defense-in-depth.
+  // side-effecting GETs are removed at the source where possible (the task dispatcher
+  // starts at boot, not on a GET), and the Sec-Fetch-Site rule below refuses an
+  // origin-less request the browser marks cross-site. Applying the check to GET is defense-in-depth.
   if (!origin) {
     // Absent Origin ⇒ not a browser fetch/XHR (those always send it). Allow:
     // same-origin GETs frequently omit Origin, and non-browser callers (curl,
     // MCP tools, the in-process dev-server tools) have no confused browser to
     // exploit. The Host check above still guards these against DNS rebinding.
+    //
+    // One exception: a browser that says the request came from ANOTHER site. A cross-site `<img>`,
+    // `<script>` or navigation sends no Origin but does send `Sec-Fetch-Site: cross-site` (or
+    // `same-site` from a page on another localhost port), and an unauthenticated GET that has side
+    // effects (/api/pulse drains one-shot notification queues) would otherwise fire for any web page
+    // the user has open (#642). `same-origin` (the dashboard itself), `none` (typed URL) and an absent
+    // header (curl, MCP tools, the tray) stay allowed.
+    const site = secFetchSite?.toLowerCase();
+    if (site === "cross-site" || site === "same-site") {
+      return { allow: false, reason: "cross-site request blocked" };
+    }
     return { allow: true };
   }
 
@@ -177,6 +197,7 @@ export function proxy(request: NextRequest) {
     host: request.headers.get("host"),
     origin: request.headers.get("origin"),
     pathname: request.nextUrl.pathname,
+    secFetchSite: request.headers.get("sec-fetch-site"),
   });
 
   if (!result.allow) {
