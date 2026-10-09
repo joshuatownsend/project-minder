@@ -9,6 +9,7 @@ import {
   deriveApprovalUrl,
   isManagedCommand,
   isApprovalCommand,
+  SENTINEL_UA,
 } from "./curlCommand";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "@/lib/approvals/store";
 import { tryParseJsonc } from "@/lib/scanner/util/jsonc";
@@ -80,8 +81,44 @@ export async function getLiveActivityHookStatus(): Promise<{
 }
 
 /**
+ * Remove hooks whose command carries BOTH sentinels. Minder never builds one (each command has exactly
+ * one), so it can only have been planted through a URL that smuggled the other sentinel in, to be
+ * mistaken for the other kind and left alone (#631). True if anything was removed.
+ */
+function stripAmbiguous(groups: HookEntry[]): boolean {
+  let removed = false;
+  for (let i = groups.length - 1; i >= 0; i--) {
+    const hooks = groups[i].hooks ?? [];
+    const kept = hooks.filter((h) => {
+      const c = h.command ?? "";
+      return !(c.includes(SENTINEL_UA) && isApprovalCommand(c));
+    });
+    if (kept.length === hooks.length) continue;
+    removed = true;
+    if (kept.length === 0) groups.splice(i, 1);
+    else groups[i].hooks = kept;
+  }
+  return removed;
+}
+
+/** Replace the command of every hook matching `isMine` that differs from `command`; true if any changed. */
+function rewriteManaged(groups: HookEntry[], isMine: (c: string) => boolean, command: string): boolean {
+  let changed = false;
+  for (const g of groups) {
+    for (const h of g.hooks ?? []) {
+      if (isMine(h.command ?? "") && h.command !== command) {
+        h.command = command;
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
+/**
  * Write Project Minder lifecycle hook entries into ~/.claude/settings.json.
- * Idempotent: skips events that already have a managed entry. Atomic write
+ * Idempotent: an event that already has the current managed command is left alone; a managed entry
+ * with a different command (an old URL, or one planted before URLs were validated) is rewritten. Atomic write
  * with COW snapshot via configHistory.
  */
 export async function installLiveActivityHooks(
@@ -101,6 +138,7 @@ export async function installLiveActivityHooks(
     for (const event of events) {
       hooksObj[event] ??= [];
       const groups = hooksObj[event] as HookEntry[];
+      if (stripAmbiguous(groups)) changed = true;
       // Each command kind is checked against its own predicate. Asking the
       // broad `isManagedCommand` here would let the approval entry — which now
       // also matches it — stand in for the lifecycle entry and suppress it.
@@ -110,6 +148,9 @@ export async function installLiveActivityHooks(
           return isManagedCommand(c) && !isApprovalCommand(c);
         }),
       );
+      // A Minder-managed entry whose command is not the one built now is replaced in place, not trusted:
+      // one planted through an older, unvalidated install would otherwise keep running (#631).
+      if (rewriteManaged(groups, (c) => isManagedCommand(c) && !isApprovalCommand(c), command)) changed = true;
       if (!hasLifecycle) {
         groups.push({ hooks: [{ type: "command", command, timeout: 10 }] });
         changed = true;
@@ -136,6 +177,7 @@ export async function installLiveActivityHooks(
         const hasApproval = groups.some((g) =>
           g.hooks?.some((h) => isApprovalCommand(h.command ?? "")),
         );
+        if (rewriteManaged(groups, isApprovalCommand, approvalCommand)) changed = true;
         if (!hasApproval) {
           groups.push({
             hooks: [

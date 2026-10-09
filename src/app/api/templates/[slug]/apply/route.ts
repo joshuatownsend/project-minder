@@ -6,6 +6,7 @@ import {
   ConflictPolicy,
 } from "@/lib/types";
 import { applyTemplate } from "@/lib/template/applyTemplate";
+import { isValidSlug } from "@/lib/template/manifest";
 
 const VALID_CONFLICTS: readonly ConflictPolicy[] = ["skip", "overwrite", "merge", "rename"];
 
@@ -13,6 +14,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ slug: stri
   const __demoBlocked = await demoWriteBlock();
   if (__demoBlocked) return __demoBlocked;
   const { slug } = await ctx.params;
+  if (!isValidSlug(slug)) return jsonError("INVALID_SLUG", "Template slug must be 1-64 characters: lowercase letters, digits and hyphens, not starting with a hyphen.", 400);
   let body: unknown;
   try {
     body = await req.json();
