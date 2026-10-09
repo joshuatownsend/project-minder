@@ -446,4 +446,14 @@ describe("buildClaudeInvocation (#632)", () => {
     expect(spawnFn).not.toHaveBeenCalled();
     expect(failTask).toHaveBeenCalled();
   });
+
+  it("a stream task with a bad model fails without spawning and still runs onComplete", async () => {
+    const spawnFn = vi.fn();
+    const onComplete = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(failTask).mockResolvedValueOnce(makeTask({ status: "failed" }));
+    const r = await runStreamTask(makeTask({ model: "x & calc" }), spawnFn as never, undefined, onComplete);
+    expect(r.status).toBe("failed");
+    expect(spawnFn).not.toHaveBeenCalled();
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
 });

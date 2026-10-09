@@ -213,13 +213,23 @@ function sendPromptOnStdin(child: ChildProcess, prompt: string): void {
   child.stdin?.end(prompt);
 }
 
-async function failBeforeSpawn(task: Task, err: unknown, startMs: number): Promise<RunTaskResult> {
+async function failBeforeSpawn(
+  task: Task,
+  err: unknown,
+  startMs: number,
+  onComplete?: OnCompleteFn,
+): Promise<RunTaskResult> {
   const message = (err instanceof Error ? err.message : String(err)).slice(0, 2000);
   const durationMs = Date.now() - startMs;
+  let failed: Task | null = null;
   try {
-    await failTask(task.id, { error_message: message, duration_ms: durationMs });
+    failed = await failTask(task.id, { error_message: message, duration_ms: durationMs });
   } catch (storeErr) {
     console.error(`[spawner] failTask failed for task ${task.id}:`, storeErr);
+  }
+  // Stream tasks rely on this callback for completion bookkeeping (swarm status), as the close/error paths do.
+  if (failed && onComplete) {
+    onComplete(failed).catch((e) => console.error(`[spawner] onComplete failed for task ${task.id}:`, e));
   }
   return { taskId: task.id, status: "failed", error: message, durationMs };
 }
@@ -358,7 +368,7 @@ export async function runStreamTask(
   try {
     inv = buildClaudeInvocation(task, ["--output-format", "stream-json", "--verbose"]);
   } catch (err) {
-    return failBeforeSpawn(task, err, startMs);
+    return failBeforeSpawn(task, err, startMs, onComplete);
   }
   const { cmd, args: extraArgs, stdinPrompt } = inv;
 
@@ -440,6 +450,8 @@ export async function runStreamTask(
           if (decisionParser) {
             const events = decisionParser.feed(line);
             for (const event of events) {
+              // A blocking DECISION could never be answered once stdin is closed (Windows), so don't record one.
+              if (stdinPrompt !== null && event.kind === "decision") continue;
               onDecision!(task.id, event).catch((e) =>
                 console.error(`[spawner] onDecision failed for task ${task.id}:`, e)
               );

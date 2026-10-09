@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter, PassThrough } from "stream";
 
 // Mock server-side modules before importing spawner
+// Pin to the POSIX path: on Windows the prompt closes stdin and DECISION markers are not recorded (#632).
+vi.mock("@/lib/platform", () => ({ isWindows: false }));
 vi.mock("@/lib/tasks/store", () => ({
   completeTask: vi.fn(),
   failTask: vi.fn(),
