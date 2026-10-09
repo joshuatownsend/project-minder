@@ -26,7 +26,7 @@ The left sidebar lists every table with its columns. Click a table's chevron to 
 ## Export
 
 Export buttons appear once a query returns rows:
-- **CSV** — RFC-4180 compliant (double-quote escaping; CRLF line endings)
+- **CSV** — RFC-4180 compliant (double-quote escaping; CRLF line endings). Text cells that start with `=`, `+`, `-`, `@`, a tab, or a line break (including the full-width forms `＝ ＋ － ＠`) get a leading apostrophe so a spreadsheet shows them as text instead of running them as a formula; numbers are unchanged. The apostrophe is part of the exported value.
 - **JSON** — pretty-printed array of row objects
 
 ## Query history
