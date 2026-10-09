@@ -3,11 +3,19 @@ import { demoWriteBlock } from "@/lib/demo/demoWriteGuard";
 import { readConfig } from "@/lib/config";
 import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { scanAllProjects } from "@/lib/scanner";
-import { readManifest } from "@/lib/template/manifest";
+import { isValidSlug, readManifest } from "@/lib/template/manifest";
 import { deleteTemplate, saveAsSnapshot } from "@/lib/template/promote";
+
+function invalidSlug() {
+  return NextResponse.json(
+    { error: { code: "INVALID_SLUG", message: "Template slug must be lowercase letters, digits and hyphens." } },
+    { status: 400 }
+  );
+}
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ slug: string }> }) {
   const { slug } = await ctx.params;
+  if (!isValidSlug(slug)) return invalidSlug();
   const config = await readConfig();
   const result = await readManifest(config, slug);
   if (!result) {
@@ -31,6 +39,7 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ slug: s
   const __demoBlocked = await demoWriteBlock();
   if (__demoBlocked) return __demoBlocked;
   const { slug } = await ctx.params;
+  if (!isValidSlug(slug)) return invalidSlug();
   const config = await readConfig();
   await deleteTemplate(config, slug);
   return NextResponse.json({ ok: true });
@@ -43,6 +52,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ slug: str
   const __demoBlocked = await demoWriteBlock();
   if (__demoBlocked) return __demoBlocked;
   const { slug } = await ctx.params;
+  if (!isValidSlug(slug)) return invalidSlug();
   let body: unknown;
   try {
     body = await req.json();

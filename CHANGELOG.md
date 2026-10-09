@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security
+
+- A template slug can no longer reach a recursive delete outside the templates folder (#636). `DELETE /api/templates/<slug>` passed the decoded slug straight to `path.join` and `fs.rm({ recursive })`, and a slug such as `..%2F..%2Fproject` decodes to a path that `path.join` normalizes out of `.minder/templates`. Every template route (read, delete, snapshot, apply) now answers 400 for anything that is not a lowercase letters-digits-hyphens slug, and the shared path helpers throw on one, so no other caller can build such a path.
+
 ## [1.16.8] - 2026-10-09
 
 *Two background-work costs that kept scaling with the size of the history, found by measuring the real install. A project scan stops re-reading session transcripts it has already looked at for insights, and cleaning up deleted sessions stops costing about two seconds each. Neither changes what you see, only how much work happens behind it.*
