@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.16.8] - 2026-10-09
+
+*Two background-work costs that kept scaling with the size of the history, found by measuring the real install. A project scan stops re-reading session transcripts it has already looked at for insights, and cleaning up deleted sessions stops costing about two seconds each. Neither changes what you see, only how much work happens behind it.*
+
 ### Fixed
 
 - Removing sessions whose transcript files were deleted no longer costs about two seconds per session (#595). The ingest's prune pass deleted each stale session's full-text rows with its own `DELETE ... WHERE session_id = ?`, and `session_id` is an unindexed column of the FTS table, so each one scanned all ~200k chunks. It now deletes them in batched statements (one scan per 500 sessions); one reconcile that pruned a dozen sessions had spent 23.8 s in this step.
