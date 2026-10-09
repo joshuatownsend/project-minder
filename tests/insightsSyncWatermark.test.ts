@@ -174,9 +174,18 @@ describe("insights sync watermark (#612)", () => {
 describe("sync mark bookkeeping (#612)", () => {
   it("ignores a mark from the future instead of hiding every transcript until the clock catches up", () => {
     const now = 1_000_000_000_000;
-    expect(watermarkFor(null, { at: now + 3_600_000, hadFile: false, dirs: [] }, now)).toBe(0);
-    expect(watermarkFor(5, { at: now + 3_600_000, hadFile: true, dirs: [] }, now)).toBe(5);
-    expect(watermarkFor(null, { at: now - 1000, hadFile: false, dirs: [] }, now)).toBe(now - 1000);
+    expect(watermarkFor(null, { at: now + 3_600_000, insightsMtimeMs: null, dirs: [] }, now)).toBe(0);
+    expect(watermarkFor(null, { at: now + 5_000, insightsMtimeMs: null, dirs: [] }, now)).toBe(0); // even slightly ahead: a clock stepped back
+    expect(watermarkFor(5, { at: now + 3_600_000, insightsMtimeMs: 5, dirs: [] }, now)).toBe(5);
+    expect(watermarkFor(null, { at: now - 1000, insightsMtimeMs: null, dirs: [] }, now)).toBe(now - 1000);
+  });
+
+  it("ignores a mark recorded against a different INSIGHTS.md (restored from backup, edited, deleted)", () => {
+    const now = 1_000_000_000_000;
+    const mark = { at: now - 1000, insightsMtimeMs: 500, dirs: [] };
+    expect(watermarkFor(500, mark, now)).toBe(now - 1000); // same file: trusted
+    expect(watermarkFor(100, mark, now)).toBe(100); // rolled back to an older copy: back to its mtime
+    expect(watermarkFor(null, mark, now)).toBe(0); // deleted: start over
   });
 
   it("never moves a mark backwards (overlapping scans finish out of order)", async () => {
@@ -186,7 +195,7 @@ describe("sync mark bookkeeping (#612)", () => {
       await scanInsightsMd(project);
     };
     await mark();
-    setSyncMark(project, { at: Date.now() - 3_600_000, hadFile: false, dirs: [] }); // a stale generation finishing late
+    setSyncMark(project, { at: Date.now() - 3_600_000, insightsMtimeMs: null, dirs: [] }); // a stale generation finishing late
     jsonlReads = [];
     await scanInsightsMd(project);
     expect(jsonlReads).toEqual([]);
@@ -194,7 +203,7 @@ describe("sync mark bookkeeping (#612)", () => {
 
   it("replaces a future-dated mark after a successful scan instead of re-reading everything until the clock catches up", async () => {
     session("a", null, Date.now() - 60_000);
-    setSyncMark(project, { at: Date.now() + 3_600_000, hadFile: false, dirs: [] }); // clock rollback / hand edit
+    setSyncMark(project, { at: Date.now() + 3_600_000, insightsMtimeMs: null, dirs: [] }); // clock rollback / hand edit
     await settle();
     await scanInsightsMd(project); // ignores the bad mark, reads, records a real one
     jsonlReads = [];
@@ -211,7 +220,7 @@ describe("sync mark bookkeeping (#612)", () => {
     fs.writeFileSync(path.join(restored, "r.jsonl"), JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text }] } }) + "\n");
     fs.utimesSync(path.join(restored, "r.jsonl"), OLD / 1000, OLD / 1000);
     await settle(); // every file's ctime is now older than the mark below
-    setSyncMark(project, { at: Date.now(), hadFile: false, dirs: [path.basename(known)] });
+    setSyncMark(project, { at: Date.now(), insightsMtimeMs: null, dirs: [path.basename(known)] });
 
     jsonlReads = [];
     const info = await scanInsightsMd(project);
@@ -229,6 +238,30 @@ describe("sync mark bookkeeping (#612)", () => {
     fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
     fs.writeFileSync(path.join(root, "state"), "a file where the directory should be");
     expect(() => flushSyncMarksSync()).not.toThrow();
+  });
+
+  it("does not let an async flush publish an older snapshot after the shutdown flush", async () => {
+    setSyncMark(project, { at: 1000, insightsMtimeMs: null, dirs: ["first"] });
+    flushSyncMarksSync();
+    setSyncMark(project, { at: 2000, insightsMtimeMs: null, dirs: ["second"] });
+    await flushSyncMarks(); // would have rewritten the file with the newer map; sealed by the shutdown flush
+    const file = JSON.parse(fs.readFileSync(path.join(root, "state", "insights-sync.json"), "utf-8"));
+    expect(Object.values<{ dirs: string[] }>(file.marks).map((m) => m.dirs)).toEqual([["first"]]);
+  });
+
+  it("re-reads transcripts when INSIGHTS.md is rolled back to an older copy", async () => {
+    session("a", "alpha insight", Date.now() - 60_000);
+    await settle();
+    await scanInsightsMd(project); // appends INSIGHTS.md and records the mark against its new mtime
+    await scanInsightsMd(project);
+    jsonlReads = [];
+    await scanInsightsMd(project);
+    expect(jsonlReads).toEqual([]); // trusted while INSIGHTS.md is the file the mark was made for
+
+    touchInsights(OLD); // restored from a backup: a different (older) file
+    jsonlReads = [];
+    await scanInsightsMd(project);
+    expect(jsonlReads).toEqual(["a.jsonl"]);
   });
 
   it("records only this project's transcript directories in the mark", async () => {

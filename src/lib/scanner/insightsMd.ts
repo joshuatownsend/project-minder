@@ -322,7 +322,7 @@ async function syncInsightsFromSessions(projectPath: string): Promise<string | n
   } catch {
     // No INSIGHTS.md yet
   }
-  const mark = effectiveMark(await getSyncMark(projectPath));
+  const mark = effectiveMark(await getSyncMark(projectPath), insightsMtimeMs);
   const watermarkMs = watermarkFor(insightsMtimeMs, mark);
   const encoded = encodePath(projectPath).toLowerCase();
   const projectSlug = toSlug(path.basename(projectPath));
@@ -382,8 +382,12 @@ async function syncInsightsFromSessions(projectPath: string): Promise<string | n
   // A throw from appendInsights skips the mark below, so the next scan looks again.
   const content = allInsights.length > 0 ? (await appendInsights(projectPath, allInsights)).content : null;
   if (!incomplete) {
-    // Anything appended means the file exists now; otherwise nothing changed since the first stat.
-    setSyncMark(projectPath, { at: syncStartedAt, hadFile: allInsights.length > 0 || insightsMtimeMs !== null, dirs: matchingDirs });
+    // Recorded against the file as this sync leaves it (the append above changed its mtime).
+    let finalMtimeMs = insightsMtimeMs;
+    if (allInsights.length > 0) {
+      try { finalMtimeMs = (await fs.stat(insightsMdPath)).mtimeMs; } catch { finalMtimeMs = null; }
+    }
+    setSyncMark(projectPath, { at: syncStartedAt, insightsMtimeMs: finalMtimeMs, dirs: matchingDirs });
   }
   return content;
 }

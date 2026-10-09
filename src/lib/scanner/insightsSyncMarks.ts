@@ -1,7 +1,7 @@
-import { promises as fs, mkdirSync, renameSync, writeFileSync } from "fs";
+import { promises as fs, mkdirSync, renameSync, unlinkSync, writeFileSync } from "fs";
 import os from "os";
 import path from "path";
-import { withFileLock, writeFileAtomic } from "../atomicWrite";
+import { withFileLock } from "../atomicWrite";
 import { normalizePathKey } from "../platform";
 
 // #612 — when each project's insights were last synced from session transcripts. INSIGHTS.md's mtime
@@ -12,8 +12,12 @@ import { normalizePathKey } from "../platform";
 export interface SyncMark {
   /** Wall-clock ms at which the sync that recorded this mark STARTED (files written during it are re-read once). */
   at: number;
-  /** Whether INSIGHTS.md existed when the sync finished. A mark made WITH one stops applying if the file is later deleted; a mark made without one stays valid while the file is absent. */
-  hadFile: boolean;
+  /**
+   * INSIGHTS.md's mtime when the sync finished (null: no file). The mark only applies while the file
+   * still has this mtime: a deleted, restored-from-backup or hand-edited file is a different file,
+   * and the transcripts newer than ITS contents have to be looked at again.
+   */
+  insightsMtimeMs: number | null;
   /** The transcript directories this sync saw; one not listed here is new since, and is read in full. */
   dirs: string[];
 }
@@ -23,11 +27,12 @@ interface MarksState {
   loaded: Promise<void>;
   file: string;
   timer: NodeJS.Timeout | null;
+  /** Set by the shutdown flush: nothing may publish an older snapshot after it. */
+  sealed: boolean;
 }
 
 const FILE_VERSION = 1;
 const FLUSH_DELAY_MS = 2000;
-const FUTURE_TOLERANCE_MS = 60_000;
 const g = globalThis as unknown as { __minderInsightsMarks?: MarksState };
 
 function marksFile(): string {
@@ -41,7 +46,7 @@ function keyFor(projectPath: string): string {
 function isMark(v: unknown): v is SyncMark {
   const m = v as Partial<SyncMark> | null;
   return (
-    !!m && typeof m.at === "number" && Number.isFinite(m.at) && typeof m.hadFile === "boolean" &&
+    !!m && typeof m.at === "number" && Number.isFinite(m.at) && (m.insightsMtimeMs === null || (typeof m.insightsMtimeMs === "number" && Number.isFinite(m.insightsMtimeMs))) &&
     Array.isArray(m.dirs) && m.dirs.every((d) => typeof d === "string")
   );
 }
@@ -55,6 +60,7 @@ function getState(): MarksState {
     marks,
     file,
     timer: null,
+    sealed: false,
     loaded: (async () => {
       try {
         const parsed = JSON.parse(await fs.readFile(file, "utf-8")) as { version?: number; marks?: Record<string, unknown> };
@@ -82,7 +88,7 @@ export function setSyncMark(projectPath: string, mark: SyncMark): void {
   // move a newer mark back (that would re-read the range the newer one already covered).
   const existing = state.marks.get(key);
   // A future-dated existing mark is one watermarkFor already ignores, so it must not block its replacement.
-  if (effectiveMark(existing) && existing!.at > mark.at) return;
+  if (existing && existing.at <= Date.now() && existing.at > mark.at) return;
   state.marks.set(key, mark);
   if (state.timer) return;
   state.timer = setTimeout(() => {
@@ -105,13 +111,29 @@ export function flushSyncMarksSync(): void {
     clearTimeout(state.timer);
     state.timer = null;
   }
+  state.sealed = true; // an async flush still in flight must not publish its older snapshot over this one
+  const tmp = `${state.file}.${process.pid}.tmp`;
   try {
     mkdirSync(path.dirname(state.file), { recursive: true });
-    const tmp = `${state.file}.${process.pid}.tmp`;
     writeFileSync(tmp, JSON.stringify({ version: FILE_VERSION, marks: Object.fromEntries(state.marks) }));
-    renameSync(tmp, state.file);
+    renameSyncWithRetry(tmp, state.file);
   } catch {
-    // best-effort
+    try { unlinkSync(tmp); } catch { /* best-effort */ }
+  }
+}
+
+/** Synchronous, tightly bounded (~40 ms) version of renameWithRetry: Windows can fail a rename with EPERM/EBUSY for a moment after a handle closes. */
+function renameSyncWithRetry(src: string, dest: string): void {
+  const attempts = 5;
+  for (let i = 0; ; i++) {
+    try {
+      renameSync(src, dest);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (i + 1 >= attempts || (code !== "EBUSY" && code !== "EPERM")) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
   }
 }
 
@@ -126,20 +148,35 @@ export async function flushSyncMarks(): Promise<void> {
   try {
     await state.loaded;
     await fs.mkdir(path.dirname(state.file), { recursive: true });
-    await withFileLock(state.file, () =>
-      writeFileAtomic(state.file, JSON.stringify({ version: FILE_VERSION, marks: Object.fromEntries(state.marks) })),
-    );
+    await withFileLock(state.file, async () => {
+      const tmp = `${state.file}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+      const body = JSON.stringify({ version: FILE_VERSION, marks: Object.fromEntries(state.marks) });
+      try {
+        await fs.writeFile(tmp, body);
+        // Checked and renamed in one synchronous step, so a shutdown flush cannot slip in between.
+        if (state.sealed) await fs.unlink(tmp);
+        else renameSyncWithRetry(tmp, state.file);
+      } catch (err) {
+        try { await fs.unlink(tmp); } catch { /* best-effort */ }
+        throw err;
+      }
+    });
   } catch {
     // best-effort
   }
 }
 
 /**
- * A mark from the future (clock set back, hand-edited file) would hide every normally timestamped
- * transcript until the clock catches up; it is ignored rather than trusted.
+ * The mark if it still describes the world: not from the future (a clock set back, a hand-edited
+ * file: it would hide every normally timestamped transcript until the clock catches up) and recorded
+ * against the INSIGHTS.md that is on disk now.
  */
-export function effectiveMark(mark: SyncMark | undefined, now: number = Date.now()): SyncMark | undefined {
-  return mark && mark.at <= now + FUTURE_TOLERANCE_MS ? mark : undefined;
+export function effectiveMark(
+  mark: SyncMark | undefined,
+  insightsMtimeMs: number | null,
+  now: number = Date.now(),
+): SyncMark | undefined {
+  return mark && mark.at <= now && mark.insightsMtimeMs === insightsMtimeMs ? mark : undefined;
 }
 
 /**
@@ -151,12 +188,8 @@ export function watermarkFor(
   rawMark: SyncMark | undefined,
   now: number = Date.now(),
 ): number {
-  const mark = effectiveMark(rawMark, now);
-  if (insightsMtimeMs === null) {
-    // No file. A mark recorded when there was none says "scanned everything, found nothing":
-    // trust it. A mark recorded WITH a file means it was deleted since, so start over.
-    return mark && !mark.hadFile ? mark.at : 0;
-  }
+  const mark = effectiveMark(rawMark, insightsMtimeMs, now);
+  // No file: a mark recorded when there was none says "scanned everything, found nothing", trust it.
   // File exists: an edit or append is itself a sync point, so never go earlier than its mtime.
-  return Math.max(insightsMtimeMs, mark?.at ?? 0);
+  return Math.max(insightsMtimeMs ?? 0, mark?.at ?? 0);
 }
