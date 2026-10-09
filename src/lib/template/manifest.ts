@@ -19,7 +19,13 @@ export function templatesRootForConfig(config: MinderConfig): string {
   return path.join(getDevRoots(config)[0], ".minder", "templates");
 }
 
+/**
+ * The directory for a template slug. Throws on a slug that is not a plain slug: this path ends up in
+ * recursive deletes and writes, and `path.join` would otherwise normalize `..` and separators out of
+ * the templates root (#636). Callers that take a slug from a request should answer 400 first.
+ */
 export function templateDirForSlug(config: MinderConfig, slug: string): string {
+  if (!isValidSlug(slug)) throw new Error(`Invalid template slug: ${JSON.stringify(slug)}`);
   return path.join(templatesRootForConfig(config), slug);
 }
 
