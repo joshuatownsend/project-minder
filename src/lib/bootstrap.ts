@@ -338,6 +338,12 @@ async function registerServiceDisposers(): Promise<void> {
       // so tasks.db (disposed right after this) closes with no writer active.
       if (isDispatcherRunning()) await stopDispatcher();
     });
+    onShutdown("insightsSyncMarks", async () => {
+      // Synchronous and never throws: a disposer that fails or overruns its small budget would make
+      // the lifecycle withhold the database's clean-shutdown marker (a multi-minute check next boot).
+      const { flushSyncMarksSync } = await import("@/lib/scanner/insightsSyncMarks");
+      flushSyncMarksSync();
+    });
     onShutdown("gitStatusCache", async () => {
       const { gitStatusCache } = await import("@/lib/gitStatusCache");
       gitStatusCache.dispose();

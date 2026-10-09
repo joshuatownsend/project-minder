@@ -5,6 +5,7 @@ import crypto from "crypto";
 import { InsightEntry, InsightsInfo } from "../types";
 import { encodePath, toSlug } from "./claudeConversations";
 import { writeFileAtomic, withFileLock } from "../atomicWrite";
+import { effectiveMark, getSyncMark, setSyncMark, watermarkFor } from "./insightsSyncMarks";
 
 // ─── Dedup ID ────────────────────────────────────────────────────────────────
 
@@ -310,16 +311,19 @@ export function parseInsightsMd(content: string): {
 async function syncInsightsFromSessions(projectPath: string): Promise<string | null> {
   const claudeProjectsDir = path.join(os.homedir(), ".claude", "projects");
 
-  // Watermark: skip JSONL files not modified since last INSIGHTS.md write
+  // Watermark: skip JSONL files not modified since the last sync (#612). INSIGHTS.md's mtime alone
+  // is not enough: it only moves when something new is written, so a project with changing sessions
+  // and nothing new to extract would re-read the same files on every scan.
+  const syncStartedAt = Date.now() - 1000; // slack: a file written as the sync begins is re-read once
   const insightsMdPath = path.join(projectPath, "INSIGHTS.md");
-  let watermarkMs = 0;
+  let insightsMtimeMs: number | null = null;
   try {
-    const stat = await fs.stat(insightsMdPath);
-    watermarkMs = stat.mtimeMs;
+    insightsMtimeMs = (await fs.stat(insightsMdPath)).mtimeMs;
   } catch {
-    // No INSIGHTS.md yet — scan all JSONL files
+    // No INSIGHTS.md yet
   }
-
+  const mark = effectiveMark(await getSyncMark(projectPath), insightsMtimeMs);
+  const watermarkMs = watermarkFor(insightsMtimeMs, mark);
   const encoded = encodePath(projectPath).toLowerCase();
   const projectSlug = toSlug(path.basename(projectPath));
 
@@ -336,13 +340,20 @@ async function syncInsightsFromSessions(projectPath: string): Promise<string | n
   });
 
   const allInsights: InsightEntry[] = [];
+  // Any directory or file we could not read means this pass did not see everything, so it must not
+  // advance the watermark past what it missed.
+  let incomplete = false;
 
   for (const dir of matchingDirs) {
+    // With a prior mark, a directory it did not see (restored, renamed or mounted into place later) holds
+    // files that keep their OLD mtime/ctime, so it is read in full. Without one there is nothing to compare.
+    const dirWatermarkMs = mark && !mark.dirs.includes(dir) ? 0 : watermarkMs;
     const dirPath = path.join(claudeProjectsDir, dir);
     let files: string[];
     try {
       files = (await fs.readdir(dirPath)).filter((f) => f.endsWith(".jsonl"));
     } catch {
+      incomplete = true;
       continue;
     }
 
@@ -351,12 +362,15 @@ async function syncInsightsFromSessions(projectPath: string): Promise<string | n
         const filePath = path.join(dirPath, file);
         try {
           const fstat = await fs.stat(filePath);
-          if (fstat.mtimeMs <= watermarkMs) return [];
+          // ctime as well as mtime: a transcript restored or copied in with its OLD mtime preserved
+          // (backup restore, another machine) still has a fresh change time, and must not be skipped.
+          if (Math.max(fstat.mtimeMs, fstat.ctimeMs) <= dirWatermarkMs) return [];
           if (fstat.size > 50 * 1024 * 1024) return [];
           const content = await fs.readFile(filePath, "utf-8");
           const sessionId = path.basename(file, ".jsonl");
           return parseInsightsFromJsonl(content, sessionId, projectSlug, projectPath);
         } catch {
+          incomplete = true;
           return [];
         }
       })
@@ -365,8 +379,16 @@ async function syncInsightsFromSessions(projectPath: string): Promise<string | n
     allInsights.push(...fileInsights.flat());
   }
 
-  if (allInsights.length === 0) return null;
-  const { content } = await appendInsights(projectPath, allInsights);
+  // A throw from appendInsights skips the mark below, so the next scan looks again.
+  const content = allInsights.length > 0 ? (await appendInsights(projectPath, allInsights)).content : null;
+  if (!incomplete) {
+    // Recorded against the file as this sync leaves it (the append above changed its mtime).
+    let finalMtimeMs = insightsMtimeMs;
+    if (allInsights.length > 0) {
+      try { finalMtimeMs = (await fs.stat(insightsMdPath)).mtimeMs; } catch { finalMtimeMs = null; }
+    }
+    setSyncMark(projectPath, { at: syncStartedAt, insightsMtimeMs: finalMtimeMs, dirs: matchingDirs });
+  }
   return content;
 }
 
