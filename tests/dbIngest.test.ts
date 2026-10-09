@@ -373,7 +373,19 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
 
     await fs.rm(path.join(projectsDir, "C--dev-z", "gone1.jsonl"));
     await fs.rm(path.join(projectsDir, "C--dev-z", "gone2.jsonl"));
-    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    const realPrepare = db.prepare.bind(db);
+    const ftsDeletes: string[] = [];
+    const spy = vi.spyOn(db, "prepare").mockImplementation(((sql: string) => {
+      if (/DELETE FROM prompts_fts/.test(sql)) ftsDeletes.push(sql);
+      return realPrepare(sql);
+    }) as typeof db.prepare);
+    try {
+      await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    } finally {
+      spy.mockRestore();
+    }
+    // one FTS scan for both vanished sessions, not one per session
+    expect(ftsDeletes.map((q) => q.replace(/\s+/g, " ").trim())).toEqual(["DELETE FROM prompts_fts WHERE session_id IN (?,?)"]);
 
     expect(ftsFor("gone1")).toBe(0);
     expect(ftsFor("gone2")).toBe(0);

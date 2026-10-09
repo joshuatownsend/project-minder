@@ -4368,14 +4368,16 @@ async function runReconcileAllSessions(
 
     // `session_id` is an UNINDEXED fts5 column, so every FTS delete keyed on it scans the whole table
     // (~2 s at 200k chunks; #595). Delete the stale sessions' chunks in batched scans, not one per session.
+    // Each batch's FTS and session deletes share a transaction, so the writer-owned pair never half-applies.
     const FTS_BATCH = 500;
     for (let i = 0; i < stale.length; i += FTS_BATCH) {
-      const ids = stale.slice(i, i + FTS_BATCH).map((r) => r.session_id);
-      db.prepare(`DELETE FROM prompts_fts WHERE session_id IN (${ids.map(() => "?").join(",")})`).run(...ids);
-    }
-    for (const r of stale) {
-      deleteStale.run(r.session_id);
-      stalePruned.add(r.project_slug);
+      const batch = stale.slice(i, i + FTS_BATCH);
+      const ids = batch.map((r) => r.session_id);
+      db.transaction(() => {
+        db.prepare(`DELETE FROM prompts_fts WHERE session_id IN (${ids.map(() => "?").join(",")})`).run(...ids);
+        for (const r of batch) deleteStale.run(r.session_id);
+      })();
+      for (const r of batch) stalePruned.add(r.project_slug);
     }
   });
 
