@@ -35,7 +35,7 @@ afterEach(async () => {
   await fs.rm(tmp, { recursive: true, force: true });
 });
 
-const BAD = ["..", "../victim", "../../victim", "a/b", "a\b", "Real", "-x", "", "x".repeat(65)];
+const BAD = ["..", "../victim", "../../victim", "a/b", String.raw`a\b`, "Real", "-x", "", "x".repeat(65)];
 
 describe("template slug validation (#636)", () => {
   it.each(BAD)("path helpers throw for %j", (slug) => {

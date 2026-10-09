@@ -8,7 +8,7 @@ import { deleteTemplate, saveAsSnapshot } from "@/lib/template/promote";
 
 function invalidSlug() {
   return NextResponse.json(
-    { error: { code: "INVALID_SLUG", message: "Template slug must be lowercase letters, digits and hyphens." } },
+    { error: { code: "INVALID_SLUG", message: "Template slug must be 1-64 characters: lowercase letters, digits and hyphens, not starting with a hyphen." } },
     { status: 400 }
   );
 }
