@@ -49,7 +49,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       c.liveActivity = { ...(c.liveActivity ?? {}), hookUrl: safeUrl };
     });
     const status = await getLiveActivityHookStatus();
-    return NextResponse.json({ ok: true, ...status, hookUrl, lastReceivedAt: getLastHookReceivedAt() });
+    return NextResponse.json({ ok: true, ...status, hookUrl: safeUrl, lastReceivedAt: getLastHookReceivedAt() });
   } catch (err) {
     console.error("[live-activity] install failed:", err);
     return NextResponse.json(

@@ -9,6 +9,7 @@ import {
   deriveApprovalUrl,
   isManagedCommand,
   isApprovalCommand,
+  SENTINEL_UA,
 } from "./curlCommand";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "@/lib/approvals/store";
 import { tryParseJsonc } from "@/lib/scanner/util/jsonc";
@@ -79,6 +80,27 @@ export async function getLiveActivityHookStatus(): Promise<{
   return { installed: registered.length > 0, eventsRegistered: registered, approvalHookRegistered };
 }
 
+/**
+ * Remove hooks whose command carries BOTH sentinels. Minder never builds one (each command has exactly
+ * one), so it can only have been planted through a URL that smuggled the other sentinel in, to be
+ * mistaken for the other kind and left alone (#631). True if anything was removed.
+ */
+function stripAmbiguous(groups: HookEntry[]): boolean {
+  let removed = false;
+  for (let i = groups.length - 1; i >= 0; i--) {
+    const hooks = groups[i].hooks ?? [];
+    const kept = hooks.filter((h) => {
+      const c = h.command ?? "";
+      return !(c.includes(SENTINEL_UA) && isApprovalCommand(c));
+    });
+    if (kept.length === hooks.length) continue;
+    removed = true;
+    if (kept.length === 0) groups.splice(i, 1);
+    else groups[i].hooks = kept;
+  }
+  return removed;
+}
+
 /** Replace the command of every hook matching `isMine` that differs from `command`; true if any changed. */
 function rewriteManaged(groups: HookEntry[], isMine: (c: string) => boolean, command: string): boolean {
   let changed = false;
@@ -116,6 +138,7 @@ export async function installLiveActivityHooks(
     for (const event of events) {
       hooksObj[event] ??= [];
       const groups = hooksObj[event] as HookEntry[];
+      if (stripAmbiguous(groups)) changed = true;
       // Each command kind is checked against its own predicate. Asking the
       // broad `isManagedCommand` here would let the approval entry — which now
       // also matches it — stand in for the lifecycle entry and suppress it.
