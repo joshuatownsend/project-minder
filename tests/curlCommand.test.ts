@@ -6,6 +6,7 @@ import {
   isManagedCommand,
   isApprovalCommand,
   SENTINEL_UA,
+  safeHookUrl,
 } from "@/lib/hooks/curlCommand";
 
 describe("buildCurlCommand", () => {
@@ -93,5 +94,43 @@ describe("deriveApprovalUrl", () => {
     const out = deriveApprovalUrl("http://localhost:4100/api/hooks" + "/".repeat(50_000));
     expect(out).toBe("http://localhost:4100/api/hooks/permission");
     expect(Date.now() - start).toBeLessThan(1_000);
+  });
+});
+
+// #631 — the hook URL is interpolated into a shell command stored in user-wide Claude settings.
+describe("safeHookUrl / command injection (#631)", () => {
+  it("accepts plain loopback http(s) URLs and returns the normalized form", () => {
+    expect(safeHookUrl("http://localhost:4100/api/hooks")).toBe("http://localhost:4100/api/hooks");
+    expect(safeHookUrl("http://127.0.0.1:4100/api/hooks/")).toBe("http://127.0.0.1:4100/api/hooks/");
+    expect(safeHookUrl("https://[::1]:4100/a_b-c.d")).toBe("https://[::1]:4100/a_b-c.d");
+  });
+
+  it.each([
+    'http://localhost:4100/$(touch pwned)',
+    'http://localhost:4100/"; touch pwned; "',
+    "http://localhost:4100/`id`",
+    "http://localhost:4100/a b",
+    "http://localhost:4100/a;b",
+    "http://localhost:4100/a&b",
+    "http://localhost:4100/a|b",
+    "http://localhost:4100/%PATH%",
+    "http://localhost:4100/a?x=1",
+    "http://localhost:4100/a#x",
+    "http://user:pw@localhost:4100/a",
+    "http://evil.example/a",
+    "file:///etc/passwd",
+    "not a url",
+  ])("refuses %s", (u) => {
+    expect(safeHookUrl(u)).toBeNull();
+  });
+
+  it("normalizes a backslash to a path separator, so none reaches the command line", () => {
+    expect(safeHookUrl(String.raw`http://localhost:4100/a\b`)).toBe("http://localhost:4100/a/b");
+  });
+
+  it("both command builders refuse an unsafe URL instead of embedding it", () => {
+    const evil = 'http://localhost:4100/$(touch pwned)';
+    expect(() => buildCurlCommand(evil)).toThrow();
+    expect(() => buildApprovalCurlCommand(evil, 60_000)).toThrow();
   });
 });

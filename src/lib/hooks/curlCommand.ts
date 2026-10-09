@@ -23,6 +23,33 @@ export const SENTINEL_UA = "project-minder-live-activity/1";
 export const SENTINEL_UA_APPROVAL = "project-minder-approval-gate/1";
 
 /**
+ * The hook URL, normalized, if it is one a hook command may safely embed: http(s) to this machine,
+ * with only plain path characters. The URL is interpolated into a shell command line that Claude Code
+ * stores in user-wide settings and runs on every lifecycle event, so anything the shell treats
+ * specially (quotes, `$`, backticks, `\`, `%`, spaces, `&`, `;`, a query) is refused rather than
+ * escaped (#631). Returns null for anything else.
+ */
+const SAFE_HOOK_URL = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?(?:\/[A-Za-z0-9._~\/-]*)?$/;
+
+export function safeHookUrl(raw: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (u.username || u.password || u.search || u.hash) return null;
+  const href = u.href;
+  return SAFE_HOOK_URL.test(href) ? href : null;
+}
+
+function requireSafeHookUrl(raw: string): string {
+  const url = safeHookUrl(raw);
+  if (!url) throw new Error("hook URL must be a plain http(s) URL to localhost");
+  return url;
+}
+
+/**
  * Build the curl command Claude Code will run for each registered lifecycle
  * hook event. The command reads the JSON payload from stdin and POSTs it to
  * the hook receiver.
@@ -33,7 +60,7 @@ export const SENTINEL_UA_APPROVAL = "project-minder-approval-gate/1";
  */
 export function buildCurlCommand(hookUrl: string): string {
   return (
-    `curl -sS -X POST "${hookUrl}"` +
+    `curl -sS -X POST "${requireSafeHookUrl(hookUrl)}"` +
     ` -H "Content-Type: application/json"` +
     ` -A "${SENTINEL_UA}"` +
     ` --data-binary @-`
@@ -122,7 +149,7 @@ export function buildApprovalCurlCommand(
   // response to come back before curl gives up on a healthy server.
   const maxTimeSec = Math.max(1, Math.ceil(serverTimeoutMs / 1000) + 3);
   return (
-    `curl -sS -f -X POST "${hookUrl}"` +
+    `curl -sS -f -X POST "${requireSafeHookUrl(hookUrl)}"` +
     ` -H "Content-Type: application/json"` +
     ` -A "${SENTINEL_UA_APPROVAL}"` +
     ` --max-time ${maxTimeSec}` +

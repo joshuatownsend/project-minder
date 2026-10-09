@@ -353,15 +353,15 @@ describe("buildApprovalCurlCommand", () => {
   it("uses -f so an HTTP error yields empty stdout, not a parse error", () => {
     // Empty stdout is what Claude Code reads as "no opinion" — this flag
     // is the difference between failing open and feeding it garbage.
-    const cmd = buildApprovalCurlCommand("http://x/y", 1_000);
+    const cmd = buildApprovalCurlCommand("http://localhost:4100/y", 1_000);
     expect(cmd).toMatch(/(^|\s)-sS -f(\s|$)/);
   });
 
   it("stays identifiable as Minder-managed for cleanup", () => {
-    expect(isManagedCommand(buildApprovalCurlCommand("http://x/y", 1_000))).toBe(true);
+    expect(isManagedCommand(buildApprovalCurlCommand("http://localhost:4100/y", 1_000))).toBe(true);
   });
 
   it("never drops below a 1-second ceiling", () => {
-    expect(buildApprovalCurlCommand("http://x/y", 0)).toContain("--max-time 3");
+    expect(buildApprovalCurlCommand("http://localhost:4100/y", 0)).toContain("--max-time 3");
   });
 });
