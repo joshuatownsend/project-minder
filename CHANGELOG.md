@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Removing sessions whose transcript files were deleted no longer costs about two seconds per session (#595). The ingest's prune pass deleted each stale session's full-text rows with its own `DELETE ... WHERE session_id = ?`, and `session_id` is an unindexed column of the FTS table, so each one scanned all ~200k chunks. It now deletes them in batched statements (one scan per 500 sessions); one reconcile that pruned a dozen sessions had spent 23.8 s in this step.
 - A project scan no longer re-reads the same session transcripts for insights on every run (#612). The sync that copies `★ Insight` blocks from transcripts into `INSIGHTS.md` skipped only files older than `INSIGHTS.md`'s modification time, which moves only when something new is written, so a project whose sessions kept changing but held nothing new (or no insights at all, hence no `INSIGHTS.md`) re-read and re-parsed every newer transcript each time: 2,284 files / 1.2 GB for one project, about 10 s of a serial scan. Minder now remembers when each project was last synced (`~/.minder/insights-sync.json`) and reads only what changed since. A pass that could not read some file does not advance the mark, a deleted, restored or edited `INSIGHTS.md` (or a transcript directory the last pass never saw) starts that project over, and a missing or corrupt marks file just means the old behaviour.
 
 ## [1.16.7] - 2026-10-08

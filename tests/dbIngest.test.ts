@@ -356,6 +356,33 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions", () => {
     reloaded.conn.closeDb();
   });
 
+  it("prunes the full-text rows of every vanished session in one pass and leaves the rest (#595)", async () => {
+    const { reloaded, projectsDir } = await setup();
+    const names = ["keep", "gone1", "gone2"];
+    for (const n of names) {
+      await writeJsonl(path.join(projectsDir, "C--dev-z", `${n}.jsonl`), [
+        userTurn("2026-04-30T10:00:00Z", `prompt for ${n}`),
+        assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "ok"),
+      ]);
+    }
+    const db = (await reloaded.conn.getDb())!;
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+    const ftsFor = (id: string) =>
+      (db.prepare("SELECT COUNT(*) AS n FROM prompts_fts WHERE session_id = ?").get(id) as { n: number }).n;
+    expect(names.map(ftsFor).every((n) => n > 0)).toBe(true);
+
+    await fs.rm(path.join(projectsDir, "C--dev-z", "gone1.jsonl"));
+    await fs.rm(path.join(projectsDir, "C--dev-z", "gone2.jsonl"));
+    await reloaded.ingest.reconcileAllSessions(db, { projectsDir });
+
+    expect(ftsFor("gone1")).toBe(0);
+    expect(ftsFor("gone2")).toBe(0);
+    expect(ftsFor("keep")).toBeGreaterThan(0);
+    expect((db.prepare("SELECT session_id FROM sessions").all() as Array<{ session_id: string }>).map((r) => r.session_id)).toEqual(["keep"]);
+
+    reloaded.conn.closeDb();
+  });
+
   it("stamps day, model and a priced cost on ingested assistant turns", async () => {
     const { reloaded, projectsDir } = await setup();
     const sessionFile = path.join(projectsDir, "C--dev-pm", "s1.jsonl");

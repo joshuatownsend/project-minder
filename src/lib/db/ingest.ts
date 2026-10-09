@@ -4335,8 +4335,8 @@ async function runReconcileAllSessions(
         file_path: string;
         derived_version: number;
       }>;
-    const deleteFtsBySession = db.prepare("DELETE FROM prompts_fts WHERE session_id = ?");
     const deleteStale = db.prepare("DELETE FROM sessions WHERE session_id = ?");
+    const stale: Array<{ session_id: string; project_slug: string }> = [];
     for (const r of allSessions) {
       if (liveFilePaths.has(r.file_path)) continue;
 
@@ -4363,7 +4363,17 @@ async function runReconcileAllSessions(
         continue;
       }
 
-      deleteFtsBySession.run(r.session_id);
+      stale.push(r);
+    }
+
+    // `session_id` is an UNINDEXED fts5 column, so every FTS delete keyed on it scans the whole table
+    // (~2 s at 200k chunks; #595). Delete the stale sessions' chunks in batched scans, not one per session.
+    const FTS_BATCH = 500;
+    for (let i = 0; i < stale.length; i += FTS_BATCH) {
+      const ids = stale.slice(i, i + FTS_BATCH).map((r) => r.session_id);
+      db.prepare(`DELETE FROM prompts_fts WHERE session_id IN (${ids.map(() => "?").join(",")})`).run(...ids);
+    }
+    for (const r of stale) {
       deleteStale.run(r.session_id);
       stalePruned.add(r.project_slug);
     }
