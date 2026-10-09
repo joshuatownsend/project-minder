@@ -5,10 +5,11 @@ import { readConfig } from "@/lib/config";
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}));
   const config = await readConfig();
-
+  const endpoint = (body?.endpoint as string | undefined) ?? config.autoTitle?.endpoint;
   try {
     const { title } = await generateTitle({
-      endpoint: (body?.endpoint as string | undefined) ?? config.autoTitle?.endpoint,
+      // generateTitle rejects an endpoint the stored key must not be sent to (400).
+      endpoint,
       model: (body?.model as string | undefined) ?? config.autoTitle?.model,
       turns: [
         { role: "user", content: "Help me build a web scraper for news articles" },

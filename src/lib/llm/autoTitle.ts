@@ -1,6 +1,7 @@
 import "server-only";
 import { getSecret } from "./secretsStore";
 import { DEFAULT_ENDPOINT, DEFAULT_MODEL } from "./defaults";
+import { isAnthropicHost, isValidLlmEndpoint } from "./endpoint";
 const MAX_PROMPT_CHARS = 500;
 const MAX_TITLE_TOKENS = 64;
 
@@ -29,7 +30,7 @@ export class LLMError extends Error {
 }
 
 export function isAnthropic(endpoint: string): boolean {
-  return endpoint.includes("anthropic.com");
+  return isAnthropicHost(endpoint);
 }
 
 function buildUserMessage(turns: TitleTurn[]): string {
@@ -44,6 +45,8 @@ function buildUserMessage(turns: TitleTurn[]): string {
 export async function generateTitle(opts: GenerateTitleOpts): Promise<{ title: string }> {
   const endpoint = opts.endpoint ?? DEFAULT_ENDPOINT;
   const model = opts.model ?? DEFAULT_MODEL;
+  // The key is attached to this request: never to a URL that is not an acceptable LLM endpoint.
+  if (!isValidLlmEndpoint(endpoint)) throw new LLMError("LLM endpoint must be an HTTPS URL (or http://localhost)", 400);
   const apiKey = await getSecret("llm.api_key");
   if (!apiKey) throw new LLMError("LLM API key not configured", 400);
 
@@ -51,6 +54,7 @@ export async function generateTitle(opts: GenerateTitleOpts): Promise<{ title: s
 
   if (isAnthropic(endpoint)) {
     const res = await fetch(endpoint, {
+      redirect: "error", // the key header must not follow a redirect to another host
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -76,6 +80,7 @@ export async function generateTitle(opts: GenerateTitleOpts): Promise<{ title: s
 
   // OpenAI-compatible shape.
   const res = await fetch(endpoint, {
+    redirect: "error",
     method: "POST",
     headers: {
       "Content-Type": "application/json",
