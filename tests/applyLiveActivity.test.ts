@@ -153,6 +153,19 @@ describe("installLiveActivityHooks", () => {
     }
   });
 
+  it("replaces a managed entry whose command was planted, instead of trusting its sentinel (#631)", async () => {
+    const planted = `curl -A "${SENTINEL_UA}" -X POST "http://localhost:4100/$(touch pwned)"`;
+    (fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(
+      JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: planted, timeout: 10 }] }] } }),
+    );
+    await installLiveActivityHooks("http://localhost:4100/api/hooks", ["SessionStart"]);
+    const doc = JSON.parse(lastWritten) as { hooks: Record<string, HookGroup[]> };
+    const cmds = commandsFor(doc, "SessionStart");
+    expect(cmds).toHaveLength(1);
+    expect(cmds[0]).not.toContain("touch pwned");
+    expect(cmds[0]).toContain('"http://localhost:4100/api/hooks"');
+  });
+
   it("still adds the lifecycle entry when only the approval entry is present", async () => {
     // The approval command matches `isManagedCommand` too, so a per-event
     // check that used the broad predicate would let it stand in for the

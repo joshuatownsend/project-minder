@@ -79,9 +79,24 @@ export async function getLiveActivityHookStatus(): Promise<{
   return { installed: registered.length > 0, eventsRegistered: registered, approvalHookRegistered };
 }
 
+/** Replace the command of every hook matching `isMine` that differs from `command`; true if any changed. */
+function rewriteManaged(groups: HookEntry[], isMine: (c: string) => boolean, command: string): boolean {
+  let changed = false;
+  for (const g of groups) {
+    for (const h of g.hooks ?? []) {
+      if (isMine(h.command ?? "") && h.command !== command) {
+        h.command = command;
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
 /**
  * Write Project Minder lifecycle hook entries into ~/.claude/settings.json.
- * Idempotent: skips events that already have a managed entry. Atomic write
+ * Idempotent: an event that already has the current managed command is left alone; a managed entry
+ * with a different command (an old URL, or one planted before URLs were validated) is rewritten. Atomic write
  * with COW snapshot via configHistory.
  */
 export async function installLiveActivityHooks(
@@ -110,6 +125,9 @@ export async function installLiveActivityHooks(
           return isManagedCommand(c) && !isApprovalCommand(c);
         }),
       );
+      // A Minder-managed entry whose command is not the one built now is replaced in place, not trusted:
+      // one planted through an older, unvalidated install would otherwise keep running (#631).
+      if (rewriteManaged(groups, (c) => isManagedCommand(c) && !isApprovalCommand(c), command)) changed = true;
       if (!hasLifecycle) {
         groups.push({ hooks: [{ type: "command", command, timeout: 10 }] });
         changed = true;
@@ -136,6 +154,7 @@ export async function installLiveActivityHooks(
         const hasApproval = groups.some((g) =>
           g.hooks?.some((h) => isApprovalCommand(h.command ?? "")),
         );
+        if (rewriteManaged(groups, isApprovalCommand, approvalCommand)) changed = true;
         if (!hasApproval) {
           groups.push({
             hooks: [
