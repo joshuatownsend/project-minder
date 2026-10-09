@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.16.9] - 2026-10-09
+
+*A security release. An automated review of the whole repository turned up fourteen findings; this release closes the six that were cheapest to fix and most exposed: the dashboard can no longer be reached from the network by a source run, nor framed or poked by another website, the stored LLM key can only go to an acceptable endpoint, the hook installer and template routes refuse input that could reach a shell or a recursive delete, and CSV downloads no longer carry live spreadsheet formulas. The rest are tracked as issues #632–#640.*
+
 ### Security
 
 - Downloading a SQL result as CSV can no longer carry a spreadsheet formula (#641). The serializer applied only RFC-4180 quoting, so a text value beginning with `=`, `+`, `-`, `@` (or their full-width forms), a tab, a carriage return or a line feed (repository, session, tool and provider names all reach SQL results) was evaluated by Excel, Sheets or LibreOffice when the file was opened. Such text now gets a leading apostrophe; real numbers, including negative ones, are untouched. The timecard export already did this; the usage export contains only dates and numbers.
