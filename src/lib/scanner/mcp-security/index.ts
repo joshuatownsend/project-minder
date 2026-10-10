@@ -23,12 +23,18 @@ let runningPromise: Promise<McpSecurityScanSummary> | null = null;
 
 /**
  * Run a full static-surface MCP security scan.
- * Deduplicated: if a scan is already in progress the same promise is returned.
+ * Deduplicated: if a scan is already in progress an automatic trigger gets the same promise; a manual one
+ * waits for it and starts its own.
  */
 export async function runMcpSecurityScan(
   trigger: "scan" | "manual" | "startup" = "scan",
 ): Promise<McpSecurityScanSummary> {
-  if (runningPromise) return runningPromise;
+  // An automatic trigger may share a run already in progress. A manual re-run may not: that run could have
+  // read the project scan before an edit the user is now asking to see, so it waits and then runs afresh.
+  while (runningPromise) {
+    if (trigger !== "manual") return runningPromise;
+    await runningPromise.catch(() => undefined);
+  }
 
   runningPromise = (async () => {
     const startMs = Date.now();

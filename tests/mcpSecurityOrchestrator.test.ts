@@ -71,6 +71,7 @@ describe("runMcpSecurityScan covers project and local servers (#638)", () => {
 
   it("a manual re-run bypasses the cached scan; an automatic one uses it", async () => {
     fresh.mockClear();
+    invalidate.mockClear();
     await runMcpSecurityScan("scan");
     expect(fresh).not.toHaveBeenCalled();
     await runMcpSecurityScan("manual");
