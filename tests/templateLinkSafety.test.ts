@@ -233,4 +233,16 @@ describe("snapshot destination and cycle reporting (#633, #640)", () => {
     expect(r.ok).toBe(true);
     expect(r.bundle?.files).toEqual(["SKILL.md"]);
   });
+
+  it("saveAsSnapshot refuses when .minder/templates itself is a link out of the root", async () => {
+    const { saveAsSnapshot } = await import("@/lib/template/promote");
+    await fs.mkdir(path.join(root, ".minder"), { recursive: true });
+    await fs.mkdir(path.join(outside, "ok", "bundle"), { recursive: true });
+    await fs.writeFile(path.join(outside, "ok", "bundle", "keep.txt"), "keep");
+    await link(outside, path.join(root, ".minder", "templates"));
+    const manifest = { kind: "live", liveSourceSlug: "nope", units: {} } as never;
+    const r = await saveAsSnapshot(cfg(), { projects: [] } as never, "ok", manifest);
+    expect("error" in r).toBe(true);
+    expect(await fs.readFile(path.join(outside, "ok", "bundle", "keep.txt"), "utf-8")).toBe("keep");
+  });
 });

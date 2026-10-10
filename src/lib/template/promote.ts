@@ -24,6 +24,7 @@ import {
   writeManifest,
 } from "./manifest";
 import { atomicWriteFile, copyDirRecursive, ensureDir, fileExists } from "./atomicFs";
+import { getDevRoots } from "../config";
 import { assertContained, assertNotLink, assertProjectConfigContained, PathSafetyError } from "./pathSafety";
 import { templateExists } from "./registry";
 import {
@@ -94,7 +95,8 @@ export async function saveAsSnapshot(
     if (src) assertProjectConfigContained(src.path);
     // The snapshot destination is recursively deleted and rewritten: it must not be, or sit under, a link.
     const templateDir = templateDirForSlug(config, slug);
-    assertContained(bundleDirForSlug(config, slug), path.dirname(templateDir));
+    // Anchored at the dev root, not at templates/: a linked `.minder` or `templates` must not redirect it.
+    assertContained(bundleDirForSlug(config, slug), getDevRoots(config)[0]);
     await assertNotLink(templateDir);
     await assertNotLink(bundleDirForSlug(config, slug));
   } catch (e) {
