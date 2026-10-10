@@ -217,7 +217,9 @@ describe("server ids are unambiguous across scopes (#638)", () => {
     const { buildServerId } = await import("@/lib/scanner/mcp-security/ids");
     const lone = String.fromCharCode(0xd800);
     expect(() => buildServerId("project", "a" + lone, "app")).not.toThrow();
-    expect(buildServerId("user", lone)).toBe("user:%EF%BF%BD");
+    expect(buildServerId("user", lone)).toBe("user:%uD800");
+    expect(buildServerId("user", lone)).not.toBe(buildServerId("user", String.fromCharCode(0xd801)));
+    expect(buildServerId("user", "a" + lone + "b")).toBe("user:a%uD800b");
     expect(buildServerId("user", "😀")).toBe("user:%F0%9F%98%80");
   });
 });
