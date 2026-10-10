@@ -213,4 +213,11 @@ describe("server ids are unambiguous across scopes (#638)", () => {
     expect(buildServerId("project", "local:foo", "app")).not.toBe(buildServerId("local", "foo", "app"));
     expect(buildServerId("user", "a:b")).toBe("user:a%3Ab");
   });
+  it("does not throw on a lone surrogate in a server name", async () => {
+    const { buildServerId } = await import("@/lib/scanner/mcp-security/ids");
+    const lone = String.fromCharCode(0xd800);
+    expect(() => buildServerId("project", "a" + lone, "app")).not.toThrow();
+    expect(buildServerId("user", lone)).toBe("user:%EF%BF%BD");
+    expect(buildServerId("user", "😀")).toBe("user:%F0%9F%98%80");
+  });
 });
