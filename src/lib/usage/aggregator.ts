@@ -44,7 +44,7 @@ import type {
 } from "./types";
 
 import type { AggregatorPeriod as Period } from "./period";
-import { sameDirName } from "./dirNameFold";
+import { foldDirName } from "./dirNameFold";
 
 // `Period` here is the alias `AggregatorPeriod` from `period.ts` —
 // canonical 5-option vocabulary plus the legacy `week`/`month` aliases
@@ -75,6 +75,7 @@ export async function generateUsageReport(
   // "when does this developer work", which a one-day window cannot.
   const acc = createUsageAccumulator(period);
   const periodStart = getPeriodStart(period);
+  const dirKey = dirName ? foldDirName(dirName) : null;
 
   /**
    * Activity's input, kept for the whole run — but as `{ timestamp }` only,
@@ -88,7 +89,7 @@ export async function generateUsageReport(
     async (_sessionId, sessionTurns) => {
       let turns = sessionTurns;
       if (project) turns = turns.filter((t) => t.projectSlug === project);
-      if (dirName) turns = turns.filter((t) => sameDirName(t.projectDirName, dirName));
+      if (dirKey) turns = turns.filter((t) => foldDirName(t.projectDirName) === dirKey);
       if (source) turns = turns.filter((t) => (t.source ?? "claude") === source);
       // Home discriminator (#311): scope the report to turns recorded by ONE
       // configured Claude home. Strict equality — a turn with no home stamp

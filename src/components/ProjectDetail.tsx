@@ -38,7 +38,7 @@ import { LauncherChips } from "./LauncherChips";
 import { useWorkflowLauncherEnabled } from "./ConfigProvider";
 import { useGithubActivity } from "@/hooks/useGithubActivity";
 import type { SessionSummary } from "@/lib/types";
-import { sameHomeKey } from "@/lib/homeKey";
+import { isProjectSession } from "@/lib/sessions/projectSessionMatch";
 import dynamic from "next/dynamic";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -192,7 +192,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
         if (cancelled || !Array.isArray(data)) return;
         const map: Record<string, string> = {};
         for (const s of data) {
-          if (s.projectName !== usageDirName || (usageHomeKey && !sameHomeKey(s.homeKey, usageHomeKey))) continue;
+          if (!isProjectSession(s, usageDirName, usageHomeKey)) continue;
           for (const pr of s.prs ?? []) {
             if (pr?.repo && typeof pr.number === "number") {
               map[`${pr.repo}#${pr.number}`] = s.sessionId;
@@ -711,7 +711,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
               module does, so passing `project.slug` would silently match
               nothing on any project whose route slug differs. */}
           {activeTab === "timecard" && (
-            <EngagementDashboard project={project.usageDirName || project.usageSlug} home={project.usageHomeKey} />
+            <EngagementDashboard project={project.usageDirName} home={project.usageHomeKey} />
           )}
 
           {/* ── BOARD ─────────────────────────────────────────────────── */}

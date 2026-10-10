@@ -24,7 +24,7 @@ export const queryKeys = {
   stats: () => ["stats"] as const,
   environments: () => ["environments"] as const,
   usage: (period: string, project?: string, home?: string, dirName?: string) =>
-    ["usage", period, project ?? null, home ?? null, ...(dirName ? [dirName] : [])] as const,
+    ["usage", period, project ?? null, home ?? null, dirName ?? null] as const,
   // Thresholds are part of the key: the same period over the same bytes
   // yields a different report at a different idle threshold, so they must
   // not share a cache entry. `tz` likewise — it decides both the day buckets
