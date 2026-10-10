@@ -141,7 +141,7 @@ export const PATTERN_RULES: PatternRule[] = [
     message: "Social engineering: 'for educational purposes only' cover phrase",
   },
 
-  // ── CH: Credential Harvesting (7 rules) ────────────────────────────────────
+  // ── CH: Credential Harvesting (8 rules) ────────────────────────────────────
   {
     id: "CH-01",
     category: "CH",

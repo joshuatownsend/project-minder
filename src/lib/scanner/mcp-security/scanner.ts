@@ -33,13 +33,39 @@ function dbScope(server: McpServer): "user" | "project" {
 
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "ash", "csh", "tcsh", "fish"]);
 const POWERSHELL = /^(?:powershell|pwsh)$/i;
-// Delimiter-based rules re-run over the extracted script text.
-const SHELL_SCRIPT_RULES: ReadonlySet<string> = new Set(["SF-01", "SF-02", "SF-03", "SF-09", "CI-01", "CI-02"]);
+// Delimiter-based rules re-run over the extracted script text. CI-01 is left out: it would fire on the
+// delimiter we prepend, i.e. on any script that merely starts with rm/curl/sh.
+const SHELL_SCRIPT_RULES: ReadonlySet<string> = new Set(["SF-01", "SF-02", "SF-03", "SF-09", "CI-02"]);
 const POWERSHELL_RULES: ReadonlySet<string> = new Set(["SF-08"]);
 const CMD_RULES: ReadonlySet<string> = new Set(["SF-09"]);
 const LAUNCH_LINE_RULES: ReadonlySet<string> = new Set([...SHELL_SCRIPT_RULES, ...POWERSHELL_RULES, ...CMD_RULES]);
 const DIRECT_RULES: ReadonlySet<string> = new Set(["SF-01", "SF-09"]);
 const DIRECT_DESTRUCTIVE = new Set(["rm", "del", "erase", "rd", "rmdir"]);
+
+// Programs that only run their first operand; the scanner looks through them (`env sh -c ...`, `sudo rm -rf`).
+const LAUNCHERS = new Set(["env", "sudo", "doas", "nohup", "nice", "exec", "command", "time", "stdbuf", "setsid"]);
+
+/** The command that is really run once launcher prefixes and their options / VAR=value words are skipped. */
+function effectiveLaunch(server: McpServer): { command: string; args: string[] } | null {
+  if (!server.command) return null;
+  let command = server.command;
+  let args = server.args ?? [];
+  for (let guard = 0; guard < 8 && LAUNCHERS.has(baseName(command).toLowerCase()); guard++) {
+    let i = 0;
+    while (i < args.length && (/^-/.test(args[i]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(args[i]))) i++;
+    if (i >= args.length) return { command, args };
+    command = args[i];
+    args = args.slice(i + 1);
+  }
+  return { command, args };
+}
+
+/** Rewrite `rm` invocations whose options include recursion (long form or reordered) to a plain `rm -rf`. */
+function normalizeRm(text: string): string {
+  return text.replace(/(^|[\s;&|(])rm\s+((?:--?[A-Za-z][\w-]*\s+)+)/g, (m, pre: string, opts: string) =>
+    /(?:^|\s)(?:--recursive|-[A-Za-z]*[rR][A-Za-z]*)(?:\s|$)/.test(opts) ? pre + "rm -rf " : m,
+  );
+}
 
 function baseName(command: string): string {
   const leaf = command.split(/[\\/]/).pop() ?? command;
@@ -52,8 +78,9 @@ function baseName(command: string): string {
  * and are not executed. Null for anything that is not a shell `-c` launch.
  */
 export function shellScript(server: McpServer): string | null {
-  if (!server.command || !SHELLS.has(baseName(server.command).toLowerCase())) return null;
-  const args = server.args ?? [];
+  const launch = effectiveLaunch(server);
+  if (!launch || !SHELLS.has(baseName(launch.command).toLowerCase())) return null;
+  const args = launch.args;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--" || !/^[-+]/.test(a)) return null; // first operand reached without a -c
@@ -162,7 +189,7 @@ export function scanServers(
     const script = shellScript(server);
     if (script !== null) {
       // Statements are separated by newlines as well as `;`, and the rules expect a delimiter in front.
-      const text = ";" + script.replace(/\r?\n/g, ";");
+      const text = normalizeRm(";" + script.replace(/\r?\n/g, ";"));
       own.push(...scanSurface(text, "args", sId, scope, projectSlug, runId, nowMs, SHELL_SCRIPT_RULES));
     }
     if (server.command) {
@@ -183,9 +210,9 @@ export function scanServers(
       }
       // A destructive program launched directly (`rm` with `-rf /`) has no shell wrapper to hide in. GNU rm
       // takes options in any order and in long form, so recursion is judged from the arguments, not the text.
-      if (DIRECT_DESTRUCTIVE.has(base)) {
-        const recursive = (server.args ?? []).some((a) => a === "--recursive" || /^-[A-Za-z]*[rR][A-Za-z]*$/.test(a));
-        const text = base === "rm" && recursive ? ";rm -rf " + line : ";" + line;
+      const direct = effectiveLaunch(server);
+      if (direct && DIRECT_DESTRUCTIVE.has(baseName(direct.command).toLowerCase())) {
+        const text = normalizeRm(";" + [baseName(direct.command).toLowerCase(), ...direct.args].join(" "));
         own.push(...scanSurface(text, "command", sId, scope, projectSlug, runId, nowMs, DIRECT_RULES));
       }
     }
