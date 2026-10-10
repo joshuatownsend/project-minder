@@ -37,6 +37,7 @@ const POWERSHELL = /^(?:powershell|pwsh)$/i;
 const SHELL_SCRIPT_RULES: ReadonlySet<string> = new Set(["SF-01", "SF-02", "SF-03", "SF-09", "CI-01", "CI-02"]);
 const POWERSHELL_RULES: ReadonlySet<string> = new Set(["SF-08"]);
 const CMD_RULES: ReadonlySet<string> = new Set(["SF-09"]);
+const LAUNCH_LINE_RULES: ReadonlySet<string> = new Set([...SHELL_SCRIPT_RULES, ...POWERSHELL_RULES, ...CMD_RULES]);
 const DIRECT_RULES: ReadonlySet<string> = new Set(["SF-01", "SF-09"]);
 const DIRECT_DESTRUCTIVE = new Set(["rm", "del", "erase", "rd", "rmdir"]);
 
@@ -61,6 +62,8 @@ export function shellScript(server: McpServer): string | null {
       continue;
     }
     if (/^-[A-Za-z]*c[A-Za-z]*$/.test(a)) return args[i + 1] ?? null;
+    if (a === "--command") return args[i + 1] ?? null; // fish
+    if (a.startsWith("--command=")) return a.slice("--command=".length);
   }
   return null;
 }
@@ -148,10 +151,11 @@ export function scanServers(
     const scope = dbScope(server);
     const surfaces = buildSurfaces(server);
 
-    const own: McpFinding[] = [];
+    const perSurface: McpFinding[] = [];
     for (const entry of surfaces) {
-      own.push(...scanSurface(entry.text, entry.surface, sId, scope, projectSlug, runId, nowMs));
+      perSurface.push(...scanSurface(entry.text, entry.surface, sId, scope, projectSlug, runId, nowMs));
     }
+    const own: McpFinding[] = []; // findings from the launch-line passes below
 
     // The stdio probe spawns the command with argv, so a destructive payload hides in the script argument of
     // a shell wrapper (`sh -c "..."`), where the delimiter-based rules cannot see it (#634).
@@ -164,24 +168,34 @@ export function scanServers(
     if (server.command) {
       const base = baseName(server.command).toLowerCase();
       const line = [server.command, ...(server.args ?? [])].join(" ");
-      // PowerShell flags are matched against the launch line, since its rule names the executable too.
-      if (POWERSHELL.test(base)) {
-        own.push(...scanSurface(line, "command", sId, scope, projectSlug, runId, nowMs, POWERSHELL_RULES));
+      // On Windows the probe goes through cmd.exe, which interprets the whole joined line, so the shell and
+      // PowerShell rules run over it (command/args boundaries do not matter there). PowerShell's rule also
+      // names the executable, which is why it needs the line rather than the arguments.
+      own.push(...scanSurface(line, "command", sId, scope, projectSlug, runId, nowMs, LAUNCH_LINE_RULES));
+      // `cmd /c <command>`: the first command after the switch has no delimiter in front of it.
+      if (base === "cmd") {
+        const args = server.args ?? [];
+        const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
+        if (at >= 0) {
+          const rest = ";" + args.slice(at + 1).join(" ");
+          own.push(...scanSurface(rest, "args", sId, scope, projectSlug, runId, nowMs, LAUNCH_LINE_RULES));
+        }
       }
-      // On Windows the probe goes through cmd.exe, which also interprets the joined line (& | and del/rd).
-      own.push(...scanSurface(line, "command", sId, scope, projectSlug, runId, nowMs, CMD_RULES));
-      // A destructive program launched directly (`rm` with `-rf /`) has no shell wrapper to hide in.
+      // A destructive program launched directly (`rm` with `-rf /`) has no shell wrapper to hide in. GNU rm
+      // takes options in any order and in long form, so recursion is judged from the arguments, not the text.
       if (DIRECT_DESTRUCTIVE.has(base)) {
-        own.push(...scanSurface(";" + line, "command", sId, scope, projectSlug, runId, nowMs, DIRECT_RULES));
+        const recursive = (server.args ?? []).some((a) => a === "--recursive" || /^-[A-Za-z]*[rR][A-Za-z]*$/.test(a));
+        const text = base === "rm" && recursive ? ";rm -rf " + line : ";" + line;
+        own.push(...scanSurface(text, "command", sId, scope, projectSlug, runId, nowMs, DIRECT_RULES));
       }
     }
 
-    // Overlapping passes can report the same rule on the same surface; keep one.
-    const seen = new Set<string>();
+    // The launch-line passes overlap the per-surface ones; a rule already reported for this server is not repeated.
+    findings.push(...perSurface);
+    const seen = new Set(perSurface.map((f) => f.ruleId));
     for (const f of own) {
-      const key = f.ruleId + "|" + f.surface;
-      if (seen.has(key)) continue;
-      seen.add(key);
+      if (seen.has(f.ruleId)) continue;
+      seen.add(f.ruleId);
       findings.push(f);
     }
   }

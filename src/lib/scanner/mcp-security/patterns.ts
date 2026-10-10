@@ -1,7 +1,7 @@
 /**
  * MCP security pattern rule registry.
  *
- * 60 explicit rules + a 30-name SUSPICIOUS_PARAM_NAMES set across 13 categories.
+ * 61 explicit rules + a 30-name SUSPICIOUS_PARAM_NAMES set across 13 categories.
  * Ported from the mcpware/cross-code-organizer MIT reference (src/security-scanner.mjs).
  *
  * Each rule: { id, category, severity, regex, message }
@@ -317,7 +317,7 @@ export const PATTERN_RULES: PatternRule[] = [
     message: "Dense URL-encoded sequence (≥5 encoded chars — possible payload)",
   },
 
-  // ── SF: Shell Feature Abuse (6 rules) ──────────────────────────────────────
+  // ── SF: Shell Feature Abuse (7 rules) ──────────────────────────────────────
   {
     id: "SF-01",
     category: "SF",

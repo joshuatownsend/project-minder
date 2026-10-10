@@ -6,7 +6,7 @@ Project Minder automatically scans every configured MCP server for signs of prom
 
 The scanner analyses each server's static metadata — `command`, `args`, `url`, environment variable keys, and server name — without executing anything. Text is first run through an 8-pass deobfuscation pipeline (zero-width stripping, Unicode normalisation, base64 decoding, escape unescaping, and more) before pattern matching, so obfuscated payloads are still caught.
 
-There are 60 pattern rules across 13 threat categories:
+There are 61 pattern rules across 13 threat categories:
 
 | Category | Code | Examples |
 |---|---|---|

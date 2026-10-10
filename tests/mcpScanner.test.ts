@@ -171,3 +171,19 @@ describe("shell -c scripts and PowerShell launches (#634)", () => {
     expect(found).toHaveLength(1);
   });
 });
+
+describe("launch-line boundaries (#634)", () => {
+  const mk2 = (command: string, args: string[]) =>
+    ({ name: "x", source: "user", command, args, envKeys: [] }) as never;
+  const ids2 = (command: string, args: string[]) => scanServers([mk2(command, args)], undefined, 1).map((f) => f.ruleId);
+
+  it("covers cmd /c, fish --command, rm option order, and command/args boundaries", () => {
+    expect(ids2("cmd.exe", ["/c", "rmdir /s /q C:/target"])).toContain("SF-09");
+    expect(ids2("fish", ["--command=rm -rf /"])).toContain("SF-01");
+    expect(ids2("fish", ["--command", "rm -rf /"])).toContain("SF-01");
+    expect(ids2("rm", ["--recursive", "--force", "/tmp/x"])).toContain("SF-01");
+    expect(ids2("rm", ["-v", "-rf", "/tmp/x"])).toContain("SF-01");
+    expect(ids2("echo ok &", ["rm", "-rf", "/"])).toContain("SF-01");
+    expect(ids2("powershell -NoProfile", ["-EncodedCommand", "QQBCAEMARABFAEYARwBIAEkASgBLAEwATQBOAE8A"])).toContain("SF-08");
+  });
+});
