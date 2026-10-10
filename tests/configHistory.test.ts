@@ -552,6 +552,17 @@ describe("belongsToProject for entries recorded before #635 (no projectPath)", (
     expect(belongsToProject(entry, parent, [path.join(tmpHome, "dev", "other")])).toBe(true);
   });
 
+  it("gives a memory folder two projects encode to to neither of them", async () => {
+    const { belongsToProject } = await reloadModule();
+    const first = path.resolve(tmpHome, "dev", "a-b", "c");
+    const second = path.resolve(tmpHome, "dev", "a", "b-c");
+    const encoded = first.replace(/[:\\/]/g, "-");
+    const memory = { targetPath: path.join(tmpHome, ".claude", "projects", encoded, "memory", "MEMORY.md") };
+    expect(belongsToProject(memory, first)).toBe(true);
+    expect(belongsToProject(memory, first, [second])).toBe(false);
+    expect(belongsToProject(memory, second, [first])).toBe(false);
+  });
+
   it("prefers the recorded projectPath over the file location", async () => {
     const { belongsToProject } = await reloadModule();
     const project = path.join(tmpHome, "dev", "app");

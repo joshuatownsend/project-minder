@@ -274,11 +274,15 @@ function projectMatcher(
 ): (entry: Pick<HistoryEntry, "projectPath" | "targetPath">) => boolean {
   const key = pathKey(projectPath);
   const nested = otherProjects.map(pathKey).filter((k) => k.startsWith(key + "/"));
-  const memoryDir = `/projects/${normalizePathKey(encodeProjectPath(path.resolve(projectPath)))}/`;
+  const encodedDir = (p: string) => normalizePathKey(encodeProjectPath(path.resolve(p)));
+  const encoded = encodedDir(projectPath);
+  // The encoding is lossy (`/dev/a-b/c` and `/dev/a/b-c` share a folder), so a memory folder that
+  // another scanned project also encodes to belongs to neither.
+  const memoryDir = otherProjects.some((p) => encodedDir(p) === encoded) ? null : `/projects/${encoded}/`;
   return (entry) => {
     if (entry.projectPath) return pathKey(entry.projectPath) === key;
     const target = pathKey(entry.targetPath);
-    if (target.includes(memoryDir)) return true;
+    if (memoryDir && target.includes(memoryDir)) return true;
     return target.startsWith(key + "/") && !nested.some((n) => target.startsWith(n + "/"));
   };
 }
