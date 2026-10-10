@@ -17,7 +17,11 @@ Bundled-skill applies write a directory tree and are intentionally skipped (dire
 
 ## Storage
 
-Snapshots live under `~/.minder/config-history/<id>/<filename>` with one manifest line per snapshot in `~/.minder/config-history/manifest.jsonl`. The snapshot bytes are base64-encoded; manifest entries record the original target path, content SHA, label (which apply primitive triggered it), and project slug.
+Snapshots live under `~/.minder/config-history/<id>/<filename>` with one manifest line per snapshot in `~/.minder/config-history/manifest.jsonl`. The snapshot bytes are base64-encoded; manifest entries record the original target path, content SHA, label (which apply primitive triggered it), and the owning project's slug and path.
+
+## Which project a snapshot belongs to
+
+The tab shows the snapshots recorded for the project's folder. Snapshots are matched by project path, not by slug: when two projects share a folder name in different dev roots, the order of the roots decides which of them gets the plain slug, so a slug can come to name a different project. Snapshots recorded before this change carry only a slug; they are matched by where the file lives instead (inside the project's folder, or in its auto-memory folder under `~/.claude/projects/`). Older snapshots of files elsewhere, such as `~/.claude.json`, no longer show on any project's tab; they age out under the normal retention rules.
 
 ## Restore
 
