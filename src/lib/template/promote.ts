@@ -54,6 +54,12 @@ export async function createLiveTemplate(
   if (!isValidSlug(args.slug)) {
     return { error: { code: "INVALID_SLUG", message: `"${args.slug}" is not a valid template slug.` } };
   }
+  try {
+    await assertTemplateStoreSafe(config, args.slug);
+  } catch (e) {
+    if (e instanceof PathSafetyError) return { error: { code: e.code, message: e.message } };
+    throw e;
+  }
   if (await templateExists(config, args.slug)) {
     return { error: { code: "SLUG_TAKEN", message: `Template "${args.slug}" already exists.` } };
   }
@@ -94,10 +100,7 @@ export async function saveAsSnapshot(
   try {
     if (src) assertProjectConfigContained(src.path);
     // The snapshot destination is recursively deleted and rewritten: it must not be, or sit under, a link.
-    const templateDir = templateDirForSlug(config, slug);
-    // Anchored at the dev root, not at templates/: a linked `.minder` or `templates` must not redirect it.
-    assertContained(bundleDirForSlug(config, slug), getDevRoots(config)[0]);
-    await assertNoLinkComponents(bundleDirForSlug(config, slug), getDevRoots(config)[0]);
+    await assertTemplateStoreSafe(config, slug);
   } catch (e) {
     if (e instanceof PathSafetyError) return { error: { code: e.code, message: e.message } };
     throw e;
@@ -110,6 +113,18 @@ export async function saveAsSnapshot(
     await fs.rm(bundleDirForSlug(config, slug), { recursive: true, force: true });
     return { error: { code: e.code, message: e.message } };
   }
+}
+
+/**
+ * Template-store mutations (create, snapshot, delete) write or recursively remove under
+ * `.minder/templates/<slug>`. Anchored at the dev root rather than at `templates/`, and no component may be
+ * a link, so a linked `.minder` or `templates` cannot redirect them (#633).
+ */
+async function assertTemplateStoreSafe(config: MinderConfig, slug: string): Promise<void> {
+  const root = getDevRoots(config)[0];
+  const dir = templateDirForSlug(config, slug);
+  assertContained(dir, root);
+  await assertNoLinkComponents(dir, root);
 }
 
 async function saveAsSnapshotUnchecked(
@@ -393,6 +408,7 @@ async function saveAsSnapshotUnchecked(
 
 export async function deleteTemplate(config: MinderConfig, slug: string): Promise<void> {
   const dir = templateDirForSlug(config, slug);
+  await assertTemplateStoreSafe(config, slug);
   await fs.rm(dir, { recursive: true, force: true });
 }
 

@@ -275,3 +275,18 @@ describe("snapshot destination and cycle reporting (#633, #640)", () => {
     await expect(assertTargetConfigNotLinked(proj)).rejects.toThrow(PathSafetyError);
   });
 });
+
+describe("template store create/delete (#633)", () => {
+  it("deleteTemplate and createLiveTemplate refuse a linked templates folder", async () => {
+    const { deleteTemplate, createLiveTemplate } = await import("@/lib/template/promote");
+    await fs.mkdir(path.join(root, ".minder"), { recursive: true });
+    await fs.mkdir(path.join(outside, "gone"), { recursive: true });
+    await fs.writeFile(path.join(outside, "gone", "keep.txt"), "keep");
+    await link(outside, path.join(root, ".minder", "templates"));
+    await expect(deleteTemplate(cfg(), "gone")).rejects.toThrow(PathSafetyError);
+    expect(await fs.readFile(path.join(outside, "gone", "keep.txt"), "utf-8")).toBe("keep");
+    const r = await createLiveTemplate(cfg(), { projects: [] } as never, { slug: "fresh", name: "n", sourceSlug: "x", units: {} } as never);
+    expect("error" in r).toBe(true);
+    await expect(fs.access(path.join(outside, "fresh"))).rejects.toThrow();
+  });
+});
