@@ -97,6 +97,7 @@ export async function applyFormatting(
     }
     const backupId = await recordPreWrite(abs, {
       projectSlug: opts.projectSlug,
+      projectPath,
       label: "claudelint-format",
     });
     targets.push({ rel, abs, before, backupId });

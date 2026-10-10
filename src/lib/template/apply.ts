@@ -73,37 +73,31 @@ async function snapshotBeforeApply(
   targetFiles: string[],
 ): Promise<BackupId[]> {
   if (request.dryRun) return [];
-  const projectSlug = await resolveProjectSlugForSnapshot(request.target);
+  const { projectSlug, projectPath } = await resolveProjectForSnapshot(request.target);
   const label = `apply-${request.unit.kind}:${request.unit.key}`;
   const ids: BackupId[] = [];
   for (const f of targetFiles) {
-    const id = await recordPreWrite(f, { projectSlug, label });
+    const id = await recordPreWrite(f, { projectSlug, projectPath, label });
     if (id) ids.push(id);
   }
   return ids;
 }
 
-async function resolveProjectSlugForSnapshot(
+/** The project a snapshot belongs to. The path is what Config History scopes by (#635); the slug is kept
+ *  for display only, since root order decides which same-named project owns an undecorated slug. */
+async function resolveProjectForSnapshot(
   target: ApplyTarget,
-): Promise<string | undefined> {
-  if (target.kind === "existing") return target.slug;
-  if (target.kind === "path") {
-    const scan = await getOrLoadScan();
-    const fromScan = scan.projects.find((p) => p.path === target.path)?.slug;
-    if (fromScan) return fromScan;
-    // applyTemplate routes new-project bootstraps through target.kind="path"
-    // BEFORE refreshing the scan cache. The scan lookup above misses, so
-    // backups would be recorded without a projectSlug and excluded from
-    // /api/config-history?project=<slug>. Fall back to the canonical
-    // toSlug() derivation so the entry surfaces in the project's Config
-    // History tab as soon as the post-bootstrap scan picks the project
-    // up. Importing the canonical helper (vs. re-implementing kebab
-    // here) means the fallback can't drift from the scanner if toSlug
-    // ever evolves.
-    const dirName = path.basename(target.path);
-    if (dirName) return toSlug(dirName);
+): Promise<{ projectSlug?: string; projectPath?: string }> {
+  if (target.kind === "new") return {};
+  const scan = await getOrLoadScan();
+  if (target.kind === "existing") {
+    return { projectSlug: target.slug, projectPath: scan.projects.find((p) => p.slug === target.slug)?.path };
   }
-  return undefined;
+  // applyTemplate routes new-project bootstraps through target.kind="path" BEFORE refreshing the scan
+  // cache, so the lookup can miss; derive the slug the scanner would give it with the canonical toSlug.
+  const dirName = path.basename(target.path);
+  const projectSlug = scan.projects.find((p) => p.path === target.path)?.slug ?? (dirName ? toSlug(dirName) : undefined);
+  return { projectSlug, projectPath: target.path };
 }
 
 /** Roll back snapshots when an apply primitive turned out to be a

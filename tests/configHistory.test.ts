@@ -89,21 +89,35 @@ describe("list", () => {
     expect(entries).toEqual([]);
   });
 
-  it("filters by projectSlug", async () => {
+  it("filters by projectPath, not by the recorded slug (#635)", async () => {
     const { recordPreWrite, list } = await reloadModule();
     const target = path.join(tmpHome, "x.json");
     await fs.writeFile(target, "x", "utf-8");
+    const alpha = path.join(tmpHome, "alpha");
+    const beta = path.join(tmpHome, "beta");
 
-    await recordPreWrite(target, { projectSlug: "alpha" });
-    await recordPreWrite(target, { projectSlug: "beta" });
-    await recordPreWrite(target); // no slug
+    await recordPreWrite(target, { projectSlug: "shared", projectPath: alpha });
+    await recordPreWrite(target, { projectSlug: "shared", projectPath: beta });
+    await recordPreWrite(target); // user-level write: no project
 
     const all = await list();
     expect(all).toHaveLength(3);
 
-    const alphaOnly = await list({ projectSlug: "alpha" });
+    const alphaOnly = await list({ projectPath: alpha });
     expect(alphaOnly).toHaveLength(1);
-    expect(alphaOnly[0].projectSlug).toBe("alpha");
+    expect(alphaOnly[0].projectPath).toBe(path.resolve(alpha));
+    // A trailing separator names the same project.
+    expect(await list({ projectPath: alpha + path.sep })).toHaveLength(1);
+  });
+
+  it("restore carries the project path onto the restore's own entry", async () => {
+    const { recordPreWrite, list, restore } = await reloadModule();
+    const target = path.join(tmpHome, "x.json");
+    await fs.writeFile(target, "x", "utf-8");
+    const alpha = path.join(tmpHome, "alpha");
+    const id = await recordPreWrite(target, { projectPath: alpha });
+    await restore(id!);
+    expect(await list({ projectPath: alpha })).toHaveLength(2);
   });
 
   it("returns newest entry first", async () => {
@@ -503,5 +517,34 @@ describe("prune", () => {
 
     const remaining = await mod.list();
     expect(remaining.map((e) => e.id)).toEqual(["new"]);
+  });
+});
+
+describe("belongsToProject for entries recorded before #635 (no projectPath)", () => {
+  it("attributes by where the file lives, ignoring the recorded slug", async () => {
+    const { belongsToProject } = await reloadModule();
+    const project = path.join(tmpHome, "dev", "app");
+    const inside = { targetPath: path.join(project, ".claude", "settings.json") };
+    expect(belongsToProject(inside, project)).toBe(true);
+    // A sibling whose name extends the project's is not inside it.
+    expect(belongsToProject({ targetPath: path.join(tmpHome, "dev", "app-two", "CLAUDE.md") }, project)).toBe(false);
+    expect(belongsToProject({ targetPath: path.join(tmpHome, "elsewhere.json") }, project)).toBe(false);
+  });
+
+  it("attributes the project's auto-memory folder under a Claude home", async () => {
+    const { belongsToProject } = await reloadModule();
+    const project = path.resolve(tmpHome, "dev", "app");
+    const encoded = project.replace(/[:\\/]/g, "-");
+    const memory = path.join(tmpHome, ".claude", "projects", encoded, "memory", "MEMORY.md");
+    expect(belongsToProject({ targetPath: memory }, project)).toBe(true);
+    const other = path.join(tmpHome, ".claude", "projects", encoded + "-two", "memory", "MEMORY.md");
+    expect(belongsToProject({ targetPath: other }, project)).toBe(false);
+  });
+
+  it("prefers the recorded projectPath over the file location", async () => {
+    const { belongsToProject } = await reloadModule();
+    const project = path.join(tmpHome, "dev", "app");
+    const entry = { projectPath: path.join(tmpHome, "dev", "other"), targetPath: path.join(project, "CLAUDE.md") };
+    expect(belongsToProject(entry, project)).toBe(false);
   });
 });

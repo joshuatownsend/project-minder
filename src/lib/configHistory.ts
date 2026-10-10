@@ -3,6 +3,8 @@ import { createHash, randomBytes } from "crypto";
 import path from "path";
 import os from "os";
 import { writeFileAtomic, withFileLock } from "./atomicWrite";
+import { normalizePathKey } from "./platform";
+import { encodeProjectPath } from "./usage/projectMatch";
 
 // Copy-on-write history of writes performed by the template-apply layer.
 // Each `recordPreWrite` snapshots the current bytes of a target file
@@ -43,8 +45,12 @@ export interface HistoryEntry {
   wasMissing: boolean;
   /** Optional caller-supplied label (e.g. "applyHook", "applyMcp"). */
   label?: string;
-  /** Optional project slug so the Config History tab can scope per-project. */
+  /** Slug of the owning project at record time. Display only: root order decides which same-named
+   *  project owns an undecorated slug, so it can later name a different project (#635). */
   projectSlug?: string;
+  /** Absolute path of the owning project; what the Config History tab scopes by. Absent on entries
+   *  recorded before #635 and on user-level writes. */
+  projectPath?: string;
   /** Bytes of the snapshot, base64-encoded. Only present when wasMissing
    *  is false. Stored alongside the manifest in the snapshot file —
    *  duplicated in `list()` results would bloat memory, so the manifest
@@ -83,9 +89,15 @@ function makeId(timestamp: string, contentSha: string): BackupId {
  * entries; the smart-retention prune drops them down to one per day
  * after 24h. Dedup-on-write is doable but not in Wave 1.2 scope.
  */
+interface RecordOptions {
+  projectSlug?: string;
+  projectPath?: string;
+  label?: string;
+}
+
 export async function recordPreWrite(
   targetPath: string,
-  opts: { projectSlug?: string; label?: string } = {},
+  opts: RecordOptions = {},
 ): Promise<BackupId | null> {
   try {
     return await recordPreWriteInner(targetPath, opts);
@@ -99,7 +111,7 @@ export async function recordPreWrite(
 
 async function recordPreWriteInner(
   targetPath: string,
-  opts: { projectSlug?: string; label?: string },
+  opts: RecordOptions,
 ): Promise<BackupId> {
   await ensureHistoryRoot();
   const resolved = path.resolve(targetPath);
@@ -132,6 +144,7 @@ async function recordPreWriteInner(
     wasMissing: bytes === null,
     label: opts.label,
     projectSlug: opts.projectSlug,
+    projectPath: opts.projectPath ? path.resolve(opts.projectPath) : undefined,
     snapshotPath,
   };
 
@@ -159,6 +172,7 @@ export async function restore(id: BackupId): Promise<void> {
   await withFileLock(entry.targetPath, async () => {
     await recordPreWrite(entry.targetPath, {
       projectSlug: entry.projectSlug,
+      projectPath: entry.projectPath,
       label: `restore→${id}`,
     });
 
@@ -237,10 +251,32 @@ export async function removeBackup(id: BackupId): Promise<void> {
   }
 }
 
-/** List all manifest entries, optionally filtered by project slug. Newest
+function pathKey(p: string): string {
+  return normalizePathKey(path.resolve(p)).replace(/\/+$/, "");
+}
+
+/** Whether an entry belongs to the project at `projectPath`. Entries carry the project path since #635;
+ *  older ones only had the slug, which can name a different project after the dev roots are reordered,
+ *  so they are attributed by where the file lives instead: inside the project, or in the project's
+ *  auto-memory folder under a Claude home (`.../projects/<encoded path>/`). */
+export function belongsToProject(entry: Pick<HistoryEntry, "projectPath" | "targetPath">, projectPath: string): boolean {
+  return projectMatcher(projectPath)(entry);
+}
+
+function projectMatcher(projectPath: string): (entry: Pick<HistoryEntry, "projectPath" | "targetPath">) => boolean {
+  const key = pathKey(projectPath);
+  const memoryDir = `/projects/${normalizePathKey(encodeProjectPath(path.resolve(projectPath)))}/`;
+  return (entry) => {
+    if (entry.projectPath) return pathKey(entry.projectPath) === key;
+    const target = pathKey(entry.targetPath);
+    return target.startsWith(key + "/") || target.includes(memoryDir);
+  };
+}
+
+/** List all manifest entries, optionally only those of the project at `projectPath`. Newest
  *  first. Returns empty list when the history root doesn't exist. */
 export async function list(
-  filter: { projectSlug?: string } = {},
+  filter: { projectPath?: string } = {},
 ): Promise<HistoryEntry[]> {
   let raw: string;
   try {
@@ -249,12 +285,13 @@ export async function list(
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw err;
   }
+  const matches = filter.projectPath ? projectMatcher(filter.projectPath) : null;
   const entries: HistoryEntry[] = [];
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     try {
       const parsed = JSON.parse(line) as ManifestRecord;
-      if (filter.projectSlug && parsed.projectSlug !== filter.projectSlug) continue;
+      if (matches && !matches(parsed)) continue;
       entries.push(parsed);
     } catch {
       // Skip malformed lines — a partial flush from a crashed writer

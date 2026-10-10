@@ -7,13 +7,17 @@ import { promises as fs } from "fs";
 //   1. snapshotPath is stripped from the response (server-local FS path
 //      must not leak to the browser — Copilot review on PR #59).
 //   2. The route still surfaces every other manifest field unchanged.
-//   3. project=<slug> filter passes through to list().
+//   3. project=<slug> resolves the slug to the project's path and scopes by that (#635).
 
 let tmpHome: string;
 
 async function reloadRoute() {
   vi.resetModules();
   vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
+  vi.doMock("@/lib/projectPath", () => ({
+    findProjectPathBySlug: async (slug: string) =>
+      ["demo", "alpha", "beta"].includes(slug) ? path.join(tmpHome, slug) : null,
+  }));
   const route = await import("@/app/api/config-history/route");
   const config = await import("@/lib/configHistory");
   return { route, config };
@@ -43,7 +47,7 @@ describe("/api/config-history GET", () => {
     const { route, config } = await reloadRoute();
     const target = path.join(tmpHome, "settings.json");
     await fs.writeFile(target, '{"x":1}', "utf-8");
-    await config.recordPreWrite(target, { projectSlug: "demo" });
+    await config.recordPreWrite(target, { projectSlug: "demo", projectPath: path.join(tmpHome, "demo") });
 
     const res = await route.GET(makeRequest("http://x/api/config-history?project=demo"));
     const body = (await res.json()) as { entries: Array<Record<string, unknown>> };
@@ -69,17 +73,28 @@ describe("/api/config-history GET", () => {
     expect(serialized).not.toContain(".minder\\config-history");
   });
 
-  it("filters by ?project=<slug>", async () => {
+  it("filters by the path ?project=<slug> resolves to, not by the recorded slug", async () => {
     const { route, config } = await reloadRoute();
     const target = path.join(tmpHome, "x.json");
     await fs.writeFile(target, "x", "utf-8");
-    await config.recordPreWrite(target, { projectSlug: "alpha" });
-    await config.recordPreWrite(target, { projectSlug: "beta" });
+    // The slug "alpha" was recorded against the beta project's path, as after a root reorder (#635).
+    await config.recordPreWrite(target, { projectSlug: "alpha", projectPath: path.join(tmpHome, "beta") });
+    await config.recordPreWrite(target, { projectSlug: "beta", projectPath: path.join(tmpHome, "alpha") });
 
     const alphaRes = await route.GET(makeRequest("http://x/api/config-history?project=alpha"));
-    const alphaBody = (await alphaRes.json()) as { entries: Array<{ projectSlug: string }> };
+    const alphaBody = (await alphaRes.json()) as { entries: Array<{ projectPath: string }> };
     expect(alphaBody.entries).toHaveLength(1);
-    expect(alphaBody.entries[0].projectSlug).toBe("alpha");
+    expect(alphaBody.entries[0].projectPath).toBe(path.join(tmpHome, "alpha"));
+  });
+
+  it("returns no entries for a slug that names no project", async () => {
+    const { route, config } = await reloadRoute();
+    const target = path.join(tmpHome, "x.json");
+    await fs.writeFile(target, "x", "utf-8");
+    await config.recordPreWrite(target, { projectSlug: "ghost" });
+
+    const res = await route.GET(makeRequest("http://x/api/config-history?project=ghost"));
+    expect(((await res.json()) as { entries: unknown[] }).entries).toEqual([]);
   });
 
   it("returns empty entries (not 500) when manifest does not exist", async () => {
