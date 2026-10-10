@@ -5,6 +5,7 @@ import { periodSinceIso } from "@/lib/usage/period";
 import { buildEngagementReport, projectKeyOf, type EngagementTurnRow } from "@/lib/engagement/aggregator";
 import type { EngagementConfig, EngagementReport } from "@/lib/engagement/types";
 import { startOfLocalDay, type ConcurrencyPolicy } from "@/lib/engagement/allocate";
+import { sameDirName } from "@/lib/usage/dirNameFold";
 
 /**
  * SQL-backed human-engagement report.
@@ -56,7 +57,7 @@ export interface EngagementQueryOptions {
   period: string;
   timeZone: string;
   config: EngagementConfig;
-  /** Route slug to scope to; omitted ⇒ every project (required for a
+  /** Usage slug, or an encoded conversation dir (`ProjectData.usageDirName`, which unlike the slug is unique per project folder, #639) to scope to; omitted ⇒ every project (required for a
    *  cross-project timecard, since allocation needs the full picture). */
   project?: string;
   /** Claude-home discriminator (`ProjectData.usageHomeKey`). Two homes with
@@ -159,7 +160,7 @@ export function loadEngagementReportFromSql(
   // matching the slug is kept, which is the single-home case and the
   // "show me everything for this project" case alike.
   const match = (p: { projectSlug: string | null; projectDirName: string; homeKey?: string }) =>
-    (p.projectSlug === project || p.projectDirName === project) &&
+    (p.projectSlug === project || sameDirName(p.projectDirName, project)) &&
     (!home || p.homeKey === home);
 
   const kept = report.byProject.filter(match);

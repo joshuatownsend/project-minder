@@ -688,12 +688,13 @@ async function runFileUsage(
   period: AggregatorPeriod,
   project: string | undefined,
   source: string | undefined,
-  home: string | undefined
+  home: string | undefined,
+  dirName?: string
 ): Promise<UsageResult> {
   // `getJsonlMaxMtime()` is captured AFTER report generation —
   // `parseAllSessions` warms the FileCache as a side effect, so a
   // pre-call read returns 0 on a cold process.
-  const report = await generateUsageReport(period, project, source, home);
+  const report = await generateUsageReport(period, project, source, home, dirName);
   return { report, meta: { backend: "file", maxMtimeMs: getJsonlMaxMtime() } };
 }
 
@@ -711,12 +712,14 @@ export async function getUsage(
   period: AggregatorPeriod,
   project?: string,
   source?: string,
-  home?: string
+  home?: string,
+  /** Narrows `project` to one encoded conversation dir (#639). Demo slugs are unique, so demo ignores it. */
+  dirName?: string
 ): Promise<UsageResult> {
   // Demo fixtures model a single synthetic home — the discriminator is
   // meaningless there, so it's ignored rather than threaded through.
   if (await demoMode()) return demoUsage(period, project, Date.now(), source);
-  if (!dbModeRequested()) return runFileUsage(period, project, source, home);
+  if (!dbModeRequested()) return runFileUsage(period, project, source, home, dirName);
 
   const tStart = Date.now();
   const db = await getReadyDb();
@@ -726,7 +729,7 @@ export async function getUsage(
       "getUsage",
       "DB awaiting v3 reconcile (cost_usd not yet populated on turns)"
     );
-    return runFileUsage(period, project, source, home);
+    return runFileUsage(period, project, source, home, dirName);
   }
   // #472. This one had no cold-index gate at ALL — not even the zero-rows
   // check its neighbours carry — so a first-pass read returned a partial
@@ -734,7 +737,7 @@ export async function getUsage(
   // complete one. The other sites under-reported in a window; this reported a
   // number that was simply wrong.
   if (await checkBuildStateFallback("getUsage", db)) {
-    return runFileUsage(period, project, source, home);
+    return runFileUsage(period, project, source, home, dirName);
   }
   // Serialize DB report generation across concurrent callers (#563). Yielding
   // between queries (#559) means several overlapping `/api/usage` cache misses
@@ -751,7 +754,7 @@ export async function getUsage(
     // mid-report can't make totals and breakdowns disagree (#563) and the event
     // loop / health probe stays responsive (#559).
     const report = await callDbLoader("getUsage", () =>
-      loadUsageReportFromSql(db, period, project, source, home, { readonlySnapshot: true })
+      loadUsageReportFromSql(db, period, project, source, home, { readonlySnapshot: true, dirName })
     );
     const t1 = Date.now();
     // The SQL source, not the default file sweep (#559): a SQL report must not
