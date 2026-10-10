@@ -41,7 +41,7 @@ import { computeToolTransitions } from "@/lib/usage/toolTransitions";
 import type { ToolTransitionsTurn } from "@/lib/usage/toolTransitions";
 import { readHomeCaseSensitivity } from "@/lib/db/homeCaseSensitivity";
 import { compareCodePoints } from "@/lib/usage/compareNames";
-import { driveDirFold, foldDirName } from "@/lib/usage/dirNameFold";
+import { foldDirName } from "@/lib/usage/dirNameFold";
 
 // SQL-aggregate read path for /api/usage. Builds a `UsageReport`
 // directly from `SELECT SUM(...) GROUP BY ...` queries against the
@@ -243,8 +243,7 @@ function foldDirNameForIdentity(
   // an `X--` prefix IS the statement that this came from a Windows drive, and
   // those are case-insensitive. This is #236's rule and it does not depend on
   // anything recorded later.
-  const driveFold = driveDirFold(dirName);
-  if (driveFold !== null) return driveFold;
+  if (/^[A-Za-z]--/.test(dirName)) return dirName.toLowerCase();
   // POSIX encodings fold only against a recorded verdict. A macOS volume is
   // case-insensitive by default, so `-Users-me-Dev-app` and `-users-me-dev-app`
   // are one directory — while on Linux `/home/me/Dev` and `/home/me/dev` really

@@ -178,15 +178,14 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   useEffect(() => {
     if (!(project.claude && project.claude.sessionCount > 0)) return;
     let cancelled = false;
-    // Same key and exact filter as ProjectSessions: the encoded conversation dir
-    // (with pathMappings applied, so WSL projects resolve too), not the route slug
-    // or usageSlug. A disambiguated route slug only ever matched through the API's
-    // substring fallback, and usageSlug is shared by same-named projects on
-    // different drives or roots, which linked a PR to the other project's session
-    // (#639). The query param narrows the payload; the filter makes it exact.
-    const { usageDirName, usageHomeKey } = project;
+    // usageSlug narrows the payload (it matches `s.projectSlug` exactly and covers
+    // every drive-letter case variant of the dir); the dir filter below then makes
+    // it exact, since same-named projects on different drives or roots share the
+    // slug (#639). A disambiguated route slug only ever matched through the API's
+    // substring fallback.
+    const { usageSlug, usageDirName, usageHomeKey } = project;
     const home = usageHomeKey ? `&home=${encodeURIComponent(usageHomeKey)}` : "";
-    fetch(`/api/sessions?project=${encodeURIComponent(usageDirName)}${home}`)
+    fetch(`/api/sessions?project=${encodeURIComponent(usageSlug || project.slug)}${home}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data: SessionSummary[] | null) => {
         if (cancelled || !Array.isArray(data)) return;

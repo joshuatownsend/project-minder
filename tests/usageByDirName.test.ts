@@ -3,6 +3,7 @@ import path from "path";
 import { promises as fs } from "fs";
 import type { UsageTurn } from "@/lib/usage/types";
 import { foldDirName, sameDirName } from "@/lib/usage/dirNameFold";
+import { isProjectSession } from "@/lib/sessions/projectSessionMatch";
 import { installIsolatedState } from "./_helpers/isolatedState";
 import { assertReconcileClean } from "./_helpers/reconcile";
 
@@ -16,6 +17,15 @@ describe("dir name comparison", () => {
     expect(sameDirName("C--dev-foo", "D--dev-foo")).toBe(false);
     expect(sameDirName("-home-me-Dev-app", "-home-me-dev-app")).toBe(false);
     expect(foldDirName("-home-me-Dev-app")).toBe("-home-me-Dev-app");
+  });
+
+  it("folds ASCII only, as SQLite lower() does, so both backends pick the same sessions", () => {
+    expect(foldDirName("C--Dev-École")).toBe("c--dev-École");
+  });
+
+  it("matches a session recorded under a drive-letter case variant", () => {
+    expect(isProjectSession({ projectName: "c--dev-app" }, "C--dev-app")).toBe(true);
+    expect(isProjectSession({ projectName: "D--dev-app" }, "C--dev-app")).toBe(false);
   });
 });
 
