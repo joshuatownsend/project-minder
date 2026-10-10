@@ -257,26 +257,37 @@ function pathKey(p: string): string {
 
 /** Whether an entry belongs to the project at `projectPath`. Entries carry the project path since #635;
  *  older ones only had the slug, which can name a different project after the dev roots are reordered,
- *  so they are attributed by where the file lives instead: inside the project, or in the project's
- *  auto-memory folder under a Claude home (`.../projects/<encoded path>/`). */
-export function belongsToProject(entry: Pick<HistoryEntry, "projectPath" | "targetPath">, projectPath: string): boolean {
-  return projectMatcher(projectPath)(entry);
+ *  so they are attributed by where the file lives instead: inside the project but not inside another
+ *  project nested in it (`otherProjects`), or in the project's auto-memory folder under a Claude home
+ *  (`.../projects/<encoded path>/`). */
+export function belongsToProject(
+  entry: Pick<HistoryEntry, "projectPath" | "targetPath">,
+  projectPath: string,
+  otherProjects: string[] = [],
+): boolean {
+  return projectMatcher(projectPath, otherProjects)(entry);
 }
 
-function projectMatcher(projectPath: string): (entry: Pick<HistoryEntry, "projectPath" | "targetPath">) => boolean {
+function projectMatcher(
+  projectPath: string,
+  otherProjects: string[],
+): (entry: Pick<HistoryEntry, "projectPath" | "targetPath">) => boolean {
   const key = pathKey(projectPath);
+  const nested = otherProjects.map(pathKey).filter((k) => k.startsWith(key + "/"));
   const memoryDir = `/projects/${normalizePathKey(encodeProjectPath(path.resolve(projectPath)))}/`;
   return (entry) => {
     if (entry.projectPath) return pathKey(entry.projectPath) === key;
     const target = pathKey(entry.targetPath);
-    return target.startsWith(key + "/") || target.includes(memoryDir);
+    if (target.includes(memoryDir)) return true;
+    return target.startsWith(key + "/") && !nested.some((n) => target.startsWith(n + "/"));
   };
 }
 
-/** List all manifest entries, optionally only those of the project at `projectPath`. Newest
+/** List all manifest entries, optionally only those of the project at `projectPath` (see
+ *  {@link belongsToProject}; `otherProjects` are the other scanned project paths). Newest
  *  first. Returns empty list when the history root doesn't exist. */
 export async function list(
-  filter: { projectPath?: string } = {},
+  filter: { projectPath?: string; otherProjects?: string[] } = {},
 ): Promise<HistoryEntry[]> {
   let raw: string;
   try {
@@ -285,7 +296,7 @@ export async function list(
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw err;
   }
-  const matches = filter.projectPath ? projectMatcher(filter.projectPath) : null;
+  const matches = filter.projectPath ? projectMatcher(filter.projectPath, filter.otherProjects ?? []) : null;
   const entries: HistoryEntry[] = [];
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;

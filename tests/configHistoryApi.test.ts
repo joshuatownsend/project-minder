@@ -15,8 +15,11 @@ async function reloadRoute() {
   vi.resetModules();
   vi.spyOn(os, "homedir").mockReturnValue(tmpHome);
   vi.doMock("@/lib/projectPath", () => ({
-    findProjectPathBySlug: async (slug: string) =>
-      ["demo", "alpha", "beta"].includes(slug) ? path.join(tmpHome, slug) : null,
+    getScannedProjects: async () =>
+      ["demo", "alpha", "beta"].map((slug) => ({ slug, path: path.join(tmpHome, slug) })).concat([
+        // Nested inside "alpha", as when another dev root sits inside a project.
+        { slug: "alpha-child", path: path.join(tmpHome, "alpha", "child") },
+      ]),
   }));
   const route = await import("@/app/api/config-history/route");
   const config = await import("@/lib/configHistory");
@@ -85,6 +88,25 @@ describe("/api/config-history GET", () => {
     const alphaBody = (await alphaRes.json()) as { entries: Array<{ projectPath: string }> };
     expect(alphaBody.entries).toHaveLength(1);
     expect(alphaBody.entries[0].projectPath).toBe(path.join(tmpHome, "alpha"));
+  });
+
+  it("keeps a nested project's older snapshots off its parent's tab", async () => {
+    const { route, config } = await reloadRoute();
+    const parentFile = path.join(tmpHome, "alpha", "CLAUDE.md");
+    const childFile = path.join(tmpHome, "alpha", "child", "CLAUDE.md");
+    await fs.mkdir(path.dirname(childFile), { recursive: true });
+    await fs.writeFile(parentFile, "p", "utf-8");
+    await fs.writeFile(childFile, "c", "utf-8");
+    // Recorded before #635: a slug only, no project path.
+    await config.recordPreWrite(parentFile, { projectSlug: "alpha" });
+    await config.recordPreWrite(childFile, { projectSlug: "alpha-child" });
+
+    const get = async (slug: string) =>
+      ((await (await route.GET(makeRequest(`http://x/api/config-history?project=${slug}`))).json()) as {
+        entries: Array<{ targetPath: string }>;
+      }).entries.map((e) => e.targetPath);
+    expect(await get("alpha")).toEqual([path.resolve(parentFile)]);
+    expect(await get("alpha-child")).toEqual([path.resolve(childFile)]);
   });
 
   it("returns no entries for a slug that names no project", async () => {

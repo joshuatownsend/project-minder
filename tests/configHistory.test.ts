@@ -541,6 +541,17 @@ describe("belongsToProject for entries recorded before #635 (no projectPath)", (
     expect(belongsToProject({ targetPath: other }, project)).toBe(false);
   });
 
+  it("leaves a nested project's files to that project", async () => {
+    const { belongsToProject } = await reloadModule();
+    const parent = path.join(tmpHome, "dev", "app");
+    const child = path.join(parent, "packages", "lib");
+    const entry = { targetPath: path.join(child, "CLAUDE.md") };
+    expect(belongsToProject(entry, parent, [child])).toBe(false);
+    expect(belongsToProject(entry, child, [parent])).toBe(true);
+    // A project elsewhere does not carve anything out.
+    expect(belongsToProject(entry, parent, [path.join(tmpHome, "dev", "other")])).toBe(true);
+  });
+
   it("prefers the recorded projectPath over the file location", async () => {
     const { belongsToProject } = await reloadModule();
     const project = path.join(tmpHome, "dev", "app");
