@@ -13,6 +13,7 @@ import {
 import { canonicalizeDirName, mostFrequent } from "@/lib/usage/parser";
 import { getClaudeHomes, getReadableClaudeHomes } from "@/lib/claudeHome";
 import { normalizePathKey, sessionFileHomeKey } from "@/lib/platform";
+import { parseWslUncPath } from "@/lib/wsl";
 import { recordHomeCaseSensitivity } from "./homeCaseSensitivity";
 import { chunkText } from "./textChunks";
 import type { ConversationEntry } from "@/lib/scanner/claudeConversations";
@@ -3265,6 +3266,34 @@ export interface FileReconcileResult {
   skippedNewerDerivation?: boolean;
 }
 
+const reportedIdCollisions = new Set<string>();
+
+/**
+ * Whether `sessionId` is indexed from another file that still exists (#637). The id is the row's whole
+ * identity, yet two files can carry it (the same transcript under two Claude homes, a copied .jsonl, an
+ * adapter id equal to a Claude one), and re-ingesting whichever a sweep reached last flipped the row
+ * between them. The file indexed first keeps the id. A moved file takes it over at once; a stored path
+ * inside WSL is not stat'ed (a sweep must not wake a distro) and is released by the end-of-sweep prune.
+ */
+async function isIdHeldByOtherFile(sessionId: string, storedPath: string, filePath: string): Promise<boolean> {
+  if (normalizePathKey(storedPath) === normalizePathKey(filePath)) return false;
+  if (!parseWslUncPath(storedPath)) {
+    try {
+      await fs.stat(storedPath);
+    } catch {
+      return false;
+    }
+  }
+  const key = `${sessionId}\0${filePath}`;
+  if (!reportedIdCollisions.has(key)) {
+    reportedIdCollisions.add(key);
+    console.warn(
+      `[ingest] ${filePath} has the same session id (${sessionId}) as the indexed ${storedPath}; keeping the indexed file.`
+    );
+  }
+  return true;
+}
+
 /**
  * Reconcile a single JSONL file into the DB. Caller is responsible for
  * `loadPricing()` having completed first.
@@ -3307,14 +3336,15 @@ export async function reconcileSessionFile(
         byte_offset: number;
         derived_version: number;
       }
-    | undefined;
+    | undefined = db
+    .prepare(
+      "SELECT file_path, project_dir_name, file_mtime_ms, file_size, byte_offset, derived_version FROM sessions WHERE session_id = ?"
+    )
+    .get(sessionId) as typeof existing;
+  // Checked under `force` too: a rebuild re-derives rows, it does not pick a different owner for an id.
+  if (existing && (await isIdHeldByOtherFile(sessionId, existing.file_path, filePath))) return empty;
+  if (options.force) existing = undefined;
   if (!options.force) {
-    existing = db
-      .prepare(
-        "SELECT file_path, project_dir_name, file_mtime_ms, file_size, byte_offset, derived_version FROM sessions WHERE session_id = ?"
-      )
-      .get(sessionId) as typeof existing;
-
     // Newer-derivation guard, checked BEFORE the unchanged-file gate below
     // and before the tail/full-replace decision that follows. Position is
     // load-bearing: the unchanged-file gate only fires when mtime AND size
@@ -3722,6 +3752,16 @@ export function buildAdapterParsedSession(
  * changed file is always fully re-parsed and replaced via `writeSession`'s
  * delete-then-insert.
  */
+/** Adapter files skipped because another file holds their session id, by path (#637). */
+const adapterIdLosers = new Map<string, { sessionId: string; signature: string }>();
+
+async function adapterIdHeldByOtherFile(db: DatabaseT.Database, sessionId: string, filePath: string): Promise<boolean> {
+  const owner = db.prepare("SELECT file_path FROM sessions WHERE session_id = ?").get(sessionId) as
+    | { file_path: string }
+    | undefined;
+  return owner !== undefined && (await isIdHeldByOtherFile(sessionId, owner.file_path, filePath));
+}
+
 async function reconcileAdapterSessionFile(
   db: DatabaseT.Database,
   file: SessionFile,
@@ -3763,6 +3803,14 @@ async function reconcileAdapterSessionFile(
     return empty;
   }
 
+  // An adapter file's id is only known once it is parsed, and a file that lost its id to another has no
+  // row of its own for the gate above, so remember the loss rather than re-parsing it on every sweep.
+  const signature = `${mtimeMs}:${size}`;
+  const lost = adapterIdLosers.get(file.filePath);
+  if (lost?.signature === signature && (await adapterIdHeldByOtherFile(db, lost.sessionId, file.filePath))) {
+    return empty;
+  }
+
   let turns: UsageTurn[];
   try {
     turns = await parseAdapterFile(file);
@@ -3771,6 +3819,11 @@ async function reconcileAdapterSessionFile(
   }
   const parsed = buildAdapterParsedSession(file, turns, mtimeMs, size);
   if (!parsed) return empty;
+  if (await adapterIdHeldByOtherFile(db, parsed.sessionId, file.filePath)) {
+    adapterIdLosers.set(file.filePath, { sessionId: parsed.sessionId, signature });
+    return empty;
+  }
+  adapterIdLosers.delete(file.filePath);
 
   // `sessions.file_path` is UNIQUE. Look up any row already holding this path:
   // if its session_id DIFFERS from the freshly parsed one (an adapter parser
