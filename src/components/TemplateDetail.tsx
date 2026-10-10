@@ -69,7 +69,12 @@ export function TemplateDetail({ slug }: Props) {
     }
     setBusy(true);
     try {
-      await fetch(`/api/templates/${encodeURIComponent(slug)}`, { method: "DELETE" });
+      const res = await fetch(`/api/templates/${encodeURIComponent(slug)}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        setError(typeof data?.error === "string" ? data.error : (data?.error?.message ?? `HTTP ${res.status}`));
+        return;
+      }
       window.location.href = "/templates";
     } finally {
       setBusy(false);
