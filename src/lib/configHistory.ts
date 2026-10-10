@@ -260,7 +260,7 @@ function pathKey(p: string): string {
  *  older ones only had the slug, which can name a different project after the dev roots are reordered,
  *  so they are attributed by where the file lives instead: inside the project but not inside another
  *  project nested in it (`otherProjects`), or in the project's auto-memory folder under one of
- *  `claudeHomes` (`<home>/projects/<encoded path>/`). */
+ *  `claudeHomes` (`<home>/projects/<encoded path>/memory/`). */
 export function belongsToProject(
   entry: Pick<HistoryEntry, "projectPath" | "targetPath">,
   projectPath: string,
@@ -283,7 +283,7 @@ function projectMatcher(
   // another scanned project also encodes to belongs to neither.
   const memoryDirs = otherProjects.some((p) => encodedDir(p) === encoded)
     ? []
-    : claudeHomes.map((home) => `${pathKey(home)}/projects/${encoded}/`);
+    : claudeHomes.map((home) => `${pathKey(home)}/projects/${encoded}/memory/`);
   return (entry) => {
     if (entry.projectPath) return pathKey(entry.projectPath) === key;
     const target = pathKey(entry.targetPath);

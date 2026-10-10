@@ -570,6 +570,9 @@ describe("belongsToProject for entries recorded before #635 (no projectPath)", (
     // Another project that merely lives under a `projects/<encoded>` folder.
     const lookalike = { targetPath: path.join(tmpHome, "tmp", "projects", encoded, "foo", "CLAUDE.md") };
     expect(belongsToProject(lookalike, project)).toBe(false);
+    // Only the memory folder: a repository checked out inside the encoded folder is not memory.
+    const besideMemory = { targetPath: path.join(tmpHome, ".claude", "projects", encoded, "repo", "CLAUDE.md") };
+    expect(belongsToProject(besideMemory, project)).toBe(false);
     const extraHome = path.join(tmpHome, "extra", ".claude");
     const inExtra = { targetPath: path.join(extraHome, "projects", encoded, "memory", "MEMORY.md") };
     expect(belongsToProject(inExtra, project)).toBe(false);

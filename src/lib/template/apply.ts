@@ -70,34 +70,30 @@ import { withFileLock } from "../atomicWrite";
  *  callback per-script. */
 async function snapshotBeforeApply(
   request: ApplyRequest,
+  targetProjectPath: string,
   targetFiles: string[],
 ): Promise<BackupId[]> {
   if (request.dryRun) return [];
-  const { projectSlug, projectPath } = await resolveProjectForSnapshot(request.target);
+  const projectSlug = await resolveSnapshotSlug(request.target, targetProjectPath);
   const label = `apply-${request.unit.kind}:${request.unit.key}`;
   const ids: BackupId[] = [];
   for (const f of targetFiles) {
-    const id = await recordPreWrite(f, { projectSlug, projectPath, label });
+    // The path the apply already resolved, not the slug re-resolved: Config History scopes by it (#635),
+    // and a dev-root reorder between two scans could map the slug to a different project.
+    const id = await recordPreWrite(f, { projectSlug, projectPath: targetProjectPath, label });
     if (id) ids.push(id);
   }
   return ids;
 }
 
-/** The project a snapshot belongs to. The path is what Config History scopes by (#635); the slug is kept
- *  for display only, since root order decides which same-named project owns an undecorated slug. */
-async function resolveProjectForSnapshot(
-  target: ApplyTarget,
-): Promise<{ projectSlug?: string; projectPath?: string }> {
-  if (target.kind === "new") return {};
-  const scan = await getOrLoadScan();
-  if (target.kind === "existing") {
-    return { projectSlug: target.slug, projectPath: scan.projects.find((p) => p.slug === target.slug)?.path };
-  }
-  // applyTemplate routes new-project bootstraps through target.kind="path" BEFORE refreshing the scan
-  // cache, so the lookup can miss; derive the slug the scanner would give it with the canonical toSlug.
-  const dirName = path.basename(target.path);
-  const projectSlug = scan.projects.find((p) => p.path === target.path)?.slug ?? (dirName ? toSlug(dirName) : undefined);
-  return { projectSlug, projectPath: target.path };
+/** The slug recorded with a snapshot, for display only (root order decides which same-named project owns
+ *  an undecorated slug). applyTemplate routes new-project bootstraps through target.kind="path" BEFORE
+ *  refreshing the scan cache, so the lookup can miss; the canonical toSlug derives what the scanner will. */
+async function resolveSnapshotSlug(target: ApplyTarget, projectPath: string): Promise<string | undefined> {
+  if (target.kind === "existing") return target.slug;
+  const fromScan = (await getOrLoadScan()).projects.find((p) => p.path === projectPath)?.slug;
+  const dirName = path.basename(projectPath);
+  return fromScan ?? (dirName ? toSlug(dirName) : undefined);
 }
 
 /** Roll back snapshots when an apply primitive turned out to be a
@@ -356,7 +352,7 @@ async function dispatchAgent(
   const sourceFile = entry.realPath ?? entry.filePath;
   const targetFile = path.join(targetProjectPath, ".claude", "agents", `${entry.slug}.md`);
   return withFileLocks([targetFile], async () => {
-    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    const snaps = await snapshotBeforeApply(request, targetProjectPath, [targetFile]);
     return finalizeSnapshots(snaps, await applySingleFile({
       sourcePath: sourceFile,
       targetPath: targetFile,
@@ -393,7 +389,7 @@ async function dispatchSkill(
   const sourceFile = entry.realPath ?? entry.filePath;
   const targetFile = path.join(targetProjectPath, ".claude", "skills", `${entry.slug}.md`);
   return withFileLocks([targetFile], async () => {
-    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    const snaps = await snapshotBeforeApply(request, targetProjectPath, [targetFile]);
     return finalizeSnapshots(snaps, await applySingleFile({
       sourcePath: sourceFile,
       targetPath: targetFile,
@@ -420,7 +416,7 @@ async function dispatchCommand(
   const sourceFile = entry.realPath ?? entry.filePath;
   const targetFile = path.join(targetProjectPath, ".claude", "commands", `${entry.slug}.md`);
   return withFileLocks([targetFile], async () => {
-    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    const snaps = await snapshotBeforeApply(request, targetProjectPath, [targetFile]);
     return finalizeSnapshots(snaps, await applySingleFile({
       sourcePath: sourceFile,
       targetPath: targetFile,
@@ -463,7 +459,7 @@ async function dispatchHook(
 
   const targetFile = path.join(targetProjectPath, ".claude", "settings.json");
   return withFileLocks([targetFile], async () => {
-    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    const snaps = await snapshotBeforeApply(request, targetProjectPath, [targetFile]);
     return finalizeSnapshots(snaps, await applyHook({
       entry,
       sourceHooksDir,
@@ -531,7 +527,7 @@ async function dispatchMcp(
 
   const targetFile = path.join(targetProjectPath, ".mcp.json");
   return withFileLocks([targetFile], async () => {
-    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    const snaps = await snapshotBeforeApply(request, targetProjectPath, [targetFile]);
     return finalizeSnapshots(snaps, await applyMcp({
       server,
       targetProjectPath,
@@ -555,7 +551,7 @@ async function dispatchWorkflow(
   }
   const targetFile = path.join(targetProjectPath, ".github", "workflows", request.unit.key);
   return withFileLocks([targetFile], async () => {
-    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    const snaps = await snapshotBeforeApply(request, targetProjectPath, [targetFile]);
     return finalizeSnapshots(snaps, await applyWorkflow({
       sourceProjectPath: source.path,
       workflowKey: request.unit.key,
@@ -578,7 +574,7 @@ async function dispatchSettings(
 
   const targetFile = path.join(targetProjectPath, ".claude", "settings.json");
   return withFileLocks([targetFile], async () => {
-    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    const snaps = await snapshotBeforeApply(request, targetProjectPath, [targetFile]);
     return finalizeSnapshots(snaps, await applySettings({
       settingsPath: request.unit.key,
       sourceSettingsFile,
@@ -631,7 +627,7 @@ async function dispatchPlugin(
   }
   const targetFile = path.join(targetProjectPath, ".claude", "settings.json");
   return withFileLocks([targetFile], async () => {
-    const snaps = await snapshotBeforeApply(request, [targetFile]);
+    const snaps = await snapshotBeforeApply(request, targetProjectPath, [targetFile]);
     return finalizeSnapshots(snaps, await applyPlugin({
       pluginKey: request.unit.key,
       targetProjectPath,
