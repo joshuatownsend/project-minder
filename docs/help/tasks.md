@@ -132,7 +132,9 @@ POST /api/tasks/<id>/decide
      { "decisionId": 42, "answer": "yes" }
 ```
 
-Returns 410 if the stream child has already exited.
+Returns 410 if the stream child has already exited, and 409 if its input is closed.
+
+**Windows:** the task prompt is sent to `claude` on stdin (so shell metacharacters in it are never interpreted by `cmd.exe`), which closes stdin. A Windows stream task therefore cannot receive answers: its `DECISION:` markers are not recorded as decisions (`INBOX:` messages still are).
 
 ### TasksBrowser badge
 

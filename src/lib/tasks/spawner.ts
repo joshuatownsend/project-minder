@@ -176,14 +176,63 @@ function buildPrompt(task: Task): string {
   return [task.title, task.description].filter(Boolean).join("\n\n");
 }
 
+/** Model ids and skill names are interpolated into a command line; accept only plain identifier characters,
+ *  including the `@` and `/` of Vertex ids and Bedrock inference-profile ARNs (#632). */
+const SAFE_FLAG_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:@/\-\[\]]{0,199}$/;
+
 function appendTaskFlags(args: string[], task: Task): void {
-  if (task.assigned_skill) args.push("--allowedTools", `mcp__skills__${task.assigned_skill}`);
-  if (task.model) args.push("--model", task.model);
+  if (task.assigned_skill) {
+    if (!SAFE_FLAG_VALUE.test(task.assigned_skill)) throw new Error("Task has an invalid assigned skill name");
+    args.push("--allowedTools", `mcp__skills__${task.assigned_skill}`);
+  }
+  if (task.model) {
+    if (!SAFE_FLAG_VALUE.test(task.model)) throw new Error("Task has an invalid model name");
+    args.push("--model", task.model);
+  }
 }
 
-// On Windows, `claude` is a .cmd file; must invoke via cmd.exe
-function buildSpawnTarget(args: string[]): [string, string[]] {
-  return isWindows ? ["cmd.exe", ["/c", "claude", ...args]] : ["claude", args];
+/**
+ * Build the `claude` invocation. On Windows `claude` is a .cmd shim that can only be started through
+ * cmd.exe, and cmd re-parses its command line, so the prompt (repository-controlled TODO/BOARD text) must
+ * never be an argument there: it goes on stdin instead (#632). Elsewhere no shell is involved and it stays argv.
+ */
+export function buildClaudeInvocation(
+  task: Task,
+  outputArgs: string[],
+  windows: boolean = isWindows,
+): { cmd: string; args: string[]; stdinPrompt: string | null } {
+  const prompt = buildPrompt(task);
+  const args = windows ? ["-p", ...outputArgs] : ["-p", prompt, ...outputArgs];
+  appendTaskFlags(args, task);
+  return windows
+    ? { cmd: "cmd.exe", args: ["/c", "claude", ...args], stdinPrompt: prompt }
+    : { cmd: "claude", args, stdinPrompt: null };
+}
+
+function sendPromptOnStdin(child: ChildProcess, prompt: string): void {
+  child.stdin?.on("error", () => { /* child exited before reading the prompt — "close" reports the failure */ });
+  child.stdin?.end(prompt);
+}
+
+async function failBeforeSpawn(
+  task: Task,
+  err: unknown,
+  startMs: number,
+  onComplete?: OnCompleteFn,
+): Promise<RunTaskResult> {
+  const message = (err instanceof Error ? err.message : String(err)).slice(0, 2000);
+  const durationMs = Date.now() - startMs;
+  let failed: Task | null = null;
+  try {
+    failed = await failTask(task.id, { error_message: message, duration_ms: durationMs });
+  } catch (storeErr) {
+    console.error(`[spawner] failTask failed for task ${task.id}:`, storeErr);
+  }
+  // Stream tasks rely on this callback for completion bookkeeping (swarm status), as the close/error paths do.
+  if (failed && onComplete) {
+    onComplete(failed).catch((e) => console.error(`[spawner] onComplete failed for task ${task.id}:`, e));
+  }
+  return { taskId: task.id, status: "failed", error: message, durationMs };
 }
 
 /**
@@ -228,13 +277,17 @@ export async function runClassicTask(
   spawnFn: SpawnFn = spawn
 ): Promise<RunTaskResult> {
   const startMs = Date.now();
-  const spawnArgs = ["-p", buildPrompt(task), "--output-format", "text"];
-  appendTaskFlags(spawnArgs, task);
-  const [cmd, extraArgs] = buildSpawnTarget(spawnArgs);
+  let inv: ReturnType<typeof buildClaudeInvocation>;
+  try {
+    inv = buildClaudeInvocation(task, ["--output-format", "text"]);
+  } catch (err) {
+    return failBeforeSpawn(task, err, startMs);
+  }
+  const { cmd, args: extraArgs, stdinPrompt } = inv;
 
   return new Promise<RunTaskResult>((resolve) => {
     const child = spawnFn(cmd, extraArgs, {
-      stdio: ["ignore", "pipe", "pipe"] as ["ignore", "pipe", "pipe"],
+      stdio: [stdinPrompt === null ? "ignore" : "pipe", "pipe", "pipe"] as ["ignore" | "pipe", "pipe", "pipe"],
       env: { ...process.env, MINDER_DISPATCHED: "1" },
       // Run in the task's project dir (board-promoted / delegated tasks); a
       // missing/absent path resolves to undefined ⇒ inherit current cwd.
@@ -242,6 +295,7 @@ export async function runClassicTask(
     });
     const pid = child.pid;
     if (pid) writePidFile(pid, task.id);
+    if (stdinPrompt !== null) sendPromptOnStdin(child, stdinPrompt);
 
     let stdout = "";
     let stderr = "";
@@ -311,9 +365,13 @@ export async function runStreamTask(
   onComplete?: OnCompleteFn
 ): Promise<RunTaskResult> {
   const startMs = Date.now();
-  const spawnArgs = ["-p", buildPrompt(task), "--output-format", "stream-json", "--verbose"];
-  appendTaskFlags(spawnArgs, task);
-  const [cmd, extraArgs] = buildSpawnTarget(spawnArgs);
+  let inv: ReturnType<typeof buildClaudeInvocation>;
+  try {
+    inv = buildClaudeInvocation(task, ["--output-format", "stream-json", "--verbose"]);
+  } catch (err) {
+    return failBeforeSpawn(task, err, startMs, onComplete);
+  }
+  const { cmd, args: extraArgs, stdinPrompt } = inv;
 
   return new Promise<RunTaskResult>((resolve) => {
     function fireOnComplete(t: Task | null) {
@@ -345,6 +403,8 @@ export async function runStreamTask(
     const pid = child.pid;
     if (pid) writePidFile(pid, task.id);
     streamChildren.set(task.id, child);
+    // The prompt closes stdin, so a Windows stream task cannot take HITL answers afterwards (see decide route).
+    if (stdinPrompt !== null) sendPromptOnStdin(child, stdinPrompt);
 
     let lineBuffer = "";
     let resultText = "";
@@ -391,6 +451,8 @@ export async function runStreamTask(
           if (decisionParser) {
             const events = decisionParser.feed(line);
             for (const event of events) {
+              // A blocking DECISION could never be answered once stdin is closed (Windows), so don't record one.
+              if (stdinPrompt !== null && event.kind === "decision") continue;
               onDecision!(task.id, event).catch((e) =>
                 console.error(`[spawner] onDecision failed for task ${task.id}:`, e)
               );

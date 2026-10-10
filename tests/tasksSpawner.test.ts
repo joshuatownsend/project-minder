@@ -21,14 +21,19 @@ vi.mock("fs", () => {
     },
   };
 });
-vi.mock("../src/lib/platform", () => ({ isWindows: false }));
+const platform = vi.hoisted(() => ({ win: false }));
+vi.mock("../src/lib/platform", () => ({
+  get isWindows() {
+    return platform.win;
+  },
+}));
 vi.mock("../src/lib/tasks/store", () => ({
   completeTask: vi.fn().mockResolvedValue(null),
   failTask: vi.fn().mockResolvedValue(null),
   setSessionId: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { runClassicTask, runStreamTask, sweepStalePids, taskCwd } from "../src/lib/tasks/spawner";
+import { runClassicTask, runStreamTask, sweepStalePids, taskCwd, buildClaudeInvocation } from "../src/lib/tasks/spawner";
 import { completeTask, failTask, setSessionId } from "../src/lib/tasks/store";
 import type { Task } from "../src/lib/tasks/types";
 
@@ -411,5 +416,101 @@ describe("task working directory (cwd)", () => {
     await promise;
 
     expect(spawnOpts(spawnFn).cwd).toBeUndefined();
+  });
+});
+
+// #632 — on Windows the claude .cmd shim runs under cmd.exe, which re-parses its command line.
+describe("buildClaudeInvocation (#632)", () => {
+  const evil = 'x" & calc.exe & "%PATH%^|<>';
+  it("Windows: the prompt is never an argument, it goes on stdin", () => {
+    const inv = buildClaudeInvocation(makeTask({ title: evil, description: undefined }), ["--output-format", "text"], true);
+    expect(inv.cmd).toBe("cmd.exe");
+    expect(inv.stdinPrompt).toBe(evil);
+    expect(inv.args.join(" ")).not.toContain("calc.exe");
+    expect(inv.args).toEqual(["/c", "claude", "-p", "--output-format", "text"]);
+  });
+
+  it("elsewhere: no shell, prompt stays argv", () => {
+    const inv = buildClaudeInvocation(makeTask({ title: "hello", description: undefined }), ["--output-format", "text"], false);
+    expect(inv).toEqual({ cmd: "claude", args: ["-p", "hello", "--output-format", "text"], stdinPrompt: null });
+  });
+
+  it.each([true, false])("refuses a model or skill name that could carry shell syntax (windows=%s)", (win) => {
+    expect(() => buildClaudeInvocation(makeTask({ model: "x & calc" }), [], win)).toThrow(/model/);
+    expect(() => buildClaudeInvocation(makeTask({ model: "--dangerous" }), [], win)).toThrow(/model/);
+    expect(() => buildClaudeInvocation(makeTask({ assigned_skill: 'a"b' }), [], win)).toThrow(/skill/);
+    const ok = buildClaudeInvocation(makeTask({ model: "claude-haiku-4-5", assigned_skill: "my-skill" }), [], win);
+    expect(ok.args).toContain("claude-haiku-4-5");
+    expect(ok.args).toContain("mcp__skills__my-skill");
+  });
+
+  it("a task with a bad model fails without spawning", async () => {
+    const spawnFn = vi.fn();
+    const r = await runClassicTask(makeTask({ model: "x & calc" }), spawnFn as never);
+    expect(r.status).toBe("failed");
+    expect(spawnFn).not.toHaveBeenCalled();
+    expect(failTask).toHaveBeenCalled();
+  });
+
+  it("a stream task with a bad model fails without spawning and still runs onComplete", async () => {
+    const spawnFn = vi.fn();
+    const onComplete = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(failTask).mockResolvedValueOnce(makeTask({ status: "failed" }));
+    const r = await runStreamTask(makeTask({ model: "x & calc" }), spawnFn as never, undefined, onComplete);
+    expect(r.status).toBe("failed");
+    expect(spawnFn).not.toHaveBeenCalled();
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts Vertex ids and Bedrock inference-profile ARNs", () => {
+    for (const model of ["claude-sonnet-4@20250514", "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4"]) {
+      expect(buildClaudeInvocation(makeTask({ model }), [], true).args).toContain(model);
+    }
+  });
+});
+
+// The runtime path on a Windows host: prompt reaches the child on stdin, which is then closed.
+describe("Windows runtime path (#632)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    platform.win = true;
+  });
+  afterEach(() => {
+    platform.win = false;
+  });
+
+  function withStdin(proc: Partial<ChildProcess>) {
+    const stdin = { on: vi.fn(), end: vi.fn() };
+    (proc as { stdin: unknown }).stdin = stdin;
+    return stdin;
+  }
+
+  it("classic: spawns through cmd.exe without the prompt in argv and ends stdin with it", async () => {
+    const { proc, emitClose } = makeChildProcess();
+    const stdin = withStdin(proc);
+    const spawnFn = vi.fn().mockReturnValue(proc);
+    const evil = 'a" & calc & "%PATH%';
+    const p = runClassicTask(makeTask({ title: evil, description: undefined }), spawnFn as never);
+    emitClose(0);
+    await p;
+    const [cmd, args, opts] = spawnFn.mock.calls[0] as [string, string[], { stdio: string[] }];
+    expect(cmd).toBe("cmd.exe");
+    expect(args.join(" ")).not.toContain("calc");
+    expect(opts.stdio[0]).toBe("pipe");
+    expect(stdin.end).toHaveBeenCalledWith(evil);
+  });
+
+  it("stream: ends stdin with the prompt, drops DECISION but keeps INBOX", async () => {
+    const { proc, emitOutput, emitClose } = makeChildProcess();
+    const stdin = withStdin(proc);
+    const spawnFn = vi.fn().mockReturnValue(proc);
+    const onDecision = vi.fn().mockResolvedValue(undefined);
+    const p = runStreamTask(makeTask({ execution_mode: "stream", title: "go", description: undefined }), spawnFn as never, onDecision);
+    emitOutput("DECISION: overwrite? [yes, no]\nINBOX: scanning\n");
+    emitClose(0);
+    await p;
+    expect(stdin.end).toHaveBeenCalledWith("go");
+    expect(onDecision).toHaveBeenCalledTimes(1);
+    expect(onDecision.mock.calls[0][1]).toMatchObject({ kind: "inbox" });
   });
 });
