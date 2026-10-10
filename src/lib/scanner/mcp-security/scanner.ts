@@ -31,6 +31,70 @@ function dbScope(server: McpServer): "user" | "project" {
   return server.source === "project" ? "project" : "user";
 }
 
+const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "ash", "csh", "tcsh", "fish"]);
+const POWERSHELL = /^(?:powershell|pwsh)$/i;
+// Delimiter-based rules re-run over the extracted script text. CI-01 is left out: it would fire on the
+// delimiter we prepend, i.e. on any script that merely starts with rm/curl/sh.
+const SHELL_SCRIPT_RULES: ReadonlySet<string> = new Set(["SF-01", "SF-02", "SF-03", "SF-09", "CI-02"]);
+const POWERSHELL_RULES: ReadonlySet<string> = new Set(["SF-08"]);
+const CMD_RULES: ReadonlySet<string> = new Set(["SF-09"]);
+const LAUNCH_LINE_RULES: ReadonlySet<string> = new Set([...SHELL_SCRIPT_RULES, ...POWERSHELL_RULES, ...CMD_RULES]);
+const DIRECT_RULES: ReadonlySet<string> = new Set(["SF-01", "SF-09"]);
+const DIRECT_DESTRUCTIVE = new Set(["rm", "del", "erase", "rd", "rmdir"]);
+
+// Programs that only run their first operand; the scanner looks through them (`env sh -c ...`, `sudo rm -rf`).
+const LAUNCHERS = new Set(["env", "sudo", "doas", "nohup", "nice", "exec", "command", "time", "stdbuf", "setsid"]);
+
+/** The command that is really run once launcher prefixes and their options / VAR=value words are skipped. */
+function effectiveLaunch(server: McpServer): { command: string; args: string[] } | null {
+  if (!server.command) return null;
+  let command = server.command;
+  let args = server.args ?? [];
+  for (let guard = 0; guard < 8 && LAUNCHERS.has(baseName(command).toLowerCase()); guard++) {
+    let i = 0;
+    while (i < args.length && (/^-/.test(args[i]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(args[i]))) i++;
+    if (i >= args.length) return { command, args };
+    command = args[i];
+    args = args.slice(i + 1);
+  }
+  return { command, args };
+}
+
+/** Rewrite `rm` invocations whose options include recursion (long form or reordered) to a plain `rm -rf`. */
+function normalizeRm(text: string): string {
+  return text.replace(/(^|[\s;&|(])rm\s+((?:--?[A-Za-z][\w-]*\s+)+)/g, (m, pre: string, opts: string) =>
+    /(?:^|\s)(?:--recursive|-[A-Za-z]*[rR][A-Za-z]*)(?:\s|$)/.test(opts) ? pre + "rm -rf " : m,
+  );
+}
+
+function baseName(command: string): string {
+  const leaf = command.split(/[\\/]/).pop() ?? command;
+  return leaf.replace(/\.exe$/i, "");
+}
+
+/**
+ * The script a POSIX shell is asked to run, i.e. the argument after the `-c` option (alone or inside a
+ * short-option group such as `-lc` / `-cl`, after any other options). Later arguments are `$0`, `$1`, …
+ * and are not executed. Null for anything that is not a shell `-c` launch.
+ */
+export function shellScript(server: McpServer): string | null {
+  const launch = effectiveLaunch(server);
+  if (!launch || !SHELLS.has(baseName(launch.command).toLowerCase())) return null;
+  const args = launch.args;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--" || !/^[-+]/.test(a)) return null; // first operand reached without a -c
+    if (a === "-o" || a === "+o" || a === "-O" || a === "+O" || a === "--rcfile" || a === "--init-file") {
+      i++; // takes an option name or a file
+      continue;
+    }
+    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(a)) return args[i + 1] ?? null;
+    if (a === "--command") return args[i + 1] ?? null; // fish
+    if (a.startsWith("--command=")) return a.slice("--command=".length);
+  }
+  return null;
+}
+
 interface SurfaceEntry {
   surface: McpFindingSurface;
   text: string;
@@ -54,12 +118,14 @@ function scanSurface(
   projectSlug: string | undefined,
   runId: number,
   nowMs: number,
+  only?: ReadonlySet<string>,
 ): McpFinding[] {
   const findings: McpFinding[] = [];
   const deobbed = deobfuscate(text);
   const deobbedLeet = deobfuscate(text, true);
 
   for (const rule of PATTERN_RULES) {
+    if (only && !only.has(rule.id)) continue;
     const target = DE_CATEGORIES.has(rule.category)
       ? text
       : LEETSPEAK_CATEGORIES.has(rule.category) ? deobbedLeet : deobbed;
@@ -112,8 +178,52 @@ export function scanServers(
     const scope = dbScope(server);
     const surfaces = buildSurfaces(server);
 
+    const perSurface: McpFinding[] = [];
     for (const entry of surfaces) {
-      findings.push(...scanSurface(entry.text, entry.surface, sId, scope, projectSlug, runId, nowMs));
+      perSurface.push(...scanSurface(entry.text, entry.surface, sId, scope, projectSlug, runId, nowMs));
+    }
+    const own: McpFinding[] = []; // findings from the launch-line passes below
+
+    // The stdio probe spawns the command with argv, so a destructive payload hides in the script argument of
+    // a shell wrapper (`sh -c "..."`), where the delimiter-based rules cannot see it (#634).
+    const script = shellScript(server);
+    if (script !== null) {
+      // Statements are separated by newlines as well as `;`, and the rules expect a delimiter in front.
+      const text = normalizeRm(";" + script.replace(/\r?\n/g, ";"));
+      own.push(...scanSurface(text, "args", sId, scope, projectSlug, runId, nowMs, SHELL_SCRIPT_RULES));
+    }
+    if (server.command) {
+      const base = baseName(server.command).toLowerCase();
+      const line = [server.command, ...(server.args ?? [])].join(" ");
+      // On Windows the probe goes through cmd.exe, which interprets the whole joined line, so the shell and
+      // PowerShell rules run over it (command/args boundaries do not matter there). PowerShell's rule also
+      // names the executable, which is why it needs the line rather than the arguments.
+      own.push(...scanSurface(line, "command", sId, scope, projectSlug, runId, nowMs, LAUNCH_LINE_RULES));
+      // `cmd /c <command>`: the first command after the switch has no delimiter in front of it.
+      if (base === "cmd") {
+        const args = server.args ?? [];
+        const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
+        if (at >= 0) {
+          const rest = ";" + args.slice(at + 1).join(" ");
+          own.push(...scanSurface(rest, "args", sId, scope, projectSlug, runId, nowMs, LAUNCH_LINE_RULES));
+        }
+      }
+      // A destructive program launched directly (`rm` with `-rf /`) has no shell wrapper to hide in. GNU rm
+      // takes options in any order and in long form, so recursion is judged from the arguments, not the text.
+      const direct = effectiveLaunch(server);
+      if (direct && DIRECT_DESTRUCTIVE.has(baseName(direct.command).toLowerCase())) {
+        const text = normalizeRm(";" + [baseName(direct.command).toLowerCase(), ...direct.args].join(" "));
+        own.push(...scanSurface(text, "command", sId, scope, projectSlug, runId, nowMs, DIRECT_RULES));
+      }
+    }
+
+    // The launch-line passes overlap the per-surface ones; a rule already reported for this server is not repeated.
+    findings.push(...perSurface);
+    const seen = new Set(perSurface.map((f) => f.ruleId));
+    for (const f of own) {
+      if (seen.has(f.ruleId)) continue;
+      seen.add(f.ruleId);
+      findings.push(f);
     }
   }
 

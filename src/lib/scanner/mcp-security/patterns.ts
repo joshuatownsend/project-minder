@@ -1,7 +1,7 @@
 /**
  * MCP security pattern rule registry.
  *
- * 58 explicit rules + a 30-name SUSPICIOUS_PARAM_NAMES set across 13 categories.
+ * 61 explicit rules + a 30-name SUSPICIOUS_PARAM_NAMES set across 13 categories.
  * Ported from the mcpware/cross-code-organizer MIT reference (src/security-scanner.mjs).
  *
  * Each rule: { id, category, severity, regex, message }
@@ -317,7 +317,7 @@ export const PATTERN_RULES: PatternRule[] = [
     message: "Dense URL-encoded sequence (≥5 encoded chars — possible payload)",
   },
 
-  // ── SF: Shell Feature Abuse (5 rules) ──────────────────────────────────────
+  // ── SF: Shell Feature Abuse (7 rules) ──────────────────────────────────────
   {
     id: "SF-01",
     category: "SF",
@@ -352,6 +352,22 @@ export const PATTERN_RULES: PatternRule[] = [
     severity: "med",
     regex: /\$\([^)]{5,}\)/,
     message: "Subshell command substitution $(…) in tool descriptor",
+  },
+
+  // PowerShell forms (#634). Shell `-c` wrappers are handled in scanner.ts, which scans the script argument.
+  {
+    id: "SF-08",
+    category: "SF",
+    severity: "crit",
+    regex: /\b(?:powershell|pwsh)(?:\.exe)?\b[\s\S]*(?:-e(?:c|nc(?:odedcommand)?)?\s+[A-Za-z0-9+/=]{20,}|\b(?:iex|invoke-expression)\b|downloadstring|\biwr\b|invoke-webrequest)/i,
+    message: "PowerShell launch using an encoded command, Invoke-Expression or a remote download",
+  },
+  {
+    id: "SF-09",
+    category: "SF",
+    severity: "crit",
+    regex: /(?:^|[&|;(])\s*(?:del|erase|rd|rmdir)\b[^&|;]*\s\/[sq]\b/i,
+    message: "cmd.exe recursive/quiet delete (del, erase, rd, rmdir with /s or /q)",
   },
 
   // ── HK: Hook / Keylogger (3 rules) ─────────────────────────────────────────
