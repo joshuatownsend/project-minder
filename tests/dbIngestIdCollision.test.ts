@@ -159,8 +159,11 @@ describe.skipIf(!driverAvailable)("session id held by two files (#637)", () => {
     await ingest.reconcileAllSessions(db, opts);
     const row = db.prepare("SELECT source, initial_prompt FROM sessions WHERE session_id = 'same-id'").get();
     expect(row).toEqual({ source: "claude", initial_prompt: "alpha prompt" });
-    // The losing file is not re-parsed while it and the owner are unchanged.
+    // The losing file is not re-parsed while it and the owner are unchanged...
     expect(opts.parseAdapterFile).toHaveBeenCalledTimes(1);
+    // ...except by a forced rebuild, which re-parses so a parser change can resolve a new id.
+    await ingest.reconcileAllSessions(db, { ...opts, force: true });
+    expect(opts.parseAdapterFile).toHaveBeenCalledTimes(2);
     conn.closeDb();
   });
 

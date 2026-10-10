@@ -3830,7 +3830,8 @@ async function reconcileAdapterSessionFile(
   // An adapter file's id is only known once it is parsed, and a file that lost its id to another has no
   // row of its own for the gate above, so remember the loss rather than re-parsing it on every sweep.
   const signature = `${mtimeMs}:${size}`;
-  const lost = adapterIdLosers.get(file.filePath);
+  // Not under `force`: a forced rebuild exists to re-parse, and a parser change can resolve a new id.
+  const lost = force ? undefined : adapterIdLosers.get(file.filePath);
   if (lost?.signature === signature && (await adapterIdHeldByOtherFile(db, lost.sessionId, file.filePath))) {
     return empty;
   }
