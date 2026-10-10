@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.16.10] - 2026-10-10
+
+*The second security release from the repository review, closing the remaining nine findings (#632–#640). Task prompts no longer pass through a `cmd.exe` command line, Template Mode no longer follows links out of the folders it works in, the MCP security scan covers project and local servers and reads shell `-c` and PowerShell launch lines, and three places that keyed data on a project's lossy slug or a shared session id (Config History, per-project costs and PR links, the session index) no longer mix one project's or file's data into another's.*
+
 ### Security
 
 - The MCP security scan now reads the script argument of shell `-c` launches (`sh -c "rm -rf ~"`, `bash -lc ...`, multi-line scripts) with the same destructive-command and download-and-run rules it applies elsewhere, also checks direct `rm`/`del`/`rd` launches and cmd.exe deletes (the Windows probe goes through cmd.exe), and has a new rule for PowerShell encoded commands, `Invoke-Expression` and remote downloads. Such launch lines previously scanned clean, although the health probe runs them (#634).
