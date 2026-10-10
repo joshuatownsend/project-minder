@@ -13,6 +13,7 @@ import {
 import { canonicalizeDirName, mostFrequent } from "@/lib/usage/parser";
 import { getClaudeHomes, getReadableClaudeHomes } from "@/lib/claudeHome";
 import { normalizePathKey, sessionFileHomeKey } from "@/lib/platform";
+import { parseWslUncPath } from "@/lib/wsl";
 import { recordHomeCaseSensitivity } from "./homeCaseSensitivity";
 import { chunkText } from "./textChunks";
 import type { ConversationEntry } from "@/lib/scanner/claudeConversations";
@@ -3265,6 +3266,58 @@ export interface FileReconcileResult {
   skippedNewerDerivation?: boolean;
 }
 
+const reportedIdCollisions = new Set<string>();
+
+function idOwnerPath(db: DatabaseT.Database, sessionId: string): string | undefined {
+  return (db.prepare("SELECT file_path FROM sessions WHERE session_id = ?").get(sessionId) as
+    | { file_path: string }
+    | undefined)?.file_path;
+}
+
+/**
+ * Whether another file claimed `sessionId` after this reconcile looked (`ownerSeen`). Ownership is
+ * decided before an async parse, and the watcher reconciles different paths concurrently, so the write
+ * transaction re-checks it synchronously; otherwise the parse that finished last would replace the row.
+ */
+function idClaimedMeanwhile(
+  db: DatabaseT.Database,
+  sessionId: string,
+  filePath: string,
+  ownerSeen: string | undefined
+): boolean {
+  const owner = idOwnerPath(db, sessionId);
+  return owner !== undefined && owner !== ownerSeen && normalizePathKey(owner) !== normalizePathKey(filePath);
+}
+
+/**
+ * Whether `sessionId` is indexed from another file that still exists (#637). The id is the row's whole
+ * identity, yet two files can carry it (the same transcript under two Claude homes, a copied .jsonl, an
+ * adapter id equal to a Claude one), and re-ingesting whichever a sweep reached last flipped the row
+ * between them. The file indexed first keeps the id. A moved file takes it over at once; a stored path
+ * inside WSL is not stat'ed (a sweep must not wake a distro) and is released by the end-of-sweep prune.
+ */
+async function isIdHeldByOtherFile(sessionId: string, storedPath: string, filePath: string): Promise<boolean> {
+  if (normalizePathKey(storedPath) === normalizePathKey(filePath)) return false;
+  if (!parseWslUncPath(storedPath)) {
+    try {
+      await fs.stat(storedPath);
+    } catch (err) {
+      // Only a file that is really gone hands its id over; a permission error or an unreachable
+      // share is transient and must not make the other file the owner.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return false;
+    }
+  }
+  const key = `${sessionId}\0${filePath}`;
+  if (!reportedIdCollisions.has(key)) {
+    reportedIdCollisions.add(key);
+    console.warn(
+      `[ingest] ${filePath} has the same session id (${sessionId}) as the indexed ${storedPath}; keeping the indexed file.`
+    );
+  }
+  return true;
+}
+
 /**
  * Reconcile a single JSONL file into the DB. Caller is responsible for
  * `loadPricing()` having completed first.
@@ -3307,14 +3360,16 @@ export async function reconcileSessionFile(
         byte_offset: number;
         derived_version: number;
       }
-    | undefined;
+    | undefined = db
+    .prepare(
+      "SELECT file_path, project_dir_name, file_mtime_ms, file_size, byte_offset, derived_version FROM sessions WHERE session_id = ?"
+    )
+    .get(sessionId) as typeof existing;
+  // Checked under `force` too: a rebuild re-derives rows, it does not pick a different owner for an id.
+  if (existing && (await isIdHeldByOtherFile(sessionId, existing.file_path, filePath))) return empty;
+  const ownerSeen = existing?.file_path;
+  if (options.force) existing = undefined;
   if (!options.force) {
-    existing = db
-      .prepare(
-        "SELECT file_path, project_dir_name, file_mtime_ms, file_size, byte_offset, derived_version FROM sessions WHERE session_id = ?"
-      )
-      .get(sessionId) as typeof existing;
-
     // Newer-derivation guard, checked BEFORE the unchanged-file gate below
     // and before the tail/full-replace decision that follows. Position is
     // load-bearing: the unchanged-file gate only fires when mtime AND size
@@ -3417,6 +3472,7 @@ export async function reconcileSessionFile(
 
   let rows = 0;
   const txn = db.transaction(() => {
+    if (idClaimedMeanwhile(db, sessionId, filePath, ownerSeen)) return;
     rows = writeSession(db, fullResult.parsed!);
   });
   const tWrite = PROFILE ? performance.now() : 0;
@@ -3722,6 +3778,14 @@ export function buildAdapterParsedSession(
  * changed file is always fully re-parsed and replaced via `writeSession`'s
  * delete-then-insert.
  */
+/** Adapter files skipped because another file holds their session id, by path (#637). */
+const adapterIdLosers = new Map<string, { sessionId: string; signature: string }>();
+
+async function adapterIdHeldByOtherFile(db: DatabaseT.Database, sessionId: string, filePath: string): Promise<boolean> {
+  const owner = idOwnerPath(db, sessionId);
+  return owner !== undefined && (await isIdHeldByOtherFile(sessionId, owner, filePath));
+}
+
 async function reconcileAdapterSessionFile(
   db: DatabaseT.Database,
   file: SessionFile,
@@ -3763,6 +3827,14 @@ async function reconcileAdapterSessionFile(
     return empty;
   }
 
+  // An adapter file's id is only known once it is parsed, and a file that lost its id to another has no
+  // row of its own for the gate above, so remember the loss rather than re-parsing it on every sweep.
+  const signature = `${mtimeMs}:${size}`;
+  const lost = adapterIdLosers.get(file.filePath);
+  if (lost?.signature === signature && (await adapterIdHeldByOtherFile(db, lost.sessionId, file.filePath))) {
+    return empty;
+  }
+
   let turns: UsageTurn[];
   try {
     turns = await parseAdapterFile(file);
@@ -3771,7 +3843,6 @@ async function reconcileAdapterSessionFile(
   }
   const parsed = buildAdapterParsedSession(file, turns, mtimeMs, size);
   if (!parsed) return empty;
-
   // `sessions.file_path` is UNIQUE. Look up any row already holding this path:
   // if its session_id DIFFERS from the freshly parsed one (an adapter parser
   // change can alter the resolved id), `writeSession`'s session_id-keyed DELETE
@@ -3782,16 +3853,30 @@ async function reconcileAdapterSessionFile(
     .prepare("SELECT session_id FROM sessions WHERE file_path = ?")
     .get(file.filePath) as { session_id: string } | undefined;
   const oldSessionId = existingRow?.session_id;
+  // Clear a stale row sharing this UNIQUE file_path under a different id
+  // (prompts_fts first, matching writeSession's delete contract) so the
+  // INSERT below can't hit the UNIQUE(file_path) constraint. Also done when the
+  // new id is refused below: the file no longer holds the old id, and as a live
+  // path its row would never be pruned.
+  const clearOldRow = (): number => {
+    if (!oldSessionId || oldSessionId === parsed.sessionId) return 0;
+    db.prepare("DELETE FROM prompts_fts WHERE session_id = ?").run(oldSessionId);
+    return db.prepare("DELETE FROM sessions WHERE session_id = ?").run(oldSessionId).changes;
+  };
+
+  const ownerSeen = idOwnerPath(db, parsed.sessionId);
+  if (ownerSeen !== undefined && (await isIdHeldByOtherFile(parsed.sessionId, ownerSeen, file.filePath))) {
+    const removed = db.transaction(clearOldRow)();
+    adapterIdLosers.set(file.filePath, { sessionId: parsed.sessionId, signature });
+    // A removed row is a change: the sweep then re-derives continuation links that pointed at it.
+    return { rowsWritten: removed };
+  }
+  adapterIdLosers.delete(file.filePath);
 
   let rows = 0;
   const txn = db.transaction(() => {
-    // Clear a stale row sharing this UNIQUE file_path under a different id
-    // (prompts_fts first, matching writeSession's delete contract) so the
-    // INSERT below can't hit the UNIQUE(file_path) constraint.
-    if (oldSessionId && oldSessionId !== parsed.sessionId) {
-      db.prepare("DELETE FROM prompts_fts WHERE session_id = ?").run(oldSessionId);
-      db.prepare("DELETE FROM sessions WHERE session_id = ?").run(oldSessionId);
-    }
+    if (idClaimedMeanwhile(db, parsed.sessionId, file.filePath, ownerSeen)) return;
+    clearOldRow();
     rows = writeSession(db, parsed);
   });
   txn();
