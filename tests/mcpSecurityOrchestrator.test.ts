@@ -48,8 +48,8 @@ describe("runMcpSecurityScan covers project and local servers (#638)", () => {
     const findings = saved[0].findings;
     const evil = findings.filter((f) => f.serverId === "app:evil");
     const mine = findings.filter((f) => f.serverId === "app:mine");
-    expect(evil.map((f) => f.ruleId)).toContain("SF-06");
-    expect(mine.map((f) => f.ruleId)).toContain("SF-07");
+    expect(evil.map((f) => f.ruleId)).toContain("SF-01");
+    expect(mine.map((f) => f.ruleId)).toContain("SF-02");
     expect(findings.every((f) => f.serverId.startsWith("app:") || f.serverId.startsWith("user:"))).toBe(true);
     expect(evil[0]).toMatchObject({ scope: "project", projectSlug: "app" });
     expect(mine[0]).toMatchObject({ scope: "project", projectSlug: "app" });
