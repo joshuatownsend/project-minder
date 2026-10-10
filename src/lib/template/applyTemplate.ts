@@ -1,4 +1,4 @@
-import { PathSafetyError, assertContained, assertNotLink } from "./pathSafety";
+import { PathSafetyError, assertContained, assertNoLinkComponents } from "./pathSafety";
 import {
   ApplyRequest,
   ApplyResult,
@@ -51,7 +51,7 @@ export async function applyTemplate(req: ApplyTemplateRequest): Promise<ApplyTem
     // The bundle is trusted as a source root; a link in its place (or in the templates path) would relocate it.
     try {
       assertContained(sourcePath, getDevRoots(config)[0]);
-      await assertNotLink(sourcePath);
+      await assertNoLinkComponents(sourcePath, getDevRoots(config)[0]);
     } catch (e) {
       if (e instanceof PathSafetyError) return errorAggregate(e.code, e.message);
       throw e;
