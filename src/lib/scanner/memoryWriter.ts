@@ -131,6 +131,7 @@ export async function writeMemoryFile(
       let backupId: string | null = null;
       try {
         backupId = await recordPreWrite(targetPath, {
+          projectPath,
           label: options.backupLabel ?? "memoryEditor",
         });
       } catch {

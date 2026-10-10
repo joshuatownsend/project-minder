@@ -146,6 +146,7 @@ export async function PUT(
     const backupId = await recordPreWrite(absPath, {
       label: "memoryEditor",
       projectSlug: allowed.projectSlug,
+      projectPath: allowed.projectPath,
     });
 
     await writeFileAtomic(absPath, content);
