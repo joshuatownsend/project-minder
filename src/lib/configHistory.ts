@@ -5,6 +5,7 @@ import os from "os";
 import { writeFileAtomic, withFileLock } from "./atomicWrite";
 import { normalizePathKey } from "./platform";
 import { encodeProjectPath } from "./usage/projectMatch";
+import { getPrimaryClaudeHome } from "./claudeHome";
 
 // Copy-on-write history of writes performed by the template-apply layer.
 // Each `recordPreWrite` snapshots the current bytes of a target file
@@ -258,19 +259,21 @@ function pathKey(p: string): string {
 /** Whether an entry belongs to the project at `projectPath`. Entries carry the project path since #635;
  *  older ones only had the slug, which can name a different project after the dev roots are reordered,
  *  so they are attributed by where the file lives instead: inside the project but not inside another
- *  project nested in it (`otherProjects`), or in the project's auto-memory folder under a Claude home
- *  (`.../projects/<encoded path>/`). */
+ *  project nested in it (`otherProjects`), or in the project's auto-memory folder under one of
+ *  `claudeHomes` (`<home>/projects/<encoded path>/`). */
 export function belongsToProject(
   entry: Pick<HistoryEntry, "projectPath" | "targetPath">,
   projectPath: string,
   otherProjects: string[] = [],
+  claudeHomes: string[] = [getPrimaryClaudeHome()],
 ): boolean {
-  return projectMatcher(projectPath, otherProjects)(entry);
+  return projectMatcher(projectPath, otherProjects, claudeHomes)(entry);
 }
 
 function projectMatcher(
   projectPath: string,
   otherProjects: string[],
+  claudeHomes: string[],
 ): (entry: Pick<HistoryEntry, "projectPath" | "targetPath">) => boolean {
   const key = pathKey(projectPath);
   const nested = otherProjects.map(pathKey).filter((k) => k.startsWith(key + "/"));
@@ -278,20 +281,22 @@ function projectMatcher(
   const encoded = encodedDir(projectPath);
   // The encoding is lossy (`/dev/a-b/c` and `/dev/a/b-c` share a folder), so a memory folder that
   // another scanned project also encodes to belongs to neither.
-  const memoryDir = otherProjects.some((p) => encodedDir(p) === encoded) ? null : `/projects/${encoded}/`;
+  const memoryDirs = otherProjects.some((p) => encodedDir(p) === encoded)
+    ? []
+    : claudeHomes.map((home) => `${pathKey(home)}/projects/${encoded}/`);
   return (entry) => {
     if (entry.projectPath) return pathKey(entry.projectPath) === key;
     const target = pathKey(entry.targetPath);
-    if (memoryDir && target.includes(memoryDir)) return true;
+    if (memoryDirs.some((dir) => target.startsWith(dir))) return true;
     return target.startsWith(key + "/") && !nested.some((n) => target.startsWith(n + "/"));
   };
 }
 
 /** List all manifest entries, optionally only those of the project at `projectPath` (see
- *  {@link belongsToProject}; `otherProjects` are the other scanned project paths). Newest
- *  first. Returns empty list when the history root doesn't exist. */
+ *  {@link belongsToProject}; `otherProjects` are the other scanned project paths, `claudeHomes`
+ *  the configured Claude homes). Newest first. Returns empty list when the history root doesn't exist. */
 export async function list(
-  filter: { projectPath?: string; otherProjects?: string[] } = {},
+  filter: { projectPath?: string; otherProjects?: string[]; claudeHomes?: string[] } = {},
 ): Promise<HistoryEntry[]> {
   let raw: string;
   try {
@@ -300,7 +305,7 @@ export async function list(
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw err;
   }
-  const matches = filter.projectPath ? projectMatcher(filter.projectPath, filter.otherProjects ?? []) : null;
+  const matches = filter.projectPath ? projectMatcher(filter.projectPath, filter.otherProjects ?? [], filter.claudeHomes ?? [getPrimaryClaudeHome()]) : null;
   const entries: HistoryEntry[] = [];
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;

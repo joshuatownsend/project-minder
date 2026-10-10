@@ -563,6 +563,19 @@ describe("belongsToProject for entries recorded before #635 (no projectPath)", (
     expect(belongsToProject(memory, second, [first])).toBe(false);
   });
 
+  it("only counts a memory folder directly under a Claude home", async () => {
+    const { belongsToProject } = await reloadModule();
+    const project = path.resolve(tmpHome, "dev", "app");
+    const encoded = project.replace(/[:\\/]/g, "-");
+    // Another project that merely lives under a `projects/<encoded>` folder.
+    const lookalike = { targetPath: path.join(tmpHome, "tmp", "projects", encoded, "foo", "CLAUDE.md") };
+    expect(belongsToProject(lookalike, project)).toBe(false);
+    const extraHome = path.join(tmpHome, "extra", ".claude");
+    const inExtra = { targetPath: path.join(extraHome, "projects", encoded, "memory", "MEMORY.md") };
+    expect(belongsToProject(inExtra, project)).toBe(false);
+    expect(belongsToProject(inExtra, project, [], [path.join(tmpHome, ".claude"), extraHome])).toBe(true);
+  });
+
   it("prefers the recorded projectPath over the file location", async () => {
     const { belongsToProject } = await reloadModule();
     const project = path.join(tmpHome, "dev", "app");
