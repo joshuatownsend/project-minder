@@ -3874,12 +3874,19 @@ async function reconcileAdapterSessionFile(
   adapterIdLosers.delete(file.filePath);
 
   let rows = 0;
+  let claimedMeanwhile = false;
   const txn = db.transaction(() => {
-    if (idClaimedMeanwhile(db, parsed.sessionId, file.filePath, ownerSeen)) return;
-    clearOldRow();
+    // The old row goes either way: this file no longer holds its id.
+    const removed = clearOldRow();
+    if (idClaimedMeanwhile(db, parsed.sessionId, file.filePath, ownerSeen)) {
+      claimedMeanwhile = true;
+      rows = removed;
+      return;
+    }
     rows = writeSession(db, parsed);
   });
   txn();
+  if (claimedMeanwhile) adapterIdLosers.set(file.filePath, { sessionId: parsed.sessionId, signature });
 
   return { rowsWritten: rows };
 }
