@@ -115,6 +115,16 @@ export function scanServers(
     for (const entry of surfaces) {
       findings.push(...scanSurface(entry.text, entry.surface, sId, scope, projectSlug, runId, nowMs));
     }
+
+    // The probe spawns command + args as one command line, so scan that too (#634). Rules already reported
+    // for this server on the separate surfaces are not repeated.
+    if (server.command && server.args?.length) {
+      const seen = new Set(findings.filter((f) => f.serverId === sId).map((f) => f.ruleId));
+      const line = [server.command, ...server.args].join(" ");
+      for (const f of scanSurface(line, "command", sId, scope, projectSlug, runId, nowMs)) {
+        if (!seen.has(f.ruleId)) findings.push(f);
+      }
+    }
   }
 
   return findings;

@@ -317,7 +317,7 @@ export const PATTERN_RULES: PatternRule[] = [
     message: "Dense URL-encoded sequence (≥5 encoded chars — possible payload)",
   },
 
-  // ── SF: Shell Feature Abuse (5 rules) ──────────────────────────────────────
+  // ── SF: Shell Feature Abuse (8 rules) ──────────────────────────────────────
   {
     id: "SF-01",
     category: "SF",
@@ -352,6 +352,30 @@ export const PATTERN_RULES: PatternRule[] = [
     severity: "med",
     regex: /\$\([^)]{5,}\)/,
     message: "Subshell command substitution $(…) in tool descriptor",
+  },
+
+  // Shell-wrapper and PowerShell forms (#634). SF-01..03 need a `;`/`&`/`|` in front of the command, which a
+  // `sh -c "rm -rf ~"` launch line does not have, so these match the wrapper itself.
+  {
+    id: "SF-06",
+    category: "SF",
+    severity: "crit",
+    regex: /\b(?:ba|z|da|k|c)?sh\s+-[a-z]*c\s+["']?[^"']*\brm\s+-[rRf]/i,
+    message: "Shell -c launch running a destructive rm -r/-f/-rf command",
+  },
+  {
+    id: "SF-07",
+    category: "SF",
+    severity: "crit",
+    regex: /\b(?:ba|z|da|k|c)?sh\s+-[a-z]*c\s+["']?[^"']*\b(?:curl|wget)\b[^"']*\|\s*(?:ba|z|da)?sh\b/i,
+    message: "Shell -c launch piping a remote download into a shell",
+  },
+  {
+    id: "SF-08",
+    category: "SF",
+    severity: "crit",
+    regex: /\b(?:powershell|pwsh)(?:\.exe)?\b.*(?:-e(?:nc(?:odedcommand)?)?\s+[A-Za-z0-9+/=]{20,}|\b(?:iex|invoke-expression)\b|downloadstring|\biwr\b|invoke-webrequest)/i,
+    message: "PowerShell launch using an encoded command, Invoke-Expression or a remote download",
   },
 
   // ── HK: Hook / Keylogger (3 rules) ─────────────────────────────────────────
