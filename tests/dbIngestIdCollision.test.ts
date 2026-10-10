@@ -80,6 +80,28 @@ describe.skipIf(!driverAvailable)("session id held by two files (#637)", () => {
     conn.closeDb();
   });
 
+  it("lets only one of two concurrent reconciles write a shared new id", async () => {
+    const { conn, ingest, db, projectsDir } = await setup();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const a = path.join(projectsDir, "C--dev-alpha", "same-id.jsonl");
+    const b = path.join(projectsDir, "C--dev-beta", "same-id.jsonl");
+    await writeSession(a, "alpha prompt");
+    await writeSession(b, "beta prompt");
+
+    // Both look before either writes, as the watcher does for two new paths.
+    const results = await Promise.all([
+      ingest.reconcileSessionFile(db, a, "C--dev-alpha"),
+      ingest.reconcileSessionFile(db, b, "C--dev-beta"),
+    ]);
+    expect(results.filter((r) => r.rowsWritten > 0)).toHaveLength(1);
+    const row = db.prepare("SELECT file_path, initial_prompt FROM sessions WHERE session_id = 'same-id'").get() as {
+      file_path: string;
+      initial_prompt: string;
+    };
+    expect(row.initial_prompt).toBe(row.file_path === a ? "alpha prompt" : "beta prompt");
+    conn.closeDb();
+  });
+
   it("does not rewrite the row on every sweep while both files exist", async () => {
     const { conn, ingest, db, projectsDir } = await setup();
     vi.spyOn(console, "warn").mockImplementation(() => {});

@@ -3268,6 +3268,27 @@ export interface FileReconcileResult {
 
 const reportedIdCollisions = new Set<string>();
 
+function idOwnerPath(db: DatabaseT.Database, sessionId: string): string | undefined {
+  return (db.prepare("SELECT file_path FROM sessions WHERE session_id = ?").get(sessionId) as
+    | { file_path: string }
+    | undefined)?.file_path;
+}
+
+/**
+ * Whether another file claimed `sessionId` after this reconcile looked (`ownerSeen`). Ownership is
+ * decided before an async parse, and the watcher reconciles different paths concurrently, so the write
+ * transaction re-checks it synchronously; otherwise the parse that finished last would replace the row.
+ */
+function idClaimedMeanwhile(
+  db: DatabaseT.Database,
+  sessionId: string,
+  filePath: string,
+  ownerSeen: string | undefined
+): boolean {
+  const owner = idOwnerPath(db, sessionId);
+  return owner !== undefined && owner !== ownerSeen && normalizePathKey(owner) !== normalizePathKey(filePath);
+}
+
 /**
  * Whether `sessionId` is indexed from another file that still exists (#637). The id is the row's whole
  * identity, yet two files can carry it (the same transcript under two Claude homes, a copied .jsonl, an
@@ -3346,6 +3367,7 @@ export async function reconcileSessionFile(
     .get(sessionId) as typeof existing;
   // Checked under `force` too: a rebuild re-derives rows, it does not pick a different owner for an id.
   if (existing && (await isIdHeldByOtherFile(sessionId, existing.file_path, filePath))) return empty;
+  const ownerSeen = existing?.file_path;
   if (options.force) existing = undefined;
   if (!options.force) {
     // Newer-derivation guard, checked BEFORE the unchanged-file gate below
@@ -3450,6 +3472,7 @@ export async function reconcileSessionFile(
 
   let rows = 0;
   const txn = db.transaction(() => {
+    if (idClaimedMeanwhile(db, sessionId, filePath, ownerSeen)) return;
     rows = writeSession(db, fullResult.parsed!);
   });
   const tWrite = PROFILE ? performance.now() : 0;
@@ -3759,10 +3782,8 @@ export function buildAdapterParsedSession(
 const adapterIdLosers = new Map<string, { sessionId: string; signature: string }>();
 
 async function adapterIdHeldByOtherFile(db: DatabaseT.Database, sessionId: string, filePath: string): Promise<boolean> {
-  const owner = db.prepare("SELECT file_path FROM sessions WHERE session_id = ?").get(sessionId) as
-    | { file_path: string }
-    | undefined;
-  return owner !== undefined && (await isIdHeldByOtherFile(sessionId, owner.file_path, filePath));
+  const owner = idOwnerPath(db, sessionId);
+  return owner !== undefined && (await isIdHeldByOtherFile(sessionId, owner, filePath));
 }
 
 async function reconcileAdapterSessionFile(
@@ -3843,7 +3864,8 @@ async function reconcileAdapterSessionFile(
     return db.prepare("DELETE FROM sessions WHERE session_id = ?").run(oldSessionId).changes;
   };
 
-  if (await adapterIdHeldByOtherFile(db, parsed.sessionId, file.filePath)) {
+  const ownerSeen = idOwnerPath(db, parsed.sessionId);
+  if (ownerSeen !== undefined && (await isIdHeldByOtherFile(parsed.sessionId, ownerSeen, file.filePath))) {
     const removed = db.transaction(clearOldRow)();
     adapterIdLosers.set(file.filePath, { sessionId: parsed.sessionId, signature });
     // A removed row is a change: the sweep then re-derives continuation links that pointed at it.
@@ -3853,6 +3875,7 @@ async function reconcileAdapterSessionFile(
 
   let rows = 0;
   const txn = db.transaction(() => {
+    if (idClaimedMeanwhile(db, parsed.sessionId, file.filePath, ownerSeen)) return;
     clearOldRow();
     rows = writeSession(db, parsed);
   });
