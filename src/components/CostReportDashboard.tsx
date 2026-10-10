@@ -45,10 +45,14 @@ export function CostReportDashboard() {
   // layouts share a usageSlug (and a dir), and the report emits one row per
   // (slug, home).
   const { routeByDir, routeByUsage } = useMemo(() => {
-    const byDir = new Map<string, ProjectData>();
+    // Every project per dir: homes with identical layouts share one, so the row's home picks among them.
+    const byDir = new Map<string, ProjectData[]>();
     const byUsage = new Map<string, ProjectData>();
     for (const p of scan?.projects ?? []) {
-      if (p.usageDirName) byDir.set(foldDirName(p.usageDirName), p);
+      if (p.usageDirName) {
+        const key = foldDirName(p.usageDirName);
+        byDir.set(key, [...(byDir.get(key) ?? []), p]);
+      }
       byUsage.set(p.usageSlug, p);
       if (p.usageHomeKey) byUsage.set(`${p.usageSlug}\u0000${p.usageHomeKey}`, p);
     }
@@ -64,11 +68,13 @@ export function CostReportDashboard() {
       // from a DIFFERENT home (that's the other distro's spend).
       const otherHome = (p: ProjectData | undefined) =>
         !!(p?.usageHomeKey && r.homeKey && p.usageHomeKey !== r.homeKey);
-      const byDir = routeByDir.get(foldDirName(r.projectDirName));
+      const dirCandidates = routeByDir.get(foldDirName(r.projectDirName)) ?? [];
+      const byDir =
+        dirCandidates.find((p) => p.usageHomeKey && p.usageHomeKey === r.homeKey) ??
+        dirCandidates.find((p) => !p.usageHomeKey);
       const composite = r.homeKey ? routeByUsage.get(`${r.projectSlug}\u0000${r.homeKey}`) : undefined;
       const bySlug = routeByUsage.get(r.projectSlug);
-      const routeProject =
-        (otherHome(byDir) ? undefined : byDir) ?? composite ?? (otherHome(bySlug) ? undefined : bySlug);
+      const routeProject = byDir ?? composite ?? (otherHome(bySlug) ? undefined : bySlug);
       const name = routeProject?.name ?? decodeDirName(r.projectDirName);
       return { ...r, name, routeSlug: routeProject?.slug };
     });

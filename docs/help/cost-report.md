@@ -56,7 +56,7 @@ unaffected — they keep exactly one row.
 
 ### Projects with the same folder name
 
-Two projects with the same folder name on different drives or roots (`C:\dev\app` and `D:\dev\app`) are kept apart. Each one gets its own row linked to its own project, and each project's **Costs** tab, **Timecard** tab and PR-to-session links count only that project's sessions. Drive letters are compared case-insensitively, so `c:` and `C:` sessions of one project still count together.
+Two projects with the same folder name on different drives or roots (`C:\dev\app` and `D:\dev\app`) are kept apart. Each one gets its own row linked to its own project, and each project's **Costs** tab, **Timecard** tab and PR-to-session links count only that project's sessions. Drive letters are compared case-insensitively, so `c:` and `C:` sessions of one project still count together. Other paths are compared exactly. On a case-insensitive macOS volume, sessions recorded under a different capitalization of the project's path count toward the cost report's total but not toward that project's tabs.
 
 ## Per-project Costs tab
 
