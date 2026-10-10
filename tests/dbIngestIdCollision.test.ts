@@ -142,6 +142,38 @@ describe.skipIf(!driverAvailable)("session id held by two files (#637)", () => {
     conn.closeDb();
   });
 
+  it("drops an adapter file's old row when its new id is refused", async () => {
+    const { conn, ingest, db, projectsDir } = await setup();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await writeSession(path.join(projectsDir, "C--dev-alpha", "same-id.jsonl"), "alpha prompt");
+    const codexFile = path.join(tmpHome, ".codex", "sessions", "rollout-1.jsonl");
+    await fs.mkdir(path.dirname(codexFile), { recursive: true });
+    await fs.writeFile(codexFile, "x");
+    let id = "old-id";
+    const turn = (role: "user" | "assistant", ts: string): UsageTurn => ({
+      timestamp: ts, sessionId: id, projectSlug: "codexproj", projectDirName: "codexproj",
+      model: role === "assistant" ? "gpt-5" : "", role, inputTokens: 10, outputTokens: 5,
+      cacheCreateTokens: 0, cacheReadTokens: 0, toolCalls: [],
+    });
+    const config: MinderConfig = { statuses: {}, hidden: [], portOverrides: {}, devRoot: tmpHome, enabledAdapters: ["claude", "codex"] };
+    const opts = {
+      projectsDir,
+      config,
+      adapterSessions: [{ source: "codex", filePath: codexFile, projectDirName: "codexproj" }] as SessionFile[],
+      parseAdapterFile: async () => [turn("user", "2026-05-01T10:00:00Z"), turn("assistant", "2026-05-01T10:00:01Z")],
+    };
+    await ingest.reconcileAllSessions(db, opts);
+    expect(db.prepare("SELECT file_path FROM sessions WHERE session_id = 'old-id'").get()).toEqual({ file_path: codexFile });
+
+    // The file now resolves to an id another file holds.
+    id = "same-id";
+    await fs.writeFile(codexFile, "xy");
+    await ingest.reconcileAllSessions(db, opts);
+    expect(db.prepare("SELECT 1 FROM sessions WHERE session_id = 'old-id'").get()).toBeUndefined();
+    expect(db.prepare("SELECT source FROM sessions WHERE session_id = 'same-id'").get()).toEqual({ source: "claude" });
+    conn.closeDb();
+  });
+
   it("treats a path that differs only by separators (and, on Windows, case) as the same file", async () => {
     const { conn, ingest, db, projectsDir } = await setup();
     const a = path.join(projectsDir, "C--dev-alpha", "same-id.jsonl");

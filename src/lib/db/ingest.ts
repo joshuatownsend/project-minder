@@ -3280,8 +3280,11 @@ async function isIdHeldByOtherFile(sessionId: string, storedPath: string, filePa
   if (!parseWslUncPath(storedPath)) {
     try {
       await fs.stat(storedPath);
-    } catch {
-      return false;
+    } catch (err) {
+      // Only a file that is really gone hands its id over; a permission error or an unreachable
+      // share is transient and must not make the other file the owner.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return false;
     }
   }
   const key = `${sessionId}\0${filePath}`;
@@ -3819,12 +3822,6 @@ async function reconcileAdapterSessionFile(
   }
   const parsed = buildAdapterParsedSession(file, turns, mtimeMs, size);
   if (!parsed) return empty;
-  if (await adapterIdHeldByOtherFile(db, parsed.sessionId, file.filePath)) {
-    adapterIdLosers.set(file.filePath, { sessionId: parsed.sessionId, signature });
-    return empty;
-  }
-  adapterIdLosers.delete(file.filePath);
-
   // `sessions.file_path` is UNIQUE. Look up any row already holding this path:
   // if its session_id DIFFERS from the freshly parsed one (an adapter parser
   // change can alter the resolved id), `writeSession`'s session_id-keyed DELETE
@@ -3835,16 +3832,28 @@ async function reconcileAdapterSessionFile(
     .prepare("SELECT session_id FROM sessions WHERE file_path = ?")
     .get(file.filePath) as { session_id: string } | undefined;
   const oldSessionId = existingRow?.session_id;
-
-  let rows = 0;
-  const txn = db.transaction(() => {
-    // Clear a stale row sharing this UNIQUE file_path under a different id
-    // (prompts_fts first, matching writeSession's delete contract) so the
-    // INSERT below can't hit the UNIQUE(file_path) constraint.
+  // Clear a stale row sharing this UNIQUE file_path under a different id
+  // (prompts_fts first, matching writeSession's delete contract) so the
+  // INSERT below can't hit the UNIQUE(file_path) constraint. Also done when the
+  // new id is refused below: the file no longer holds the old id, and as a live
+  // path its row would never be pruned.
+  const clearOldRow = () => {
     if (oldSessionId && oldSessionId !== parsed.sessionId) {
       db.prepare("DELETE FROM prompts_fts WHERE session_id = ?").run(oldSessionId);
       db.prepare("DELETE FROM sessions WHERE session_id = ?").run(oldSessionId);
     }
+  };
+
+  if (await adapterIdHeldByOtherFile(db, parsed.sessionId, file.filePath)) {
+    db.transaction(clearOldRow)();
+    adapterIdLosers.set(file.filePath, { sessionId: parsed.sessionId, signature });
+    return empty;
+  }
+  adapterIdLosers.delete(file.filePath);
+
+  let rows = 0;
+  const txn = db.transaction(() => {
+    clearOldRow();
     rows = writeSession(db, parsed);
   });
   txn();
