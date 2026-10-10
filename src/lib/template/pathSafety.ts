@@ -150,3 +150,18 @@ const PROJECT_CONFIG_PATHS = [
 export function assertProjectConfigContained(projectPath: string): void {
   for (const rel of PROJECT_CONFIG_PATHS) assertContained(path.join(projectPath, rel), projectPath);
 }
+
+/** Throws if any existing component of `target` below `root` is a symlink/junction, even one that stays inside `root`. */
+export async function assertNoLinkComponents(target: string, root: string): Promise<void> {
+  const rel = path.relative(path.resolve(root), path.resolve(target));
+  let cur = path.resolve(root);
+  for (const part of rel.split(path.sep).filter(Boolean)) {
+    cur = path.join(cur, part);
+    await assertNotLink(cur);
+  }
+}
+
+/** The target project's configuration locations are written through; none of them may be a link, in or out of the project. */
+export async function assertTargetConfigNotLinked(projectPath: string): Promise<void> {
+  for (const rel of PROJECT_CONFIG_PATHS) await assertNotLink(path.join(projectPath, rel));
+}

@@ -25,7 +25,7 @@ import {
 } from "./manifest";
 import { atomicWriteFile, copyDirRecursive, ensureDir, fileExists } from "./atomicFs";
 import { getDevRoots } from "../config";
-import { assertContained, assertNotLink, assertProjectConfigContained, PathSafetyError } from "./pathSafety";
+import { assertContained, assertNoLinkComponents, assertProjectConfigContained, PathSafetyError } from "./pathSafety";
 import { templateExists } from "./registry";
 import {
   explodeHookCommands,
@@ -97,8 +97,7 @@ export async function saveAsSnapshot(
     const templateDir = templateDirForSlug(config, slug);
     // Anchored at the dev root, not at templates/: a linked `.minder` or `templates` must not redirect it.
     assertContained(bundleDirForSlug(config, slug), getDevRoots(config)[0]);
-    await assertNotLink(templateDir);
-    await assertNotLink(bundleDirForSlug(config, slug));
+    await assertNoLinkComponents(bundleDirForSlug(config, slug), getDevRoots(config)[0]);
   } catch (e) {
     if (e instanceof PathSafetyError) return { error: { code: e.code, message: e.message } };
     throw e;

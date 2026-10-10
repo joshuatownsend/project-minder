@@ -32,7 +32,7 @@ import { applyMcp } from "./applyMcp";
 import { applyPlugin } from "./applyPlugin";
 import { applyWorkflow } from "./applyWorkflow";
 import { applySettings } from "./applySettings";
-import { ensureInsideDevRoots, assertProjectConfigContained, PathSafetyError } from "./pathSafety";
+import { ensureInsideDevRoots, assertProjectConfigContained, assertTargetConfigNotLinked, PathSafetyError } from "./pathSafety";
 import { explodeHookCommands, findHookByKey, findMcpByKey } from "./unitKey";
 import { scanProjectPluginEnables } from "../scanner/projectPlugins";
 import { recordPreWrite, removeBackup, type BackupId } from "../configHistory";
@@ -276,6 +276,7 @@ export async function applyUnit(request: ApplyRequest): Promise<ApplyResult> {
   try {
     safeTargetPath = ensureInsideDevRoots(targetResolved.path, config);
     assertProjectConfigContained(safeTargetPath);
+    await assertTargetConfigNotLinked(safeTargetPath);
   } catch (e) {
     if (e instanceof PathSafetyError) {
       return errorResult(e.code, e.message);

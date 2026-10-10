@@ -254,4 +254,24 @@ describe("snapshot destination and cycle reporting (#633, #640)", () => {
     expect(() => ensureInsideDevRoots(path.join(root, "team-link", "new"), two)).not.toThrow();
     expect(() => ensureInsideDevRoots(path.join(root, "team-link", "new"), cfg())).toThrow(PathSafetyError);
   });
+
+  it("saveAsSnapshot refuses a .minder that is a link to somewhere else inside the root", async () => {
+    const { saveAsSnapshot } = await import("@/lib/template/promote");
+    await fs.mkdir(path.join(root, "elsewhere", "templates", "ok", "bundle"), { recursive: true });
+    await fs.writeFile(path.join(root, "elsewhere", "templates", "ok", "bundle", "keep.txt"), "keep");
+    await link(path.join(root, "elsewhere"), path.join(root, ".minder"));
+    const manifest = { kind: "live", liveSourceSlug: "nope", units: {} } as never;
+    const r = await saveAsSnapshot(cfg(), { projects: [] } as never, "ok", manifest);
+    expect("error" in r).toBe(true);
+    expect(await fs.readFile(path.join(root, "elsewhere", "templates", "ok", "bundle", "keep.txt"), "utf-8")).toBe("keep");
+  });
+
+  it("assertTargetConfigNotLinked refuses a linked config location even inside the project", async () => {
+    const { assertTargetConfigNotLinked } = await import("@/lib/template/pathSafety");
+    const proj = path.join(root, "tp");
+    await fs.mkdir(path.join(proj, "real"), { recursive: true });
+    await expect(assertTargetConfigNotLinked(proj)).resolves.toBeUndefined();
+    await link(path.join(proj, "real"), path.join(proj, ".github"));
+    await expect(assertTargetConfigNotLinked(proj)).rejects.toThrow(PathSafetyError);
+  });
 });
