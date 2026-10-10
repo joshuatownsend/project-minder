@@ -11,7 +11,7 @@ import {
   fileExists,
   previewFileWrite,
 } from "./atomicFs";
-import { PathSafetyError, assertContained, assertNotLink } from "./pathSafety";
+import { PathSafetyError, assertContained, assertNotLink, canonicalPath } from "./pathSafety";
 
 /**
  * Copy a single `.md` file (agent / skill standalone / command) from
@@ -171,34 +171,47 @@ export async function applyDirectory(args: {
   };
 }
 
-/** Walk `dir` and return every file path relative to it (sorted) plus total byte count. */
+/**
+ * Walk `dir` and return every file path relative to it (sorted) plus total byte count. Mirrors
+ * copyDirRecursive: a link leaving `containRoot` is skipped, a link to a directory is walked (unless it
+ * loops back to a directory being walked), so the report matches what was actually copied.
+ */
 async function listDirFiles(dir: string, containRoot?: string): Promise<{ files: string[]; totalBytes: number }> {
   const out: string[] = [];
   let totalBytes = 0;
+  const ancestors = new Set<string>();
   async function walk(curr: string, rel: string): Promise<void> {
-    const entries = await fs.readdir(curr, { withFileTypes: true });
-    for (const e of entries) {
-      if (e.name.startsWith(".")) continue;
-      const childRel = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDirectory()) {
-        await walk(path.join(curr, e.name), childRel);
-      } else if (e.isFile() || e.isSymbolicLink()) {
-        // Mirror copyDirRecursive: a link leaving the source root is skipped, so it must not be reported either.
+    const here = canonicalPath(curr);
+    if (ancestors.has(here)) return;
+    ancestors.add(here);
+    try {
+      const entries = await fs.readdir(curr, { withFileTypes: true });
+      for (const e of entries) {
+        if (e.name.startsWith(".")) continue;
+        const full = path.join(curr, e.name);
+        const childRel = rel ? `${rel}/${e.name}` : e.name;
         if (e.isSymbolicLink() && containRoot) {
           try {
-            assertContained(path.join(curr, e.name), containRoot);
+            assertContained(full, containRoot);
           } catch {
             continue;
           }
         }
-        out.push(childRel);
-        try {
-          const stat = await fs.stat(path.join(curr, e.name));
-          totalBytes += stat.size;
-        } catch {
-          // stat failure — skip size contribution
+        let isDir = e.isDirectory();
+        if (e.isSymbolicLink()) isDir = await fs.stat(full).then((st) => st.isDirectory(), () => false);
+        if (isDir) {
+          await walk(full, childRel);
+        } else if (e.isFile() || e.isSymbolicLink()) {
+          out.push(childRel);
+          try {
+            totalBytes += (await fs.stat(full)).size;
+          } catch {
+            // stat failure — skip size contribution
+          }
         }
       }
+    } finally {
+      ancestors.delete(here);
     }
   }
   try {

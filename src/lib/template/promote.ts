@@ -24,7 +24,7 @@ import {
   writeManifest,
 } from "./manifest";
 import { atomicWriteFile, copyDirRecursive, ensureDir, fileExists } from "./atomicFs";
-import { assertContained, assertProjectConfigContained, PathSafetyError } from "./pathSafety";
+import { assertContained, assertNotLink, assertProjectConfigContained, PathSafetyError } from "./pathSafety";
 import { templateExists } from "./registry";
 import {
   explodeHookCommands,
@@ -90,13 +90,16 @@ export async function saveAsSnapshot(
   liveManifest: TemplateManifest
 ): Promise<{ manifest: TemplateManifest } | { error: { code: string; message: string } }> {
   const src = scan.projects.find((p) => p.slug === liveManifest.liveSourceSlug);
-  if (src) {
-    try {
-      assertProjectConfigContained(src.path);
-    } catch (e) {
-      if (e instanceof PathSafetyError) return { error: { code: e.code, message: e.message } };
-      throw e;
-    }
+  try {
+    if (src) assertProjectConfigContained(src.path);
+    // The snapshot destination is recursively deleted and rewritten: it must not be, or sit under, a link.
+    const templateDir = templateDirForSlug(config, slug);
+    assertContained(bundleDirForSlug(config, slug), path.dirname(templateDir));
+    await assertNotLink(templateDir);
+    await assertNotLink(bundleDirForSlug(config, slug));
+  } catch (e) {
+    if (e instanceof PathSafetyError) return { error: { code: e.code, message: e.message } };
+    throw e;
   }
   try {
     return await saveAsSnapshotUnchecked(config, scan, slug, liveManifest);

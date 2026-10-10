@@ -210,3 +210,27 @@ describe("bundle report and loops (#633, #640)", () => {
     expect(() => canonicalPath(path.join(a, "x"))).toThrow(PathSafetyError);
   });
 });
+
+describe("snapshot destination and cycle reporting (#633, #640)", () => {
+  it("saveAsSnapshot refuses a template folder that is a link and deletes nothing through it", async () => {
+    const { saveAsSnapshot } = await import("@/lib/template/promote");
+    await fs.mkdir(path.join(root, ".minder", "templates"), { recursive: true });
+    await fs.mkdir(path.join(outside, "bundle"));
+    await fs.writeFile(path.join(outside, "bundle", "keep.txt"), "keep");
+    await link(outside, path.join(root, ".minder", "templates", "evil"));
+    const manifest = { kind: "live", liveSourceSlug: "nope", units: {} } as never;
+    const r = await saveAsSnapshot(cfg(), { projects: [] } as never, "evil", manifest);
+    expect("error" in r).toBe(true);
+    expect(await fs.readFile(path.join(outside, "bundle", "keep.txt"), "utf-8")).toBe("keep");
+  });
+
+  it("applyDirectory does not report a link that loops back to an ancestor", async () => {
+    const src = path.join(tmp, "csk");
+    await fs.mkdir(src);
+    await fs.writeFile(path.join(src, "SKILL.md"), "x");
+    await link(src, path.join(src, "loop"));
+    const r = await applyDirectory({ sourceDir: src, targetDir: path.join(root, "o2"), conflict: "overwrite", sourceRoot: src, targetRoot: root });
+    expect(r.ok).toBe(true);
+    expect(r.bundle?.files).toEqual(["SKILL.md"]);
+  });
+});
