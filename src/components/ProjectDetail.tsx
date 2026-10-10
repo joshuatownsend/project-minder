@@ -39,6 +39,7 @@ import { useWorkflowLauncherEnabled } from "./ConfigProvider";
 import { useGithubActivity } from "@/hooks/useGithubActivity";
 import type { SessionSummary } from "@/lib/types";
 import { isProjectSession } from "@/lib/sessions/projectSessionMatch";
+import { canonicalizeDirName } from "@/lib/sessions/projectIdentity";
 import dynamic from "next/dynamic";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -191,7 +192,10 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
         if (cancelled || !Array.isArray(data)) return;
         const map: Record<string, string> = {};
         for (const s of data) {
-          if (!isProjectSession(s, usageDirName, usageHomeKey)) continue;
+          // Canonicalized: a PR opened from a Claude worktree belongs to the parent
+          // project, and the slug lookup above already includes those sessions.
+          const session = { ...s, projectName: canonicalizeDirName(s.projectName) };
+          if (!isProjectSession(session, usageDirName, usageHomeKey)) continue;
           for (const pr of s.prs ?? []) {
             if (pr?.repo && typeof pr.number === "number") {
               map[`${pr.repo}#${pr.number}`] = s.sessionId;
