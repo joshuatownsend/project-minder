@@ -821,8 +821,9 @@ CREATE TABLE mcp_scan_runs (
 -- ─── mcp_scan_findings ───────────────────────────────────────────────────
 -- One row per pattern match per scan run. `evidence` is a short excerpt
 -- (≤120 chars) so we can show context without logging full command lines.
--- `server_id` mirrors the construction in `mcp_servers.id`: `user:<name>`
--- for user-scope servers, `<slug>:<name>` for project-scope.
+-- `server_id` is built by `buildServerId` (src/lib/scanner/mcp-security/ids.ts):
+-- `user:<name>`, `project:<slug>:<name>`, `local:<slug>:<name>`, each component
+-- URI-encoded so the scopes cannot collide. (It no longer mirrors `mcp_servers.id`.)
 
 CREATE TABLE mcp_scan_findings (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,

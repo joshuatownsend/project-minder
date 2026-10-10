@@ -1,6 +1,6 @@
 /**
  * Shared server_id construction for MCP security scanner.
- * Mirrors mcp_servers.id convention: project scope → `project:<slug>:<name>`, local scope → `local:<slug>:<name>`,
+ * Format: project scope → `project:<slug>:<name>`, local scope → `local:<slug>:<name>`,
  * all other scopes → `user:<name>`.
  *
  * Kept in a dependency-free module so both the server-side scanner and
