@@ -604,8 +604,10 @@ export function createUsageAccumulator(period: Period) {
     // Project — grouped per (slug, home) so two homes with identical path
     // layouts (same encoded dirname → same slug) keep separable rows; the
     // /costs join disambiguates on `homeKey` (#311). Single-home setups
-    // stamp one uniform homeKey, so their row count is unchanged.
-    const projKey = `${turn.projectSlug}\u0000${turn.homeKey ?? ""}`;
+    // stamp one uniform homeKey, so their row count is unchanged. The folded
+    // dir is in the key too, as on the DB side: same-named projects on
+    // different drives or roots share a slug but not a dir (#639).
+    const projKey = `${turn.projectSlug}\u0000${foldDirName(turn.projectDirName)}\u0000${turn.homeKey ?? ""}`;
     const proj = projectMap.get(projKey) ?? {
       projectSlug: turn.projectSlug, projectDirName: turn.projectDirName,
       ...(turn.homeKey !== undefined ? { homeKey: turn.homeKey } : {}),

@@ -72,6 +72,9 @@ describe("generateUsageReport — dirName filter (file backend)", () => {
     expect((await generateUsageReport("all", "dev-foo")).totalTokens).toBe(450);
     expect((await generateUsageReport("all", "dev-foo", undefined, undefined, "C--dev-foo")).totalTokens).toBe(150);
     expect((await generateUsageReport("all", "dev-foo", undefined, undefined, "D--dev-foo")).totalTokens).toBe(300);
+    // The unscoped breakdown keeps one row per dir (drive case folded), as the DB backend does.
+    const rows = (await generateUsageReport("all")).byProject.map((p) => [foldDirName(p.projectDirName), p.tokens]);
+    expect(rows.sort()).toEqual([["c--dev-foo", 150], ["d--dev-foo", 300]]);
   });
 });
 
