@@ -24,6 +24,7 @@ import {
   writeManifest,
 } from "./manifest";
 import { atomicWriteFile, copyDirRecursive, ensureDir, fileExists } from "./atomicFs";
+import { assertContained } from "./pathSafety";
 import { templateExists } from "./registry";
 import {
   explodeHookCommands,
@@ -124,6 +125,7 @@ export async function saveAsSnapshot(
       const entry = all.find((a) => a.slug === u.key);
       if (!entry) continue;
       const sourceFile = entry.realPath ?? entry.filePath;
+      assertContained(sourceFile, sourceProject.path);
       const targetFile = path.join(bundleDir, ".claude", "agents", `${entry.slug}.md`);
       await ensureDir(path.dirname(targetFile));
       await fs.copyFile(sourceFile, targetFile);
@@ -142,9 +144,10 @@ export async function saveAsSnapshot(
         const sourceDir = path.dirname(entry.realPath ?? entry.filePath);
         const targetDir = path.join(bundleDir, ".claude", "skills", entry.slug);
         await ensureDir(path.dirname(targetDir));
-        await copyDirRecursive(sourceDir, targetDir);
+        await copyDirRecursive(sourceDir, targetDir, { containRoot: sourceProject.path });
       } else {
         const sourceFile = entry.realPath ?? entry.filePath;
+        assertContained(sourceFile, sourceProject.path);
         const targetFile = path.join(bundleDir, ".claude", "skills", `${entry.slug}.md`);
         await ensureDir(path.dirname(targetFile));
         await fs.copyFile(sourceFile, targetFile);
@@ -159,6 +162,7 @@ export async function saveAsSnapshot(
       const entry = all.find((c) => c.slug === u.key);
       if (!entry) continue;
       const sourceFile = entry.realPath ?? entry.filePath;
+      assertContained(sourceFile, sourceProject.path);
       const targetFile = path.join(bundleDir, ".claude", "commands", `${entry.slug}.md`);
       await ensureDir(path.dirname(targetFile));
       await fs.copyFile(sourceFile, targetFile);
@@ -202,6 +206,7 @@ export async function saveAsSnapshot(
     for (const scriptName of referencedScripts) {
       const from = path.join(sourceProject.path, ".claude", "hooks", scriptName);
       if (!(await fileExists(from))) continue;
+      assertContained(from, sourceProject.path);
       const to = path.join(bundleDir, ".claude", "hooks", scriptName);
       await ensureDir(path.dirname(to));
       await fs.copyFile(from, to);
@@ -315,6 +320,7 @@ export async function saveAsSnapshot(
       if (u.key.includes("..") || path.isAbsolute(u.key)) continue;
       const from = path.join(sourceProject.path, ".github", "workflows", u.key);
       if (!(await fileExists(from))) continue;
+      assertContained(from, sourceProject.path);
       const to = path.join(bundleDir, ".github", "workflows", u.key);
       await ensureDir(path.dirname(to));
       await fs.copyFile(from, to);

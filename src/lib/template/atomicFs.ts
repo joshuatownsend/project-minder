@@ -1,5 +1,6 @@
 import { promises as fs } from "fs";
 import path from "path";
+import { assertContained, assertNotLink, canonicalPath } from "./pathSafety";
 import { writeFileAtomic, withFileLock as sharedWithFileLock } from "../atomicWrite";
 
 // Re-exported under the historic name `atomicWriteFile` so the template-mode
@@ -21,9 +22,27 @@ export async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-/** Recursive copy of a directory tree. Used for bundled-skill apply. */
-export async function copyDirRecursive(src: string, dest: string): Promise<string[]> {
+/**
+ * Recursive copy of a directory tree. Used for bundled-skill apply and live-source snapshots.
+ *
+ * Symlinks are resolved and the target copied (links are never recreated), but only when the target stays
+ * inside `containRoot` (given for repository-controlled sources, #640), a directory is never entered twice
+ * (a link back to an ancestor would otherwise recurse forever), and no destination entry may itself be a
+ * link (#633).
+ */
+export async function copyDirRecursive(
+  src: string,
+  dest: string,
+  opts: { containRoot?: string; visited?: Set<string> } = {},
+): Promise<string[]> {
+  const visited = opts.visited ?? new Set<string>();
+  const here = canonicalPath(src);
+  if (visited.has(here)) return [];
+  visited.add(here);
+  if (opts.containRoot) assertContained(src, opts.containRoot);
+
   const written: string[] = [];
+  await assertNotLink(dest);
   await ensureDir(dest);
   const entries = await fs.readdir(src, { withFileTypes: true });
   for (const entry of entries) {
@@ -31,18 +50,26 @@ export async function copyDirRecursive(src: string, dest: string): Promise<strin
     const sFull = path.join(src, entry.name);
     const dFull = path.join(dest, entry.name);
     if (entry.isDirectory()) {
-      written.push(...(await copyDirRecursive(sFull, dFull)));
+      written.push(...(await copyDirRecursive(sFull, dFull, { ...opts, visited })));
     } else if (entry.isSymbolicLink()) {
-      // Resolve symlink and copy the real file (per the plan: never recreate symlinks).
+      if (opts.containRoot) {
+        try {
+          assertContained(sFull, opts.containRoot);
+        } catch {
+          continue; // points outside the source: skipped, not followed
+        }
+      }
       const real = await fs.realpath(sFull);
       const stat = await fs.stat(real);
       if (stat.isDirectory()) {
-        written.push(...(await copyDirRecursive(real, dFull)));
+        written.push(...(await copyDirRecursive(real, dFull, { ...opts, visited })));
       } else if (stat.isFile()) {
+        await assertNotLink(dFull);
         await fs.copyFile(real, dFull);
         written.push(dFull);
       }
     } else if (entry.isFile()) {
+      await assertNotLink(dFull);
       await fs.copyFile(sFull, dFull);
       written.push(dFull);
     }

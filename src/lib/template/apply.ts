@@ -182,6 +182,12 @@ function resolveSource(source: ApplySource, scan: ScanResult): ResolvedSource | 
   }
 }
 
+/** Where a source's files must stay once links are resolved. Only repository-controlled sources are bounded;
+ *  `~/.claude` is the user's own and routinely holds links to a dotfiles checkout (#640). */
+function containRoot(source: ResolvedSource): string | undefined {
+  return source.kind === "project" ? source.path : undefined;
+}
+
 function resolveTarget(target: ApplyTarget, scan: ScanResult): { path: string } | { error: { code: string; message: string } } {
   switch (target.kind) {
     case "existing": {
@@ -352,6 +358,8 @@ async function dispatchAgent(
       targetPath: targetFile,
       conflict: request.conflict,
       dryRun: request.dryRun,
+      sourceRoot: containRoot(source),
+      targetRoot: targetProjectPath,
     }));
   });
 }
@@ -374,6 +382,8 @@ async function dispatchSkill(
       targetDir,
       conflict: request.conflict,
       dryRun: request.dryRun,
+      sourceRoot: containRoot(source),
+      targetRoot: targetProjectPath,
     });
   }
   const sourceFile = entry.realPath ?? entry.filePath;
@@ -385,6 +395,8 @@ async function dispatchSkill(
       targetPath: targetFile,
       conflict: request.conflict,
       dryRun: request.dryRun,
+      sourceRoot: containRoot(source),
+      targetRoot: targetProjectPath,
     }));
   });
 }
@@ -410,6 +422,8 @@ async function dispatchCommand(
       targetPath: targetFile,
       conflict: request.conflict,
       dryRun: request.dryRun,
+      sourceRoot: containRoot(source),
+      targetRoot: targetProjectPath,
     }));
   });
 }
@@ -450,6 +464,7 @@ async function dispatchHook(
       entry,
       sourceHooksDir,
       sourceRootForRejection,
+      sourceContainRoot: containRoot(source),
       targetProjectPath,
       conflict: request.conflict,
       dryRun: request.dryRun,
