@@ -1,6 +1,6 @@
 # MCP Security Scanner
 
-Project Minder automatically scans every configured MCP server for signs of prompt injection, credential harvesting, covert exfiltration, and other threat patterns. The scan runs in the background each time you trigger a rescan, and the results appear inline on the **Config → MCP** tab.
+Project Minder automatically scans every configured MCP server — user-level, each project's committed `.mcp.json`, and your local-scope servers for each project — for signs of prompt injection, credential harvesting, covert exfiltration, and other threat patterns. The scan runs in the background each time you trigger a rescan, and the results appear inline on the **Config → MCP** tab.
 
 ## How it works
 

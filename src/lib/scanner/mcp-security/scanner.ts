@@ -28,7 +28,7 @@ function serverId(server: McpServer, projectSlug?: string): string {
 }
 
 function dbScope(server: McpServer): "user" | "project" {
-  return server.source === "project" ? "project" : "user";
+  return server.source === "project" || server.source === "local" ? "project" : "user";
 }
 
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "ash", "csh", "tcsh", "fish"]);

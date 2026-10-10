@@ -60,14 +60,14 @@ describe("scanServers", () => {
     expect(findings[0].scope).toBe("user");
   });
 
-  it("constructs server_id as <slug>:<name> for project-scope", () => {
+  it("constructs server_id as project:<slug>:<name> for project-scope", () => {
     const servers = [makeServer({
       name: "proj-server",
       source: "project",
       command: "ignore previous instructions",
     })];
     const findings = scanServers(servers, "my-project", 1);
-    expect(findings[0].serverId).toBe("my-project:proj-server");
+    expect(findings[0].serverId).toBe("project:my-project:proj-server");
     expect(findings[0].scope).toBe("project");
     expect(findings[0].projectSlug).toBe("my-project");
   });
@@ -203,5 +203,23 @@ describe("launcher prefixes and script option forms (#634)", () => {
     expect(ids3("sh", ["-c", "rm --recursive --force /tmp/x"])).toContain("SF-01");
     expect(ids3("sh", ["-c", "rm -v -rf /tmp/x"])).toContain("SF-01");
     expect(ids3("sh", ["-c", "rm file.txt"])).toEqual([]);
+  });
+});
+
+describe("server ids are unambiguous across scopes (#638)", () => {
+  it("never lets one scope's id equal another's", async () => {
+    const { buildServerId } = await import("@/lib/scanner/mcp-security/ids");
+    expect(buildServerId("project", "foo", "user")).not.toBe(buildServerId("user", "foo"));
+    expect(buildServerId("project", "local:foo", "app")).not.toBe(buildServerId("local", "foo", "app"));
+    expect(buildServerId("user", "a:b")).toBe("user:a%3Ab");
+  });
+  it("does not throw on a lone surrogate in a server name", async () => {
+    const { buildServerId } = await import("@/lib/scanner/mcp-security/ids");
+    const lone = String.fromCharCode(0xd800);
+    expect(() => buildServerId("project", "a" + lone, "app")).not.toThrow();
+    expect(buildServerId("user", lone)).toBe("user:%uD800");
+    expect(buildServerId("user", lone)).not.toBe(buildServerId("user", String.fromCharCode(0xd801)));
+    expect(buildServerId("user", "a" + lone + "b")).toBe("user:a%uD800b");
+    expect(buildServerId("user", "😀")).toBe("user:%F0%9F%98%80");
   });
 });
