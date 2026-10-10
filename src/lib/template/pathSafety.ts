@@ -52,7 +52,7 @@ export function ensureInsideDevRoots(target: string, config: MinderConfig): stri
       `Target path "${resolved}" resolves outside its devRoot through a symlink or junction.`
     );
   }
-  const canonicalMinder = path.join(canonicalRoot, ".minder");
+  const canonicalMinder = canonicalPath(path.join(owningRoot, ".minder"));
   if (canonical === canonicalMinder || isInside(canonical, canonicalMinder)) {
     throw new PathSafetyError(
       "PATH_INSIDE_MINDER",
@@ -126,4 +126,16 @@ export async function assertNotLink(dest: string): Promise<void> {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
     throw e;
   }
+}
+
+/** Project-relative locations that Template Mode reads or writes configuration through. */
+const PROJECT_CONFIG_PATHS = [".claude", ".github", ".mcp.json"];
+
+/**
+ * Throws if any configuration location of `projectPath` is a link that resolves outside the project. Every
+ * unit kind (settings, plugins, MCP, workflows, hooks, files) goes through one of these, so checking them
+ * once per apply/snapshot bounds all of them, as the per-file checks alone would not (#633, #640).
+ */
+export function assertProjectConfigContained(projectPath: string): void {
+  for (const rel of PROJECT_CONFIG_PATHS) assertContained(path.join(projectPath, rel), projectPath);
 }

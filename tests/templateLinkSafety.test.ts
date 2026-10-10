@@ -136,3 +136,20 @@ describe("source and target containment (#633, #640)", () => {
     expect(() => assertContained(path.join(root, "a", "b"), root)).not.toThrow();
   });
 });
+
+describe("project configuration locations (#633, #640)", () => {
+  it("assertProjectConfigContained refuses a .github or .claude link leaving the project", async () => {
+    const { assertProjectConfigContained } = await import("@/lib/template/pathSafety");
+    const proj = path.join(root, "p");
+    await fs.mkdir(proj);
+    expect(() => assertProjectConfigContained(proj)).not.toThrow();
+    await link(outside, path.join(proj, ".github"));
+    expect(() => assertProjectConfigContained(proj)).toThrow(PathSafetyError);
+  });
+
+  it("protects the real location of a relocated .minder directory", async () => {
+    await fs.mkdir(path.join(root, "state"));
+    await link(path.join(root, "state"), path.join(root, ".minder"));
+    expect(() => ensureInsideDevRoots(path.join(root, "state", "x"), cfg())).toThrow(/minder/i);
+  });
+});

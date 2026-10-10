@@ -32,7 +32,7 @@ import { applyMcp } from "./applyMcp";
 import { applyPlugin } from "./applyPlugin";
 import { applyWorkflow } from "./applyWorkflow";
 import { applySettings } from "./applySettings";
-import { ensureInsideDevRoots, PathSafetyError } from "./pathSafety";
+import { ensureInsideDevRoots, assertProjectConfigContained, PathSafetyError } from "./pathSafety";
 import { explodeHookCommands, findHookByKey, findMcpByKey } from "./unitKey";
 import { scanProjectPluginEnables } from "../scanner/projectPlugins";
 import { recordPreWrite, removeBackup, type BackupId } from "../configHistory";
@@ -275,6 +275,7 @@ export async function applyUnit(request: ApplyRequest): Promise<ApplyResult> {
   let safeTargetPath: string;
   try {
     safeTargetPath = ensureInsideDevRoots(targetResolved.path, config);
+    assertProjectConfigContained(safeTargetPath);
   } catch (e) {
     if (e instanceof PathSafetyError) {
       return errorResult(e.code, e.message);
@@ -290,6 +291,14 @@ export async function applyUnit(request: ApplyRequest): Promise<ApplyResult> {
   const sourceResolved = resolveSource(request.source, scan);
   if ("error" in sourceResolved) {
     return errorResult(sourceResolved.error.code, sourceResolved.error.message);
+  }
+  if (sourceResolved.kind === "project") {
+    try {
+      assertProjectConfigContained(sourceResolved.path);
+    } catch (e) {
+      if (e instanceof PathSafetyError) return errorResult(e.code, e.message);
+      throw e;
+    }
   }
 
   // Dispatch by unit kind.
