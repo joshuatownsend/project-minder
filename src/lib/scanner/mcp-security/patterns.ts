@@ -1,7 +1,7 @@
 /**
  * MCP security pattern rule registry.
  *
- * 58 explicit rules + a 30-name SUSPICIOUS_PARAM_NAMES set across 13 categories.
+ * 60 explicit rules + a 30-name SUSPICIOUS_PARAM_NAMES set across 13 categories.
  * Ported from the mcpware/cross-code-organizer MIT reference (src/security-scanner.mjs).
  *
  * Each rule: { id, category, severity, regex, message }
@@ -141,7 +141,7 @@ export const PATTERN_RULES: PatternRule[] = [
     message: "Social engineering: 'for educational purposes only' cover phrase",
   },
 
-  // ── CH: Credential Harvesting (6 rules) ────────────────────────────────────
+  // ── CH: Credential Harvesting (7 rules) ────────────────────────────────────
   {
     id: "CH-01",
     category: "CH",
@@ -359,8 +359,15 @@ export const PATTERN_RULES: PatternRule[] = [
     id: "SF-08",
     category: "SF",
     severity: "crit",
-    regex: /\b(?:powershell|pwsh)(?:\.exe)?\b.*(?:-e(?:nc(?:odedcommand)?)?\s+[A-Za-z0-9+/=]{20,}|\b(?:iex|invoke-expression)\b|downloadstring|\biwr\b|invoke-webrequest)/i,
+    regex: /\b(?:powershell|pwsh)(?:\.exe)?\b[\s\S]*(?:-e(?:c|nc(?:odedcommand)?)?\s+[A-Za-z0-9+/=]{20,}|\b(?:iex|invoke-expression)\b|downloadstring|\biwr\b|invoke-webrequest)/i,
     message: "PowerShell launch using an encoded command, Invoke-Expression or a remote download",
+  },
+  {
+    id: "SF-09",
+    category: "SF",
+    severity: "crit",
+    regex: /(?:^|[&|;(])\s*(?:del|erase|rd|rmdir)\b[^&|;]*\s\/[sq]\b/i,
+    message: "cmd.exe recursive/quiet delete (del, erase, rd, rmdir with /s or /q)",
   },
 
   // ── HK: Hook / Keylogger (3 rules) ─────────────────────────────────────────

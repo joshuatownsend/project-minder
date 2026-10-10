@@ -34,8 +34,11 @@ function dbScope(server: McpServer): "user" | "project" {
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "ash", "csh", "tcsh", "fish"]);
 const POWERSHELL = /^(?:powershell|pwsh)$/i;
 // Delimiter-based rules re-run over the extracted script text.
-const SHELL_SCRIPT_RULES: ReadonlySet<string> = new Set(["SF-01", "SF-02", "SF-03", "CI-01", "CI-02"]);
+const SHELL_SCRIPT_RULES: ReadonlySet<string> = new Set(["SF-01", "SF-02", "SF-03", "SF-09", "CI-01", "CI-02"]);
 const POWERSHELL_RULES: ReadonlySet<string> = new Set(["SF-08"]);
+const CMD_RULES: ReadonlySet<string> = new Set(["SF-09"]);
+const DIRECT_RULES: ReadonlySet<string> = new Set(["SF-01", "SF-09"]);
+const DIRECT_DESTRUCTIVE = new Set(["rm", "del", "erase", "rd", "rmdir"]);
 
 function baseName(command: string): string {
   const leaf = command.split(/[\\/]/).pop() ?? command;
@@ -53,8 +56,8 @@ export function shellScript(server: McpServer): string | null {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--" || !/^[-+]/.test(a)) return null; // first operand reached without a -c
-    if (a === "-o" || a === "+o" || a === "-O" || a === "+O") {
-      i++; // takes an option name
+    if (a === "-o" || a === "+o" || a === "-O" || a === "+O" || a === "--rcfile" || a === "--init-file") {
+      i++; // takes an option name or a file
       continue;
     }
     if (/^-[A-Za-z]*c[A-Za-z]*$/.test(a)) return args[i + 1] ?? null;
@@ -145,22 +148,41 @@ export function scanServers(
     const scope = dbScope(server);
     const surfaces = buildSurfaces(server);
 
+    const own: McpFinding[] = [];
     for (const entry of surfaces) {
-      findings.push(...scanSurface(entry.text, entry.surface, sId, scope, projectSlug, runId, nowMs));
+      own.push(...scanSurface(entry.text, entry.surface, sId, scope, projectSlug, runId, nowMs));
     }
 
-    // The stdio probe spawns the command with argv, no shell, so a destructive payload hides in the script
-    // argument of a shell wrapper (`sh -c "..."`), where the delimiter-based rules cannot see it (#634).
+    // The stdio probe spawns the command with argv, so a destructive payload hides in the script argument of
+    // a shell wrapper (`sh -c "..."`), where the delimiter-based rules cannot see it (#634).
     const script = shellScript(server);
     if (script !== null) {
       // Statements are separated by newlines as well as `;`, and the rules expect a delimiter in front.
       const text = ";" + script.replace(/\r?\n/g, ";");
-      findings.push(...scanSurface(text, "args", sId, scope, projectSlug, runId, nowMs, SHELL_SCRIPT_RULES));
+      own.push(...scanSurface(text, "args", sId, scope, projectSlug, runId, nowMs, SHELL_SCRIPT_RULES));
     }
-    // PowerShell flags are matched against the launch line, since its rule names the executable too.
-    if (server.command && server.args?.length && POWERSHELL.test(baseName(server.command))) {
-      const line = [server.command, ...server.args].join(" ");
-      findings.push(...scanSurface(line, "command", sId, scope, projectSlug, runId, nowMs, POWERSHELL_RULES));
+    if (server.command) {
+      const base = baseName(server.command).toLowerCase();
+      const line = [server.command, ...(server.args ?? [])].join(" ");
+      // PowerShell flags are matched against the launch line, since its rule names the executable too.
+      if (POWERSHELL.test(base)) {
+        own.push(...scanSurface(line, "command", sId, scope, projectSlug, runId, nowMs, POWERSHELL_RULES));
+      }
+      // On Windows the probe goes through cmd.exe, which also interprets the joined line (& | and del/rd).
+      own.push(...scanSurface(line, "command", sId, scope, projectSlug, runId, nowMs, CMD_RULES));
+      // A destructive program launched directly (`rm` with `-rf /`) has no shell wrapper to hide in.
+      if (DIRECT_DESTRUCTIVE.has(base)) {
+        own.push(...scanSurface(";" + line, "command", sId, scope, projectSlug, runId, nowMs, DIRECT_RULES));
+      }
+    }
+
+    // Overlapping passes can report the same rule on the same surface; keep one.
+    const seen = new Set<string>();
+    for (const f of own) {
+      const key = f.ruleId + "|" + f.surface;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      findings.push(f);
     }
   }
 
