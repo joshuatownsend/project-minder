@@ -38,6 +38,7 @@ import { LauncherChips } from "./LauncherChips";
 import { useWorkflowLauncherEnabled } from "./ConfigProvider";
 import { useGithubActivity } from "@/hooks/useGithubActivity";
 import type { SessionSummary } from "@/lib/types";
+import { sameHomeKey } from "@/lib/homeKey";
 import dynamic from "next/dynamic";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -177,20 +178,21 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
   useEffect(() => {
     if (!(project.claude && project.claude.sessionCount > 0)) return;
     let cancelled = false;
-    // usageSlug, not slug: /api/sessions matches `s.projectSlug` (derived from
-    // the encoded conversation dir) and falls back to a substring match on the
-    // project NAME. The route slug only ever matched via that fallback, which
-    // breaks the moment a slug is disambiguated — "bamcli".includes(
-    // "bamcli-library") is false, so a second checkout would silently show no
-    // sessions. usageSlug is built by the same encode→canonicalize→toSlug
-    // pipeline as `s.projectSlug` (and applies pathMappings, so WSL projects
-    // resolve too), making this an exact match rather than a lucky one.
-    fetch(`/api/sessions?project=${encodeURIComponent(project.usageSlug || project.slug)}`)
+    // Same key and exact filter as ProjectSessions: the encoded conversation dir
+    // (with pathMappings applied, so WSL projects resolve too), not the route slug
+    // or usageSlug. A disambiguated route slug only ever matched through the API's
+    // substring fallback, and usageSlug is shared by same-named projects on
+    // different drives or roots, which linked a PR to the other project's session
+    // (#639). The query param narrows the payload; the filter makes it exact.
+    const { usageDirName, usageHomeKey } = project;
+    const home = usageHomeKey ? `&home=${encodeURIComponent(usageHomeKey)}` : "";
+    fetch(`/api/sessions?project=${encodeURIComponent(usageDirName)}${home}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data: SessionSummary[] | null) => {
         if (cancelled || !Array.isArray(data)) return;
         const map: Record<string, string> = {};
         for (const s of data) {
+          if (s.projectName !== usageDirName || (usageHomeKey && !sameHomeKey(s.homeKey, usageHomeKey))) continue;
           for (const pr of s.prs ?? []) {
             if (pr?.repo && typeof pr.number === "number") {
               map[`${pr.repo}#${pr.number}`] = s.sessionId;
@@ -700,7 +702,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
 
           {/* ── COSTS ─────────────────────────────────────────────────── */}
           {activeTab === "costs" && (
-            <CostsTab usageSlug={project.usageSlug} usageHomeKey={project.usageHomeKey} />
+            <CostsTab usageSlug={project.usageSlug} usageDirName={project.usageDirName} usageHomeKey={project.usageHomeKey} />
           )}
 
           {/* ── TIMECARD ──────────────────────────────────────────────── */}
@@ -709,7 +711,7 @@ export function ProjectDetail({ project, onStatusChange }: ProjectDetailProps) {
               module does, so passing `project.slug` would silently match
               nothing on any project whose route slug differs. */}
           {activeTab === "timecard" && (
-            <EngagementDashboard project={project.usageSlug} home={project.usageHomeKey} />
+            <EngagementDashboard project={project.usageDirName || project.usageSlug} home={project.usageHomeKey} />
           )}
 
           {/* ── BOARD ─────────────────────────────────────────────────── */}

@@ -44,6 +44,7 @@ import type {
 } from "./types";
 
 import type { AggregatorPeriod as Period } from "./period";
+import { sameDirName } from "./dirNameFold";
 
 // `Period` here is the alias `AggregatorPeriod` from `period.ts` —
 // canonical 5-option vocabulary plus the legacy `week`/`month` aliases
@@ -56,7 +57,10 @@ export async function generateUsageReport(
   period: Period,
   project?: string,
   source?: string,
-  home?: string
+  home?: string,
+  /** Narrows `project` to one encoded conversation dir (#639): same-named projects on different
+   *  drives or roots share a slug but not a dir. */
+  dirName?: string
 ): Promise<UsageReport> {
   // Streamed, not collected (#515). The map form of this sweep held every
   // session's turns until the report was finished, and the filters below then
@@ -84,6 +88,7 @@ export async function generateUsageReport(
     async (_sessionId, sessionTurns) => {
       let turns = sessionTurns;
       if (project) turns = turns.filter((t) => t.projectSlug === project);
+      if (dirName) turns = turns.filter((t) => sameDirName(t.projectDirName, dirName));
       if (source) turns = turns.filter((t) => (t.source ?? "claude") === source);
       // Home discriminator (#311): scope the report to turns recorded by ONE
       // configured Claude home. Strict equality — a turn with no home stamp
