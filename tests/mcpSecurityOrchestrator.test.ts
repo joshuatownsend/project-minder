@@ -21,6 +21,9 @@ const projects = [
   { slug: "empty" },
 ];
 vi.mock("@/lib/mcp/scanHelper", () => ({ getCachedOrFreshScan: async () => ({ projects }) }));
+const fresh = vi.fn(async () => ({ projects }));
+vi.mock("@/lib/scanner", () => ({ scanAllProjects: () => fresh() }));
+vi.mock("@/lib/cache", () => ({ setCachedScan: () => true }));
 
 const saved: { runId: number; findings: Array<{ serverId: string; scope: string; projectSlug?: string; ruleId: string }> }[] = [];
 const runs: Array<{ serversScanned: number }> = [];
@@ -47,7 +50,7 @@ describe("runMcpSecurityScan covers project and local servers (#638)", () => {
     const summary = await runMcpSecurityScan("manual");
     const findings = saved[0].findings;
     const evil = findings.filter((f) => f.serverId === "app:evil");
-    const mine = findings.filter((f) => f.serverId === "app:mine");
+    const mine = findings.filter((f) => f.serverId === "app:local:mine");
     expect(evil.map((f) => f.ruleId)).toContain("SF-01");
     expect(mine.map((f) => f.ruleId)).toContain("SF-02");
     expect(findings.every((f) => f.serverId.startsWith("app:") || f.serverId.startsWith("user:"))).toBe(true);
@@ -60,8 +63,16 @@ describe("runMcpSecurityScan covers project and local servers (#638)", () => {
   it("does not let a local server collide with a same-named user server", async () => {
     user.mcpServers.servers.push({ name: "mine", source: "user", command: "npx", args: ["ok"], envKeys: [] });
     const findings = (await runMcpSecurityScan("manual"), saved[0].findings);
-    expect(findings.some((f) => f.serverId === "app:mine")).toBe(true);
+    expect(findings.some((f) => f.serverId === "app:local:mine")).toBe(true);
     expect(findings.some((f) => f.serverId === "user:mine")).toBe(false);
     user.mcpServers.servers.pop();
+  });
+
+  it("a manual re-run bypasses the cached scan; an automatic one uses it", async () => {
+    fresh.mockClear();
+    await runMcpSecurityScan("scan");
+    expect(fresh).not.toHaveBeenCalled();
+    await runMcpSecurityScan("manual");
+    expect(fresh).toHaveBeenCalledTimes(1);
   });
 });

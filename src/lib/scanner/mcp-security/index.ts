@@ -3,6 +3,8 @@
 import "server-only";
 import { getUserConfig } from "../../userConfigCache";
 import { getCachedOrFreshScan } from "../../mcp/scanHelper";
+import { scanAllProjects } from "../index";
+import { setCachedScan } from "../../cache";
 import { scanServers } from "./scanner";
 import {
   createScanRun,
@@ -36,7 +38,14 @@ export async function runMcpSecurityScan(
 
     // Project-scope (`.mcp.json`) and local-scope servers are not part of the user config; they come from the
     // project scan (#638).
-    const scan = await getCachedOrFreshScan();
+    // A manual re-run must see an externally edited `.mcp.json`, so it bypasses the cached project scan.
+    let scan;
+    if (trigger === "manual") {
+      scan = await scanAllProjects();
+      setCachedScan(scan);
+    } else {
+      scan = await getCachedOrFreshScan();
+    }
     const projects = scan.projects.filter((p) => (p.mcpServers?.servers.length ?? 0) > 0);
     const projectServerCount = projects.reduce((n, p) => n + (p.mcpServers?.servers.length ?? 0), 0);
 
