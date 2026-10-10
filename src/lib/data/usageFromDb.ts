@@ -41,6 +41,7 @@ import { computeToolTransitions } from "@/lib/usage/toolTransitions";
 import type { ToolTransitionsTurn } from "@/lib/usage/toolTransitions";
 import { readHomeCaseSensitivity } from "@/lib/db/homeCaseSensitivity";
 import { compareCodePoints } from "@/lib/usage/compareNames";
+import { foldDirName } from "@/lib/usage/dirNameFold";
 
 // SQL-aggregate read path for /api/usage. Builds a `UsageReport`
 // directly from `SELECT SUM(...) GROUP BY ...` queries against the
@@ -263,7 +264,21 @@ interface FilterParams {
    * NULL home_key rows (adapter sessions) don't match any home filter.
    */
   home: string | null;
+  /**
+   * Encoded conversation dir filter (#639), narrowing `project`: same-named projects on different
+   * drives or roots share a slug but not a dir. Holds `foldDirName(dirName)`, matched by DIR_FILTER;
+   * null for no narrowing.
+   */
+  dirFold: string | null;
 }
+
+/** `project_dir_name` folded the way foldDirName folds it (drive-letter encodings lowercased). */
+function foldedDirSql(column: string): string {
+  return `CASE WHEN ${column} GLOB '[A-Za-z]--*' THEN lower(${column}) ELSE ${column} END`;
+}
+const DIR_FILTER = `(@dirFold IS NULL OR ${foldedDirSql("s.project_dir_name")} = @dirFold)`;
+const DIR_FILTER_UNALIASED = `(@dirFold IS NULL OR ${foldedDirSql("project_dir_name")} = @dirFold)`;
+const DIR_FILTER_POSITIONAL = `(? IS NULL OR ${foldedDirSql("s.project_dir_name")} = ?)`;
 
 /**
  * Build a UsageReport entirely from SQL aggregates. Single read-side
@@ -292,6 +307,8 @@ export interface LoadUsageOptions {
    * when a read-only connection can't be opened.
    */
   readonlySnapshot?: boolean;
+  /** Narrow the `project` filter to one encoded conversation dir (#639); see FilterParams.dirName. */
+  dirName?: string;
 }
 
 export async function loadUsageReportFromSql(
@@ -308,6 +325,7 @@ export async function loadUsageReportFromSql(
     project: project ?? null,
     source: source ?? null,
     home: home ?? null,
+    dirFold: opts?.dirName ? foldDirName(opts.dirName) : null,
   };
 
   // See LoadUsageOptions: an isolated read-only snapshot connection when asked
@@ -518,6 +536,7 @@ function querySubagentTotals(
          AND t.is_sidechain = 1
          AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
+         AND ${DIR_FILTER}
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)`
     )
@@ -554,6 +573,7 @@ function queryTotals(db: DatabaseT.Database, f: FilterParams): TotalsRow {
        WHERE t.role = 'assistant'
          AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
+         AND ${DIR_FILTER}
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)`
     )
@@ -563,6 +583,7 @@ function queryTotals(db: DatabaseT.Database, f: FilterParams): TotalsRow {
        FROM turns t JOIN sessions s USING (session_id)
        WHERE t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
+         AND ${DIR_FILTER}
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)`
     )
@@ -582,6 +603,7 @@ function queryBySource(db: DatabaseT.Database, f: FilterParams): SourceBreakdown
        WHERE t.role = 'assistant'
          AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
+         AND ${DIR_FILTER}
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY s.source
@@ -617,6 +639,7 @@ function queryByModel(db: DatabaseT.Database, f: FilterParams): ModelCost[] {
        WHERE t.role = 'assistant'
          AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
+         AND ${DIR_FILTER}
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY t.model
@@ -657,6 +680,7 @@ function queryByProject(db: DatabaseT.Database, f: FilterParams): ProjectBreakdo
        WHERE t.role = 'assistant'
          AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
+         AND ${DIR_FILTER}
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY s.project_slug, s.project_dir_name, s.home_key
@@ -732,6 +756,7 @@ function queryByCategory(db: DatabaseT.Database, f: FilterParams): CategoryBreak
          AND t.category IS NOT NULL
          AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
+         AND ${DIR_FILTER}
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY t.category
@@ -796,6 +821,7 @@ function queryByEffort(db: DatabaseT.Database, f: FilterParams): EffortBreakdown
        WHERE t.role = 'assistant'
          AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
+         AND ${DIR_FILTER}
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY COALESCE(NULLIF(t.effort, ''), @unknownEffort)`
@@ -858,6 +884,7 @@ function queryByEntrypoint(db: DatabaseT.Database, f: FilterParams): EntrypointB
        WHERE t.role = 'assistant'
          AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
+         AND ${DIR_FILTER}
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY COALESCE(NULLIF(s.entrypoint, ''), @unknownEntrypoint)`
@@ -914,6 +941,7 @@ function queryBySkillCost(db: DatabaseT.Database, f: FilterParams): SkillCost[] 
          AND t.attribution_skill IS NOT NULL AND t.attribution_skill <> ''
          AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
+         AND ${DIR_FILTER}
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY 1`
@@ -947,6 +975,7 @@ function queryBySkillCost(db: DatabaseT.Database, f: FilterParams): SkillCost[] 
              AND tu.skill_name IS NOT NULL AND tu.skill_name <> ''
              AND t.ts >= COALESCE(@periodStart, '')
              AND (@project IS NULL OR s.project_slug = @project)
+             AND ${DIR_FILTER}
              AND (@source IS NULL OR s.source = @source)
              AND (@home IS NULL OR s.home_key = @home)
            GROUP BY 1, 2, 3
@@ -991,6 +1020,7 @@ function queryByMcpCost(db: DatabaseT.Database, f: FilterParams): McpServerCost[
          AND t.attribution_mcp_server IS NOT NULL AND t.attribution_mcp_server <> ''
          AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
+         AND ${DIR_FILTER}
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY 1, 2`
@@ -1036,6 +1066,7 @@ function queryByMcpCost(db: DatabaseT.Database, f: FilterParams): McpServerCost[
              AND tu.mcp_server IS NOT NULL AND tu.mcp_server <> ''
              AND t.ts >= COALESCE(@periodStart, '')
              AND (@project IS NULL OR s.project_slug = @project)
+             AND ${DIR_FILTER}
              AND (@source IS NULL OR s.source = @source)
              AND (@home IS NULL OR s.home_key = @home)
            GROUP BY 1, 2, 3
@@ -1092,6 +1123,7 @@ function queryDaily(db: DatabaseT.Database, f: FilterParams): DailyBucket[] {
        WHERE t.role = 'assistant'
          AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
+         AND ${DIR_FILTER}
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)`
     )
@@ -1119,6 +1151,7 @@ function queryTopTools(db: DatabaseT.Database, f: FilterParams): [string, number
        WHERE t.role = 'assistant' AND tu.tool_name NOT LIKE 'mcp__%'
          AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
+         AND ${DIR_FILTER}
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY tu.tool_name
@@ -1189,6 +1222,7 @@ function queryToolTransitions(
           AND t.is_sidechain = 0
           AND t.ts >= COALESCE(@periodStart, '')
           AND (@project IS NULL OR s.project_slug = @project)
+          AND ${DIR_FILTER}
           AND (@source IS NULL OR s.source = @source)
           AND (@home IS NULL OR s.home_key = @home)
         ORDER BY tu.session_id, tu.turn_index, tu.sequence_in_turn`
@@ -1238,6 +1272,7 @@ function queryMcpStats(db: DatabaseT.Database, f: FilterParams): McpServerStats[
        WHERE t.role = 'assistant' AND tu.mcp_server IS NOT NULL
          AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
+         AND ${DIR_FILTER}
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY tu.mcp_server, tu.mcp_tool`
@@ -1279,9 +1314,10 @@ function queryActivityTurns(
       WHERE t.role = 'assistant'
         AND t.is_sidechain = 0
         AND (@project IS NULL OR s.project_slug = @project)
+        AND ${DIR_FILTER}
         AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)`
-  ).all({ project: f.project, source: f.source, home: f.home }) as Array<{ timestamp: string; cost: number }>;
+  ).all({ project: f.project, source: f.source, home: f.home, dirFold: f.dirFold }) as Array<{ timestamp: string; cost: number }>;
   return rows;
 }
 
@@ -1298,6 +1334,7 @@ function queryShellStats(db: DatabaseT.Database, f: FilterParams) {
        WHERE t.role = 'assistant' AND tu.tool_name IN ('Bash', 'PowerShell')
          AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
+         AND ${DIR_FILTER}
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)`
     )
@@ -1320,6 +1357,7 @@ function queryOneShot(db: DatabaseT.Database, f: FilterParams) {
        FROM sessions
        WHERE (@periodStart IS NULL OR end_ts >= @periodStart)
          AND (@project IS NULL OR project_slug = @project)
+         AND ${DIR_FILTER_UNALIASED}
          AND (@source IS NULL OR source = @source)
          AND (@home IS NULL OR home_key = @home)`
     )
@@ -1363,6 +1401,7 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
        WHERE t.role = 'assistant'
          AND t.ts >= COALESCE(@periodStart, '')
          AND (@project IS NULL OR s.project_slug = @project)
+         AND ${DIR_FILTER}
          AND (@source IS NULL OR s.source = @source)
          AND (@home IS NULL OR s.home_key = @home)
        GROUP BY s.project_slug
@@ -1399,11 +1438,12 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
          AND (? IS NULL OR t.ts >= ?)
          AND (? IS NULL OR s.source = ?)
          AND (? IS NULL OR s.home_key = ?)
+         AND ${DIR_FILTER_POSITIONAL}
          AND s.project_slug IN (${placeholders})
        GROUP BY s.project_slug, t.category
        ORDER BY cost DESC, s.project_slug ASC, t.category ASC`
     )
-    .all(f.periodStart, f.periodStart, f.source, f.source, f.home, f.home, ...slugs) as Array<{
+    .all(f.periodStart, f.periodStart, f.source, f.source, f.home, f.home, f.dirFold, f.dirFold, ...slugs) as Array<{
     projectSlug: string;
     category: string;
     cost: number;
@@ -1425,13 +1465,14 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
          AND (? IS NULL OR t.ts >= ?)
          AND (? IS NULL OR s.source = ?)
          AND (? IS NULL OR s.home_key = ?)
+         AND ${DIR_FILTER_POSITIONAL}
          AND s.project_slug IN (${placeholders})
        GROUP BY s.project_slug, tu.tool_name
        -- Five rows per project are taken from this, so a tie at the cutoff
        -- decided MEMBERSHIP and not just order (#522).
        ORDER BY s.project_slug, count DESC, tu.tool_name ASC`
     )
-    .all(f.periodStart, f.periodStart, f.source, f.source, f.home, f.home, ...slugs) as Array<{
+    .all(f.periodStart, f.periodStart, f.source, f.source, f.home, f.home, f.dirFold, f.dirFold, ...slugs) as Array<{
     projectSlug: string;
     name: string;
     count: number;
@@ -1447,10 +1488,11 @@ function queryProjectDetails(db: DatabaseT.Database, f: FilterParams): ProjectDe
          AND (? IS NULL OR t.ts >= ?)
          AND (? IS NULL OR s.source = ?)
          AND (? IS NULL OR s.home_key = ?)
+         AND ${DIR_FILTER_POSITIONAL}
          AND s.project_slug IN (${placeholders})
        GROUP BY s.project_slug, tu.mcp_server`
     )
-    .all(f.periodStart, f.periodStart, f.source, f.source, f.home, f.home, ...slugs) as Array<{
+    .all(f.periodStart, f.periodStart, f.source, f.source, f.home, f.home, f.dirFold, f.dirFold, ...slugs) as Array<{
     projectSlug: string;
     server: string;
     count: number;

@@ -80,7 +80,7 @@ describe("GET /api/usage", () => {
     const res = await GET(req);
 
     expect(res.status).toBe(200);
-    expect(getUsage).toHaveBeenCalledWith("7d", "my-app", "claude", undefined);
+    expect(getUsage).toHaveBeenCalledWith("7d", "my-app", "claude", undefined, undefined);
   });
 
   it("forwards the home param (normalized) to getUsage (#311)", async () => {
@@ -93,8 +93,14 @@ describe("GET /api/usage", () => {
       "7d",
       "my-app",
       undefined,
-      "//wsl.localhost/ubuntu/home/me/.claude"
+      "//wsl.localhost/ubuntu/home/me/.claude",
+      undefined
     );
+  });
+
+  it("forwards the dirName param to getUsage (#639)", async () => {
+    await GET(makeGetRequest({ period: "7d", project: "dev-app", dirName: "D--dev-app" }));
+    expect(getUsage).toHaveBeenCalledWith("7d", "dev-app", undefined, undefined, "D--dev-app");
   });
 
   it("caches per home — two homes never share a slot (#311)", async () => {
@@ -160,7 +166,7 @@ describe("GET /api/usage", () => {
     await GET(req);
 
     // Absent param: params.get("period") is null → (null || "30d") → validatePeriod("30d") → "30d"
-    expect(getUsage).toHaveBeenCalledWith("30d", undefined, undefined, undefined);
+    expect(getUsage).toHaveBeenCalledWith("30d", undefined, undefined, undefined, undefined);
   });
 
   it("normalizes the legacy alias 'week' to '7d'", async () => {
@@ -168,7 +174,7 @@ describe("GET /api/usage", () => {
 
     await GET(req);
 
-    expect(getUsage).toHaveBeenCalledWith("7d", undefined, undefined, undefined);
+    expect(getUsage).toHaveBeenCalledWith("7d", undefined, undefined, undefined, undefined);
   });
 
   it("normalizes the legacy alias 'month' to '30d'", async () => {
@@ -176,19 +182,19 @@ describe("GET /api/usage", () => {
 
     await GET(req);
 
-    expect(getUsage).toHaveBeenCalledWith("30d", undefined, undefined, undefined);
+    expect(getUsage).toHaveBeenCalledWith("30d", undefined, undefined, undefined, undefined);
   });
 
   it("defaults an invalid period value to '30d'", async () => {
     const req = makeGetRequest({ period: "banana" });
     await GET(req);
-    expect(getUsage).toHaveBeenCalledWith("30d", undefined, undefined, undefined);
+    expect(getUsage).toHaveBeenCalledWith("30d", undefined, undefined, undefined, undefined);
   });
 
   it("treats ?period=__proto__ as invalid and defaults to '30d'", async () => {
     const req = makeGetRequest({ period: "__proto__" });
     await GET(req);
-    expect(getUsage).toHaveBeenCalledWith("30d", undefined, undefined, undefined);
+    expect(getUsage).toHaveBeenCalledWith("30d", undefined, undefined, undefined, undefined);
   });
 
   it("returns the usage report body in the response", async () => {

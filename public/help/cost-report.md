@@ -54,6 +54,10 @@ row per *(project, home)* pair, and each row joins to the scanned project from
 the distro that actually recorded it. Projects without a home mapping are
 unaffected — they keep exactly one row.
 
+### Projects with the same folder name
+
+Two projects with the same folder name on different drives or roots (`C:\dev\app` and `D:\dev\app`) are kept apart. Each one gets its own row linked to its own project, and each project's **Costs** tab, **Timecard** tab and PR-to-session links count only that project's sessions. Drive letters are compared case-insensitively, so `c:` and `C:` sessions of one project still count together.
+
 ## Per-project Costs tab
 
 Each project's detail page has a **Costs** tab (shown when the project has

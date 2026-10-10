@@ -44,6 +44,7 @@ import type {
 } from "./types";
 
 import type { AggregatorPeriod as Period } from "./period";
+import { foldDirName } from "./dirNameFold";
 
 // `Period` here is the alias `AggregatorPeriod` from `period.ts` —
 // canonical 5-option vocabulary plus the legacy `week`/`month` aliases
@@ -56,7 +57,10 @@ export async function generateUsageReport(
   period: Period,
   project?: string,
   source?: string,
-  home?: string
+  home?: string,
+  /** Narrows `project` to one encoded conversation dir (#639): same-named projects on different
+   *  drives or roots share a slug but not a dir. */
+  dirName?: string
 ): Promise<UsageReport> {
   // Streamed, not collected (#515). The map form of this sweep held every
   // session's turns until the report was finished, and the filters below then
@@ -71,6 +75,7 @@ export async function generateUsageReport(
   // "when does this developer work", which a one-day window cannot.
   const acc = createUsageAccumulator(period);
   const periodStart = getPeriodStart(period);
+  const dirKey = dirName ? foldDirName(dirName) : null;
 
   /**
    * Activity's input, kept for the whole run — but as `{ timestamp }` only,
@@ -84,6 +89,7 @@ export async function generateUsageReport(
     async (_sessionId, sessionTurns) => {
       let turns = sessionTurns;
       if (project) turns = turns.filter((t) => t.projectSlug === project);
+      if (dirKey) turns = turns.filter((t) => foldDirName(t.projectDirName) === dirKey);
       if (source) turns = turns.filter((t) => (t.source ?? "claude") === source);
       // Home discriminator (#311): scope the report to turns recorded by ONE
       // configured Claude home. Strict equality — a turn with no home stamp
@@ -598,8 +604,10 @@ export function createUsageAccumulator(period: Period) {
     // Project — grouped per (slug, home) so two homes with identical path
     // layouts (same encoded dirname → same slug) keep separable rows; the
     // /costs join disambiguates on `homeKey` (#311). Single-home setups
-    // stamp one uniform homeKey, so their row count is unchanged.
-    const projKey = `${turn.projectSlug}\u0000${turn.homeKey ?? ""}`;
+    // stamp one uniform homeKey, so their row count is unchanged. The folded
+    // dir is in the key too, as on the DB side: same-named projects on
+    // different drives or roots share a slug but not a dir (#639).
+    const projKey = `${turn.projectSlug}\u0000${foldDirName(turn.projectDirName)}\u0000${turn.homeKey ?? ""}`;
     const proj = projectMap.get(projKey) ?? {
       projectSlug: turn.projectSlug, projectDirName: turn.projectDirName,
       ...(turn.homeKey !== undefined ? { homeKey: turn.homeKey } : {}),

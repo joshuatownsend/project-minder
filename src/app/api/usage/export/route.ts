@@ -7,12 +7,13 @@ export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
   const safePeriod = validatePeriod(params.get("period") || "month");
   const project = params.get("project") || undefined;
+  const dirName = params.get("dirName") || undefined; // see /api/usage (#639)
   const format = params.get("format") || "json";
   // Claude-home discriminator (#311) — see the /api/usage route.
   const rawHome = params.get("home") || undefined;
   const home = rawHome ? normalizePathKey(rawHome) : undefined;
 
-  const report = await generateUsageReport(safePeriod, project, undefined, home);
+  const report = await generateUsageReport(safePeriod, project, undefined, home, dirName);
 
   if (format === "csv") {
     const header = "date,cost,inputTokens,outputTokens,turns";

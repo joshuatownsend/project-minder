@@ -10,6 +10,7 @@ import { formatCost, formatTokens } from "@/lib/format";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { ProjectBreakdown } from "@/lib/usage/types";
 import type { ProjectData } from "@/lib/types";
+import { foldDirName } from "@/lib/usage/dirNameFold";
 
 const DEFAULT_PERIOD = "30d";
 
@@ -35,34 +36,39 @@ export function CostReportDashboard() {
   const { data: scan } = useProjects();
   const { currency, fxRate } = useCurrency();
 
-  // Join usage rows to scanned projects by the precomputed usageSlug, so each
-  // row can link to /project/<routeSlug>?tab=costs and show the real name.
-  // Home-pinned projects (mapped WSL, #311) are ALSO keyed by
-  // `usageSlug\u0000usageHomeKey` — two distros with identical layouts share
-  // a usageSlug, and the report emits one row per (slug, home).
-  const routeByUsage = useMemo(() => {
-    const m = new Map<string, ProjectData>();
+  // Join usage rows to scanned projects so each row can link to
+  // /project/<routeSlug>?tab=costs and show the real name. By encoded
+  // conversation dir first: same-named projects on different drives or roots
+  // share a usageSlug but not a dir, and the report emits a row per dir (#639).
+  // Then by the precomputed usageSlug; home-pinned projects (mapped WSL, #311)
+  // are ALSO keyed by `usageSlug\u0000usageHomeKey` — two distros with identical
+  // layouts share a usageSlug (and a dir), and the report emits one row per
+  // (slug, home).
+  const { routeByDir, routeByUsage } = useMemo(() => {
+    const byDir = new Map<string, ProjectData>();
+    const byUsage = new Map<string, ProjectData>();
     for (const p of scan?.projects ?? []) {
-      m.set(p.usageSlug, p);
-      if (p.usageHomeKey) m.set(`${p.usageSlug}\u0000${p.usageHomeKey}`, p);
+      if (p.usageDirName) byDir.set(foldDirName(p.usageDirName), p);
+      byUsage.set(p.usageSlug, p);
+      if (p.usageHomeKey) byUsage.set(`${p.usageSlug}\u0000${p.usageHomeKey}`, p);
     }
-    return m;
+    return { routeByDir: byDir, routeByUsage: byUsage };
   }, [scan]);
 
   const rows = useMemo(() => {
     const byProject: ProjectBreakdown[] = data?.byProject ?? [];
     const q = query.trim().toLowerCase();
     const decorated = byProject.map((r) => {
-      // Composite (slug, home) match first; slug-only as fallback — but a
-      // slug-only hit on a home-PINNED project must not claim a row from a
-      // DIFFERENT home (that's the other distro's spend).
+      // Dir match first, then composite (slug, home), then slug-only — but a
+      // dir or slug-only hit on a home-PINNED project must not claim a row
+      // from a DIFFERENT home (that's the other distro's spend).
+      const otherHome = (p: ProjectData | undefined) =>
+        !!(p?.usageHomeKey && r.homeKey && p.usageHomeKey !== r.homeKey);
+      const byDir = routeByDir.get(foldDirName(r.projectDirName));
       const composite = r.homeKey ? routeByUsage.get(`${r.projectSlug}\u0000${r.homeKey}`) : undefined;
       const bySlug = routeByUsage.get(r.projectSlug);
       const routeProject =
-        composite ??
-        (bySlug?.usageHomeKey && r.homeKey && bySlug.usageHomeKey !== r.homeKey
-          ? undefined
-          : bySlug);
+        (otherHome(byDir) ? undefined : byDir) ?? composite ?? (otherHome(bySlug) ? undefined : bySlug);
       const name = routeProject?.name ?? decodeDirName(r.projectDirName);
       return { ...r, name, routeSlug: routeProject?.slug };
     });
@@ -74,7 +80,7 @@ export function CostReportDashboard() {
       if (sortKey === "name") return a.name.localeCompare(b.name) * dir;
       return (a[sortKey] - b[sortKey]) * dir;
     });
-  }, [data, routeByUsage, query, sortKey, sortAsc]);
+  }, [data, routeByDir, routeByUsage, query, sortKey, sortAsc]);
 
   const totals = useMemo(() => {
     return (data?.byProject ?? []).reduce(
@@ -197,7 +203,7 @@ export function CostReportDashboard() {
                   <span style={{ color: "var(--text-secondary)" }}>{r.name}</span>
                 );
                 return (
-                  <tr key={`${r.projectSlug}\u0000${r.homeKey ?? ""}`} style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+                  <tr key={`${r.projectDirName}\u0000${r.homeKey ?? ""}`} style={{ borderBottom: "1px solid var(--border-subtle)" }}>
                     <td style={{ padding: "7px 10px", fontFamily: "var(--font-body)" }}>{nameCell}</td>
                     <td style={{ padding: "7px 10px", textAlign: "right", color: "var(--text-primary)" }}>
                       {formatCost(r.cost, currency, fxRate)}

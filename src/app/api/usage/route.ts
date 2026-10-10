@@ -43,6 +43,9 @@ export async function GET(request: NextRequest) {
   const safePeriod = validatePeriod(params.get("period") || "30d");
   const project = params.get("project") || undefined;
   const source = params.get("source") || undefined;
+  // Narrows `project` to one encoded conversation dir (#639): projects with the same folder name on
+  // different drives or roots share a usage slug but not a dir (clients pass ProjectData.usageDirName).
+  const dirName = params.get("dirName") || undefined;
   // Claude-home discriminator (#311): scopes the report to turns recorded by
   // one configured home (clients pass ProjectData.usageHomeKey verbatim).
   // Re-normalized defensively so a hand-typed `\\wsl$\...` or mixed-case
@@ -66,7 +69,7 @@ export async function GET(request: NextRequest) {
   const homesSig = JSON.stringify([cfg.claudeHomes ?? [], cfg.pathMappings ?? []]);
   // `home` must be part of the key: two different `?home=` requests within
   // the 2-min TTL would otherwise collide on one slot.
-  const cacheKey = `${demo}${requestedBackend}:${safePeriod}:${project || "all"}:${source || "all"}:${home || "all"}:${homesSig}`;
+  const cacheKey = `${demo}${requestedBackend}:${safePeriod}:${project || "all"}:${dirName || "all"}:${source || "all"}:${home || "all"}:${homesSig}`;
   const cached = cache.get(cacheKey);
 
   let slot: UsageCacheSlot;
@@ -82,7 +85,7 @@ export async function GET(request: NextRequest) {
     // promise per key means the second awaits the first and gets its slot.
     // Distinct keys are unaffected and the gate still bounds how many run.
     slot = await inflightUsage.run(cacheKey, async () => {
-      const { report, meta } = await getUsage(safePeriod, project, source, home);
+      const { report, meta } = await getUsage(safePeriod, project, source, home, dirName);
       const built: UsageCacheSlot = {
         report,
         cachedAt: Date.now(),
@@ -122,6 +125,7 @@ export async function GET(request: NextRequest) {
     parts: [
       safePeriod,
       project ?? "",
+      dirName ?? "",
       source ?? "",
       home ?? "",
       homesSig,

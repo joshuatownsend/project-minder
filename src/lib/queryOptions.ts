@@ -173,14 +173,17 @@ export function statsQuery() {
 /**
  * Token usage report for a period, optionally scoped to one project.
  * `home` (ProjectData.usageHomeKey) disambiguates two Claude homes whose
- * identical path layouts share a usage slug (#311).
+ * identical path layouts share a usage slug (#311); `dirName`
+ * (ProjectData.usageDirName) disambiguates same-named projects on different
+ * drives or roots, which share a usage slug too (#639).
  */
-export function usageQuery(period: string, project?: string, home?: string) {
+export function usageQuery(period: string, project?: string, home?: string, dirName?: string) {
   return queryOptions({
-    queryKey: queryKeys.usage(period, project, home),
+    queryKey: queryKeys.usage(period, project, home, dirName),
     queryFn: async ({ signal }): Promise<UsageReport> => {
       const params = new URLSearchParams({ period });
       if (project) params.set("project", project);
+      if (dirName) params.set("dirName", dirName);
       if (home) params.set("home", home);
       const res = await fetch(`/api/usage?${params}`, { signal });
       if (!res.ok) throw new Error(`Failed to load usage: ${res.status}`);
