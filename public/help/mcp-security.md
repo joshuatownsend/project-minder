@@ -24,6 +24,10 @@ There are 61 pattern rules across 13 threat categories:
 | Sandbox Circumvention | SC | Sandbox bypass phrases |
 | Cross-server Lateral | XR | References to calling another MCP server's tool |
 
+## What it does not catch
+
+This is a pattern scanner, not a sandbox. It reads shell `-c` scripts, looks through common launchers (`env`, `sudo`, `nohup`, …), and checks the joined Windows launch line, but it cannot enumerate every way of spelling a command: unusual launcher options, option operands, indirect invocation through other programs, or generated scripts can scan clean. Treat a clean result as "no known-bad patterns", and review any server you did not write before enabling it.
+
 ## Severity levels
 
 | Severity | Meaning |
