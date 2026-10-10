@@ -88,4 +88,6 @@ Which of those you would rather have depends on how much of your history lives i
 
 Starting the distro and reloading is all it takes. Minder will not start one for you: doing so is exactly the auto-wake the never-wake rule exists to prevent.
 
+**The same session in two homes.** A session id names one session in the index. If the same transcript file appears in two Claude homes (a copied `~/.claude`, or a `.jsonl` copied between projects), the index keeps the copy it read first and skips the other, logging one warning per pair. It no longer swaps between them on every sweep. If the copy it kept is deleted, the other copy is indexed on the following sweep.
+
 The raw answer is available at `GET /api/claude-homes` (`readable`, `unavailable`, `complete`), and every response carries an `X-Minder-Homes-Unavailable` count header.
