@@ -54,7 +54,8 @@ From the template detail page, click **apply…** to open the apply modal:
 
 Every safety property of the single-unit apply layer applies to template apply too:
 
-- **Path safety** — every target path (existing or freshly bootstrapped) is resolved into one of the configured dev roots; `<root>/.minder/` is reserved.
+- **Path safety** — every target path (existing or freshly bootstrapped) is resolved into one of the configured dev roots; `<root>/.minder/` is reserved. The check follows symlinks and junctions in every parent folder, so a link cannot redirect a write elsewhere, and the same goes for the project's `.claude`, `.github` and `.mcp.json`.
+- **Link safety** — a source file or folder inside a project that resolves (through a link) to somewhere outside that project is refused, a destination that is itself a link is refused, and links inside a copied skill folder that point outside it are skipped (and not listed as installed). Your own `~/.claude` is not bounded this way, so a dotfiles-managed setup keeps working.
 - **Hook idempotency** — `event + matcher + sha256(invocation)` keys mean re-applying a template never duplicates hooks.
 - **`local`-scope promotion** — hooks sourced from `settings.local.json` write to project-shared `settings.json` at the target with a warning.
 - **MCP env-keys-only** — env values are never copied. The target's `.mcp.json` receives empty-string placeholders for every env key.

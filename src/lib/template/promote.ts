@@ -24,6 +24,8 @@ import {
   writeManifest,
 } from "./manifest";
 import { atomicWriteFile, copyDirRecursive, ensureDir, fileExists } from "./atomicFs";
+import { getDevRoots } from "../config";
+import { assertContained, assertNoLinkComponents, assertProjectConfigContained, PathSafetyError } from "./pathSafety";
 import { templateExists } from "./registry";
 import {
   explodeHookCommands,
@@ -51,6 +53,12 @@ export async function createLiveTemplate(
 ): Promise<{ manifest: TemplateManifest } | { error: { code: string; message: string } }> {
   if (!isValidSlug(args.slug)) {
     return { error: { code: "INVALID_SLUG", message: `"${args.slug}" is not a valid template slug.` } };
+  }
+  try {
+    await assertTemplateStoreSafe(config, args.slug);
+  } catch (e) {
+    if (e instanceof PathSafetyError) return { error: { code: e.code, message: e.message } };
+    throw e;
   }
   if (await templateExists(config, args.slug)) {
     return { error: { code: "SLUG_TAKEN", message: `Template "${args.slug}" already exists.` } };
@@ -83,6 +91,43 @@ export async function createLiveTemplate(
  *  with empty-string env-key placeholders (never values — read-side invariant).
  */
 export async function saveAsSnapshot(
+  config: MinderConfig,
+  scan: ScanResult,
+  slug: string,
+  liveManifest: TemplateManifest
+): Promise<{ manifest: TemplateManifest } | { error: { code: string; message: string } }> {
+  const src = scan.projects.find((p) => p.slug === liveManifest.liveSourceSlug);
+  try {
+    if (src) assertProjectConfigContained(src.path);
+    // The snapshot destination is recursively deleted and rewritten: it must not be, or sit under, a link.
+    await assertTemplateStoreSafe(config, slug);
+  } catch (e) {
+    if (e instanceof PathSafetyError) return { error: { code: e.code, message: e.message } };
+    throw e;
+  }
+  try {
+    return await saveAsSnapshotUnchecked(config, scan, slug, liveManifest);
+  } catch (e) {
+    if (!(e instanceof PathSafetyError)) throw e;
+    // A link found mid-copy leaves a partial bundle behind; remove it rather than keep a truncated snapshot.
+    await fs.rm(bundleDirForSlug(config, slug), { recursive: true, force: true });
+    return { error: { code: e.code, message: e.message } };
+  }
+}
+
+/**
+ * Template-store mutations (create, snapshot, delete) write or recursively remove under
+ * `.minder/templates/<slug>`. Anchored at the dev root rather than at `templates/`, and no component may be
+ * a link, so a linked `.minder` or `templates` cannot redirect them (#633).
+ */
+async function assertTemplateStoreSafe(config: MinderConfig, slug: string): Promise<void> {
+  const root = getDevRoots(config)[0];
+  const dir = templateDirForSlug(config, slug);
+  assertContained(dir, root);
+  await assertNoLinkComponents(dir, root);
+}
+
+async function saveAsSnapshotUnchecked(
   config: MinderConfig,
   scan: ScanResult,
   slug: string,
@@ -124,6 +169,7 @@ export async function saveAsSnapshot(
       const entry = all.find((a) => a.slug === u.key);
       if (!entry) continue;
       const sourceFile = entry.realPath ?? entry.filePath;
+      assertContained(sourceFile, sourceProject.path);
       const targetFile = path.join(bundleDir, ".claude", "agents", `${entry.slug}.md`);
       await ensureDir(path.dirname(targetFile));
       await fs.copyFile(sourceFile, targetFile);
@@ -142,9 +188,10 @@ export async function saveAsSnapshot(
         const sourceDir = path.dirname(entry.realPath ?? entry.filePath);
         const targetDir = path.join(bundleDir, ".claude", "skills", entry.slug);
         await ensureDir(path.dirname(targetDir));
-        await copyDirRecursive(sourceDir, targetDir);
+        await copyDirRecursive(sourceDir, targetDir, { containRoot: sourceProject.path });
       } else {
         const sourceFile = entry.realPath ?? entry.filePath;
+        assertContained(sourceFile, sourceProject.path);
         const targetFile = path.join(bundleDir, ".claude", "skills", `${entry.slug}.md`);
         await ensureDir(path.dirname(targetFile));
         await fs.copyFile(sourceFile, targetFile);
@@ -159,6 +206,7 @@ export async function saveAsSnapshot(
       const entry = all.find((c) => c.slug === u.key);
       if (!entry) continue;
       const sourceFile = entry.realPath ?? entry.filePath;
+      assertContained(sourceFile, sourceProject.path);
       const targetFile = path.join(bundleDir, ".claude", "commands", `${entry.slug}.md`);
       await ensureDir(path.dirname(targetFile));
       await fs.copyFile(sourceFile, targetFile);
@@ -202,6 +250,7 @@ export async function saveAsSnapshot(
     for (const scriptName of referencedScripts) {
       const from = path.join(sourceProject.path, ".claude", "hooks", scriptName);
       if (!(await fileExists(from))) continue;
+      assertContained(from, sourceProject.path);
       const to = path.join(bundleDir, ".claude", "hooks", scriptName);
       await ensureDir(path.dirname(to));
       await fs.copyFile(from, to);
@@ -315,6 +364,7 @@ export async function saveAsSnapshot(
       if (u.key.includes("..") || path.isAbsolute(u.key)) continue;
       const from = path.join(sourceProject.path, ".github", "workflows", u.key);
       if (!(await fileExists(from))) continue;
+      assertContained(from, sourceProject.path);
       const to = path.join(bundleDir, ".github", "workflows", u.key);
       await ensureDir(path.dirname(to));
       await fs.copyFile(from, to);
@@ -358,6 +408,7 @@ export async function saveAsSnapshot(
 
 export async function deleteTemplate(config: MinderConfig, slug: string): Promise<void> {
   const dir = templateDirForSlug(config, slug);
+  await assertTemplateStoreSafe(config, slug);
   await fs.rm(dir, { recursive: true, force: true });
 }
 

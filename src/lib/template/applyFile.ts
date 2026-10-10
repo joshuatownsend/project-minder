@@ -11,6 +11,7 @@ import {
   fileExists,
   previewFileWrite,
 } from "./atomicFs";
+import { PathSafetyError, assertContained, assertNotLink, canonicalPath } from "./pathSafety";
 
 /**
  * Copy a single `.md` file (agent / skill standalone / command) from
@@ -19,15 +20,29 @@ import {
  * `sourcePath` MUST be the indexer's resolved real path — symlinks have
  * already been followed by the walker. Output is always a plain file
  * (we never recreate symlinks at the destination).
+ *
+ * `sourceRoot` (repository-controlled sources) and `targetRoot` bound where the file may be read from and
+ * written to once symlinks and junctions are resolved (#633, #640).
  */
 export async function applySingleFile(args: {
   sourcePath: string;
   targetPath: string;
   conflict: ConflictPolicy;
   dryRun?: boolean;
+  sourceRoot?: string;
+  targetRoot?: string;
 }): Promise<ApplyResult> {
   const { sourcePath, conflict, dryRun } = args;
   let { targetPath } = args;
+
+  try {
+    if (args.sourceRoot) assertContained(sourcePath, args.sourceRoot);
+    if (args.targetRoot) assertContained(targetPath, args.targetRoot);
+    await assertNotLink(targetPath);
+  } catch (e) {
+    if (e instanceof PathSafetyError) return errorResult(e.code, e.message);
+    throw e;
+  }
 
   let content: string;
   try {
@@ -81,9 +96,25 @@ export async function applyDirectory(args: {
   targetDir: string;
   conflict: ConflictPolicy;
   dryRun?: boolean;
+  sourceRoot?: string;
+  targetRoot?: string;
 }): Promise<ApplyResult> {
   const { sourceDir, conflict, dryRun } = args;
   let { targetDir } = args;
+
+  try {
+    if (args.sourceRoot) {
+      assertContained(sourceDir, args.sourceRoot);
+      // A skill defined by a SKILL.md that links out of the project would otherwise be copied without it.
+      const manifest = path.join(sourceDir, "SKILL.md");
+      if (await fileExists(manifest)) assertContained(manifest, args.sourceRoot);
+    }
+    if (args.targetRoot) assertContained(targetDir, args.targetRoot);
+    await assertNotLink(targetDir);
+  } catch (e) {
+    if (e instanceof PathSafetyError) return errorResult(e.code, e.message);
+    throw e;
+  }
 
   const exists = await fileExists(targetDir);
 
@@ -110,7 +141,7 @@ export async function applyDirectory(args: {
   const rootName = path.basename(sourceDir);
 
   if (dryRun) {
-    const { files, totalBytes } = await listDirFiles(sourceDir);
+    const { files, totalBytes } = await listDirFiles(sourceDir, args.sourceRoot);
     const shown = files.slice(0, 12);
     const more = files.length - shown.length;
     const action = willRemoveExisting
@@ -135,8 +166,8 @@ export async function applyDirectory(args: {
   if (willRemoveExisting) {
     await fs.rm(targetDir, { recursive: true, force: true });
   }
-  const written = await copyDirRecursive(sourceDir, targetDir);
-  const { files: writtenRelPaths } = await listDirFiles(sourceDir);
+  const written = await copyDirRecursive(sourceDir, targetDir, { containRoot: args.sourceRoot });
+  const { files: writtenRelPaths } = await listDirFiles(sourceDir, args.sourceRoot);
   return {
     ok: true,
     status: "applied",
@@ -145,26 +176,47 @@ export async function applyDirectory(args: {
   };
 }
 
-/** Walk `dir` and return every file path relative to it (sorted) plus total byte count. */
-async function listDirFiles(dir: string): Promise<{ files: string[]; totalBytes: number }> {
+/**
+ * Walk `dir` and return every file path relative to it (sorted) plus total byte count. Mirrors
+ * copyDirRecursive: a link leaving `containRoot` is skipped, a link to a directory is walked (unless it
+ * loops back to a directory being walked), so the report matches what was actually copied.
+ */
+async function listDirFiles(dir: string, containRoot?: string): Promise<{ files: string[]; totalBytes: number }> {
   const out: string[] = [];
   let totalBytes = 0;
+  const ancestors = new Set<string>();
   async function walk(curr: string, rel: string): Promise<void> {
-    const entries = await fs.readdir(curr, { withFileTypes: true });
-    for (const e of entries) {
-      if (e.name.startsWith(".")) continue;
-      const childRel = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDirectory()) {
-        await walk(path.join(curr, e.name), childRel);
-      } else if (e.isFile() || e.isSymbolicLink()) {
-        out.push(childRel);
-        try {
-          const stat = await fs.stat(path.join(curr, e.name));
-          totalBytes += stat.size;
-        } catch {
-          // stat failure — skip size contribution
+    const here = canonicalPath(curr);
+    if (ancestors.has(here)) return;
+    ancestors.add(here);
+    try {
+      const entries = await fs.readdir(curr, { withFileTypes: true });
+      for (const e of entries) {
+        if (e.name.startsWith(".")) continue;
+        const full = path.join(curr, e.name);
+        const childRel = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isSymbolicLink() && containRoot) {
+          try {
+            assertContained(full, containRoot);
+          } catch {
+            continue;
+          }
+        }
+        let isDir = e.isDirectory();
+        if (e.isSymbolicLink()) isDir = await fs.stat(full).then((st) => st.isDirectory(), () => false);
+        if (isDir) {
+          await walk(full, childRel);
+        } else if (e.isFile() || e.isSymbolicLink()) {
+          out.push(childRel);
+          try {
+            totalBytes += (await fs.stat(full)).size;
+          } catch {
+            // stat failure — skip size contribution
+          }
         }
       }
+    } finally {
+      ancestors.delete(here);
     }
   }
   try {
