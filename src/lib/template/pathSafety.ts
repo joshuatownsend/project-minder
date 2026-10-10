@@ -45,15 +45,15 @@ export function ensureInsideDevRoots(target: string, config: MinderConfig): stri
   // The check above is lexical. A symlink or junction in any parent would let the write land elsewhere,
   // so the same two tests are repeated on the canonical locations (#633).
   const canonical = canonicalPath(resolved);
-  const canonicalRoot = canonicalPath(owningRoot);
-  if (!isInside(canonical, canonicalRoot)) {
+  const canonicalRoots = roots.map((r) => canonicalPath(r));
+  if (!canonicalRoots.some((r) => isInside(canonical, r))) {
     throw new PathSafetyError(
       "PATH_OUTSIDE_DEV_ROOTS",
-      `Target path "${resolved}" resolves outside its devRoot through a symlink or junction.`
+      `Target path "${resolved}" resolves outside every configured devRoot through a symlink or junction.`
     );
   }
-  const canonicalMinder = canonicalPath(path.join(owningRoot, ".minder"));
-  if (canonical === canonicalMinder || isInside(canonical, canonicalMinder)) {
+  const reserved = roots.map((r) => canonicalPath(path.join(r, ".minder")));
+  if (reserved.some((m) => canonical === m || isInside(canonical, m))) {
     throw new PathSafetyError(
       "PATH_INSIDE_MINDER",
       `Target path "${resolved}" resolves inside Minder's reserved .minder directory.`

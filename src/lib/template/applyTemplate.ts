@@ -1,3 +1,4 @@
+import { PathSafetyError, assertContained, assertNotLink } from "./pathSafety";
 import {
   ApplyRequest,
   ApplyResult,
@@ -7,7 +8,7 @@ import {
   ConflictPolicy,
   TemplateUnitRef,
 } from "../types";
-import { readConfig } from "../config";
+import { getDevRoots, readConfig } from "../config";
 import { getCachedScan, setCachedScan, invalidateCache as invalidateScanCache } from "../cache";
 import { scanAllProjects } from "../scanner";
 import { invalidateCatalogCache } from "../indexer/catalog";
@@ -46,6 +47,16 @@ export async function applyTemplate(req: ApplyTemplateRequest): Promise<ApplyTem
     return errorAggregate(sourceResolved.error.code, sourceResolved.error.message);
   }
   const sourcePath = sourceResolved.path;
+  if (manifest.kind === "snapshot") {
+    // The bundle is trusted as a source root; a link in its place (or in the templates path) would relocate it.
+    try {
+      assertContained(sourcePath, getDevRoots(config)[0]);
+      await assertNotLink(sourcePath);
+    } catch (e) {
+      if (e instanceof PathSafetyError) return errorAggregate(e.code, e.message);
+      throw e;
+    }
+  }
 
   // 3. Resolve / bootstrap target. Bootstrap turns a "new" target into a
   //    "path" target so the inner applyUnit calls don't have to think about

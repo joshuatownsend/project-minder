@@ -245,4 +245,13 @@ describe("snapshot destination and cycle reporting (#633, #640)", () => {
     expect("error" in r).toBe(true);
     expect(await fs.readFile(path.join(outside, "ok", "bundle", "keep.txt"), "utf-8")).toBe("keep");
   });
+
+  it("accepts a link from one configured root into another, but not one that leaves them all", async () => {
+    const second = path.join(tmp, "second");
+    await fs.mkdir(path.join(second, "p"), { recursive: true });
+    await link(path.join(second, "p"), path.join(root, "team-link"));
+    const two: MinderConfig = { ...cfg(), devRoots: [root, second] };
+    expect(() => ensureInsideDevRoots(path.join(root, "team-link", "new"), two)).not.toThrow();
+    expect(() => ensureInsideDevRoots(path.join(root, "team-link", "new"), cfg())).toThrow(PathSafetyError);
+  });
 });
