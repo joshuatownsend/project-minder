@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
+- Template Mode no longer follows symlinks or junctions out of the folders it is meant to stay in. The dev-root check now resolves links in every parent of a write target, applies and snapshots refuse a source file or directory that resolves outside the source project, copies never write onto an existing link, links that point outside the source are skipped (and not reported as installed) when a skill folder is copied, a link loop is refused instead of failing the request, and a link back to an ancestor no longer recurses (#633, #640).
 - On Windows a task's prompt (taken from TODO/BOARD text) is now sent to `claude` on stdin instead of on the `cmd.exe` command line, where shell metacharacters in it would have been interpreted (#632). A stream-mode task on Windows can therefore no longer receive human-in-the-loop answers after it starts; delivering one now returns 409. A task whose model or skill name is longer than 200 characters, does not start with a letter or digit, or contains anything beyond letters, digits and `. _ : @ / - [ ]` fails before it is spawned.
 
 ## [1.16.9] - 2026-10-09

@@ -1,3 +1,4 @@
+import { promises as fs, realpathSync } from "fs";
 import path from "path";
 import { MinderConfig } from "../types";
 import { getDevRoots } from "../config";
@@ -41,6 +42,24 @@ export function ensureInsideDevRoots(target: string, config: MinderConfig): stri
     );
   }
 
+  // The check above is lexical. A symlink or junction in any parent would let the write land elsewhere,
+  // so the same two tests are repeated on the canonical locations (#633).
+  const canonical = canonicalPath(resolved);
+  const canonicalRoots = roots.map((r) => canonicalPath(r));
+  if (!canonicalRoots.some((r) => isInside(canonical, r))) {
+    throw new PathSafetyError(
+      "PATH_OUTSIDE_DEV_ROOTS",
+      `Target path "${resolved}" resolves outside every configured devRoot through a symlink or junction.`
+    );
+  }
+  const reserved = roots.map((r) => canonicalPath(path.join(r, ".minder")));
+  if (reserved.some((m) => canonical === m || isInside(canonical, m))) {
+    throw new PathSafetyError(
+      "PATH_INSIDE_MINDER",
+      `Target path "${resolved}" resolves inside Minder's reserved .minder directory.`
+    );
+  }
+
   return resolved;
 }
 
@@ -61,4 +80,88 @@ export function isInside(child: string, parent: string): boolean {
   if (rel === ".." || rel.startsWith(".." + path.sep)) return false;
   if (path.isAbsolute(rel)) return false;
   return true;
+}
+
+/**
+ * Canonical form of `p` that tolerates a path that does not exist yet: the deepest existing ancestor is
+ * resolved through every symlink/junction and the not-yet-created remainder is appended. A lexical
+ * `path.resolve` check cannot see a link in a parent directory, so a write that passes it can still land
+ * anywhere (#633).
+ */
+export function canonicalPath(p: string): string {
+  const resolved = path.resolve(p);
+  const rest: string[] = [];
+  let cur = resolved;
+  for (;;) {
+    try {
+      return path.join(realpathSync.native(cur), ...rest.reverse());
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code === "ELOOP") {
+        throw new PathSafetyError("PATH_LINK_LOOP", `"${resolved}" passes through a symlink or junction loop.`);
+      }
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw e;
+      const parent = path.dirname(cur);
+      if (parent === cur) return resolved;
+      rest.push(path.basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+/** Throws unless `file` resolves, through every link, to a location inside `root` (#640). */
+export function assertContained(file: string, root: string): void {
+  if (!isInside(canonicalPath(file), canonicalPath(root))) {
+    throw new PathSafetyError(
+      "SOURCE_ESCAPES_ROOT",
+      `"${file}" resolves outside "${root}" through a symlink or junction; refusing to copy it.`,
+    );
+  }
+}
+
+/** Throws if `dest` is itself a symlink/junction: a copy onto it would write through to wherever it points (#633). */
+export async function assertNotLink(dest: string): Promise<void> {
+  try {
+    if ((await fs.lstat(dest)).isSymbolicLink()) {
+      throw new PathSafetyError("DESTINATION_IS_LINK", `Destination "${dest}" is a symlink or junction; refusing to write through it.`);
+    }
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw e;
+  }
+}
+
+/** Project-relative locations that Template Mode reads or writes configuration through. */
+const PROJECT_CONFIG_PATHS = [
+  ".claude",
+  ".github",
+  ".mcp.json",
+  path.join(".claude", "settings.json"),
+  path.join(".claude", "settings.local.json"),
+  path.join(".claude", "hooks"),
+  path.join(".github", "workflows"),
+];
+
+/**
+ * Throws if any configuration location of `projectPath` is a link that resolves outside the project. Every
+ * unit kind (settings, plugins, MCP, workflows, hooks, files) goes through one of these, so checking them
+ * once per apply/snapshot bounds all of them (individual files are re-checked where they are read) (#633, #640).
+ */
+export function assertProjectConfigContained(projectPath: string): void {
+  for (const rel of PROJECT_CONFIG_PATHS) assertContained(path.join(projectPath, rel), projectPath);
+}
+
+/** Throws if any existing component of `target` below `root` is a symlink/junction, even one that stays inside `root`. */
+export async function assertNoLinkComponents(target: string, root: string): Promise<void> {
+  const rel = path.relative(path.resolve(root), path.resolve(target));
+  let cur = path.resolve(root);
+  for (const part of rel.split(path.sep).filter(Boolean)) {
+    cur = path.join(cur, part);
+    await assertNotLink(cur);
+  }
+}
+
+/** The target project's configuration locations are written through; none of them may be a link, in or out of the project. */
+export async function assertTargetConfigNotLinked(projectPath: string): Promise<void> {
+  for (const rel of PROJECT_CONFIG_PATHS) await assertNotLink(path.join(projectPath, rel));
 }

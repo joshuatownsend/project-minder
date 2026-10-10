@@ -32,7 +32,7 @@ import { applyMcp } from "./applyMcp";
 import { applyPlugin } from "./applyPlugin";
 import { applyWorkflow } from "./applyWorkflow";
 import { applySettings } from "./applySettings";
-import { ensureInsideDevRoots, PathSafetyError } from "./pathSafety";
+import { ensureInsideDevRoots, assertProjectConfigContained, assertTargetConfigNotLinked, PathSafetyError } from "./pathSafety";
 import { explodeHookCommands, findHookByKey, findMcpByKey } from "./unitKey";
 import { scanProjectPluginEnables } from "../scanner/projectPlugins";
 import { recordPreWrite, removeBackup, type BackupId } from "../configHistory";
@@ -182,6 +182,12 @@ function resolveSource(source: ApplySource, scan: ScanResult): ResolvedSource | 
   }
 }
 
+/** Where a source's files must stay once links are resolved. Only repository-controlled sources are bounded;
+ *  `~/.claude` is the user's own and routinely holds links to a dotfiles checkout (#640). */
+function containRoot(source: ResolvedSource): string | undefined {
+  return source.kind === "project" ? source.path : undefined;
+}
+
 function resolveTarget(target: ApplyTarget, scan: ScanResult): { path: string } | { error: { code: string; message: string } } {
   switch (target.kind) {
     case "existing": {
@@ -269,6 +275,8 @@ export async function applyUnit(request: ApplyRequest): Promise<ApplyResult> {
   let safeTargetPath: string;
   try {
     safeTargetPath = ensureInsideDevRoots(targetResolved.path, config);
+    assertProjectConfigContained(safeTargetPath);
+    await assertTargetConfigNotLinked(safeTargetPath);
   } catch (e) {
     if (e instanceof PathSafetyError) {
       return errorResult(e.code, e.message);
@@ -284,6 +292,14 @@ export async function applyUnit(request: ApplyRequest): Promise<ApplyResult> {
   const sourceResolved = resolveSource(request.source, scan);
   if ("error" in sourceResolved) {
     return errorResult(sourceResolved.error.code, sourceResolved.error.message);
+  }
+  if (sourceResolved.kind === "project") {
+    try {
+      assertProjectConfigContained(sourceResolved.path);
+    } catch (e) {
+      if (e instanceof PathSafetyError) return errorResult(e.code, e.message);
+      throw e;
+    }
   }
 
   // Dispatch by unit kind.
@@ -352,6 +368,8 @@ async function dispatchAgent(
       targetPath: targetFile,
       conflict: request.conflict,
       dryRun: request.dryRun,
+      sourceRoot: containRoot(source),
+      targetRoot: targetProjectPath,
     }));
   });
 }
@@ -374,6 +392,8 @@ async function dispatchSkill(
       targetDir,
       conflict: request.conflict,
       dryRun: request.dryRun,
+      sourceRoot: containRoot(source),
+      targetRoot: targetProjectPath,
     });
   }
   const sourceFile = entry.realPath ?? entry.filePath;
@@ -385,6 +405,8 @@ async function dispatchSkill(
       targetPath: targetFile,
       conflict: request.conflict,
       dryRun: request.dryRun,
+      sourceRoot: containRoot(source),
+      targetRoot: targetProjectPath,
     }));
   });
 }
@@ -410,6 +432,8 @@ async function dispatchCommand(
       targetPath: targetFile,
       conflict: request.conflict,
       dryRun: request.dryRun,
+      sourceRoot: containRoot(source),
+      targetRoot: targetProjectPath,
     }));
   });
 }
@@ -450,6 +474,7 @@ async function dispatchHook(
       entry,
       sourceHooksDir,
       sourceRootForRejection,
+      sourceContainRoot: containRoot(source),
       targetProjectPath,
       conflict: request.conflict,
       dryRun: request.dryRun,

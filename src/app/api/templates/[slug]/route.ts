@@ -5,6 +5,7 @@ import { getCachedScan, setCachedScan } from "@/lib/cache";
 import { scanAllProjects } from "@/lib/scanner";
 import { isValidSlug, readManifest } from "@/lib/template/manifest";
 import { deleteTemplate, saveAsSnapshot } from "@/lib/template/promote";
+import { PathSafetyError } from "@/lib/template/pathSafety";
 
 function invalidSlug() {
   return NextResponse.json(
@@ -41,7 +42,12 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ slug: s
   const { slug } = await ctx.params;
   if (!isValidSlug(slug)) return invalidSlug();
   const config = await readConfig();
-  await deleteTemplate(config, slug);
+  try {
+    await deleteTemplate(config, slug);
+  } catch (e) {
+    if (e instanceof PathSafetyError) return NextResponse.json({ error: e.message, code: e.code }, { status: 409 });
+    throw e;
+  }
   return NextResponse.json({ ok: true });
 }
 

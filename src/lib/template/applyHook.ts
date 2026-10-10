@@ -13,6 +13,7 @@ import {
   withFileLock,
 } from "./atomicFs";
 import { makeHookKey } from "./unitKey";
+import { PathSafetyError, assertContained, assertNotLink } from "./pathSafety";
 
 interface ApplyHookArgs {
   /** Single-command HookEntry (callers pre-explode multi-command entries). */
@@ -25,6 +26,9 @@ interface ApplyHookArgs {
    *  rejects any reference into the source project, not just into `.claude/`,
    *  which is why this is a separate param from `sourceHooksDir`. */
   sourceRootForRejection: string;
+  /** When set, hook scripts must resolve (through links) to somewhere inside this root. Given for
+   *  repository-controlled sources; omitted for the user's own `~/.claude`. */
+  sourceContainRoot?: string;
   targetProjectPath: string;
   conflict: ConflictPolicy;
   dryRun?: boolean;
@@ -66,6 +70,14 @@ export async function applyHook(args: ApplyHookArgs): Promise<ApplyResult> {
     return errorResult("PROJECT_PATH_IN_SOURCE", projPathCheck);
   }
 
+  try {
+    assertContained(targetSettingsPath, targetProjectPath);
+    await assertNotLink(targetSettingsPath);
+  } catch (e) {
+    if (e instanceof PathSafetyError) return errorResult(e.code, e.message);
+    throw e;
+  }
+
   // Resolve referenced hook scripts from the source's hooks dir.
   const scriptRefs = extractHookScriptRefs(invocation.command);
   const scriptCopies: { from: string; to: string }[] = [];
@@ -73,6 +85,15 @@ export async function applyHook(args: ApplyHookArgs): Promise<ApplyResult> {
     const from = path.join(sourceHooksDir, ref);
     if (!(await fileExists(from))) continue;
     const to = path.join(targetProjectPath, ".claude", "hooks", ref);
+    try {
+      if (args.sourceContainRoot) assertContained(from, args.sourceContainRoot);
+      assertContained(to, targetProjectPath);
+      assertContained(targetSettingsPath, targetProjectPath);
+      await assertNotLink(to);
+    } catch (e) {
+      if (e instanceof PathSafetyError) return errorResult(e.code, e.message);
+      throw e;
+    }
     scriptCopies.push({ from, to });
   }
 
