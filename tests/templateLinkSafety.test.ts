@@ -289,4 +289,15 @@ describe("template store create/delete (#633)", () => {
     expect("error" in r).toBe(true);
     await expect(fs.access(path.join(outside, "fresh"))).rejects.toThrow();
   });
+
+  it("applyDirectory fails when SKILL.md itself links out of the source project", async () => {
+    const src = path.join(tmp, "msk");
+    await fs.mkdir(src);
+    await fs.writeFile(path.join(outside, "SKILL.md"), "outside");
+    await fs.symlink(path.join(outside, "SKILL.md"), path.join(src, "SKILL.md"), "file").catch(() => undefined);
+    const linked = await fs.lstat(path.join(src, "SKILL.md")).then((st) => st.isSymbolicLink(), () => false);
+    if (!linked) return;
+    const r = await applyDirectory({ sourceDir: src, targetDir: path.join(root, "o3"), conflict: "overwrite", sourceRoot: src, targetRoot: root });
+    expect(r.ok).toBe(false);
+  });
 });

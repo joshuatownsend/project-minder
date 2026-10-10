@@ -103,7 +103,12 @@ export async function applyDirectory(args: {
   let { targetDir } = args;
 
   try {
-    if (args.sourceRoot) assertContained(sourceDir, args.sourceRoot);
+    if (args.sourceRoot) {
+      assertContained(sourceDir, args.sourceRoot);
+      // A skill defined by a SKILL.md that links out of the project would otherwise be copied without it.
+      const manifest = path.join(sourceDir, "SKILL.md");
+      if (await fileExists(manifest)) assertContained(manifest, args.sourceRoot);
+    }
     if (args.targetRoot) assertContained(targetDir, args.targetRoot);
     await assertNotLink(targetDir);
   } catch (e) {
