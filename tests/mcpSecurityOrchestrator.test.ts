@@ -23,7 +23,8 @@ const projects = [
 vi.mock("@/lib/mcp/scanHelper", () => ({ getCachedOrFreshScan: async () => ({ projects }) }));
 const fresh = vi.fn(async () => ({ projects }));
 vi.mock("@/lib/scanner", () => ({ scanAllProjects: () => fresh() }));
-vi.mock("@/lib/cache", () => ({ setCachedScan: () => true }));
+const invalidate = vi.fn();
+vi.mock("@/lib/cache", () => ({ setCachedScan: () => true, invalidateCache: () => invalidate() }));
 
 const saved: { runId: number; findings: Array<{ serverId: string; scope: string; projectSlug?: string; ruleId: string }> }[] = [];
 const runs: Array<{ serversScanned: number }> = [];
@@ -49,11 +50,11 @@ describe("runMcpSecurityScan covers project and local servers (#638)", () => {
   it("scans project-scope and local-scope servers under the project slug", async () => {
     const summary = await runMcpSecurityScan("manual");
     const findings = saved[0].findings;
-    const evil = findings.filter((f) => f.serverId === "app:evil");
-    const mine = findings.filter((f) => f.serverId === "app:local:mine");
+    const evil = findings.filter((f) => f.serverId === "project:app:evil");
+    const mine = findings.filter((f) => f.serverId === "local:app:mine");
     expect(evil.map((f) => f.ruleId)).toContain("SF-01");
     expect(mine.map((f) => f.ruleId)).toContain("SF-02");
-    expect(findings.every((f) => f.serverId.startsWith("app:") || f.serverId.startsWith("user:"))).toBe(true);
+    expect(findings.every((f) => f.serverId.startsWith("project:app:") || f.serverId.startsWith("local:app:") || f.serverId.startsWith("user:"))).toBe(true);
     expect(evil[0]).toMatchObject({ scope: "project", projectSlug: "app" });
     expect(mine[0]).toMatchObject({ scope: "project", projectSlug: "app" });
     expect(summary.serversScanned).toBe(3);
@@ -63,7 +64,7 @@ describe("runMcpSecurityScan covers project and local servers (#638)", () => {
   it("does not let a local server collide with a same-named user server", async () => {
     user.mcpServers.servers.push({ name: "mine", source: "user", command: "npx", args: ["ok"], envKeys: [] });
     const findings = (await runMcpSecurityScan("manual"), saved[0].findings);
-    expect(findings.some((f) => f.serverId === "app:local:mine")).toBe(true);
+    expect(findings.some((f) => f.serverId === "local:app:mine")).toBe(true);
     expect(findings.some((f) => f.serverId === "user:mine")).toBe(false);
     user.mcpServers.servers.pop();
   });
@@ -74,5 +75,6 @@ describe("runMcpSecurityScan covers project and local servers (#638)", () => {
     expect(fresh).not.toHaveBeenCalled();
     await runMcpSecurityScan("manual");
     expect(fresh).toHaveBeenCalledTimes(1);
+    expect(invalidate).toHaveBeenCalled();
   });
 });

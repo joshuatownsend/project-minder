@@ -4,7 +4,7 @@ import "server-only";
 import { getUserConfig } from "../../userConfigCache";
 import { getCachedOrFreshScan } from "../../mcp/scanHelper";
 import { scanAllProjects } from "../index";
-import { setCachedScan } from "../../cache";
+import { invalidateCache, setCachedScan } from "../../cache";
 import { scanServers } from "./scanner";
 import {
   createScanRun,
@@ -41,6 +41,8 @@ export async function runMcpSecurityScan(
     // A manual re-run must see an externally edited `.mcp.json`, so it bypasses the cached project scan.
     let scan;
     if (trigger === "manual") {
+      // Invalidating first starts a new cache generation, so this does not join a scan already in flight.
+      invalidateCache();
       scan = await scanAllProjects();
       setCachedScan(scan);
     } else {
