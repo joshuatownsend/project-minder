@@ -136,7 +136,7 @@ export async function applyDirectory(args: {
   const rootName = path.basename(sourceDir);
 
   if (dryRun) {
-    const { files, totalBytes } = await listDirFiles(sourceDir);
+    const { files, totalBytes } = await listDirFiles(sourceDir, args.sourceRoot);
     const shown = files.slice(0, 12);
     const more = files.length - shown.length;
     const action = willRemoveExisting
@@ -162,7 +162,7 @@ export async function applyDirectory(args: {
     await fs.rm(targetDir, { recursive: true, force: true });
   }
   const written = await copyDirRecursive(sourceDir, targetDir, { containRoot: args.sourceRoot });
-  const { files: writtenRelPaths } = await listDirFiles(sourceDir);
+  const { files: writtenRelPaths } = await listDirFiles(sourceDir, args.sourceRoot);
   return {
     ok: true,
     status: "applied",
@@ -172,7 +172,7 @@ export async function applyDirectory(args: {
 }
 
 /** Walk `dir` and return every file path relative to it (sorted) plus total byte count. */
-async function listDirFiles(dir: string): Promise<{ files: string[]; totalBytes: number }> {
+async function listDirFiles(dir: string, containRoot?: string): Promise<{ files: string[]; totalBytes: number }> {
   const out: string[] = [];
   let totalBytes = 0;
   async function walk(curr: string, rel: string): Promise<void> {
@@ -183,6 +183,14 @@ async function listDirFiles(dir: string): Promise<{ files: string[]; totalBytes:
       if (e.isDirectory()) {
         await walk(path.join(curr, e.name), childRel);
       } else if (e.isFile() || e.isSymbolicLink()) {
+        // Mirror copyDirRecursive: a link leaving the source root is skipped, so it must not be reported either.
+        if (e.isSymbolicLink() && containRoot) {
+          try {
+            assertContained(path.join(curr, e.name), containRoot);
+          } catch {
+            continue;
+          }
+        }
         out.push(childRel);
         try {
           const stat = await fs.stat(path.join(curr, e.name));

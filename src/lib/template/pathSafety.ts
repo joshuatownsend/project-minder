@@ -97,6 +97,9 @@ export function canonicalPath(p: string): string {
       return path.join(realpathSync.native(cur), ...rest.reverse());
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code;
+      if (code === "ELOOP") {
+        throw new PathSafetyError("PATH_LINK_LOOP", `"${resolved}" passes through a symlink or junction loop.`);
+      }
       if (code !== "ENOENT" && code !== "ENOTDIR") throw e;
       const parent = path.dirname(cur);
       if (parent === cur) return resolved;

@@ -185,3 +185,28 @@ describe("final-file links and aliases (#633, #640)", () => {
     expect(r.ok).toBe(false);
   });
 });
+
+describe("bundle report and loops (#633, #640)", () => {
+  it("applyDirectory does not list a skipped outside link as installed", async () => {
+    const src = path.join(tmp, "bsk");
+    await fs.mkdir(src);
+    await fs.writeFile(path.join(src, "SKILL.md"), "x");
+    await fs.writeFile(path.join(outside, "f.md"), "y");
+    await fs.symlink(path.join(outside, "f.md"), path.join(src, "leak.md"), "file").catch(() => undefined);
+    const linked = await fs.lstat(path.join(src, "leak.md")).then((st) => st.isSymbolicLink(), () => false);
+    if (!linked) return;
+    const r = await applyDirectory({ sourceDir: src, targetDir: path.join(root, "out"), conflict: "overwrite", sourceRoot: src, targetRoot: root });
+    expect(r.ok).toBe(true);
+    expect(r.bundle?.files).toEqual(["SKILL.md"]);
+  });
+
+  it("a link loop is a PathSafetyError, not a raw ELOOP", async () => {
+    const a = path.join(root, "a");
+    const b = path.join(root, "b");
+    await fs.symlink(b, a, "junction").catch(() => undefined);
+    await fs.symlink(a, b, "junction").catch(() => undefined);
+    const looped = await fs.lstat(a).then(() => true, () => false);
+    if (!looped) return;
+    expect(() => canonicalPath(path.join(a, "x"))).toThrow(PathSafetyError);
+  });
+});
