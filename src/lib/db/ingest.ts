@@ -3837,17 +3837,17 @@ async function reconcileAdapterSessionFile(
   // INSERT below can't hit the UNIQUE(file_path) constraint. Also done when the
   // new id is refused below: the file no longer holds the old id, and as a live
   // path its row would never be pruned.
-  const clearOldRow = () => {
-    if (oldSessionId && oldSessionId !== parsed.sessionId) {
-      db.prepare("DELETE FROM prompts_fts WHERE session_id = ?").run(oldSessionId);
-      db.prepare("DELETE FROM sessions WHERE session_id = ?").run(oldSessionId);
-    }
+  const clearOldRow = (): number => {
+    if (!oldSessionId || oldSessionId === parsed.sessionId) return 0;
+    db.prepare("DELETE FROM prompts_fts WHERE session_id = ?").run(oldSessionId);
+    return db.prepare("DELETE FROM sessions WHERE session_id = ?").run(oldSessionId).changes;
   };
 
   if (await adapterIdHeldByOtherFile(db, parsed.sessionId, file.filePath)) {
-    db.transaction(clearOldRow)();
+    const removed = db.transaction(clearOldRow)();
     adapterIdLosers.set(file.filePath, { sessionId: parsed.sessionId, signature });
-    return empty;
+    // A removed row is a change: the sweep then re-derives continuation links that pointed at it.
+    return { rowsWritten: removed };
   }
   adapterIdLosers.delete(file.filePath);
 

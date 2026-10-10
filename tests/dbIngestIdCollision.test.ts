@@ -168,7 +168,8 @@ describe.skipIf(!driverAvailable)("session id held by two files (#637)", () => {
     // The file now resolves to an id another file holds.
     id = "same-id";
     await fs.writeFile(codexFile, "xy");
-    await ingest.reconcileAllSessions(db, opts);
+    // Counted as a change, so the sweep re-derives continuation links that pointed at the old id.
+    expect((await ingest.reconcileAllSessions(db, opts)).filesChanged).toBe(1);
     expect(db.prepare("SELECT 1 FROM sessions WHERE session_id = 'old-id'").get()).toBeUndefined();
     expect(db.prepare("SELECT source FROM sessions WHERE session_id = 'same-id'").get()).toEqual({ source: "claude" });
     conn.closeDb();
