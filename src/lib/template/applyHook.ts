@@ -70,6 +70,14 @@ export async function applyHook(args: ApplyHookArgs): Promise<ApplyResult> {
     return errorResult("PROJECT_PATH_IN_SOURCE", projPathCheck);
   }
 
+  try {
+    assertContained(targetSettingsPath, targetProjectPath);
+    await assertNotLink(targetSettingsPath);
+  } catch (e) {
+    if (e instanceof PathSafetyError) return errorResult(e.code, e.message);
+    throw e;
+  }
+
   // Resolve referenced hook scripts from the source's hooks dir.
   const scriptRefs = extractHookScriptRefs(invocation.command);
   const scriptCopies: { from: string; to: string }[] = [];

@@ -1,6 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { ApplyResult, ConflictPolicy } from "../types";
+import { PathSafetyError, assertContained, assertNotLink } from "./pathSafety";
 import {
   atomicWriteFile,
   ensureDir,
@@ -41,6 +42,14 @@ export async function applyWorkflow(args: ApplyWorkflowArgs): Promise<ApplyResul
   }
 
   let targetFile = path.join(targetProjectPath, ".github", "workflows", workflowKey);
+  try {
+    assertContained(sourceFile, sourceProjectPath);
+    assertContained(targetFile, targetProjectPath);
+    await assertNotLink(targetFile);
+  } catch (e) {
+    if (e instanceof PathSafetyError) return errorResult(e.code, e.message);
+    throw e;
+  }
   const exists = await fileExists(targetFile);
   if (exists) {
     if (conflict === "skip") {

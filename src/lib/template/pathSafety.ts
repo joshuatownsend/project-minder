@@ -129,12 +129,20 @@ export async function assertNotLink(dest: string): Promise<void> {
 }
 
 /** Project-relative locations that Template Mode reads or writes configuration through. */
-const PROJECT_CONFIG_PATHS = [".claude", ".github", ".mcp.json"];
+const PROJECT_CONFIG_PATHS = [
+  ".claude",
+  ".github",
+  ".mcp.json",
+  path.join(".claude", "settings.json"),
+  path.join(".claude", "settings.local.json"),
+  path.join(".claude", "hooks"),
+  path.join(".github", "workflows"),
+];
 
 /**
  * Throws if any configuration location of `projectPath` is a link that resolves outside the project. Every
  * unit kind (settings, plugins, MCP, workflows, hooks, files) goes through one of these, so checking them
- * once per apply/snapshot bounds all of them, as the per-file checks alone would not (#633, #640).
+ * once per apply/snapshot bounds all of them (individual files are re-checked where they are read) (#633, #640).
  */
 export function assertProjectConfigContained(projectPath: string): void {
   for (const rel of PROJECT_CONFIG_PATHS) assertContained(path.join(projectPath, rel), projectPath);

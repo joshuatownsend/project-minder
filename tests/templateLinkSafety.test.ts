@@ -153,3 +153,35 @@ describe("project configuration locations (#633, #640)", () => {
     expect(() => ensureInsideDevRoots(path.join(root, "state", "x"), cfg())).toThrow(/minder/i);
   });
 });
+
+describe("final-file links and aliases (#633, #640)", () => {
+  it("copies two in-root aliases of one directory (only a cycle is skipped)", async () => {
+    const src = path.join(tmp, "sk");
+    await fs.mkdir(path.join(src, "shared"), { recursive: true });
+    await fs.writeFile(path.join(src, "shared", "a.md"), "a");
+    await link(path.join(src, "shared"), path.join(src, "alias"));
+    const written = await copyDirRecursive(src, path.join(tmp, "dd"), { containRoot: src });
+    expect(written.map((w) => path.relative(path.join(tmp, "dd"), w)).sort()).toEqual([path.join("alias", "a.md"), path.join("shared", "a.md")]);
+  });
+
+  it("assertProjectConfigContained refuses a settings.json that is a link out of the project", async () => {
+    const { assertProjectConfigContained } = await import("@/lib/template/pathSafety");
+    const proj = path.join(root, "q");
+    await fs.mkdir(path.join(proj, ".claude"), { recursive: true });
+    await fs.writeFile(path.join(outside, "s.json"), "{}");
+    await fs.symlink(path.join(outside, "s.json"), path.join(proj, ".claude", "settings.json"), "file").catch(() => undefined);
+    const linked = await fs.lstat(path.join(proj, ".claude", "settings.json")).then((st) => st.isSymbolicLink(), () => false);
+    if (!linked) return; // file symlinks need privilege on some Windows setups
+    expect(() => assertProjectConfigContained(proj)).toThrow(PathSafetyError);
+  });
+
+  it("applyWorkflow refuses a workflow file that links out of the source project", async () => {
+    const { applyWorkflow } = await import("@/lib/template/applyWorkflow");
+    const srcProj = path.join(root, "w");
+    await fs.mkdir(path.join(srcProj, ".github"), { recursive: true });
+    await fs.writeFile(path.join(outside, "ci.yml"), "name: x");
+    await link(outside, path.join(srcProj, ".github", "workflows"));
+    const r = await applyWorkflow({ sourceProjectPath: srcProj, workflowKey: "ci.yml", targetProjectPath: path.join(root, "t"), conflict: "overwrite" });
+    expect(r.ok).toBe(false);
+  });
+});
