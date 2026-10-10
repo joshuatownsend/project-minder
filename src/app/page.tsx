@@ -743,7 +743,7 @@ export default function HomePage() {
               const color = projectColor(proj?.slug ?? p.projectSlug);
               return (
                 <div
-                  key={p.projectSlug}
+                  key={`${p.projectDirName} ${p.homeKey ?? ""}`}
                   style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--line-soft)" }}
                 >
                   <ProjectGlyph name={proj?.name || p.projectDirName} color={color} size={20} />

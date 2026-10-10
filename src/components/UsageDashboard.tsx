@@ -1125,7 +1125,7 @@ export function UsageDashboard() {
                       const max = sorted[0]?.cost ?? 1;
                       return sorted.map((p) => (
                         <CostRow
-                          key={`${p.projectSlug} ${p.homeKey ?? ""}`}
+                          key={`${p.projectDirName} ${p.homeKey ?? ""}`}
                           label={decodeProjectName(p.projectDirName)}
                           cost={p.cost}
                           maxCost={max}
