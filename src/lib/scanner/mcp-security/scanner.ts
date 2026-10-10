@@ -31,6 +31,37 @@ function dbScope(server: McpServer): "user" | "project" {
   return server.source === "project" ? "project" : "user";
 }
 
+const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "ash", "csh", "tcsh", "fish"]);
+const POWERSHELL = /^(?:powershell|pwsh)$/i;
+// Delimiter-based rules re-run over the extracted script text.
+const SHELL_SCRIPT_RULES: ReadonlySet<string> = new Set(["SF-01", "SF-02", "SF-03", "CI-01", "CI-02"]);
+const POWERSHELL_RULES: ReadonlySet<string> = new Set(["SF-08"]);
+
+function baseName(command: string): string {
+  const leaf = command.split(/[\\/]/).pop() ?? command;
+  return leaf.replace(/\.exe$/i, "");
+}
+
+/**
+ * The script a POSIX shell is asked to run, i.e. the argument after the `-c` option (alone or inside a
+ * short-option group such as `-lc` / `-cl`, after any other options). Later arguments are `$0`, `$1`, …
+ * and are not executed. Null for anything that is not a shell `-c` launch.
+ */
+export function shellScript(server: McpServer): string | null {
+  if (!server.command || !SHELLS.has(baseName(server.command).toLowerCase())) return null;
+  const args = server.args ?? [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--" || !/^[-+]/.test(a)) return null; // first operand reached without a -c
+    if (a === "-o" || a === "+o" || a === "-O" || a === "+O") {
+      i++; // takes an option name
+      continue;
+    }
+    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(a)) return args[i + 1] ?? null;
+  }
+  return null;
+}
+
 interface SurfaceEntry {
   surface: McpFindingSurface;
   text: string;
@@ -54,12 +85,14 @@ function scanSurface(
   projectSlug: string | undefined,
   runId: number,
   nowMs: number,
+  only?: ReadonlySet<string>,
 ): McpFinding[] {
   const findings: McpFinding[] = [];
   const deobbed = deobfuscate(text);
   const deobbedLeet = deobfuscate(text, true);
 
   for (const rule of PATTERN_RULES) {
+    if (only && !only.has(rule.id)) continue;
     const target = DE_CATEGORIES.has(rule.category)
       ? text
       : LEETSPEAK_CATEGORIES.has(rule.category) ? deobbedLeet : deobbed;
@@ -116,14 +149,18 @@ export function scanServers(
       findings.push(...scanSurface(entry.text, entry.surface, sId, scope, projectSlug, runId, nowMs));
     }
 
-    // The probe spawns command + args as one command line, so scan that too (#634). Rules already reported
-    // for this server on the separate surfaces are not repeated.
-    if (server.command && server.args?.length) {
-      const seen = new Set(findings.filter((f) => f.serverId === sId).map((f) => f.ruleId));
+    // The stdio probe spawns the command with argv, no shell, so a destructive payload hides in the script
+    // argument of a shell wrapper (`sh -c "..."`), where the delimiter-based rules cannot see it (#634).
+    const script = shellScript(server);
+    if (script !== null) {
+      // Statements are separated by newlines as well as `;`, and the rules expect a delimiter in front.
+      const text = ";" + script.replace(/\r?\n/g, ";");
+      findings.push(...scanSurface(text, "args", sId, scope, projectSlug, runId, nowMs, SHELL_SCRIPT_RULES));
+    }
+    // PowerShell flags are matched against the launch line, since its rule names the executable too.
+    if (server.command && server.args?.length && POWERSHELL.test(baseName(server.command))) {
       const line = [server.command, ...server.args].join(" ");
-      for (const f of scanSurface(line, "command", sId, scope, projectSlug, runId, nowMs)) {
-        if (!seen.has(f.ruleId)) findings.push(f);
-      }
+      findings.push(...scanSurface(line, "command", sId, scope, projectSlug, runId, nowMs, POWERSHELL_RULES));
     }
   }
 
