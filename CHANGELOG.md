@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.16.12] - 2026-10-11
+
+*The second performance release for the tray server. The background indexer's safety re-check of every transcript runs every 5 minutes instead of every 30 seconds while the live file watcher is working, and each re-check does less work. An indexing worker that keeps running out of memory now pauses instead of moving onto the server's main thread.*
+
 ### Changed
 
 - The background indexer's safety sweep, which re-checks every transcript on disk for changes the file watcher missed, now runs every 5 minutes instead of every 30 seconds while the native recursive watch is live (#655). The 30-second sweep stays for the chokidar and sweep-only modes, where the sweep may be the only way changes are noticed. If the native watch fails, the sweep returns to the 30-second schedule within 30 seconds. New `MINDER_SWEEP_INTERVAL_MS` overrides the interval (minimum 1 second). Codex and Gemini sessions, which are not watched, now appear within 5 minutes rather than 30 seconds.
