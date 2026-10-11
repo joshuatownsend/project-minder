@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import path from "path";
+import { writeFileSync, utimesSync } from "fs";
 import { installIsolatedState } from "./_helpers/isolatedState";
 
 // #657: Agent View's live cost and context fill come from the index. Pins what
@@ -16,6 +18,8 @@ try {
 
 const state = installIsolatedState({ prefix: "pm-indexed-live-", preserveEnv: ["MINDER_USE_DB"] });
 
+const INDEXED_MTIME_MS = Date.UTC(2026, 9, 11);
+
 async function setup() {
   await state.reload();
   const conn = await import("@/lib/db/connection");
@@ -29,11 +33,16 @@ async function setup() {
 
 type Db = Awaited<ReturnType<typeof setup>>["db"];
 
-function insertSession(db: Db, sessionId: string, costUsd: number) {
+/** Index a session whose transcript was last written `aheadMs` after the indexed copy. */
+function insertSession(db: Db, sessionId: string, costUsd: number, aheadMs = 0) {
+  const file = path.join(state.tmpHome(), `${sessionId}.jsonl`);
+  writeFileSync(file, "{}\n");
+  const mtime = (INDEXED_MTIME_MS + aheadMs) / 1000;
+  utimesSync(file, mtime, mtime);
   db.prepare(
     `INSERT INTO sessions (session_id, project_dir_name, file_path, file_mtime_ms, file_size, indexed_at_ms, cost_usd)
-     VALUES (?, 'C--dev-x', ?, 1, 1, 1, ?)`
-  ).run(sessionId, `/tmp/${sessionId}.jsonl`, costUsd);
+     VALUES (?, 'C--dev-x', ?, ?, 1, 1, ?)`
+  ).run(sessionId, file, INDEXED_MTIME_MS, costUsd);
 }
 
 function insertTurn(
@@ -88,6 +97,19 @@ describe.skipIf(!driverAvailable)("indexedLiveMetrics (#657)", () => {
   it("returns null when the session is not indexed, so the caller parses", async () => {
     const { indexedLiveMetrics } = await setup();
     expect(await indexedLiveMetrics("missing")).toBeNull();
+  });
+
+  it("tolerates normal reconcile lag", async () => {
+    const { db, indexedLiveMetrics } = await setup();
+    insertSession(db, "s4", 3, 5_000);
+    expect((await indexedLiveMetrics("s4"))?.costUsd).toBe(3);
+  });
+
+  it("returns null when the transcript has run well ahead of the index (indexer off or stalled)", async () => {
+    const { db, indexedLiveMetrics } = await setup();
+    const { INDEX_STALE_AFTER_MS } = await import("@/lib/data/indexedLiveMetrics");
+    insertSession(db, "s5", 3, INDEX_STALE_AFTER_MS + 1_000);
+    expect(await indexedLiveMetrics("s5")).toBeNull();
   });
 
   it("returns null with the index switched off, even if a row exists", async () => {
