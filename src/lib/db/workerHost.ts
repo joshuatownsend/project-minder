@@ -81,6 +81,14 @@ export const DEFAULT_START_TIMEOUT_MS = 300_000;
 const STOP_GRACE_MS = 2_000;
 const CRASH_RESPAWN_BACKOFF_MS = [500, 2_000, 10_000];
 const MAX_RESPAWNS_PER_HOUR = 5;
+/**
+ * V8 old-space ceiling for the ingest worker (#656). A runaway guard, not a
+ * tuning knob: observed heap stays well under 400 MB, and 1 GB leaves room
+ * for a full re-parse of a 50 MB transcript. Hitting it is a crash like any
+ * other (respawn + backoff). Not covered: past `MAX_RESPAWNS_PER_HOUR`,
+ * ingest falls back to the in-process watcher on the main thread.
+ */
+const WORKER_MAX_OLD_GENERATION_MB = 1024;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
 type MessageSubscriber = (msg: unknown) => void;
@@ -795,6 +803,7 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
     stderr: false,
     stdout: false,
     env: nextWorkerEnv(),
+    resourceLimits: { maxOldGenerationSizeMb: WORKER_MAX_OLD_GENERATION_MB },
   });
   state.worker = worker;
   state.startedAt = Date.now();
@@ -851,6 +860,16 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
   worker.on("error", (err) => {
     // eslint-disable-next-line no-console
     console.warn(`[ingest-worker] error: ${err.message}`);
+    // The heap ceiling must be findable in `minder.log` as its own cause; the
+    // exit handler only sees a non-zero code and logs it as a generic crash.
+    if ((err as NodeJS.ErrnoException).code === "ERR_WORKER_OUT_OF_MEMORY") {
+      serviceLog({
+        level: "error",
+        subsystem: "ingest-worker",
+        msg: `hit its ${WORKER_MAX_OLD_GENERATION_MB} MB heap ceiling and was terminated`,
+        heapCeilingMb: WORKER_MAX_OLD_GENERATION_MB,
+      });
+    }
     if (state.readyTimeout) {
       clearTimeout(state.readyTimeout);
       state.readyTimeout = null;

@@ -14,6 +14,7 @@
  */
 
 import type { ConversationEntry } from "../scanner/claudeConversations";
+import { toolUseBlocks } from "./contentBlocks";
 import type { PrLink } from "../types";
 
 export type { PrLink };
@@ -95,6 +96,62 @@ function toolResultText(content: unknown): string {
 }
 
 /**
+ * A user turn's content blocks: `message.content`, or top-level `content`
+ * when that array is EMPTY. Length-based, not nullish — `[] ?? x` is `[]`,
+ * so a nullish chain never reaches the top-level field. Shared by the
+ * extractor and the recovery gate so the two can't read turns differently.
+ * Mirrors ticketExtractor.ts and parser.ts.
+ */
+function userTurnContent(entry: ConversationEntry): unknown {
+  const messageContent = (entry.message?.content as unknown) ?? [];
+  return Array.isArray(messageContent) && messageContent.length === 0
+    ? ((entry as { content?: unknown }).content ?? messageContent)
+    : messageContent;
+}
+
+/**
+ * Straddle-recovery gate for a tail parse window (#654). True only when the
+ * window holds a `tool_result` whose `tool_use_id` has no `tool_use` in the
+ * same window AND whose text contains a GitHub PR URL.
+ *
+ * An unmatched result alone is the normal case, not the rare one: a tool call
+ * and its result are written in separate appends, so nearly every tail starts
+ * with one. Gating on that alone sent every tool call in every live session
+ * through a full-file re-parse. The URL check loses nothing: the scraper in
+ * `extractPrsFromEntries` can only yield a link from a result whose text
+ * matches `PR_URL_RE`, so a result without one has nothing to recover.
+ */
+export function tailNeedsPrRecovery(entries: Iterable<ConversationEntry>): boolean {
+  // A `tool_use` is always written before its `tool_result`, so a result
+  // whose id isn't known by the time it is reached is unmatched. Its text is
+  // accumulated per id, exactly as `extractPrsFromEntries` does, so a URL
+  // split across repeated result blocks matches here iff it matches there.
+  const toolUseIds = new Set<string>();
+  const orphanText = new Map<string, string>();
+  for (const e of entries) {
+    if (e.type === "assistant") {
+      for (const block of toolUseBlocks(e.message?.content)) {
+        if (typeof block.id === "string") toolUseIds.add(block.id);
+      }
+      continue;
+    }
+    if (e.type !== "user") continue;
+    const content = userTurnContent(e);
+    if (!Array.isArray(content)) continue;
+    for (const block of content as Array<Record<string, unknown>>) {
+      const id = block.tool_use_id;
+      if (block.type !== "tool_result" || typeof id !== "string" || toolUseIds.has(id)) continue;
+      const text = toolResultText(block.content);
+      if (!text) continue;
+      const acc = (orphanText.get(id) ?? "") + text;
+      if (PR_URL_RE.test(acc)) return true;
+      orphanText.set(id, acc);
+    }
+  }
+  return false;
+}
+
+/**
  * Walk a session's `ConversationEntry[]` once and yield every PR link the
  * session produced, from two sources:
  *
@@ -168,17 +225,7 @@ export function extractPrsFromEntries(entries: ConversationEntry[]): PrLink[] {
     }
 
     if (entry.type === "user") {
-      // Tool-result turns put their blocks on `message.content` OR — when
-      // that array is EMPTY — on top-level `content`. The fallback must be
-      // length-based, not nullish: `[] ?? x` is `[]`, so a nullish chain
-      // stops at the empty array and never looks at the top-level field,
-      // silently dropping the `gh pr create` result and its PR URL.
-      // Mirrors ticketExtractor.ts and parser.ts's `textSource`.
-      const messageContent = (entry.message?.content as unknown) ?? [];
-      const content =
-        Array.isArray(messageContent) && messageContent.length === 0
-          ? ((entry as { content?: unknown }).content ?? messageContent)
-          : messageContent;
+      const content = userTurnContent(entry);
       if (!Array.isArray(content)) continue;
       for (const block of content as Array<Record<string, unknown>>) {
         if (block.type !== "tool_result") continue;

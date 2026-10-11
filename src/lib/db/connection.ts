@@ -2,6 +2,7 @@ import "server-only";
 import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
+import { isMainThread } from "worker_threads";
 import type DatabaseT from "better-sqlite3";
 import {
   clearCleanShutdownMarker,
@@ -32,10 +33,15 @@ import { ordinaryDisposersFailed } from "../lifecycle";
 //
 // * **`mmap_size=256MB`** keeps hot pages in mapped memory; with our
 //   expected DB size of ~50–150 MB this means most reads are page faults,
-//   not syscalls.
+//   not syscalls. The ingest worker's connection gets 64 MB instead (#656):
+//   it is a writer whose reads are point lookups, not the dashboard's wide
+//   aggregates, so a full-size map there only adds to the working set.
 //
 // * **`server-only` import** ensures this module never accidentally bundles
 //   into a client component.
+
+const MAIN_MMAP_BYTES = 256 * 1024 * 1024;
+const WORKER_MMAP_BYTES = 64 * 1024 * 1024;
 
 let Database: typeof DatabaseT | null = null;
 let loadError: Error | null = null;
@@ -155,7 +161,7 @@ export async function getDb(): Promise<DatabaseT.Database | null> {
       db.pragma("journal_mode = WAL");
       db.pragma("synchronous = NORMAL");
       db.pragma("foreign_keys = ON");
-      db.pragma("mmap_size = 268435456"); // 256 MB
+      db.pragma(`mmap_size = ${isMainThread ? MAIN_MMAP_BYTES : WORKER_MMAP_BYTES}`);
       db.pragma("temp_store = MEMORY");
       db.pragma("busy_timeout = 5000");
       state.db = db;
@@ -190,7 +196,7 @@ export function openReadonlyConnection(): DatabaseT.Database | null {
   try {
     const db = new Database(DB_PATH, { readonly: true });
     db.pragma("busy_timeout = 5000");
-    db.pragma("mmap_size = 268435456");
+    db.pragma(`mmap_size = ${MAIN_MMAP_BYTES}`);
     // Match the primary connection's read-relevant pragma (Copilot, PR #563):
     // the heavy usage aggregates build TEMP B-TREEs for GROUP BY, and the
     // default `temp_store = FILE` would spill them to disk on this connection.

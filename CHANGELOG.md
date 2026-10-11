@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The background indexer no longer re-reads and re-parses a session's whole transcript after nearly every tool call (#654). It did so whenever a new chunk held a tool result whose call was in an earlier chunk — the normal case, since a call and its result are written separately — to recover a PR link split across the boundary. It now does so only when that result contains a GitHub PR URL, the only case that can yield one. On a machine with several active sessions this was the main source of the tray server's constant ~1-core CPU use.
+
+### Changed
+
+- The ingest worker now has a 1 GB heap ceiling and its database connection maps 64 MB instead of 256 MB (#656). A worker that hits the ceiling is restarted like any other crash and is logged in `minder.log` as hitting the ceiling.
+
 ## [1.16.10] - 2026-10-10
 
 *The second security release from the repository review, closing the remaining nine findings (#632–#640). Task prompts no longer pass through a `cmd.exe` command line, Template Mode no longer follows links out of the folders it works in, the MCP security scan covers project and local servers and reads shell `-c` and PowerShell launch lines, and three places that keyed data on a project's lossy slug or a shared session id (Config History, per-project costs and PR links, the session index) no longer mix one project's or file's data into another's.*

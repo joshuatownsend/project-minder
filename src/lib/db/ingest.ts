@@ -39,7 +39,7 @@ import {
 } from "@/lib/usage/contentBlocks";
 import { categorizeToolError } from "@/lib/usage/toolErrorCategorizer";
 import { aggregateWorkMode } from "@/lib/usage/workMode";
-import { extractPrsFromEntries } from "@/lib/usage/prExtractor";
+import { extractPrsFromEntries, tailNeedsPrRecovery } from "@/lib/usage/prExtractor";
 import type { PrLink, TicketLink } from "@/lib/types";
 import { isFileWriteOp, type FileOp } from "@/lib/usage/toolNames";
 import {
@@ -587,15 +587,11 @@ interface ReadResult {
   parsed: ParsedSession | null;
   safeOffset: number;
   /**
-   * T2.2 straddle-recovery signal — true when this parse window contains
-   * one or more `tool_result` blocks whose `tool_use_id` isn't matched by
-   * a `tool_use` block in the same window. On a tail parse this is the
-   * fingerprint of a `gh pr create` Bash call written in the prefix whose
-   * result lands in the tail; the caller does a full-file PR re-extract
-   * to catch it. Always `false` on full parses (`fromOffset = 0`) since
-   * any unmatched result would also be unrecoverable. Read review #1.
+   * T2.2 straddle-recovery signal (review #1): this tail holds an unmatched
+   * `tool_result` carrying a PR URL, so the caller re-extracts PRs from the
+   * full file. Always `false` on full parses. See `tailNeedsPrRecovery`.
    */
-  hasOrphanToolResults: boolean;
+  needsPrRecovery: boolean;
 }
 
 /**
@@ -806,42 +802,14 @@ async function readJsonlSession(
     if (names.length > 0) slashCommandsByTimestamp.set(preEntry.timestamp, new Set(names));
   }
 
-  // T2.2 orphan-result detector — flags tail parses where at least one
-  // `tool_result` block references a `tool_use_id` that isn't in the same
-  // parse window. This is the fingerprint of a `gh pr create` whose
-  // assistant Bash call lives in the already-persisted prefix but whose
-  // result landed in the tail. Caller (`reconcileSessionFile`) does a
-  // full-file PR re-extract when this fires so the PR isn't silently lost
-  // (review #1). Only meaningful for tails — on a `fromOffset === 0`
-  // full parse the recovery is moot because the full file is already in
-  // scope.
-  let hasOrphanToolResults = false;
-  if (fromOffset > 0) {
-    const toolUseIds = new Set<string>();
-    for (const { entry: e } of parsedLines) {
-      if (!e || e.type !== "assistant" || !Array.isArray(e.message?.content)) continue;
-      for (const block of e.message.content as Array<Record<string, unknown>>) {
-        if (block.type === "tool_use" && typeof block.id === "string") {
-          toolUseIds.add(block.id);
-        }
-      }
-    }
-    outer: for (const { entry: e } of parsedLines) {
-      if (!e || e.type !== "user") continue;
-      const ec = (e.message?.content as unknown) ?? (e as { content?: unknown }).content;
-      if (!Array.isArray(ec)) continue;
-      for (const block of ec as Array<Record<string, unknown>>) {
-        if (
-          block.type === "tool_result" &&
-          typeof block.tool_use_id === "string" &&
-          !toolUseIds.has(block.tool_use_id)
-        ) {
-          hasOrphanToolResults = true;
-          break outer;
-        }
-      }
-    }
-  }
+  // Filter to non-null parsed entries once and share between the PR
+  // straddle gate and the PR/ticket extractors below.
+  const entries: ConversationEntry[] = [];
+  for (const { entry } of parsedLines) if (entry) entries.push(entry);
+
+  // T2.2 straddle-recovery signal (review #1) — tails only; a full parse
+  // already has the whole file in scope. See `tailNeedsPrRecovery` (#654).
+  const needsPrRecovery = fromOffset > 0 && tailNeedsPrRecovery(entries);
 
   // Tracks the timestamp of the most-recent user turn so the following
   // assistant turn can look up that turn's slash-command set.
@@ -1755,7 +1723,7 @@ async function readJsonlSession(
     aiTitle !== null || permissionModes.length > 0 || hookRuns.length > 0 ||
     hookErrors.length > 0 || sawPrLink;
   if (turns.length === 0 && sidechainCollected.length === 0 && !hasA1Metadata) {
-    return { parsed: null, safeOffset, hasOrphanToolResults };
+    return { parsed: null, safeOffset, needsPrRecovery };
   }
 
   const primaryModel = mostFrequent(modelCounts);
@@ -1954,11 +1922,6 @@ async function readJsonlSession(
     }
   }
 
-  // Filter to non-null parsed entries once and share between the PR and
-  // ticket extractors — both walk the identical entry list.
-  const entries: ConversationEntry[] = [];
-  for (const { entry } of parsedLines) if (entry) entries.push(entry);
-
   return {
     parsed: {
       sessionId,
@@ -2076,7 +2039,7 @@ async function readJsonlSession(
       turns,
     },
     safeOffset,
-    hasOrphanToolResults,
+    needsPrRecovery,
   };
 }
 
@@ -2087,8 +2050,8 @@ async function readJsonlSession(
  * T2.2 straddle-recovery (review #1). Reads the full JSONL file from
  * byte 0, runs the PR extractor against every parsed entry, and
  * `INSERT OR IGNORE`s each PR. Used by `reconcileSessionFile` ONLY when
- * the tail parse flagged `hasOrphanToolResults` — i.e., a `tool_result`
- * referenced a `tool_use_id` we don't have in tail scope. Cheap on small
+ * the tail parse flagged `needsPrRecovery` — a PR-URL-bearing `tool_result`
+ * whose `tool_use_id` isn't in tail scope. Cheap on small
  * files (~10 ms for 5 MB), bounded by `MAX_SESSION_FILE_SIZE` (50 MB) at
  * the worst case. Soft-fails on any error so a recovery glitch never
  * blocks the tail-append's primary correctness.
@@ -3445,13 +3408,11 @@ export async function reconcileSessionFile(
     // prefix, the tail extractor can't match the pair on its own —
     // bashPrCalls in `safeExtractPrs` only ever sees the tail window. Do
     // a fallback full-file PR pass and INSERT OR IGNORE so the chip
-    // appears without waiting on the next DERIVED_VERSION bump. The
-    // orphan-result flag was computed cheaply during the tail parse so we
-    // skip this whole branch on the common case (no orphan = nothing to
-    // recover). Logs and returns soft on any error — never blocks the
-    // tail-append's primary correctness.
+    // appears without waiting on the next DERIVED_VERSION bump. The flag is
+    // PR-URL-gated (see `tailNeedsPrRecovery`). Logs and returns soft on any
+    // error — never blocks the tail-append's primary correctness.
     let recovered = 0;
-    if (tailResult.hasOrphanToolResults) {
+    if (tailResult.needsPrRecovery) {
       recovered = await recoverStraddledPrs(db, filePath, sessionId);
       if (recovered > 0) rows += recovered;
     }
