@@ -122,9 +122,12 @@ function userTurnContent(entry: ConversationEntry): unknown {
  * matches `PR_URL_RE`, so a result without one has nothing to recover.
  */
 export function tailNeedsPrRecovery(entries: Iterable<ConversationEntry>): boolean {
-  // A `tool_use` is always written before its `tool_result`, so one forward
-  // pass can decide each result as it is reached and stop at the first hit.
+  // A `tool_use` is always written before its `tool_result`, so a result
+  // whose id isn't known by the time it is reached is unmatched. Its text is
+  // accumulated per id, exactly as `extractPrsFromEntries` does, so a URL
+  // split across repeated result blocks matches here iff it matches there.
   const toolUseIds = new Set<string>();
+  const orphanText = new Map<string, string>();
   for (const e of entries) {
     if (e.type === "assistant") {
       for (const block of toolUseBlocks(e.message?.content)) {
@@ -136,14 +139,13 @@ export function tailNeedsPrRecovery(entries: Iterable<ConversationEntry>): boole
     const content = userTurnContent(e);
     if (!Array.isArray(content)) continue;
     for (const block of content as Array<Record<string, unknown>>) {
-      if (
-        block.type === "tool_result" &&
-        typeof block.tool_use_id === "string" &&
-        !toolUseIds.has(block.tool_use_id) &&
-        PR_URL_RE.test(toolResultText(block.content))
-      ) {
-        return true;
-      }
+      const id = block.tool_use_id;
+      if (block.type !== "tool_result" || typeof id !== "string" || toolUseIds.has(id)) continue;
+      const text = toolResultText(block.content);
+      if (!text) continue;
+      const acc = (orphanText.get(id) ?? "") + text;
+      if (PR_URL_RE.test(acc)) return true;
+      orphanText.set(id, acc);
     }
   }
   return false;

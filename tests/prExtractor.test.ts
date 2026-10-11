@@ -540,6 +540,13 @@ describe("tailNeedsPrRecovery (#654)", () => {
     expect(tailNeedsPrRecovery([entry])).toBe(true);
   });
 
+  it("matches a URL split across repeated result blocks, like the extractor (Codex, PR #666)", () => {
+    const split = [userToolResult("tu_prefix", "https://github.com/foo/"), userToolResult("tu_prefix", "bar/pull/88")];
+    expect(tailNeedsPrRecovery(split)).toBe(true);
+    // Parity: the full-file extractor yields the PR from the same fragments.
+    expect(extractPrsFromEntries([assistantBashCall("tu_prefix", "gh pr create --fill"), ...split])).toHaveLength(1);
+  });
+
   it("ignores non-PR GitHub URLs", () => {
     expect(tailNeedsPrRecovery([userToolResult("tu_prefix", "https://github.com/foo/bar/issues/5")])).toBe(false);
   });
