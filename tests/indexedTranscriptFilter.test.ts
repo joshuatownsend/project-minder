@@ -14,12 +14,12 @@ try {
   driverAvailable = false;
 }
 
-const worker = vi.hoisted(() => ({ running: false }));
-vi.mock("@/lib/db/workerHost", () => ({ getWorkerStatus: () => ({ running: worker.running }) }));
+const ingest = vi.hoisted(() => ({ current: true }));
+vi.mock("@/lib/db/ingestSettled", () => ({ readIndexCurrent: async () => ingest.current }));
 
 const state = installIsolatedState({
   prefix: "pm-transcript-filter-",
-  preserveEnv: ["MINDER_USE_DB", "MINDER_INDEXER", "MINDER_INDEXER_WORKER"],
+  preserveEnv: ["MINDER_USE_DB"],
 });
 
 const NOW = Date.UTC(2026, 9, 11, 12);
@@ -50,16 +50,12 @@ function index(db: Db, file: string, mtimeMs: number) {
 describe.skipIf(!driverAvailable)("indexedTranscriptFilter (#672)", () => {
   beforeEach(() => {
     delete process.env.MINDER_USE_DB;
-    delete process.env.MINDER_INDEXER;
-    delete process.env.MINDER_INDEXER_WORKER;
-    worker.running = false;
+    ingest.current = true;
     vi.spyOn(Date, "now").mockReturnValue(NOW);
   });
   afterEach(() => {
     vi.restoreAllMocks();
     delete process.env.MINDER_USE_DB;
-    delete process.env.MINDER_INDEXER;
-    delete process.env.MINDER_INDEXER_WORKER;
   });
 
   it("skips only transcripts the index knows are old", async () => {
@@ -104,17 +100,11 @@ describe.skipIf(!driverAvailable)("indexedTranscriptFilter (#672)", () => {
     expect(await indexedTranscriptFilter(SINCE)).toBeNull();
   });
 
-  it("gives no filter when nothing keeps the index current", async () => {
+  it("gives no filter until the index is known to be current", async () => {
     const { indexedTranscriptFilter } = await setup();
-    process.env.MINDER_INDEXER = "0";
+    ingest.current = false;
     expect(await indexedTranscriptFilter(SINCE)).toBeNull();
-  });
-
-  it("gives no filter while the ingest worker is not running, and one once it is", async () => {
-    const { indexedTranscriptFilter } = await setup();
-    process.env.MINDER_INDEXER_WORKER = "1";
-    expect(await indexedTranscriptFilter(SINCE)).toBeNull();
-    worker.running = true;
+    ingest.current = true;
     expect(await indexedTranscriptFilter(SINCE)).not.toBeNull();
   });
 });

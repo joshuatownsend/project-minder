@@ -1,8 +1,7 @@
 import "server-only";
 import { getDb, prepCached } from "@/lib/db/connection";
 import { dbModeRequested } from "@/lib/data";
-import { resolveIngestMode } from "@/lib/db/ingestMode";
-import { getWorkerStatus } from "@/lib/db/workerHost";
+import { readIndexCurrent } from "@/lib/db/ingestSettled";
 
 /**
  * How long the set of indexed transcript paths is trusted before it is reloaded.
@@ -31,16 +30,12 @@ const g = globalThis as unknown as {
  * session created since the last reconcile) is still stat'ed.
  *
  * Returns null — stat everything, as before — when the index is off
- * (`MINDER_USE_DB=0`), nothing keeps it current (`MINDER_INDEXER=0`, or the
- * ingest worker isn't running: still starting, crashed, or paused after
- * crashes), or it can't be read. While the worker runs but is behind (a long
- * backfill), a resumed old session is skipped until its row catches up unless
- * the Claude CLI reports it alive — the caller stats CLI-alive sessions anyway.
+ * (`MINDER_USE_DB=0`), it isn't known to be current (`readIndexCurrent`:
+ * indexer off, this boot's initial reconcile not finished, ingest restarting or
+ * paused), or it can't be read.
  */
 export async function indexedTranscriptFilter(since: number): Promise<TranscriptStatFilter | null> {
-  if (!dbModeRequested()) return null;
-  const mode = resolveIngestMode();
-  if (mode === "off" || (mode === "worker" && !getWorkerStatus().running)) return null;
+  if (!dbModeRequested() || !(await readIndexCurrent())) return null;
   try {
     const db = await getDb();
     if (!db) return null;
