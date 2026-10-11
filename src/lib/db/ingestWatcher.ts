@@ -49,6 +49,7 @@ const SWEEP_INTERVAL_MS = 30_000;
 // floor (#655). Non-Claude adapter sessions (Codex/Gemini) are not watched, so
 // they now land within 5 min rather than 30 s in this mode.
 const NATIVE_SWEEP_INTERVAL_MS = 5 * 60_000;
+const MIN_SWEEP_WAKE_MS = 1_000;
 
 /**
  * Delay before the next safety sweep. `MINDER_SWEEP_INTERVAL_MS` (a positive
@@ -69,10 +70,12 @@ export function resolveSweepIntervalMs(
  * Delay until the sweep timer next wakes: when the interval falls due, but no
  * later than `SWEEP_INTERVAL_MS` so a mode change is noticed promptly. Sleeping
  * the exact remainder keeps an override like 45 s from rounding up to the next
- * 30 s wake (Codex, PR #668). Exported for unit tests.
+ * 30 s wake (Codex, PR #668). Floored at `MIN_SWEEP_WAKE_MS`: a sweep held
+ * off by the in-flight initial reconcile is overdue, and an unfloored 0 ms
+ * re-arm would spin until that pass ends. Exported for unit tests.
  */
 export function nextSweepWakeMs(intervalMs: number, sinceLastSweepMs: number): number {
-  return Math.min(SWEEP_INTERVAL_MS, Math.max(0, intervalMs - sinceLastSweepMs));
+  return Math.min(SWEEP_INTERVAL_MS, Math.max(MIN_SWEEP_WAKE_MS, intervalMs - sinceLastSweepMs));
 }
 const AWAIT_WRITE_FINISH_MS = 250;
 // Cap on how long we'll wait for chokidar's initial scan. A malformed
@@ -881,11 +884,12 @@ function startSweep(state: WatcherState): void {
       if (state.stopped) return;
       // Woken only to re-read the mode; the re-arm below sleeps the remainder.
       if (performance.now() - lastSweepAt < resolveSweepIntervalMs(state.watcherMode)) return;
-      attempted = true;
       // The deferred initial reconcile IS a full sweep; running a second
-      // one concurrently would race it file-by-file. Skip this tick and
-      // let the re-arm in `finally` pick up after it completes.
+      // one concurrently would race it file-by-file. Skip this tick WITHOUT
+      // moving the deadline, so the re-arm retries soon after it completes
+      // rather than a whole interval later (Codex, PR #668).
       if (state.initialReconcileInFlight) return;
+      attempted = true;
       const db = getDbSync() ?? (await getDb());
       if (db) {
         await reconcileAllSessions(db, {

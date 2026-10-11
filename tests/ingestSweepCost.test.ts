@@ -106,7 +106,8 @@ describe("resolveSweepIntervalMs", () => {
     expect(nextSweepWakeMs(45_000, 0)).toBe(30_000);
     expect(nextSweepWakeMs(45_000, 30_000)).toBe(15_000);
     expect(nextSweepWakeMs(10_000, 0)).toBe(10_000);
-    expect(nextSweepWakeMs(30_000, 40_000)).toBe(0);
+    // Overdue (e.g. held off by the initial reconcile): retry soon, never a 0 ms spin.
+    expect(nextSweepWakeMs(30_000, 40_000)).toBe(1_000);
   });
 
   it("stretches the sweep only under a native watch", () => {
