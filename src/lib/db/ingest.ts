@@ -3232,7 +3232,7 @@ export interface FileReconcileResult {
 const reportedIdCollisions = new Set<string>();
 
 function idOwnerPath(db: DatabaseT.Database, sessionId: string): string | undefined {
-  return (db.prepare("SELECT file_path FROM sessions WHERE session_id = ?").get(sessionId) as
+  return (prepareCached(db, "SELECT file_path FROM sessions WHERE session_id = ?").get(sessionId) as
     | { file_path: string }
     | undefined)?.file_path;
 }
@@ -3281,34 +3281,18 @@ async function isIdHeldByOtherFile(sessionId: string, storedPath: string, filePa
   return true;
 }
 
-interface FileReconcileStatements {
-  existing: DatabaseT.Statement;
-  nextTurnIndex: DatabaseT.Statement;
-  advanceCursor: DatabaseT.Statement;
-}
+// Statements on the per-file sweep path are compiled once per connection rather
+// than per call — the sweep visits every transcript (~15k), and better-sqlite3
+// has no statement cache of its own (#655). Keyed weakly so a closed-and-reopened
+// connection gets fresh statements.
+const statementCache = new WeakMap<DatabaseT.Database, Map<string, DatabaseT.Statement>>();
 
-// `reconcileSessionFile` runs once per transcript on every sweep (~15k files),
-// so its statements are compiled once per connection rather than per call (#655).
-// Keyed weakly so a closed-and-reopened connection gets fresh statements.
-const fileReconcileStatements = new WeakMap<DatabaseT.Database, FileReconcileStatements>();
-
-function fileStatements(db: DatabaseT.Database): FileReconcileStatements {
-  let stmts = fileReconcileStatements.get(db);
-  if (!stmts) {
-    stmts = {
-      existing: db.prepare(
-        "SELECT file_path, project_dir_name, file_mtime_ms, file_size, byte_offset, derived_version FROM sessions WHERE session_id = ?"
-      ),
-      nextTurnIndex: db.prepare(
-        "SELECT COALESCE(MAX(turn_index), -1) + 1 AS next_idx FROM turns WHERE session_id = ?"
-      ),
-      advanceCursor: db.prepare(
-        "UPDATE sessions SET file_mtime_ms = ?, file_size = ?, byte_offset = ?, indexed_at_ms = ? WHERE session_id = ?"
-      ),
-    };
-    fileReconcileStatements.set(db, stmts);
-  }
-  return stmts;
+function prepareCached(db: DatabaseT.Database, sql: string): DatabaseT.Statement {
+  let byDb = statementCache.get(db);
+  if (!byDb) statementCache.set(db, (byDb = new Map()));
+  let stmt = byDb.get(sql);
+  if (!stmt) byDb.set(sql, (stmt = db.prepare(sql)));
+  return stmt;
 }
 
 /**
@@ -3344,7 +3328,6 @@ export async function reconcileSessionFile(
   // parent project) — canonicalize before comparing or every worktree file
   // would look mispinned and full-replace on each sweep.
   const canonicalDirName = canonicalizeDirName(projectDirName);
-  const stmts = fileStatements(db);
   let existing:
     | {
         file_path: string;
@@ -3354,7 +3337,10 @@ export async function reconcileSessionFile(
         byte_offset: number;
         derived_version: number;
       }
-    | undefined = stmts.existing.get(sessionId) as typeof existing;
+    | undefined = prepareCached(
+      db,
+      "SELECT file_path, project_dir_name, file_mtime_ms, file_size, byte_offset, derived_version FROM sessions WHERE session_id = ?"
+    ).get(sessionId) as typeof existing;
   // Checked under `force` too: a rebuild re-derives rows, it does not pick a different owner for an id.
   if (existing && (await isIdHeldByOtherFile(sessionId, existing.file_path, filePath))) return empty;
   const ownerSeen = existing?.file_path;
@@ -3404,7 +3390,10 @@ export async function reconcileSessionFile(
     mtimeMs >= existing.file_mtime_ms;
 
   if (canTail) {
-    const startTurnIndex = (stmts.nextTurnIndex.get(sessionId) as { next_idx: number }).next_idx;
+    const startTurnIndex = (prepareCached(
+      db,
+      "SELECT COALESCE(MAX(turn_index), -1) + 1 AS next_idx FROM turns WHERE session_id = ?"
+    ).get(sessionId) as { next_idx: number }).next_idx;
     const tailResult = await readJsonlSession(filePath, projectDirName, mtimeMs, size, {
       fromOffset: existing!.byte_offset,
       startTurnIndex,
@@ -3416,7 +3405,10 @@ export async function reconcileSessionFile(
     // `safeOffset` is a partial line that hasn't been flushed.
     if (!tailResult || !tailResult.parsed) {
       const newCursor = tailResult?.safeOffset ?? existing!.byte_offset;
-      stmts.advanceCursor.run(mtimeMs, size, newCursor, Date.now(), sessionId);
+      prepareCached(
+        db,
+        "UPDATE sessions SET file_mtime_ms = ?, file_size = ?, byte_offset = ?, indexed_at_ms = ? WHERE session_id = ?"
+      ).run(mtimeMs, size, newCursor, Date.now(), sessionId);
       return empty;
     }
     const tailParsed = tailResult.parsed;
@@ -4186,7 +4178,7 @@ async function runReconcileAllSessions(
   try {
     adapterSessions =
       options.adapterSessions ??
-      (await timed("adapterDiscovery", () => discoverAllSessions(config, { exclude: ["claude"] })));
+      await timed("adapterDiscovery", () => discoverAllSessions(config, { exclude: ["claude"] }));
   } catch (err) {
     adapterSessions = [];
     adapterDiscoveryFailed = true;

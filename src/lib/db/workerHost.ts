@@ -113,11 +113,11 @@ interface WorkerHostState {
   /** Recent crash timestamps (ms). Pruned to the last hour on read + write. */
   crashHistory: number[];
   /**
-   * Subset of `crashHistory` that hit the heap ceiling (`ERR_WORKER_OUT_OF_MEMORY`),
-   * pruned the same way. Any entry here keeps an exhausted budget off the
-   * main-thread fallback — see `HEAP_CEILING_COOLDOWN_MS`.
+   * When the worker last hit its heap ceiling (`ERR_WORKER_OUT_OF_MEMORY`). Within
+   * the crash window it keeps an exhausted budget off the main-thread fallback —
+   * see `HEAP_CEILING_COOLDOWN_MS`.
    */
-  heapCeilingCrashes: number[];
+  lastHeapCeilingAt: number | null;
   respawnTimer: NodeJS.Timeout | null;
   /** Set true once stopWorker is called; suppresses respawn. */
   stopping: boolean;
@@ -247,7 +247,7 @@ function freshState(readyTimeoutMs: number, workerEntry: string): WorkerHostStat
     lastReadyAt: null,
     lastMessageAt: null,
     crashHistory: [],
-    heapCeilingCrashes: [],
+    lastHeapCeilingAt: null,
     respawnTimer: null,
     stopping: false,
     readyPromise: null,
@@ -264,7 +264,6 @@ function freshState(readyTimeoutMs: number, workerEntry: string): WorkerHostStat
 function pruneCrashHistory(state: WorkerHostState): number {
   const cutoff = Date.now() - ONE_HOUR_MS;
   state.crashHistory = state.crashHistory.filter((t) => t >= cutoff);
-  state.heapCeilingCrashes = state.heapCeilingCrashes.filter((t) => t >= cutoff);
   return state.crashHistory.length;
 }
 
@@ -882,7 +881,7 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
     // exit handler only sees a non-zero code and logs it as a generic crash.
     if ((err as NodeJS.ErrnoException).code === "ERR_WORKER_OUT_OF_MEMORY") {
       // `error` precedes `exit`, so the exit handler's budget check sees this.
-      state.heapCeilingCrashes.push(Date.now());
+      state.lastHeapCeilingAt = Date.now();
       serviceLog({
         level: "error",
         subsystem: "ingest-worker",
@@ -939,22 +938,11 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
       crashesLastHour: crashes,
     });
 
-    let respawnDelayMs: number;
-    if (crashes >= MAX_RESPAWNS_PER_HOUR && state.heapCeilingCrashes.length > 0) {
-      // Runaway memory: never move it onto the main thread (#656).
-      serviceLog({
-        level: "error",
-        subsystem: "ingest-worker",
-        msg:
-          `crash budget exceeded (${crashes}/${MAX_RESPAWNS_PER_HOUR} in last hour, ` +
-          `${state.heapCeilingCrashes.length} at the heap ceiling); not falling back to the ` +
-          `main thread, which has no ceiling. Ingest paused; retrying the worker in ` +
-          `${HEAP_CEILING_COOLDOWN_MS / 60_000} min.`,
-        crashesLastHour: crashes,
-        heapCeilingCrashes: state.heapCeilingCrashes.length,
-      });
-      respawnDelayMs = HEAP_CEILING_COOLDOWN_MS;
-    } else if (crashes >= MAX_RESPAWNS_PER_HOUR) {
+    const overBudget = crashes >= MAX_RESPAWNS_PER_HOUR;
+    // Runaway memory is never moved onto the main thread (#656).
+    const hitHeapCeiling =
+      state.lastHeapCeilingAt !== null && state.lastHeapCeilingAt >= Date.now() - ONE_HOUR_MS;
+    if (overBudget && !hitHeapCeiling) {
       // Hand off to the in-process watcher rather than stopping dead.
       //
       // This used to just give up, which was survivable while worker mode was
@@ -988,9 +976,21 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
         }
       }
       return;
-    } else {
-      respawnDelayMs = CRASH_RESPAWN_BACKOFF_MS[Math.min(crashes - 1, CRASH_RESPAWN_BACKOFF_MS.length - 1)];
     }
+    if (overBudget) {
+      serviceLog({
+        level: "error",
+        subsystem: "ingest-worker",
+        msg:
+          `crash budget exceeded (${crashes}/${MAX_RESPAWNS_PER_HOUR} in last hour, at least one ` +
+          `at the heap ceiling); not falling back to the main thread, which has no ceiling. ` +
+          `Ingest paused; retrying the worker in ${HEAP_CEILING_COOLDOWN_MS / 60_000} min.`,
+        crashesLastHour: crashes,
+      });
+    }
+    const respawnDelayMs = overBudget
+      ? HEAP_CEILING_COOLDOWN_MS
+      : CRASH_RESPAWN_BACKOFF_MS[Math.min(crashes - 1, CRASH_RESPAWN_BACKOFF_MS.length - 1)];
 
     state.worker = null;
     state.respawnTimer = setTimeout(() => {

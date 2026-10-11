@@ -101,13 +101,6 @@ interface WatcherState {
   initialReconcileInFlight: boolean;
   sweepTimer: NodeJS.Timeout | null;
   /**
-   * Re-arms a PENDING sweep at the current mode's interval; a no-op while a
-   * sweep runs (its own re-arm reads the new mode) or with the sweep disabled.
-   * Set by `startSweep`. Without it, a native watch that dies just after
-   * arming a 5 min sweep leaves the index blind for those 5 min.
-   */
-  rearmSweep: (() => void) | null;
-  /**
    * True when the caller pinned an explicit projectsDir (tests, worker
    * wiring). When false, reconcile passes omit projectsDir so
    * `reconcileAllSessions` resolves ALL readable Claude homes (primary +
@@ -327,7 +320,6 @@ export async function startIngestWatcher(
     needsAnotherPass: new Set(),
     initialReconcileInFlight: false,
     sweepTimer: null,
-    rearmSweep: null,
     explicitProjectsDir: options.projectsDir != null,
     stopped: false,
     activeWork: new Set(),
@@ -343,7 +335,6 @@ export async function startIngestWatcher(
   const setWatcherMode = (mode: IngestWatcherMode): void => {
     if (state.watcherMode === mode) return;
     state.watcherMode = mode;
-    state.rearmSweep?.();
     try {
       options.onWatcherMode?.(mode);
     } catch {
@@ -858,19 +849,19 @@ function startSweep(state: WatcherState): void {
   // doubling the work. setTimeout-after-completion guarantees one sweep
   // at a time. `stopIngestWatcher` clears whichever phase is pending.
   //
-  // The interval is read at every arm, not once here: the mode can change
-  // mid-run (a native watch dying drops to sweep-only), and the sweep is what
-  // covers for it.
-  let ticking = false;
+  // It wakes every `SWEEP_INTERVAL_MS` (or sooner, under a shorter override)
+  // but only sweeps once the CURRENT mode's interval has passed since the last
+  // sweep. Reading the mode at each wake means a native watch that dies is
+  // backstopped within 30 s, not after the rest of a 5 min wait.
+  let lastSweepAt = Date.now();
   const arm = (): void => {
     state.sweepTimer = setTimeout(
       () => { void trackWork(state, tick()); },
-      resolveSweepIntervalMs(state.watcherMode)
+      Math.min(SWEEP_INTERVAL_MS, resolveSweepIntervalMs(state.watcherMode))
     );
     state.sweepTimer.unref?.();
   };
   const tick = async (): Promise<void> => {
-    ticking = true;
     try {
       // Bail once shutting down — don't start a full reconcile that would
       // write to index.db while the shutdown disposer is closing it.
@@ -879,6 +870,8 @@ function startSweep(state: WatcherState): void {
       // one concurrently would race it file-by-file. Skip this tick and
       // let the re-arm in `finally` pick up after it completes.
       if (state.initialReconcileInFlight) return;
+      if (Date.now() - lastSweepAt < resolveSweepIntervalMs(state.watcherMode)) return;
+      lastSweepAt = Date.now();
       const db = getDbSync() ?? (await getDb());
       if (db) {
         await reconcileAllSessions(db, {
@@ -895,17 +888,11 @@ function startSweep(state: WatcherState): void {
       // eslint-disable-next-line no-console
       console.warn(`[ingest-watcher] sweep failed: ${(err as Error).message}`);
     } finally {
-      ticking = false;
       // Re-arm only if we're still the active watcher AND not shutting down
       // (stopIngestWatcher sets `stopped` and detaches the singleton via
       // `delete g.__minderIngestWatcher`).
       if (!state.stopped && g.__minderIngestWatcher === state) arm();
     }
-  };
-  state.rearmSweep = () => {
-    if (ticking || state.stopped || !state.sweepTimer) return;
-    clearTimeout(state.sweepTimer);
-    arm();
   };
   arm();
 }

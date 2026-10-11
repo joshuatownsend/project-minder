@@ -60,8 +60,7 @@ export async function discoverAllSessions(
   config: MinderConfig,
   options: { exclude?: readonly string[] } = {}
 ): Promise<SessionFile[]> {
-  // Excluded adapters never run `discover()` — the ingest sweep walks the
-  // Claude tree itself, and a second Claude walk per sweep was pure waste (#655).
+  // Excluded adapters' `discover()` is never called.
   const exclude = new Set(options.exclude);
   const adapters = getEnabledAdapters(config).filter((a) => !exclude.has(a.id));
   const results = await Promise.all(adapters.map((a) => a.discover()));
