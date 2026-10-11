@@ -123,6 +123,11 @@ describe("resolveSweepIntervalMs", () => {
     expect(resolveSweepIntervalMs("sweep-only", env)).toBe(60_000);
   });
 
+  it("raises a sub-second override to the 1 s minimum", () => {
+    expect(resolveSweepIntervalMs("native", { MINDER_SWEEP_INTERVAL_MS: "500" })).toBe(1_000);
+    expect(resolveSweepIntervalMs("sweep-only", { MINDER_SWEEP_INTERVAL_MS: "1" })).toBe(1_000);
+  });
+
   it("ignores an unusable override", () => {
     for (const bad of ["", "0", "-5", "abc", "1.5"]) {
       expect(resolveSweepIntervalMs("native", { MINDER_SWEEP_INTERVAL_MS: bad })).toBe(300_000);

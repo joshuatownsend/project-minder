@@ -53,7 +53,8 @@ const MIN_SWEEP_WAKE_MS = 1_000;
 
 /**
  * Delay before the next safety sweep. `MINDER_SWEEP_INTERVAL_MS` (a positive
- * integer) overrides every mode; otherwise native watching earns the long
+ * integer, raised to a 1 s minimum — a full sweep stats every transcript)
+ * overrides every mode; otherwise native watching earns the long
  * interval and chokidar / polling / sweep-only keep 30 s, since there the
  * sweep may be the only thing noticing changes. Exported for unit tests.
  */
@@ -62,7 +63,7 @@ export function resolveSweepIntervalMs(
   env: Record<string, string | undefined> = process.env
 ): number {
   const override = Number(env.MINDER_SWEEP_INTERVAL_MS);
-  if (Number.isInteger(override) && override > 0) return override;
+  if (Number.isInteger(override) && override > 0) return Math.max(MIN_SWEEP_WAKE_MS, override);
   return mode === "native" ? NATIVE_SWEEP_INTERVAL_MS : SWEEP_INTERVAL_MS;
 }
 
