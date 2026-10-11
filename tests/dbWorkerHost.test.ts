@@ -243,6 +243,50 @@ parentPort.on("message", (msg) => {
     expect(state!.respawnTimer).not.toBeNull();
   }, 15_000);
 
+  it("a heap-ceiling crash during a pending start handshake does not trigger the fallback (#656)", async () => {
+    // Codex, PR #668: the handshake rejects with the OOM error before the exit
+    // handler picks the cooldown, and its catch used to call onStartFailure —
+    // whose production callback stops the worker and starts the uncapped
+    // in-process watcher, defeating the cooldown.
+    const entry = createInlineWorker(`
+import { parentPort } from "node:worker_threads";
+parentPort.postMessage({ type: "ready" });
+parentPort.on("message", (msg) => {
+  // "start" is deliberately never acknowledged: the handshake stays pending.
+  if (msg?.type === "oom") {
+    const e = new Error("synthetic heap ceiling");
+    e.code = "ERR_WORKER_OUT_OF_MEMORY";
+    throw e;
+  }
+});
+`);
+    const host = await reloadHost();
+    const failures: Error[] = [];
+    await host.startWorker({
+      workerEntry: entry,
+      sendStart: true,
+      awaitStart: false,
+      onStartFailure: (err: Error) => failures.push(err),
+    });
+
+    const state = (globalThis as {
+      __minderWorker?: { crashHistory: number[]; respawnTimer: unknown };
+    }).__minderWorker;
+    const now = Date.now();
+    state!.crashHistory.push(now, now, now, now);
+
+    host.postMessage({ type: "oom" });
+
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline && host.getWorkerStatus().crashesLastHour < 1) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(failures).toHaveLength(0);
+    expect(state!.respawnTimer).not.toBeNull();
+  }, 15_000);
+
   it("respawns after an unexpected crash", async () => {
     const entry = createInlineWorker(TRIVIAL_WORKER);
     const host = await reloadHost();

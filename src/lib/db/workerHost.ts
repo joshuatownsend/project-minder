@@ -101,6 +101,17 @@ const ONE_HOUR_MS = 60 * 60 * 1000;
  */
 const HEAP_CEILING_COOLDOWN_MS = ONE_HOUR_MS;
 
+/**
+ * A worker that hits its heap ceiling also fails any pending start handshake,
+ * with this same error and before the exit handler runs. That failure must not
+ * reach `onStartFailure`: the exit handler owns a crash's recovery (respawn, or
+ * the cooldown above), and the fallback would move the runaway onto the main
+ * thread — the one outcome the cooldown exists to prevent (Codex, PR #668).
+ */
+function isHeapCeilingError(err: Error): boolean {
+  return (err as NodeJS.ErrnoException).code === "ERR_WORKER_OUT_OF_MEMORY";
+}
+
 type MessageSubscriber = (msg: unknown) => void;
 
 interface WorkerHostState {
@@ -404,7 +415,7 @@ export async function startWorker(options: StartWorkerOptions = {}): Promise<Wor
           err,
           elapsedMs: Date.now() - handshakeStartedAt,
           timeoutMs: state.startTimeoutMs,
-          willFallBack: state.onStartFailure !== null,
+          willFallBack: state.onStartFailure !== null && !isHeapCeilingError(err),
         });
         throw err;
       }
@@ -417,7 +428,7 @@ export async function startWorker(options: StartWorkerOptions = {}): Promise<Wor
       // already logged above). The worker also emits `started` /
       // `error/phase=start` on the subscriber bus regardless.
       startPromise.catch((err: Error) => {
-        state.onStartFailure?.(err);
+        if (!isHeapCeilingError(err)) state.onStartFailure?.(err);
       });
     }
   }
@@ -879,7 +890,7 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
     console.warn(`[ingest-worker] error: ${err.message}`);
     // The heap ceiling must be findable in `minder.log` as its own cause; the
     // exit handler only sees a non-zero code and logs it as a generic crash.
-    if ((err as NodeJS.ErrnoException).code === "ERR_WORKER_OUT_OF_MEMORY") {
+    if (isHeapCeilingError(err)) {
       // `error` precedes `exit`, so the exit handler's budget check sees this.
       state.lastHeapCeilingAt = Date.now();
       serviceLog({
@@ -1029,9 +1040,9 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
                 err,
                 elapsedMs: Date.now() - respawnHandshakeStartedAt,
                 timeoutMs: timeout,
-                willFallBack: fail !== null && fail !== undefined,
+                willFallBack: fail != null && !isHeapCeilingError(err),
               });
-              fail?.(err);
+              if (!isHeapCeilingError(err)) fail?.(err);
             });
           })
           .catch(() => {

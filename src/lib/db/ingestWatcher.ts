@@ -64,6 +64,16 @@ export function resolveSweepIntervalMs(
   if (Number.isInteger(override) && override > 0) return override;
   return mode === "native" ? NATIVE_SWEEP_INTERVAL_MS : SWEEP_INTERVAL_MS;
 }
+
+/**
+ * Delay until the sweep timer next wakes: when the interval falls due, but no
+ * later than `SWEEP_INTERVAL_MS` so a mode change is noticed promptly. Sleeping
+ * the exact remainder keeps an override like 45 s from rounding up to the next
+ * 30 s wake (Codex, PR #668). Exported for unit tests.
+ */
+export function nextSweepWakeMs(intervalMs: number, sinceLastSweepMs: number): number {
+  return Math.min(SWEEP_INTERVAL_MS, Math.max(0, intervalMs - sinceLastSweepMs));
+}
 const AWAIT_WRITE_FINISH_MS = 250;
 // Cap on how long we'll wait for chokidar's initial scan. A malformed
 // watch path or a permission issue can leave `ready` un-emitted; we
@@ -849,29 +859,32 @@ function startSweep(state: WatcherState): void {
   // doubling the work. setTimeout-after-completion guarantees one sweep
   // at a time. `stopIngestWatcher` clears whichever phase is pending.
   //
-  // It wakes every `SWEEP_INTERVAL_MS` (or sooner, under a shorter override)
-  // but only sweeps once the CURRENT mode's interval has passed since the last
-  // sweep. Reading the mode at each wake means a native watch that dies is
-  // backstopped within 30 s, not after the rest of a 5 min wait.
+  // It wakes when the CURRENT mode's interval falls due, but at least every
+  // `SWEEP_INTERVAL_MS`: re-reading the mode at each wake means a native watch
+  // that dies is backstopped within 30 s, not after the rest of a 5 min wait.
+  // `lastSweepAt` is when the last attempt ENDED, so the interval is measured
+  // from completion, as it always was.
   let lastSweepAt = Date.now();
   const arm = (): void => {
     state.sweepTimer = setTimeout(
       () => { void trackWork(state, tick()); },
-      Math.min(SWEEP_INTERVAL_MS, resolveSweepIntervalMs(state.watcherMode))
+      nextSweepWakeMs(resolveSweepIntervalMs(state.watcherMode), Date.now() - lastSweepAt)
     );
     state.sweepTimer.unref?.();
   };
   const tick = async (): Promise<void> => {
+    let attempted = false;
     try {
       // Bail once shutting down — don't start a full reconcile that would
       // write to index.db while the shutdown disposer is closing it.
       if (state.stopped) return;
+      // Woken only to re-read the mode; the re-arm below sleeps the remainder.
+      if (Date.now() - lastSweepAt < resolveSweepIntervalMs(state.watcherMode)) return;
+      attempted = true;
       // The deferred initial reconcile IS a full sweep; running a second
       // one concurrently would race it file-by-file. Skip this tick and
       // let the re-arm in `finally` pick up after it completes.
       if (state.initialReconcileInFlight) return;
-      if (Date.now() - lastSweepAt < resolveSweepIntervalMs(state.watcherMode)) return;
-      lastSweepAt = Date.now();
       const db = getDbSync() ?? (await getDb());
       if (db) {
         await reconcileAllSessions(db, {
@@ -888,6 +901,7 @@ function startSweep(state: WatcherState): void {
       // eslint-disable-next-line no-console
       console.warn(`[ingest-watcher] sweep failed: ${(err as Error).message}`);
     } finally {
+      if (attempted) lastSweepAt = Date.now();
       // Re-arm only if we're still the active watcher AND not shutting down
       // (stopIngestWatcher sets `stopped` and detaches the singleton via
       // `delete g.__minderIngestWatcher`).

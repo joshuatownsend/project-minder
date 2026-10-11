@@ -93,9 +93,20 @@ describe("resolveSweepIntervalMs", () => {
   // Imported dynamically: a static import of ingestWatcher pins the real ~/.minder DB path
   // (see dbIsolationGuard.test.ts).
   let resolveSweepIntervalMs: typeof import("@/lib/db/ingestWatcher").resolveSweepIntervalMs;
+  let nextSweepWakeMs: typeof import("@/lib/db/ingestWatcher").nextSweepWakeMs;
   beforeAll(async () => {
     await state.reload();
-    ({ resolveSweepIntervalMs } = await import("@/lib/db/ingestWatcher"));
+    ({ resolveSweepIntervalMs, nextSweepWakeMs } = await import("@/lib/db/ingestWatcher"));
+  });
+
+  it("wakes at most every 30 s, and exactly when a longer interval falls due", () => {
+    expect(nextSweepWakeMs(300_000, 0)).toBe(30_000);
+    expect(nextSweepWakeMs(300_000, 290_000)).toBe(10_000);
+    // A 45 s override sweeps at 45 s, not at the next 30 s boundary (60 s).
+    expect(nextSweepWakeMs(45_000, 0)).toBe(30_000);
+    expect(nextSweepWakeMs(45_000, 30_000)).toBe(15_000);
+    expect(nextSweepWakeMs(10_000, 0)).toBe(10_000);
+    expect(nextSweepWakeMs(30_000, 40_000)).toBe(0);
   });
 
   it("stretches the sweep only under a native watch", () => {
