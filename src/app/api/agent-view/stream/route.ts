@@ -1,8 +1,8 @@
 import { NextRequest } from "next/server";
 import { onAgentEvent } from "@/lib/agentView/eventBus";
 import { aggregateLiveSessions } from "@/lib/agentView/aggregate";
-import { startJobRosterWatcher, refreshRoster } from "@/lib/agentView/jobRoster";
-import { startJsonlWatcher } from "@/lib/agentView/jsonlWatcher";
+import { refreshRoster } from "@/lib/agentView/jobRoster";
+import { acquireAgentViewWatchers } from "@/lib/agentView/agentViewWatchers";
 import { readConfig } from "@/lib/config";
 
 // SSE endpoint for the Agent View live Kanban.
@@ -13,8 +13,9 @@ import { readConfig } from "@/lib/config";
 //   3. On each live event, re-aggregates and emits a "snapshot" delta.
 //   4. Heartbeats every 15 s as a comment line to defeat proxy timeouts.
 //
-// Cleanup is driven by request.signal so the listener is removed when the
-// client disconnects. Multiple concurrent tabs share the same globalThis
+// Cleanup is driven by request.signal so the listener is removed — and this
+// subscriber's hold on the watchers released (#657) — when the client
+// disconnects. Multiple concurrent tabs share the same globalThis
 // emitter; setMaxListeners(50) in eventBus.ts ensures no Node warning.
 //
 // Coalescing: drops intermediate events < 200 ms apart for the same
@@ -36,10 +37,9 @@ export async function GET(request: NextRequest): Promise<Response> {
   const config = await readConfig();
   const abandonMin = config.agentView?.abandonThresholdMin;
 
-  // Ensure watcher is running (idempotent due to globalThis guard), then wait
-  // for the initial roster load so the first snapshot includes daemon sessions.
-  startJobRosterWatcher();
-  startJsonlWatcher();
+  // Hold the watchers for this connection's lifetime, then wait for the initial
+  // roster load so the first snapshot includes daemon sessions.
+  const releaseWatchers = acquireAgentViewWatchers();
   await refreshRoster();
 
   const stream = new ReadableStream({
@@ -52,6 +52,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       function close() {
         if (closed) return;
         closed = true;
+        releaseWatchers();
         if (heartbeatTimer) clearTimeout(heartbeatTimer);
         for (const t of coalesceTimers.values()) clearTimeout(t);
         coalesceTimers.clear();
@@ -95,11 +96,14 @@ export async function GET(request: NextRequest): Promise<Response> {
         scheduleCoalesce(ev.sessionId);
       });
 
-      // Cleanup on disconnect
-      request.signal.addEventListener("abort", () => {
+      // Cleanup on disconnect. A client that left during the awaits above has
+      // already fired `abort`, which a listener added now would never see.
+      const cleanup = () => {
         unsubscribe();
         close();
-      });
+      };
+      if (request.signal.aborted) cleanup();
+      else request.signal.addEventListener("abort", cleanup, { once: true });
     },
   });
 

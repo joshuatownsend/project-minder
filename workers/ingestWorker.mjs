@@ -71,6 +71,11 @@ try {
   watcherLoadError = errorMessage(err);
 }
 
+// #657: ingest's "session X was re-indexed" events fire on this isolate's
+// buses, where nothing listens. Relay them so the host can re-emit them to
+// Agent View and `/api/events`.
+watcher?.forwardIngestEvents?.((message) => parentPort.postMessage(message));
+
 parentPort.postMessage({
   type: "ready",
   at: Date.now(),

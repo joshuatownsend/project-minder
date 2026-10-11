@@ -3,7 +3,7 @@ import { getLiveStatusPayload } from "@/lib/liveStatus";
 import { sweepAndGetState, getHookBuffer, STOP_EVENTS } from "@/lib/hooks/buffer";
 import type { HookEvent } from "@/lib/hooks/buffer";
 import { getRosterEntries } from "./jobRoster";
-import { getLiveSessionMetrics } from "./liveCostCache";
+import { getLiveSessionMetrics, pruneLiveMetricsCache } from "./liveCostCache";
 import type { LiveAgentSession, AgentSessionStatus, LivenessSource } from "./types";
 import { STATUS_ORDER } from "./types";
 import type { LiveSessionStatus } from "@/lib/types";
@@ -257,15 +257,16 @@ export async function aggregateLiveSessions(
   // (completed/failed/stopped) are skipped — their data lives in the historical
   // /sessions/[id] view which already computes these numbers.
   const nonTerminalStatuses = new Set<AgentSessionStatus>(["waiting", "working", "idle"]);
+  const enriched = sessions.filter((s) => nonTerminalStatuses.has(s.status));
   await Promise.all(
-    sessions.map(async (session) => {
-      if (!nonTerminalStatuses.has(session.status)) return;
+    enriched.map(async (session) => {
       const metrics = await getLiveSessionMetrics(session.sessionId);
       if (!metrics) return;
       if (metrics.totalCostUsd > 0) session.costEstimate = metrics.totalCostUsd;
       if (metrics.contextFill > 0) session.maxContextFill = metrics.contextFill;
     }),
   );
+  pruneLiveMetricsCache(new Set(enriched.map((s) => s.sessionId)));
 
   sessions.sort((a, b) => {
     const diff = STATUS_ORDER[a.status] - STATUS_ORDER[b.status];

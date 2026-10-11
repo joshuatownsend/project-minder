@@ -4,6 +4,9 @@ import { Worker } from "node:worker_threads";
 import { serviceLog, type LogEntry } from "@/lib/serviceLog";
 import { workerEnvFor } from "@/lib/db/cleanShutdown";
 import type { IngestWatcherMode } from "@/lib/types/init";
+import { bridgeJsonlAppendToEventBus } from "@/lib/agentView/eventBus";
+import { emitMinderEvent } from "@/lib/events/bus";
+import { MINDER_EVENT_TYPES, type MinderEventType } from "@/lib/events/types";
 
 // Main-thread orchestrator for the ingest worker.
 //
@@ -769,6 +772,26 @@ export function absorbWorkerMessage(
       // `watcher-status` tick hasn't landed yet (#563). Finite guard as above.
       if (isFiniteNumber(m.ms) && state.watcher) {
         state.watcher = { ...state.watcher, initialReconcileMs: m.ms };
+      }
+      return;
+    }
+    case "agent-event": {
+      // Ingest's post-commit "session re-indexed" signal, relayed by
+      // `forwardIngestEvents` (#657). Only that kind originates in the worker;
+      // rebuild it from validated fields rather than re-emitting the payload.
+      const ev = m.event as Record<string, unknown> | undefined;
+      if (
+        ev && typeof ev === "object" && ev.kind === "jsonl-tail" &&
+        typeof ev.sessionId === "string" && typeof ev.slug === "string"
+      ) {
+        bridgeJsonlAppendToEventBus(ev.sessionId, ev.slug);
+      }
+      return;
+    }
+    case "minder-event": {
+      const type = (m.event as { type?: unknown } | undefined)?.type;
+      if ((MINDER_EVENT_TYPES as readonly unknown[]).includes(type)) {
+        emitMinderEvent(type as MinderEventType);
       }
       return;
     }

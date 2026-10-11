@@ -19,11 +19,12 @@ vi.mock("@/lib/agentView/jobRoster", () => ({
 
 vi.mock("@/lib/agentView/liveCostCache", () => ({
   getLiveSessionMetrics: vi.fn(),
+  pruneLiveMetricsCache: vi.fn(),
 }));
 
 import { getLiveStatusPayload } from "@/lib/liveStatus";
 import { getRosterEntries } from "@/lib/agentView/jobRoster";
-import { getLiveSessionMetrics } from "@/lib/agentView/liveCostCache";
+import { getLiveSessionMetrics, pruneLiveMetricsCache } from "@/lib/agentView/liveCostCache";
 import { aggregateLiveSessions } from "@/lib/agentView/aggregate";
 
 const mockGetLiveStatus = vi.mocked(getLiveStatusPayload);
@@ -104,6 +105,18 @@ describe("aggregateLiveSessions — metrics wiring", () => {
 
       await aggregateLiveSessions();
       expect(mockGetMetrics).not.toHaveBeenCalledWith("s4");
+    });
+  });
+
+  describe("cache eviction (#657)", () => {
+    it("keeps exactly the sessions it enriched", async () => {
+      mockGetLiveStatus.mockResolvedValue({ generatedAt: new Date(NOW).toISOString(), sessions: [jsonlSession("s6", "working")], cliAvailable: false });
+      mockGetRoster.mockReturnValue([rosterEntry("s7", "working"), rosterEntry("s8", "completed")]);
+
+      await aggregateLiveSessions();
+      expect(pruneLiveMetricsCache).toHaveBeenCalledTimes(1);
+      const kept = vi.mocked(pruneLiveMetricsCache).mock.calls[0][0];
+      expect([...kept].sort()).toEqual(["s6", "s7"]);
     });
   });
 

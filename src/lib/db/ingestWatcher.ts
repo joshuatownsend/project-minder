@@ -9,6 +9,8 @@ import { isShuttingDown } from "@/lib/lifecycle";
 import { closeOrphanedIndexerRuns, recordOptionForSweep } from "./indexerRuns";
 import { serviceLog } from "@/lib/serviceLog";
 import type { IngestWatcherMode } from "@/lib/types/init";
+import { onAgentEvent } from "@/lib/agentView/eventBus";
+import { onMinderEvent } from "@/lib/events/bus";
 
 // Incremental ingest driven by one recursive OS watch (chokidar as fallback).
 //
@@ -682,6 +684,38 @@ export async function stopIngestWatcher(): Promise<void> {
     await Promise.allSettled([...state.activeWork]);
   }
   delete g.__minderIngestWatcher;
+}
+
+/** A bus event the ingest worker hands to the main thread. */
+export type ForwardedIngestEvent =
+  | { type: "agent-event"; event: import("@/lib/agentView/types").LiveAgentEvent }
+  | { type: "minder-event"; event: import("@/lib/events/types").MinderEvent };
+
+/**
+ * Relay this isolate's bus events to the host (#657). Called by the worker
+ * entry only — on the main thread the buses already reach their listeners.
+ *
+ * Both buses live on `globalThis`, which is per-isolate: inside the ingest
+ * worker, `bridgeJsonlAppendToEventBus` and `emitMinderEvent("sessions.changed")`
+ * fire on the worker's copy, where no SSE route listens. Without this relay
+ * Agent View never learned that the index had caught up with a session, and
+ * `/api/events` never saw `sessions.changed` while ingest ran in the worker.
+ * `workerHost` re-emits each message on the main thread's buses.
+ */
+export function forwardIngestEvents(post: (message: ForwardedIngestEvent) => void): () => void {
+  const send = (message: ForwardedIngestEvent) => {
+    try {
+      post(message);
+    } catch {
+      /* a lost notification must never break the ingest pass that emitted it */
+    }
+  };
+  const offAgent = onAgentEvent((event) => send({ type: "agent-event", event }));
+  const offMinder = onMinderEvent((event) => send({ type: "minder-event", event }));
+  return () => {
+    offAgent();
+    offMinder();
+  };
 }
 
 export function getWatcherStatus(): WatcherStatus {
