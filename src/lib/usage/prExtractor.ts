@@ -95,6 +95,47 @@ function toolResultText(content: unknown): string {
 }
 
 /**
+ * Straddle-recovery gate for a tail parse window (#654). True only when the
+ * window holds a `tool_result` whose `tool_use_id` has no `tool_use` in the
+ * same window AND whose text contains a GitHub PR URL.
+ *
+ * An unmatched result alone is the normal case, not the rare one: a tool call
+ * and its result are written in separate appends, so nearly every tail starts
+ * with one. Gating on that alone sent every tool call in every live session
+ * through a full-file re-parse. The URL check loses nothing: the scraper in
+ * `extractPrsFromEntries` can only yield a link from a result whose text
+ * matches `PR_URL_RE`, so a result without one has nothing to recover.
+ */
+export function tailNeedsPrRecovery(entries: Iterable<ConversationEntry | null>): boolean {
+  const toolUseIds = new Set<string>();
+  const candidates: Array<{ id: string; content: unknown }> = [];
+  for (const e of entries) {
+    if (!e) continue;
+    if (e.type === "assistant" && Array.isArray(e.message?.content)) {
+      for (const block of e.message.content as Array<Record<string, unknown>>) {
+        if (block.type === "tool_use" && typeof block.id === "string") toolUseIds.add(block.id);
+      }
+      continue;
+    }
+    if (e.type !== "user") continue;
+    // Same length-based fallback as `extractPrsFromEntries`: an empty
+    // `message.content` defers to top-level `content`.
+    const messageContent = (e.message?.content as unknown) ?? [];
+    const content =
+      Array.isArray(messageContent) && messageContent.length === 0
+        ? ((e as { content?: unknown }).content ?? messageContent)
+        : messageContent;
+    if (!Array.isArray(content)) continue;
+    for (const block of content as Array<Record<string, unknown>>) {
+      if (block.type === "tool_result" && typeof block.tool_use_id === "string") {
+        candidates.push({ id: block.tool_use_id, content: block.content });
+      }
+    }
+  }
+  return candidates.some((c) => !toolUseIds.has(c.id) && PR_URL_RE.test(toolResultText(c.content)));
+}
+
+/**
  * Walk a session's `ConversationEntry[]` once and yield every PR link the
  * session produced, from two sources:
  *

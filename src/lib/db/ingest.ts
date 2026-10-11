@@ -39,7 +39,7 @@ import {
 } from "@/lib/usage/contentBlocks";
 import { categorizeToolError } from "@/lib/usage/toolErrorCategorizer";
 import { aggregateWorkMode } from "@/lib/usage/workMode";
-import { extractPrsFromEntries } from "@/lib/usage/prExtractor";
+import { extractPrsFromEntries, tailNeedsPrRecovery } from "@/lib/usage/prExtractor";
 import type { PrLink, TicketLink } from "@/lib/types";
 import { isFileWriteOp, type FileOp } from "@/lib/usage/toolNames";
 import {
@@ -589,9 +589,10 @@ interface ReadResult {
   /**
    * T2.2 straddle-recovery signal — true when this parse window contains
    * one or more `tool_result` blocks whose `tool_use_id` isn't matched by
-   * a `tool_use` block in the same window. On a tail parse this is the
-   * fingerprint of a `gh pr create` Bash call written in the prefix whose
-   * result lands in the tail; the caller does a full-file PR re-extract
+   * a `tool_use` block in the same window AND whose text contains a PR URL
+   * (#654 — an unmatched result alone is the common case). On a tail parse
+   * this is the fingerprint of a `gh pr create` Bash call written in the
+   * prefix whose result lands in the tail; the caller does a full-file PR re-extract
    * to catch it. Always `false` on full parses (`fromOffset = 0`) since
    * any unmatched result would also be unrecoverable. Read review #1.
    */
@@ -814,34 +815,10 @@ async function readJsonlSession(
   // full-file PR re-extract when this fires so the PR isn't silently lost
   // (review #1). Only meaningful for tails — on a `fromOffset === 0`
   // full parse the recovery is moot because the full file is already in
-  // scope.
-  let hasOrphanToolResults = false;
-  if (fromOffset > 0) {
-    const toolUseIds = new Set<string>();
-    for (const { entry: e } of parsedLines) {
-      if (!e || e.type !== "assistant" || !Array.isArray(e.message?.content)) continue;
-      for (const block of e.message.content as Array<Record<string, unknown>>) {
-        if (block.type === "tool_use" && typeof block.id === "string") {
-          toolUseIds.add(block.id);
-        }
-      }
-    }
-    outer: for (const { entry: e } of parsedLines) {
-      if (!e || e.type !== "user") continue;
-      const ec = (e.message?.content as unknown) ?? (e as { content?: unknown }).content;
-      if (!Array.isArray(ec)) continue;
-      for (const block of ec as Array<Record<string, unknown>>) {
-        if (
-          block.type === "tool_result" &&
-          typeof block.tool_use_id === "string" &&
-          !toolUseIds.has(block.tool_use_id)
-        ) {
-          hasOrphanToolResults = true;
-          break outer;
-        }
-      }
-    }
-  }
+  // scope. Gated on the orphan result carrying a PR URL (#654) — see
+  // `tailNeedsPrRecovery`.
+  const hasOrphanToolResults =
+    fromOffset > 0 && tailNeedsPrRecovery(parsedLines.map((p) => p.entry));
 
   // Tracks the timestamp of the most-recent user turn so the following
   // assistant turn can look up that turn's slash-command set.
@@ -3445,11 +3422,11 @@ export async function reconcileSessionFile(
     // prefix, the tail extractor can't match the pair on its own —
     // bashPrCalls in `safeExtractPrs` only ever sees the tail window. Do
     // a fallback full-file PR pass and INSERT OR IGNORE so the chip
-    // appears without waiting on the next DERIVED_VERSION bump. The
-    // orphan-result flag was computed cheaply during the tail parse so we
-    // skip this whole branch on the common case (no orphan = nothing to
-    // recover). Logs and returns soft on any error — never blocks the
-    // tail-append's primary correctness.
+    // appears without waiting on the next DERIVED_VERSION bump. The flag
+    // only fires when the orphan result carries a PR URL (#654), so the
+    // common case — every ordinary tool call — skips this branch. Logs and
+    // returns soft on any error — never blocks the tail-append's primary
+    // correctness.
     let recovered = 0;
     if (tailResult.hasOrphanToolResults) {
       recovered = await recoverStraddledPrs(db, filePath, sessionId);

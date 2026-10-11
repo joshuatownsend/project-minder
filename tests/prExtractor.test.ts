@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractPrLinkFromText,
   extractPrsFromEntries,
+  tailNeedsPrRecovery,
 } from "@/lib/usage/prExtractor";
 import type { ConversationEntry } from "@/lib/scanner/claudeConversations";
 
@@ -505,5 +506,43 @@ describe("extractPrsFromEntries — authoritative pr-link entries", () => {
       { type: "pr-link", prNumber: 9 } as ConversationEntry,
     ];
     expect(extractPrsFromEntries(entries)).toEqual([]);
+  });
+});
+
+describe("tailNeedsPrRecovery (#654)", () => {
+  const PR = "https://github.com/foo/bar/pull/88";
+
+  it("is false for an orphan result without a PR URL — the common tail shape", () => {
+    expect(tailNeedsPrRecovery([userToolResult("tu_prefix", "added 3 files")])).toBe(false);
+  });
+
+  it("is true for an orphan result carrying a PR URL", () => {
+    expect(tailNeedsPrRecovery([userToolResult("tu_prefix", PR)])).toBe(true);
+  });
+
+  it("is false when the PR result's tool_use is in the same window", () => {
+    expect(
+      tailNeedsPrRecovery([assistantBashCall("tu_1", "gh pr create --fill"), userToolResult("tu_1", PR)]),
+    ).toBe(false);
+  });
+
+  it("reads text blocks in array-shaped result content", () => {
+    expect(tailNeedsPrRecovery([userToolResult("tu_prefix", [{ type: "text", text: PR }])])).toBe(true);
+  });
+
+  it("falls back to top-level content when message.content is empty", () => {
+    const entry = {
+      type: "user",
+      timestamp: "2026-05-26T12:00:01Z",
+      message: { role: "user", content: [] },
+      content: [{ type: "tool_result", tool_use_id: "tu_prefix", content: PR }],
+    } as unknown as ConversationEntry;
+    expect(tailNeedsPrRecovery([entry])).toBe(true);
+  });
+
+  it("ignores non-PR GitHub URLs and null entries", () => {
+    expect(
+      tailNeedsPrRecovery([null, userToolResult("tu_prefix", "https://github.com/foo/bar/issues/5")]),
+    ).toBe(false);
   });
 });
