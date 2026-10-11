@@ -239,8 +239,10 @@ parentPort.on("message", (msg) => {
 
     expect(failures).toHaveLength(0);
     expect(host.getWorkerStatus().running).toBe(false);
-    // A cooldown respawn is pending (cancelled by stopWorker in afterEach).
+    // A cooldown respawn is pending (cancelled by stopWorker in afterEach),
+    // and status reports the pause rather than a pending reconcile.
     expect(state!.respawnTimer).not.toBeNull();
+    expect(host.getWorkerStatus().pausedUntil).toBeGreaterThan(Date.now());
   }, 15_000);
 
   it("a heap-ceiling crash during a pending start handshake does not trigger the fallback (#656)", async () => {

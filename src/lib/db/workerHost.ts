@@ -129,6 +129,8 @@ interface WorkerHostState {
    * see `HEAP_CEILING_COOLDOWN_MS`.
    */
   lastHeapCeilingAt: number | null;
+  /** See `WorkerHostStatus.pausedUntil`. Cleared when the cooldown respawn fires. */
+  pausedUntil: number | null;
   respawnTimer: NodeJS.Timeout | null;
   /** Set true once stopWorker is called; suppresses respawn. */
   stopping: boolean;
@@ -259,6 +261,7 @@ function freshState(readyTimeoutMs: number, workerEntry: string): WorkerHostStat
     lastMessageAt: null,
     crashHistory: [],
     lastHeapCeilingAt: null,
+    pausedUntil: null,
     respawnTimer: null,
     stopping: false,
     readyPromise: null,
@@ -289,6 +292,12 @@ export interface WorkerHostStatus {
   memory: WorkerMemorySample | null;
   /** Watcher state inside the worker, last report (#558). Null until `started` arrives. */
   watcher: WorkerWatcherSnapshot | null;
+  /**
+   * Set while ingest is deliberately paused after heap-ceiling crashes (#656):
+   * when the worker will be retried. Null otherwise. Not a pending reconcile —
+   * nothing is running, and waiters must not hold off for it.
+   */
+  pausedUntil: number | null;
 }
 
 export interface StartWorkerOptions {
@@ -661,6 +670,7 @@ export function getWorkerStatus(): WorkerHostStatus {
       workerEntry: "",
       memory: null,
       watcher: null,
+      pausedUntil: null,
     };
   }
   return snapshot(state);
@@ -703,6 +713,7 @@ function snapshot(state: WorkerHostState): WorkerHostStatus {
     workerEntry: state.workerEntry,
     memory: state.worker !== null ? state.memory : null,
     watcher: state.worker !== null ? state.watcher : null,
+    pausedUntil: state.pausedUntil,
   };
 }
 
@@ -1002,10 +1013,12 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
     const respawnDelayMs = overBudget
       ? HEAP_CEILING_COOLDOWN_MS
       : CRASH_RESPAWN_BACKOFF_MS[Math.min(crashes - 1, CRASH_RESPAWN_BACKOFF_MS.length - 1)];
+    if (overBudget) state.pausedUntil = Date.now() + respawnDelayMs;
 
     state.worker = null;
     state.respawnTimer = setTimeout(() => {
       state.respawnTimer = null;
+      state.pausedUntil = null;
       if (state.stopping || g.__minderWorker !== state) return;
       spawnAndAttach(state, entry);
       const respawnedAt = Date.now();

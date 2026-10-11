@@ -40,6 +40,7 @@ const idleWorker = {
   workerEntry: "",
   memory: null,
   watcher: null,
+  pausedUntil: null,
 };
 
 describe("formatMemorySample", () => {
