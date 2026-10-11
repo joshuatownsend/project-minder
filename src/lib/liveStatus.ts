@@ -141,7 +141,9 @@ async function buildStatusPayload(): Promise<{ data: StatusPayload; transient: b
           // #672: the index knows which transcripts are recent; stat only those.
           if (statFilter && !isCliAlive && !statFilter.mustStat(filePath)) continue;
           const fstat = await fs.stat(filePath);
-          if (now - fstat.mtime.getTime() > SESSION_MAX_AGE_MS && !isCliAlive) continue;
+          const writtenSince = now - fstat.mtime.getTime() <= SESSION_MAX_AGE_MS;
+          statFilter?.observed(filePath, writtenSince);
+          if (!writtenSince && !isCliAlive) continue;
 
           const cacheKey = `${dir}/${sessionId}`;
           const previousMtimeMs = mtimeCache.get(cacheKey)?.lastMtime;

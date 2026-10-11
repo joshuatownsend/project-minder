@@ -8,7 +8,7 @@ import fsSync, { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync } fro
 // its session is CLI-alive), and with no filter every transcript is.
 
 const mocks = vi.hoisted(() => ({
-  filter: null as null | { mustStat: (p: string) => boolean },
+  filter: null as null | { mustStat: (p: string) => boolean; observed: (p: string, w: boolean) => void },
   live: [] as Array<{ sessionId: string; pid: number; startedAt: number }>,
 }));
 
@@ -58,7 +58,7 @@ describe("live status stat filter (#672)", () => {
     const recent = transcript("recent", HOUR);
     transcript("old", 30 * HOUR);
     const fresh = transcript("fresh", 1_000);
-    mocks.filter = { mustStat: (p) => p === recent || p === fresh };
+    mocks.filter = { mustStat: (p) => p === recent || p === fresh, observed: () => {} };
     const stat = vi.spyOn(fsSync.promises, "stat");
 
     const { sessions } = await getLiveStatusPayload();
@@ -69,7 +69,7 @@ describe("live status stat filter (#672)", () => {
 
   it("still stats a ruled-out transcript whose session the CLI reports alive", async () => {
     transcript("resumed", 30 * HOUR);
-    mocks.filter = { mustStat: () => false };
+    mocks.filter = { mustStat: () => false, observed: () => {} };
     mocks.live = [{ sessionId: "resumed", pid: 42, startedAt: Date.now() }];
     const stat = vi.spyOn(fsSync.promises, "stat");
 
@@ -88,5 +88,16 @@ describe("live status stat filter (#672)", () => {
 
     expect(statted(stat)).toEqual(["a", "b"]);
     expect(sessions.map((s) => s.sessionId)).toEqual(["a"]);
+  });
+
+  it("reports what each stat found back to the filter", async () => {
+    const recent = transcript("recent", HOUR);
+    const old = transcript("old", 30 * HOUR);
+    const seen: Array<[string, boolean]> = [];
+    mocks.filter = { mustStat: () => true, observed: (p, w) => void seen.push([p, w]) };
+
+    await getLiveStatusPayload();
+
+    expect(seen.sort()).toEqual([[old, false], [recent, true]].sort());
   });
 });

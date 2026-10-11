@@ -10,13 +10,29 @@ import { readIndexCurrent } from "@/lib/db/ingestSettled";
  */
 export const KNOWN_RELOAD_MS = 10 * 60_000;
 
+/**
+ * How often one rebuild stats every transcript anyway, to catch rows the index
+ * has let fall behind their file: a transcript that fails to parse keeps its old
+ * `file_mtime_ms` through every reconcile, and a missed watch event or a long
+ * backfill holds a row back for a while. ~5 CPU-s per pass on a 13k-transcript
+ * corpus — about 0.02 cores at this interval.
+ */
+export const VERIFY_EVERY_MS = 5 * 60_000;
+
 export interface TranscriptStatFilter {
   /** False only when the index says `filePath` has not been written since `since`. */
   mustStat(filePath: string): boolean;
+  /**
+   * Report what a stat found. A file written since `since` that the index calls
+   * old is lagging: it is stat'ed on every rebuild until the index catches up or
+   * the file ages out.
+   */
+  observed(filePath: string, writtenSince: boolean): void;
 }
 
 const g = globalThis as unknown as {
   __minderIndexedTranscripts?: { paths: Set<string>; loadedAt: number };
+  __minderTranscriptCheck?: { lagging: Set<string>; verifiedAt: number };
 };
 
 /**
@@ -27,7 +43,9 @@ const g = globalThis as unknown as {
  * ~5 CPU-s — to find the few touched in the last four hours. The ingest watcher
  * updates `sessions.file_mtime_ms` within seconds of an append, so the index
  * already knows which transcripts are recent; a file it has never seen (a
- * session created since the last reconcile) is still stat'ed.
+ * session created since the last reconcile) is still stat'ed. Where the index
+ * is wrong, the periodic full pass (`VERIFY_EVERY_MS`) finds the file and keeps
+ * it stat'ed from then on.
  *
  * Returns null — stat everything, as before — when the index is off
  * (`MINDER_USE_DB=0`), it isn't known to be current (`readIndexCurrent`:
@@ -52,19 +70,31 @@ export async function indexedTranscriptFilter(since: number): Promise<Transcript
     const recent = new Set(recentRows.map((r) => r.file_path));
     const lookup = prepCached(db, "SELECT 1 FROM sessions WHERE file_path = ?");
     const { paths } = known;
-    return {
-      mustStat(filePath) {
-        if (recent.has(filePath)) return true;
-        if (paths.has(filePath)) return false;
-        try {
-          if (lookup.get(filePath)) {
-            paths.add(filePath);
-            return false;
-          }
-        } catch {
-          /* unreadable — stat it */
+
+    const check = (g.__minderTranscriptCheck ??= { lagging: new Set(), verifiedAt: now });
+    const verifying = now - check.verifiedAt >= VERIFY_EVERY_MS;
+    if (verifying) check.verifiedAt = now;
+    const { lagging } = check;
+
+    const indexMayBeRecent = (filePath: string): boolean => {
+      if (recent.has(filePath)) return true;
+      if (paths.has(filePath)) return false;
+      try {
+        if (lookup.get(filePath)) {
+          paths.add(filePath);
+          return false;
         }
-        return true;
+      } catch {
+        /* unreadable — stat it */
+      }
+      return true;
+    };
+
+    return {
+      mustStat: (filePath) => verifying || lagging.has(filePath) || indexMayBeRecent(filePath),
+      observed(filePath, writtenSince) {
+        if (writtenSince && !indexMayBeRecent(filePath)) lagging.add(filePath);
+        else lagging.delete(filePath);
       },
     };
   } catch {
@@ -72,7 +102,8 @@ export async function indexedTranscriptFilter(since: number): Promise<Transcript
   }
 }
 
-/** Test hook: forget the cached set of indexed paths. */
+/** Test hook: forget the cached index paths and the verification state. */
 export function _resetIndexedTranscriptsForTesting(): void {
   delete g.__minderIndexedTranscripts;
+  delete g.__minderTranscriptCheck;
 }

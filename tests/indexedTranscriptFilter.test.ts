@@ -107,4 +107,35 @@ describe.skipIf(!driverAvailable)("indexedTranscriptFilter (#672)", () => {
     ingest.current = true;
     expect(await indexedTranscriptFilter(SINCE)).not.toBeNull();
   });
+
+  it("stats everything once per verification interval, and not on the first filtered rebuild", async () => {
+    const { db, indexedTranscriptFilter, VERIFY_EVERY_MS } = await setup();
+    index(db, "old.jsonl", NOW - 30 * HOUR);
+    expect((await indexedTranscriptFilter(SINCE))!.mustStat("old.jsonl")).toBe(false);
+    vi.mocked(Date.now).mockReturnValue(NOW + VERIFY_EVERY_MS);
+    expect((await indexedTranscriptFilter(SINCE))!.mustStat("old.jsonl")).toBe(true); // verifying
+    expect((await indexedTranscriptFilter(SINCE))!.mustStat("old.jsonl")).toBe(false); // next one is not
+  });
+
+  it("keeps stat'ing a file the index has fallen behind on, until it catches up or the file ages out", async () => {
+    const { db, indexedTranscriptFilter } = await setup();
+    index(db, "stuck.jsonl", NOW - 30 * HOUR); // e.g. fails to parse, so its row never moves
+    const verify = (await indexedTranscriptFilter(SINCE))!;
+    verify.observed("stuck.jsonl", true); // a full pass found it written recently
+    expect((await indexedTranscriptFilter(SINCE))!.mustStat("stuck.jsonl")).toBe(true);
+    expect((await indexedTranscriptFilter(SINCE))!.mustStat("stuck.jsonl")).toBe(true);
+
+    (await indexedTranscriptFilter(SINCE))!.observed("stuck.jsonl", false); // aged out
+    expect((await indexedTranscriptFilter(SINCE))!.mustStat("stuck.jsonl")).toBe(false);
+  });
+
+  it("drops a lagging file once the index records its write", async () => {
+    const { db, indexedTranscriptFilter } = await setup();
+    index(db, "slow.jsonl", NOW - 30 * HOUR);
+    (await indexedTranscriptFilter(SINCE))!.observed("slow.jsonl", true);
+    index(db, "slow.jsonl", NOW - 1_000); // reconcile caught up
+    (await indexedTranscriptFilter(SINCE))!.observed("slow.jsonl", true);
+    index(db, "slow.jsonl", NOW - 30 * HOUR); // pretend the row went old again
+    expect((await indexedTranscriptFilter(SINCE))!.mustStat("slow.jsonl")).toBe(false);
+  });
 });
