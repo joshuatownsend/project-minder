@@ -75,27 +75,58 @@ export async function readInitialReconcilePending(): Promise<boolean> {
   // Demo mode serves synthetic fixtures and has no real reconcile to wait for.
   if (process.env.MINDER_DEMO === "1") return false;
   try {
-    const [{ getWorkerStatus }, { getWatcherStatus, isIndexUnusable }] = await Promise.all([
-      import("./workerHost"),
-      import("./ingestWatcher"),
-    ]);
-    const worker = getWorkerStatus();
+    const live = await readLiveIngest();
     // Ingest deliberately paused after heap-ceiling crashes (#656): no reconcile
     // is running, so nothing to wait for (Codex, PR #668).
-    if (worker.pausedUntil != null) return false;
-    const initialReconcileMs = worker.running
-      ? (worker.watcher?.initialReconcileMs ?? null)
-      : getWatcherStatus().initialReconcileMs;
+    if (live.paused) return false;
     return initialReconcilePending({
-      dbUnusable: isIndexUnusable(),
+      dbUnusable: live.dbUnusable,
       mode: resolveIngestMode(),
-      initialReconcileMs,
+      initialReconcileMs: live.initialReconcileMs,
     });
   } catch {
     // A status read that cannot answer must not be the reason grades never
     // compute: fail open, exactly as the readiness predicates in indexerRuns do.
     return false;
   }
+}
+
+/**
+ * Is the index current — this boot's initial reconcile finished, and ingest
+ * running and not paused? Fail-CLOSED, unlike [`readInitialReconcilePending`]:
+ * a caller asking this wants to skip work on the index's word, so any doubt
+ * (indexer off, reconcile not done, worker respawning or paused, unreadable
+ * status) answers false. Until the initial pass finishes, a transcript written
+ * while Minder was stopped still carries its old indexed mtime (#672, Codex).
+ */
+export async function readIndexCurrent(): Promise<boolean> {
+  if (resolveIngestMode() === "off") return false;
+  try {
+    const live = await readLiveIngest();
+    return !live.paused && !live.dbUnusable && live.initialReconcileMs !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** The ingest readings `/api/health` uses, from whichever host runs the watcher. */
+async function readLiveIngest(): Promise<{
+  paused: boolean;
+  dbUnusable: boolean;
+  initialReconcileMs: number | null;
+}> {
+  const [{ getWorkerStatus }, { getWatcherStatus, isIndexUnusable }] = await Promise.all([
+    import("./workerHost"),
+    import("./ingestWatcher"),
+  ]);
+  const worker = getWorkerStatus();
+  return {
+    paused: worker.pausedUntil != null,
+    dbUnusable: isIndexUnusable(),
+    initialReconcileMs: worker.running
+      ? (worker.watcher?.initialReconcileMs ?? null)
+      : getWatcherStatus().initialReconcileMs,
+  };
 }
 
 /** Poll cadence and ceiling for [`waitUntilSettled`]. */

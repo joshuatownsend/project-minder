@@ -3,17 +3,23 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 // The live reader imports these on demand. Stubbed so the regression test below
 // controls exactly what "ingest is running but has not reported" looks like,
 // without starting a watcher or touching a database.
-const workerStatus = vi.hoisted(() => ({ running: false, pausedUntil: null as number | null }));
+const workerStatus = vi.hoisted(() => ({
+  running: false,
+  pausedUntil: null as number | null,
+  watcher: null as { initialReconcileMs: number | null } | null,
+}));
+const inProcess = vi.hoisted(() => ({ initialReconcileMs: null as number | null, unusable: false }));
 vi.mock("@/lib/db/workerHost", () => ({
   getWorkerStatus: () => workerStatus,
 }));
 vi.mock("@/lib/db/ingestWatcher", () => ({
-  getWatcherStatus: () => ({ initialReconcileMs: null }),
-  isIndexUnusable: () => false,
+  getWatcherStatus: () => ({ initialReconcileMs: inProcess.initialReconcileMs }),
+  isIndexUnusable: () => inProcess.unusable,
 }));
 
 import {
   initialReconcilePending,
+  readIndexCurrent,
   readInitialReconcilePending,
   waitUntilSettled,
 } from "@/lib/db/ingestSettled";
@@ -85,6 +91,53 @@ describe("readInitialReconcilePending", () => {
     vi.stubEnv("MINDER_DEMO", "");
     vi.stubEnv("MINDER_INDEXER", "0");
     await expect(readInitialReconcilePending()).resolves.toBe(false);
+  });
+});
+
+// #672 (Codex, PR #673): live status skips transcripts on the index's word, so
+// it may only do that once this boot's initial reconcile has caught the index up
+// with every transcript written while Minder was stopped.
+describe("readIndexCurrent", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    Object.assign(workerStatus, { running: false, pausedUntil: null, watcher: null });
+    Object.assign(inProcess, { initialReconcileMs: null, unusable: false });
+  });
+
+  it("is current once the running worker's initial reconcile has finished", async () => {
+    workerStatus.running = true;
+    workerStatus.watcher = { initialReconcileMs: null };
+    await expect(readIndexCurrent()).resolves.toBe(false); // started, not finished
+    workerStatus.watcher = { initialReconcileMs: 12_000 };
+    await expect(readIndexCurrent()).resolves.toBe(true);
+  });
+
+  it("is not current while a worker is spawned but has not reported", async () => {
+    workerStatus.running = true;
+    inProcess.initialReconcileMs = 5_000; // a stale in-process reading must not count
+    await expect(readIndexCurrent()).resolves.toBe(false);
+  });
+
+  it("reads the in-process watcher when no worker runs", async () => {
+    await expect(readIndexCurrent()).resolves.toBe(false);
+    inProcess.initialReconcileMs = 0;
+    await expect(readIndexCurrent()).resolves.toBe(true);
+  });
+
+  it("is not current while ingest is paused after crashes", async () => {
+    workerStatus.running = true;
+    workerStatus.watcher = { initialReconcileMs: 12_000 };
+    workerStatus.pausedUntil = Date.now() + 60_000;
+    await expect(readIndexCurrent()).resolves.toBe(false);
+  });
+
+  it("is not current with the index unusable or the indexer off", async () => {
+    inProcess.initialReconcileMs = 1_000;
+    inProcess.unusable = true;
+    await expect(readIndexCurrent()).resolves.toBe(false);
+    inProcess.unusable = false;
+    vi.stubEnv("MINDER_INDEXER", "0");
+    await expect(readIndexCurrent()).resolves.toBe(false);
   });
 });
 
