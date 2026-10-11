@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.16.11] - 2026-10-10
+
+*A performance release for the tray server. The background indexer stops re-reading whole session transcripts after nearly every tool call, which was the main cause of the server's constant ~1-core CPU use with several active Claude sessions, and the indexing worker gets a heap ceiling and a smaller database memory map.*
+
 ### Fixed
 
 - The background indexer no longer re-reads and re-parses a session's whole transcript after nearly every tool call (#654). It did so whenever a new chunk held a tool result whose call was in an earlier chunk — the normal case, since a call and its result are written separately — to recover a PR link split across the boundary. It now does so only when that result contains a GitHub PR URL, the only case that can yield one. On a machine with several active sessions this was the main source of the tray server's constant ~1-core CPU use.
