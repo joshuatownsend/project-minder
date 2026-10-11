@@ -863,12 +863,13 @@ function startSweep(state: WatcherState): void {
   // `SWEEP_INTERVAL_MS`: re-reading the mode at each wake means a native watch
   // that dies is backstopped within 30 s, not after the rest of a 5 min wait.
   // `lastSweepAt` is when the last attempt ENDED, so the interval is measured
-  // from completion, as it always was.
-  let lastSweepAt = Date.now();
+  // from completion, as it always was. Monotonic: a wall clock stepped backward
+  // would otherwise hold every sweep off until it caught up (Codex, PR #668).
+  let lastSweepAt = performance.now();
   const arm = (): void => {
     state.sweepTimer = setTimeout(
       () => { void trackWork(state, tick()); },
-      nextSweepWakeMs(resolveSweepIntervalMs(state.watcherMode), Date.now() - lastSweepAt)
+      nextSweepWakeMs(resolveSweepIntervalMs(state.watcherMode), performance.now() - lastSweepAt)
     );
     state.sweepTimer.unref?.();
   };
@@ -879,7 +880,7 @@ function startSweep(state: WatcherState): void {
       // write to index.db while the shutdown disposer is closing it.
       if (state.stopped) return;
       // Woken only to re-read the mode; the re-arm below sleeps the remainder.
-      if (Date.now() - lastSweepAt < resolveSweepIntervalMs(state.watcherMode)) return;
+      if (performance.now() - lastSweepAt < resolveSweepIntervalMs(state.watcherMode)) return;
       attempted = true;
       // The deferred initial reconcile IS a full sweep; running a second
       // one concurrently would race it file-by-file. Skip this tick and
@@ -901,7 +902,7 @@ function startSweep(state: WatcherState): void {
       // eslint-disable-next-line no-console
       console.warn(`[ingest-watcher] sweep failed: ${(err as Error).message}`);
     } finally {
-      if (attempted) lastSweepAt = Date.now();
+      if (attempted) lastSweepAt = performance.now();
       // Re-arm only if we're still the active watcher AND not shutting down
       // (stopIngestWatcher sets `stopped` and detaches the singleton via
       // `delete g.__minderIngestWatcher`).
