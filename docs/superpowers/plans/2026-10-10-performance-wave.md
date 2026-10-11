@@ -123,6 +123,22 @@ Fixes:
    (Alternative: tail from last byte offset like ingest does.)
 3. Evict cache entries for ended/idle sessions.
 
+**Implemented (branch `perf/wave4-agent-view-657`):**
+- `agentViewWatchers.ts` ref-counts SSE subscribers; 30 s grace; both watchers abortable
+  (AbortController created synchronously, so a stop before `fs.access` resolves still cancels).
+  The one-shot `/api/agent-view` route only refreshes the roster.
+- Live cost/fill from the index (`data/indexedLiveMetrics.ts`): `sessions.cost_usd` (primary-only,
+  same as the parse) and the last primary assistant turn's raw tokens, run through the parse
+  path's own fill formula (`turns.context_fill` is a different formula — not used). Parse only
+  when the index is off or has no row. Josh approved the ~1–2 s chip lag (2026-10-11).
+- Found while building it: ingest's post-commit events fired on the **worker's** buses, so
+  `/api/events` never got `sessions.changed` and Agent View never heard the index caught up.
+  The worker now relays them (`events/workerRelay.ts` `relayBusEvents`), `workerHost` re-emits
+  validated copies. The full-replace ingest path now emits `sessions.changed` too.
+- SSE route coalesces with ONE pending snapshot (was per session) so a re-index relaying an event
+  per session costs one snapshot per 200 ms window.
+- `pruneLiveMetricsCache` keeps only sessions the latest snapshot enriched.
+
 ## Deferred
 
 - **#627** prompts_fts full scan on session rewrite (~2 s each). Its own assessment: low

@@ -684,6 +684,10 @@ export async function stopIngestWatcher(): Promise<void> {
   delete g.__minderIngestWatcher;
 }
 
+// Re-exported so the worker entry (`workers/ingestWorker.mjs`), which can only
+// reach this bundle, can relay its bus events to the host (#657).
+export { relayBusEvents } from "@/lib/events/workerRelay";
+
 export function getWatcherStatus(): WatcherStatus {
   const state = g.__minderIngestWatcher;
   if (!state) return idleStatus();

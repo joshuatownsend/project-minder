@@ -4,6 +4,7 @@ import { Worker } from "node:worker_threads";
 import { serviceLog, type LogEntry } from "@/lib/serviceLog";
 import { workerEnvFor } from "@/lib/db/cleanShutdown";
 import type { IngestWatcherMode } from "@/lib/types/init";
+import { reemitRelayedEvent } from "@/lib/events/workerRelay";
 
 // Main-thread orchestrator for the ingest worker.
 //
@@ -772,6 +773,11 @@ export function absorbWorkerMessage(
       }
       return;
     }
+    case "agent-event":
+    case "minder-event":
+      // The worker's bus traffic, relayed by `relayBusEvents` (#657).
+      reemitRelayedEvent(m);
+      return;
     case "service-log": {
       // The worker's `serviceLog` cannot write the file (its `active` flag is
       // per-isolate), so it forwards the entry; stamp it so the reader can

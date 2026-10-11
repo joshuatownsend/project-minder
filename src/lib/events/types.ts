@@ -32,6 +32,10 @@ export const MINDER_EVENT_TYPES = [
 
 export type MinderEventType = (typeof MINDER_EVENT_TYPES)[number];
 
+export function isMinderEventType(value: unknown): value is MinderEventType {
+  return (MINDER_EVENT_TYPES as readonly unknown[]).includes(value);
+}
+
 export interface MinderEvent {
   type: MinderEventType;
 }

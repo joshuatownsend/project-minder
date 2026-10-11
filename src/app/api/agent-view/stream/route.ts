@@ -1,8 +1,8 @@
 import { NextRequest } from "next/server";
 import { onAgentEvent } from "@/lib/agentView/eventBus";
 import { aggregateLiveSessions } from "@/lib/agentView/aggregate";
-import { startJobRosterWatcher, refreshRoster } from "@/lib/agentView/jobRoster";
-import { startJsonlWatcher } from "@/lib/agentView/jsonlWatcher";
+import { refreshRoster } from "@/lib/agentView/jobRoster";
+import { acquireAgentViewWatchers } from "@/lib/agentView/agentViewWatchers";
 import { readConfig } from "@/lib/config";
 
 // SSE endpoint for the Agent View live Kanban.
@@ -13,12 +13,15 @@ import { readConfig } from "@/lib/config";
 //   3. On each live event, re-aggregates and emits a "snapshot" delta.
 //   4. Heartbeats every 15 s as a comment line to defeat proxy timeouts.
 //
-// Cleanup is driven by request.signal so the listener is removed when the
-// client disconnects. Multiple concurrent tabs share the same globalThis
+// Cleanup is driven by request.signal so the listener is removed — and this
+// subscriber's hold on the watchers released (#657) — when the client
+// disconnects. Multiple concurrent tabs share the same globalThis
 // emitter; setMaxListeners(50) in eventBus.ts ensures no Node warning.
 //
-// Coalescing: drops intermediate events < 200 ms apart for the same
-// session so a fast Bash burst doesn't flood the client.
+// Coalescing: every snapshot covers ALL sessions, so one pending snapshot
+// absorbs every event in the next 200 ms, whichever session it names. A fast
+// Bash burst, or a full re-index relaying one event per session (#657), costs
+// one snapshot per window rather than one per session.
 
 const HEARTBEAT_MS = 15_000;
 const COALESCE_MS = 200;
@@ -36,25 +39,23 @@ export async function GET(request: NextRequest): Promise<Response> {
   const config = await readConfig();
   const abandonMin = config.agentView?.abandonThresholdMin;
 
-  // Ensure watcher is running (idempotent due to globalThis guard), then wait
-  // for the initial roster load so the first snapshot includes daemon sessions.
-  startJobRosterWatcher();
-  startJsonlWatcher();
+  // Hold the watchers for this connection's lifetime, then wait for the initial
+  // roster load so the first snapshot includes daemon sessions.
+  const releaseWatchers = acquireAgentViewWatchers();
   await refreshRoster();
 
   const stream = new ReadableStream({
     start(controller) {
       let closed = false;
-      // Per-session coalesce timers: sessionId → timeout
-      const coalesceTimers = new Map<string, NodeJS.Timeout>();
+      let coalesceTimer: NodeJS.Timeout | null = null;
       let heartbeatTimer: NodeJS.Timeout | null = null;
 
       function close() {
         if (closed) return;
         closed = true;
+        releaseWatchers();
         if (heartbeatTimer) clearTimeout(heartbeatTimer);
-        for (const t of coalesceTimers.values()) clearTimeout(t);
-        coalesceTimers.clear();
+        if (coalesceTimer) clearTimeout(coalesceTimer);
         try { controller.close(); } catch { /* already closed */ }
       }
 
@@ -68,13 +69,12 @@ export async function GET(request: NextRequest): Promise<Response> {
         }
       }
 
-      function scheduleCoalesce(sessionId: string) {
-        const existing = coalesceTimers.get(sessionId);
-        if (existing) return; // already pending — drop this event
-        coalesceTimers.set(sessionId, setTimeout(() => {
-          coalesceTimers.delete(sessionId);
+      function scheduleCoalesce() {
+        if (coalesceTimer) return; // a snapshot is already pending — it will include this event
+        coalesceTimer = setTimeout(() => {
+          coalesceTimer = null;
           sendSnapshot();
-        }, COALESCE_MS));
+        }, COALESCE_MS);
       }
 
       function scheduleHeartbeat() {
@@ -90,16 +90,19 @@ export async function GET(request: NextRequest): Promise<Response> {
       scheduleHeartbeat();
 
       // Subscribe to live events
-      const unsubscribe = onAgentEvent((ev) => {
+      const unsubscribe = onAgentEvent(() => {
         if (closed) return;
-        scheduleCoalesce(ev.sessionId);
+        scheduleCoalesce();
       });
 
-      // Cleanup on disconnect
-      request.signal.addEventListener("abort", () => {
+      // Cleanup on disconnect. A client that left during the awaits above has
+      // already fired `abort`, which a listener added now would never see.
+      const cleanup = () => {
         unsubscribe();
         close();
-      });
+      };
+      if (request.signal.aborted) cleanup();
+      else request.signal.addEventListener("abort", cleanup, { once: true });
     },
   });
 

@@ -17,6 +17,12 @@ vi.mock("@/lib/usage/parser", () => ({
   parseSessionTurns: vi.fn(),
 }));
 
+// The index path (#657). Null by default, so every parse-path test below runs
+// as "the index has no row for this session yet".
+vi.mock("@/lib/data/indexedLiveMetrics", () => ({
+  indexedLiveMetrics: vi.fn(),
+}));
+
 vi.mock("@/lib/usage/costCalculator", () => ({
   loadPricing: vi.fn().mockResolvedValue(undefined),
   getModelPricing: vi.fn(() => ({
@@ -39,11 +45,17 @@ vi.mock("@/lib/usage/costCalculator", () => ({
 import { promises as fs } from "fs";
 import { resolveSessionJsonl } from "@/lib/usage/sessionPath";
 import { parseSessionTurns } from "@/lib/usage/parser";
-import { getLiveSessionMetrics, _resetLiveMetricsCacheForTesting } from "@/lib/agentView/liveCostCache";
+import { indexedLiveMetrics } from "@/lib/data/indexedLiveMetrics";
+import {
+  getLiveSessionMetrics,
+  pruneLiveMetricsCache,
+  _resetLiveMetricsCacheForTesting,
+} from "@/lib/agentView/liveCostCache";
 
 const mockStat = vi.mocked(fs.stat);
 const mockResolve = vi.mocked(resolveSessionJsonl);
 const mockParseTurns = vi.mocked(parseSessionTurns);
+const mockIndexed = vi.mocked(indexedLiveMetrics);
 
 function makeTurn(opts: {
   role?: "assistant" | "user";
@@ -73,6 +85,46 @@ beforeEach(() => {
   _resetLiveMetricsCacheForTesting();
   mockResolve.mockResolvedValue({ filePath: "/tmp/s1.jsonl", projectDirName: "test-dir" });
   mockStat.mockResolvedValue({ mtimeMs: 1000 } as ReturnType<typeof fs.stat> extends Promise<infer T> ? T : never);
+  mockIndexed.mockResolvedValue(null);
+});
+
+describe("getLiveSessionMetrics — index path (#657)", () => {
+  it("answers from the index without resolving or parsing the transcript", async () => {
+    mockIndexed.mockResolvedValue({
+      costUsd: 1.25,
+      lastAssistant: { model: "claude-sonnet-4", inputTokens: 1_000, cacheCreateTokens: 9_000, cacheReadTokens: 90_000 },
+    });
+    const result = await getLiveSessionMetrics("s1");
+    // Same fill formula as the parse path: input + both cache columns over the window.
+    expect(result).toEqual({ totalCostUsd: 1.25, contextFill: 0.5 });
+    expect(mockResolve).not.toHaveBeenCalled();
+    expect(mockParseTurns).not.toHaveBeenCalled();
+  });
+
+  it("reports zero fill for an indexed session with no assistant turn yet", async () => {
+    mockIndexed.mockResolvedValue({ costUsd: 0, lastAssistant: null });
+    expect(await getLiveSessionMetrics("s1")).toEqual({ totalCostUsd: 0, contextFill: 0 });
+    expect(mockParseTurns).not.toHaveBeenCalled();
+  });
+
+  it("falls back to parsing when the index has no row", async () => {
+    mockParseTurns.mockResolvedValue([makeTurn({ inputTokens: 1000, outputTokens: 500 })] as ReturnType<typeof parseSessionTurns> extends Promise<infer T> ? T : never);
+    const result = await getLiveSessionMetrics("s1");
+    expect(mockParseTurns).toHaveBeenCalledTimes(1);
+    expect(result?.totalCostUsd).toBeCloseTo(0.0105, 6);
+  });
+});
+
+describe("pruneLiveMetricsCache", () => {
+  it("drops cached parses for sessions not kept, and only those", async () => {
+    mockParseTurns.mockResolvedValue([makeTurn({ inputTokens: 1000 })] as ReturnType<typeof parseSessionTurns> extends Promise<infer T> ? T : never);
+    await getLiveSessionMetrics("s1");
+    await getLiveSessionMetrics("s2");
+    pruneLiveMetricsCache(new Set(["s2"]));
+    await getLiveSessionMetrics("s1"); // evicted → parsed again
+    await getLiveSessionMetrics("s2"); // kept → cache hit
+    expect(mockParseTurns).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("getLiveSessionMetrics", () => {

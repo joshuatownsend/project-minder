@@ -55,6 +55,11 @@ Sessions launched with `claude --bg` in any terminal appear automatically in the
 
 Sessions launched with `claude` (foreground) appear when either the Live Activity hook fires or the JSONL file updates within the last 90 seconds.
 
+## How live data updates
+
+- **Cost and context fill** are read from Minder's session index, which the background indexer keeps current. They update a second or two after Claude writes, once the indexer has caught up. A session the index hasn't seen yet, a session whose transcript is more than 30 seconds ahead of its indexed copy (automatic indexing off with `MINDER_INDEXER=0`, paused, or catching up), or any session when the index is off (`MINDER_USE_DB=0`), is read straight from its transcript instead.
+- **Watchers run only while Agent View is open.** The transcript watcher and the background-session roster check start when the first Agent View tab connects and stop 30 seconds after the last one closes, so a closed board costs nothing. Reopening the page starts them again.
+
 ## Abandoned session reaper
 
 Sessions that have been inactive longer than the **Abandon threshold** (default 180 minutes) automatically drop to **Stopped** so they don't clutter the board. You can adjust the threshold in Settings → Feature Flags → Agent View.

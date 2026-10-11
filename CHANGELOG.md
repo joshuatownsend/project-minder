@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Agent View's live cost and context-fill chips now read from the session index instead of re-parsing the whole transcript every time an active session changes (#657). Re-parsing duplicated the background indexer's work, on the server's main thread, once per update for every active session. The chips now update a second or two after Claude writes rather than within ~0.2 seconds. Sessions not yet indexed, sessions whose transcript has run more than 30 seconds ahead of the index (automatic indexing off, paused or catching up), and every session when the index is off (`MINDER_USE_DB=0`) are still read from the transcript.
+- Agent View's transcript watcher and 5-second background-session roster check now run only while an Agent View tab is open, stopping 30 seconds after the last one closes (#657). Before, the first visit started them for the life of the server. The one-shot `/api/agent-view` snapshot no longer starts them at all.
+
+### Fixed
+
+- When indexing runs in its worker thread (the default), "session re-indexed" notifications now reach the server's main thread (#657). They used to stop at the worker, so the live-update stream (`/api/events`) never sent `sessions.changed` and Agent View never heard that the index had caught up with a session. A session indexed in full (new, or re-indexed) now sends `sessions.changed` too; only appends to an already-indexed session did before.
+
 ## [1.16.12] - 2026-10-11
 
 *The second performance release for the tray server. The background indexer's safety re-check of every transcript runs every 5 minutes instead of every 30 seconds while the live file watcher is working, and each re-check does less work. An indexing worker that keeps running out of memory now pauses instead of moving onto the server's main thread.*

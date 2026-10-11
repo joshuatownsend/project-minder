@@ -16,6 +16,10 @@ import type { JobRosterEntry, JobStateEntry } from "./types";
 //   1. fs.watch on the daemon dir (change events).
 //   2. 5 s mtime sweep (belt-and-braces — Windows fs.watch can miss events).
 //   3. On-demand refresh() call from the SSE route on initial connect.
+//
+// Triggers 1 and 2 run only while an Agent View stream is connected (#657):
+// `agentViewWatchers` starts them on the first subscriber and stops them after
+// the last one leaves. The one-shot `/api/agent-view` route just refreshes.
 
 const DAEMON_DIR = path.join(os.homedir(), ".claude", "daemon");
 const JOBS_DIR = path.join(os.homedir(), ".claude", "jobs");
@@ -29,7 +33,8 @@ interface RosterState {
 
 const g = globalThis as unknown as {
   __minderJobRosterState?: RosterState;
-  __minderJobRosterWatcher?: import("fs").FSWatcher | null;
+  /** Abort handle for the daemon-dir watch; non-null while the watcher runs. */
+  __minderJobRosterWatch?: AbortController | null;
   __minderJobRosterSweepTimer?: NodeJS.Timeout | null;
   __minderJobRosterDebounce?: NodeJS.Timeout | null;
   __minderJobRosterLoggedMissing?: boolean;
@@ -37,7 +42,6 @@ const g = globalThis as unknown as {
 
 function ensureGlobals(): void {
   g.__minderJobRosterState ??= { entries: [], readAt: 0 };
-  g.__minderJobRosterWatcher ??= null;
   g.__minderJobRosterSweepTimer ??= null;
   g.__minderJobRosterDebounce ??= null;
   g.__minderJobRosterLoggedMissing ??= false;
@@ -172,24 +176,27 @@ export async function refreshRoster(): Promise<void> {
 
 export function startJobRosterWatcher(): void {
   ensureGlobals();
-  if (g.__minderJobRosterWatcher) return;
-  if (g.__minderJobRosterSweepTimer) return;
+  if (g.__minderJobRosterWatch) return;
+  // Created synchronously so stopJobRosterWatcher() can cancel a watch that
+  // the `fs.access` hop below has not installed yet.
+  const controller = new AbortController();
+  g.__minderJobRosterWatch = controller;
+  const { signal } = controller;
 
   // Initial load
   refresh().catch(() => {/* daemon dir may not exist yet */});
 
   // fs.watch on daemon dir (best-effort — dir may not exist)
   fs.access(DAEMON_DIR).then(() => {
+    if (signal.aborted) return;
     try {
-      const watcher = fs.watch(DAEMON_DIR, { recursive: false });
-      g.__minderJobRosterWatcher = watcher as unknown as import("fs").FSWatcher;
-      // watcher from fs.promises.watch is an AsyncIterable; convert to event listener pattern
+      const watcher = fs.watch(DAEMON_DIR, { recursive: false, signal });
       (async () => {
         for await (const _ of watcher) {
           scheduleDebounce();
         }
       })().catch(() => {
-        // Watcher died — will be caught by sweep
+        // Aborted by stop(), or the watcher died — the sweep covers the latter.
       });
     } catch {
       // fs.watch not supported or dir disappeared — sweep belt-and-braces covers it
@@ -201,4 +208,14 @@ export function startJobRosterWatcher(): void {
     refresh().catch((err) => console.warn("[agentView/jobRoster] sweep error:", err));
   }, SWEEP_INTERVAL_MS);
   g.__minderJobRosterSweepTimer?.unref?.();
+}
+
+/** Close the daemon-dir watch and stop the sweep. Cached entries are kept. */
+export function stopJobRosterWatcher(): void {
+  g.__minderJobRosterWatch?.abort();
+  g.__minderJobRosterWatch = null;
+  if (g.__minderJobRosterSweepTimer) clearInterval(g.__minderJobRosterSweepTimer);
+  g.__minderJobRosterSweepTimer = null;
+  if (g.__minderJobRosterDebounce) clearTimeout(g.__minderJobRosterDebounce);
+  g.__minderJobRosterDebounce = null;
 }
