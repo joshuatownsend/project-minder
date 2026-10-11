@@ -17,7 +17,7 @@ import { startJobRosterWatcher, stopJobRosterWatcher } from "@/lib/agentView/job
 import { startJsonlWatcher, stopJsonlWatcher } from "@/lib/agentView/jsonlWatcher";
 import {
   acquireAgentViewWatchers,
-  agentViewSubscriberCount,
+  _agentViewSubscriberCountForTesting as agentViewSubscriberCount,
   GRACE_MS,
   _resetAgentViewWatchersForTesting,
 } from "@/lib/agentView/agentViewWatchers";

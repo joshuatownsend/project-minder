@@ -133,7 +133,10 @@ Fixes:
   when the index is off or has no row. Josh approved the ~1–2 s chip lag (2026-10-11).
 - Found while building it: ingest's post-commit events fired on the **worker's** buses, so
   `/api/events` never got `sessions.changed` and Agent View never heard the index caught up.
-  The worker now relays them (`forwardIngestEvents`), `workerHost` re-emits validated copies.
+  The worker now relays them (`events/workerRelay.ts` `relayBusEvents`), `workerHost` re-emits
+  validated copies. The full-replace ingest path now emits `sessions.changed` too.
+- SSE route coalesces with ONE pending snapshot (was per session) so a re-index relaying an event
+  per session costs one snapshot per 200 ms window.
 - `pruneLiveMetricsCache` keeps only sessions the latest snapshot enriched.
 
 ## Deferred

@@ -18,8 +18,10 @@ import { readConfig } from "@/lib/config";
 // disconnects. Multiple concurrent tabs share the same globalThis
 // emitter; setMaxListeners(50) in eventBus.ts ensures no Node warning.
 //
-// Coalescing: drops intermediate events < 200 ms apart for the same
-// session so a fast Bash burst doesn't flood the client.
+// Coalescing: every snapshot covers ALL sessions, so one pending snapshot
+// absorbs every event in the next 200 ms, whichever session it names. A fast
+// Bash burst, or a full re-index relaying one event per session (#657), costs
+// one snapshot per window rather than one per session.
 
 const HEARTBEAT_MS = 15_000;
 const COALESCE_MS = 200;
@@ -45,8 +47,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const stream = new ReadableStream({
     start(controller) {
       let closed = false;
-      // Per-session coalesce timers: sessionId → timeout
-      const coalesceTimers = new Map<string, NodeJS.Timeout>();
+      let coalesceTimer: NodeJS.Timeout | null = null;
       let heartbeatTimer: NodeJS.Timeout | null = null;
 
       function close() {
@@ -54,8 +55,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         closed = true;
         releaseWatchers();
         if (heartbeatTimer) clearTimeout(heartbeatTimer);
-        for (const t of coalesceTimers.values()) clearTimeout(t);
-        coalesceTimers.clear();
+        if (coalesceTimer) clearTimeout(coalesceTimer);
         try { controller.close(); } catch { /* already closed */ }
       }
 
@@ -69,13 +69,12 @@ export async function GET(request: NextRequest): Promise<Response> {
         }
       }
 
-      function scheduleCoalesce(sessionId: string) {
-        const existing = coalesceTimers.get(sessionId);
-        if (existing) return; // already pending — drop this event
-        coalesceTimers.set(sessionId, setTimeout(() => {
-          coalesceTimers.delete(sessionId);
+      function scheduleCoalesce() {
+        if (coalesceTimer) return; // a snapshot is already pending — it will include this event
+        coalesceTimer = setTimeout(() => {
+          coalesceTimer = null;
           sendSnapshot();
-        }, COALESCE_MS));
+        }, COALESCE_MS);
       }
 
       function scheduleHeartbeat() {
@@ -91,9 +90,9 @@ export async function GET(request: NextRequest): Promise<Response> {
       scheduleHeartbeat();
 
       // Subscribe to live events
-      const unsubscribe = onAgentEvent((ev) => {
+      const unsubscribe = onAgentEvent(() => {
         if (closed) return;
-        scheduleCoalesce(ev.sessionId);
+        scheduleCoalesce();
       });
 
       // Cleanup on disconnect. A client that left during the awaits above has

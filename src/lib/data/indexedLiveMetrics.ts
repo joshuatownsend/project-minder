@@ -1,18 +1,20 @@
 import "server-only";
-import { getDb } from "@/lib/db/connection";
+import { getDb, prepCached } from "@/lib/db/connection";
 import { dbModeRequested } from "@/lib/data";
 
 /** The index's view of a live session — the raw inputs to Agent View's chips. */
+export interface IndexedTurnTokens {
+  model: string;
+  inputTokens: number;
+  cacheCreateTokens: number;
+  cacheReadTokens: number;
+}
+
 export interface IndexedLiveMetrics {
   /** `sessions.cost_usd` — primary (non-sidechain) assistant turns only. */
   costUsd: number;
   /** The most recent primary assistant turn, or null when there is none yet. */
-  lastAssistant: {
-    model: string;
-    inputTokens: number;
-    cacheCreateTokens: number;
-    cacheReadTokens: number;
-  } | null;
+  lastAssistant: IndexedTurnTokens | null;
 }
 
 /**
@@ -35,18 +37,17 @@ export async function indexedLiveMetrics(sessionId: string): Promise<IndexedLive
   try {
     const db = await getDb();
     if (!db) return null;
-    const session = db
-      .prepare("SELECT cost_usd FROM sessions WHERE session_id = ?")
+    const session = prepCached(db, "SELECT cost_usd FROM sessions WHERE session_id = ?")
       .get(sessionId) as { cost_usd: number } | undefined;
     if (!session) return null;
-    const last = db
-      .prepare(
-        `SELECT model, input_tokens, cache_create_tokens, cache_read_tokens
-           FROM turns
-          WHERE session_id = ? AND role = 'assistant' AND is_sidechain = 0
-          ORDER BY turn_index DESC
-          LIMIT 1`
-      )
+    const last = prepCached(
+      db,
+      `SELECT model, input_tokens, cache_create_tokens, cache_read_tokens
+         FROM turns
+        WHERE session_id = ? AND role = 'assistant' AND is_sidechain = 0
+        ORDER BY turn_index DESC
+        LIMIT 1`
+    )
       .get(sessionId) as
       | { model: string | null; input_tokens: number; cache_create_tokens: number; cache_read_tokens: number }
       | undefined;

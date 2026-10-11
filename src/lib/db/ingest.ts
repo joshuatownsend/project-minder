@@ -3432,13 +3432,7 @@ export async function reconcileSessionFile(
       if (recovered > 0) rows += recovered;
     }
 
-    if (rows > 0) {
-      const slug = projectSlugFromDirName(projectDirName);
-      bridgeJsonlAppendToEventBus(sessionId, slug);
-      // Signal SSE clients so the live sessions list invalidates (replaces the
-      // 15s poll when the liveEvents flag is on). Coalesced server-side.
-      emitMinderEvent("sessions.changed");
-    }
+    if (rows > 0) notifySessionIndexed(sessionId, projectDirName);
     return { rowsWritten: rows };
   }
 
@@ -3454,11 +3448,21 @@ export async function reconcileSessionFile(
   const tWrite = PROFILE ? performance.now() : 0;
   txn();
   if (PROFILE) tick("writeSession", performance.now() - tWrite);
-  if (rows > 0) {
-    const slug = projectSlugFromDirName(projectDirName);
-    bridgeJsonlAppendToEventBus(sessionId, slug);
-  }
+  if (rows > 0) notifySessionIndexed(sessionId, projectDirName);
   return { rowsWritten: rows };
+}
+
+/**
+ * Tell live surfaces a session's rows changed: Agent View re-snapshots, and SSE
+ * clients invalidate the sessions list (replaces the 15s poll when the
+ * liveEvents flag is on; coalesced server-side). Both the tail-append and the
+ * full-replace path call this — the full path used to skip `sessions.changed`,
+ * so a re-indexed session never refreshed the list. In the ingest worker these
+ * fire on the worker's buses and are relayed to the host (`relayBusEvents`).
+ */
+function notifySessionIndexed(sessionId: string, projectDirName: string): void {
+  bridgeJsonlAppendToEventBus(sessionId, projectSlugFromDirName(projectDirName));
+  emitMinderEvent("sessions.changed");
 }
 
 /**

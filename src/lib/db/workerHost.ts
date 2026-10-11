@@ -4,9 +4,7 @@ import { Worker } from "node:worker_threads";
 import { serviceLog, type LogEntry } from "@/lib/serviceLog";
 import { workerEnvFor } from "@/lib/db/cleanShutdown";
 import type { IngestWatcherMode } from "@/lib/types/init";
-import { bridgeJsonlAppendToEventBus } from "@/lib/agentView/eventBus";
-import { emitMinderEvent } from "@/lib/events/bus";
-import { MINDER_EVENT_TYPES, type MinderEventType } from "@/lib/events/types";
+import { reemitRelayedEvent } from "@/lib/events/workerRelay";
 
 // Main-thread orchestrator for the ingest worker.
 //
@@ -775,26 +773,11 @@ export function absorbWorkerMessage(
       }
       return;
     }
-    case "agent-event": {
-      // Ingest's post-commit "session re-indexed" signal, relayed by
-      // `forwardIngestEvents` (#657). Only that kind originates in the worker;
-      // rebuild it from validated fields rather than re-emitting the payload.
-      const ev = m.event as Record<string, unknown> | undefined;
-      if (
-        ev && typeof ev === "object" && ev.kind === "jsonl-tail" &&
-        typeof ev.sessionId === "string" && typeof ev.slug === "string"
-      ) {
-        bridgeJsonlAppendToEventBus(ev.sessionId, ev.slug);
-      }
+    case "agent-event":
+    case "minder-event":
+      // The worker's bus traffic, relayed by `relayBusEvents` (#657).
+      reemitRelayedEvent(m);
       return;
-    }
-    case "minder-event": {
-      const type = (m.event as { type?: unknown } | undefined)?.type;
-      if ((MINDER_EVENT_TYPES as readonly unknown[]).includes(type)) {
-        emitMinderEvent(type as MinderEventType);
-      }
-      return;
-    }
     case "service-log": {
       // The worker's `serviceLog` cannot write the file (its `active` flag is
       // per-isolate), so it forwards the entry; stamp it so the reader can

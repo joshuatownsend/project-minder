@@ -14,6 +14,12 @@ import { WORKTREE_SEP } from "@/lib/scanner/worktrees";
 //
 // Runs only while an Agent View stream is connected (#657): `agentViewWatchers`
 // starts it on the first subscriber and stops it after the last one leaves.
+//
+// With the index on, ingest also reports each append (after it commits, relayed
+// from its worker), so an append yields two snapshots. That is deliberate: this
+// watcher's is the fast liveness signal and the live-status cache invalidation,
+// ingest's is the one that carries current cost; with the index off, this is
+// the only signal there is.
 
 const DEBOUNCE_MS = 200;
 

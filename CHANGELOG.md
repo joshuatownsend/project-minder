@@ -13,7 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- When indexing runs in its worker thread (the default), "session re-indexed" notifications now reach the server's main thread (#657). They used to stop at the worker, so the live-update stream (`/api/events`) never sent `sessions.changed` and Agent View never heard that the index had caught up with a session.
+- When indexing runs in its worker thread (the default), "session re-indexed" notifications now reach the server's main thread (#657). They used to stop at the worker, so the live-update stream (`/api/events`) never sent `sessions.changed` and Agent View never heard that the index had caught up with a session. A session indexed in full (new, or re-indexed) now sends `sessions.changed` too; only appends to an already-indexed session did before.
 
 ## [1.16.12] - 2026-10-11
 

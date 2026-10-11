@@ -42,11 +42,10 @@ export function acquireAgentViewWatchers(): () => void {
   return () => {
     if (released) return;
     released = true;
-    s.subscribers = Math.max(0, s.subscribers - 1);
-    if (s.subscribers > 0 || s.graceTimer) return;
+    if (--s.subscribers > 0) return;
+    // acquire() cancels this timer, so it only fires with no subscribers.
     s.graceTimer = setTimeout(() => {
       s.graceTimer = null;
-      if (s.subscribers > 0) return;
       stopJsonlWatcher();
       stopJobRosterWatcher();
     }, GRACE_MS);
@@ -54,8 +53,8 @@ export function acquireAgentViewWatchers(): () => void {
   };
 }
 
-/** Subscriber count — for tests and diagnostics. */
-export function agentViewSubscriberCount(): number {
+/** Subscriber count — for testing only. */
+export function _agentViewSubscriberCountForTesting(): number {
   return state().subscribers;
 }
 

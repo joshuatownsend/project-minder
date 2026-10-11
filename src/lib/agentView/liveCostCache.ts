@@ -2,6 +2,7 @@ import "server-only";
 import { promises as fs } from "fs";
 import { resolveSessionJsonl } from "@/lib/usage/sessionPath";
 import { parseSessionTurns } from "@/lib/usage/parser";
+import type { IndexedTurnTokens } from "@/lib/data/indexedLiveMetrics";
 import {
   loadPricing,
   getModelPricing,
@@ -30,12 +31,7 @@ function getCache(): Map<string, { mtime: number; result: SessionMetrics }> {
 }
 
 /** Context fill of one assistant turn: everything the model read, over its window. */
-function turnFill(turn: {
-  model: string;
-  inputTokens: number;
-  cacheCreateTokens: number;
-  cacheReadTokens: number;
-}): number {
+function turnFill(turn: IndexedTurnTokens): number {
   return (
     (turn.inputTokens + turn.cacheCreateTokens + turn.cacheReadTokens) /
     getModelMaxContextTokens(turn.model)

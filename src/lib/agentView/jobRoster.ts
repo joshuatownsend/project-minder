@@ -42,7 +42,6 @@ const g = globalThis as unknown as {
 
 function ensureGlobals(): void {
   g.__minderJobRosterState ??= { entries: [], readAt: 0 };
-  g.__minderJobRosterWatch ??= null;
   g.__minderJobRosterSweepTimer ??= null;
   g.__minderJobRosterDebounce ??= null;
   g.__minderJobRosterLoggedMissing ??= false;
@@ -213,7 +212,6 @@ export function startJobRosterWatcher(): void {
 
 /** Close the daemon-dir watch and stop the sweep. Cached entries are kept. */
 export function stopJobRosterWatcher(): void {
-  ensureGlobals();
   g.__minderJobRosterWatch?.abort();
   g.__minderJobRosterWatch = null;
   if (g.__minderJobRosterSweepTimer) clearInterval(g.__minderJobRosterSweepTimer);
