@@ -115,7 +115,12 @@ async function buildStatusPayload(): Promise<{ data: StatusPayload; transient: b
     };
   }
 
-  const liveProcesses = await liveProcessesPromise;
+  const [liveProcesses, statFilter] = await Promise.all([
+    liveProcessesPromise,
+    import("@/lib/data/indexedTranscriptFilter")
+      .then((m) => m.indexedTranscriptFilter(now - SESSION_MAX_AGE_MS))
+      .catch(() => null),
+  ]);
   const liveSessionIds = liveProcesses ? new Set(liveProcesses.map((p) => p.sessionId)) : null;
   const cliAvailable = liveProcesses !== null;
 
@@ -131,9 +136,11 @@ async function buildStatusPayload(): Promise<{ data: StatusPayload; transient: b
       for (const file of jsonlFiles) {
         const filePath = path.join(dirPath, file);
         try {
-          const fstat = await fs.stat(filePath);
           const sessionId = path.basename(file, ".jsonl");
           const isCliAlive = liveSessionIds?.has(sessionId) ?? false;
+          // #672: the index knows which transcripts are recent; stat only those.
+          if (statFilter && !isCliAlive && !statFilter.mustStat(filePath)) continue;
+          const fstat = await fs.stat(filePath);
           if (now - fstat.mtime.getTime() > SESSION_MAX_AGE_MS && !isCliAlive) continue;
 
           const cacheKey = `${dir}/${sessionId}`;

@@ -162,6 +162,7 @@ Fixes:
 | 2 | #656 | S | PR A |
 | 3 | #655, #584 | M | PR B |
 | 4 | #657 | M | PR C |
+| 4b | #672 | S | PR D — found by the Wave 4 after-measurement: live-status rebuild stat'ed all 13.5k transcripts (~5 CPU-s, 7-20 s wall > 6 s TTL → ~0.35 cores while any page polls); now asks the index for recent files |
 | 5 | main-thread heap | ? | profile first |
 | — | #627 | — | deferred |
 

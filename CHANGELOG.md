@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Working out which Claude sessions are live no longer checks every transcript ever written (#672). The dashboard's 5-second status poll, the kanban board and Agent View all rebuild this list, and each rebuild looked at every transcript on disk (13,000+ on a long-used machine, about 5 CPU-seconds) to find the few touched in the last four hours. Because that took longer than its 6-second cache, any open Minder tab kept roughly a third of a CPU core busy. It now asks the session index which transcripts changed recently and checks only those, plus any the index hasn't seen yet and any the Claude CLI reports running. When the index is off (`MINDER_USE_DB=0`), indexing is off (`MINDER_INDEXER=0`), or the indexing worker isn't running, it checks every file as before.
+
+
 ## [1.16.13] - 2026-10-11
 
 *The third performance release for the tray server, aimed at Agent View. Its live cost and context chips now come from the session index instead of re-reading active transcripts, and its watchers stop when no Agent View tab is open. Indexing notifications from the background worker now reach the live-update stream too, which they never did.*
