@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.16.13] - 2026-10-11
+
+*The third performance release for the tray server, aimed at Agent View. Its live cost and context chips now come from the session index instead of re-reading active transcripts, and its watchers stop when no Agent View tab is open. Indexing notifications from the background worker now reach the live-update stream too, which they never did.*
+
 ### Changed
 
 - Agent View's live cost and context-fill chips now read from the session index instead of re-parsing the whole transcript every time an active session changes (#657). Re-parsing duplicated the background indexer's work, on the server's main thread, once per update for every active session. The chips now update a second or two after Claude writes rather than within ~0.2 seconds. Sessions not yet indexed, sessions whose transcript has run more than 30 seconds ahead of the index (automatic indexing off, paused or catching up), and every session when the index is off (`MINDER_USE_DB=0`) are still read from the transcript.
