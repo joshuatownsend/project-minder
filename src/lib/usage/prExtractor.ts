@@ -14,6 +14,7 @@
  */
 
 import type { ConversationEntry } from "../scanner/claudeConversations";
+import { toolUseBlocks } from "./contentBlocks";
 import type { PrLink } from "../types";
 
 export type { PrLink };
@@ -95,6 +96,20 @@ function toolResultText(content: unknown): string {
 }
 
 /**
+ * A user turn's content blocks: `message.content`, or top-level `content`
+ * when that array is EMPTY. Length-based, not nullish — `[] ?? x` is `[]`,
+ * so a nullish chain never reaches the top-level field. Shared by the
+ * extractor and the recovery gate so the two can't read turns differently.
+ * Mirrors ticketExtractor.ts and parser.ts.
+ */
+function userTurnContent(entry: ConversationEntry): unknown {
+  const messageContent = (entry.message?.content as unknown) ?? [];
+  return Array.isArray(messageContent) && messageContent.length === 0
+    ? ((entry as { content?: unknown }).content ?? messageContent)
+    : messageContent;
+}
+
+/**
  * Straddle-recovery gate for a tail parse window (#654). True only when the
  * window holds a `tool_result` whose `tool_use_id` has no `tool_use` in the
  * same window AND whose text contains a GitHub PR URL.
@@ -106,33 +121,32 @@ function toolResultText(content: unknown): string {
  * `extractPrsFromEntries` can only yield a link from a result whose text
  * matches `PR_URL_RE`, so a result without one has nothing to recover.
  */
-export function tailNeedsPrRecovery(entries: Iterable<ConversationEntry | null>): boolean {
+export function tailNeedsPrRecovery(entries: Iterable<ConversationEntry>): boolean {
+  // A `tool_use` is always written before its `tool_result`, so one forward
+  // pass can decide each result as it is reached and stop at the first hit.
   const toolUseIds = new Set<string>();
-  const candidates: Array<{ id: string; content: unknown }> = [];
   for (const e of entries) {
-    if (!e) continue;
-    if (e.type === "assistant" && Array.isArray(e.message?.content)) {
-      for (const block of e.message.content as Array<Record<string, unknown>>) {
-        if (block.type === "tool_use" && typeof block.id === "string") toolUseIds.add(block.id);
+    if (e.type === "assistant") {
+      for (const block of toolUseBlocks(e.message?.content)) {
+        if (typeof block.id === "string") toolUseIds.add(block.id);
       }
       continue;
     }
     if (e.type !== "user") continue;
-    // Same length-based fallback as `extractPrsFromEntries`: an empty
-    // `message.content` defers to top-level `content`.
-    const messageContent = (e.message?.content as unknown) ?? [];
-    const content =
-      Array.isArray(messageContent) && messageContent.length === 0
-        ? ((e as { content?: unknown }).content ?? messageContent)
-        : messageContent;
+    const content = userTurnContent(e);
     if (!Array.isArray(content)) continue;
     for (const block of content as Array<Record<string, unknown>>) {
-      if (block.type === "tool_result" && typeof block.tool_use_id === "string") {
-        candidates.push({ id: block.tool_use_id, content: block.content });
+      if (
+        block.type === "tool_result" &&
+        typeof block.tool_use_id === "string" &&
+        !toolUseIds.has(block.tool_use_id) &&
+        PR_URL_RE.test(toolResultText(block.content))
+      ) {
+        return true;
       }
     }
   }
-  return candidates.some((c) => !toolUseIds.has(c.id) && PR_URL_RE.test(toolResultText(c.content)));
+  return false;
 }
 
 /**
@@ -209,17 +223,7 @@ export function extractPrsFromEntries(entries: ConversationEntry[]): PrLink[] {
     }
 
     if (entry.type === "user") {
-      // Tool-result turns put their blocks on `message.content` OR — when
-      // that array is EMPTY — on top-level `content`. The fallback must be
-      // length-based, not nullish: `[] ?? x` is `[]`, so a nullish chain
-      // stops at the empty array and never looks at the top-level field,
-      // silently dropping the `gh pr create` result and its PR URL.
-      // Mirrors ticketExtractor.ts and parser.ts's `textSource`.
-      const messageContent = (entry.message?.content as unknown) ?? [];
-      const content =
-        Array.isArray(messageContent) && messageContent.length === 0
-          ? ((entry as { content?: unknown }).content ?? messageContent)
-          : messageContent;
+      const content = userTurnContent(entry);
       if (!Array.isArray(content)) continue;
       for (const block of content as Array<Record<string, unknown>>) {
         if (block.type !== "tool_result") continue;

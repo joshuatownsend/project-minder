@@ -540,9 +540,7 @@ describe("tailNeedsPrRecovery (#654)", () => {
     expect(tailNeedsPrRecovery([entry])).toBe(true);
   });
 
-  it("ignores non-PR GitHub URLs and null entries", () => {
-    expect(
-      tailNeedsPrRecovery([null, userToolResult("tu_prefix", "https://github.com/foo/bar/issues/5")]),
-    ).toBe(false);
+  it("ignores non-PR GitHub URLs", () => {
+    expect(tailNeedsPrRecovery([userToolResult("tu_prefix", "https://github.com/foo/bar/issues/5")])).toBe(false);
   });
 });

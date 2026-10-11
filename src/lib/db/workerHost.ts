@@ -83,12 +83,10 @@ const CRASH_RESPAWN_BACKOFF_MS = [500, 2_000, 10_000];
 const MAX_RESPAWNS_PER_HOUR = 5;
 /**
  * V8 old-space ceiling for the ingest worker (#656). A runaway guard, not a
- * tuning knob: measured worker heap is p50 ~110 MB / p90 ~250 MB and stayed
- * under 400 MB from 2026-09-26 on, but reached 2.6 GB in September. 1 GB
- * catches that class while leaving headroom for a full re-parse of a 50 MB
- * transcript. Hitting it is a crash like any other (respawn + backoff). Note
- * that past `MAX_RESPAWNS_PER_HOUR` ingest falls back to the in-process
- * watcher, which this ceiling does not cover.
+ * tuning knob: observed heap stays well under 400 MB, and 1 GB leaves room
+ * for a full re-parse of a 50 MB transcript. Hitting it is a crash like any
+ * other (respawn + backoff). Not covered: past `MAX_RESPAWNS_PER_HOUR`,
+ * ingest falls back to the in-process watcher on the main thread.
  */
 const WORKER_MAX_OLD_GENERATION_MB = 1024;
 const ONE_HOUR_MS = 60 * 60 * 1000;

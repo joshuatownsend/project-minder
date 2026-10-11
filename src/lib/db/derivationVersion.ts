@@ -86,8 +86,8 @@ export const DERIVED_VERSION = 23;
 //     Bash call lands in already-persisted bytes but whose `tool_result`
 //     arrives in a later tail-append is recovered by a fallback
 //     full-file PR extraction (`recoverStraddledPrs` in ingest.ts),
-//     gated on a cheap `hasOrphanToolResults` flag computed during the
-//     tail parse. This catches the call/result-cross-cursor case without
+//     gated on a cheap `needsPrRecovery` flag (an unmatched tool_result
+//     carrying a PR URL) computed during the tail parse. This catches the call/result-cross-cursor case without
 //     needing another DERIVED_VERSION bump.
 //
 //     No read-side gate — missing rows just mean no chip renders for
