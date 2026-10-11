@@ -78,6 +78,14 @@ From `minder.log` memory samples, last instance (uptime 0 → 25.5 h): RSS 733 M
 1.6–2.3 GB thereafter; main heap 1.0–1.97 GB; worker heap 11–400 MB. CPU per #654: 0.67–1.35
 cores sampled. After-numbers come from the same log line once the build is installed.
 
+## After Waves 1–2 (= Wave 3 baseline), tray build 1.16.11
+
+`Get-Process` on the tray server, sampled each minute from boot (2026-10-11, 06:34 local):
+- Boot (0–7 min): ~470 CPU-s — initial reconcile + scan, expected.
+- Steady state (8–21 min): 223 CPU-s over 13 min ≈ **0.29 cores**, down from 0.67–1.35. Wave 1 landed.
+- Working set: 325 MB at 3 min → **1.64 GB by 8 min**, then flat to 21 min. The main-thread
+  memory is a boot-time fill, not slow growth — a pointer for Wave 5's profile, not a conclusion.
+
 ## Wave 3 — #655 30 s safety sweep + #584 server half
 
 **Confirmed.**

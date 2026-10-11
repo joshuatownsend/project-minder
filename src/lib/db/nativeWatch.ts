@@ -140,7 +140,7 @@ export function createWriteGate(opts: WriteGateOptions): WriteGate {
   /**
    * Forward a `change` only if the file was actually written. Fails open: if the
    * file cannot be stat'ed, let the caller's own gate decide (a missing file will
-   * also have produced a `rename`, and the 30 s sweep is the net for the rest).
+   * also have produced a `rename`, and the periodic sweep is the net for the rest).
    */
   const judge = (filePath: string): void => {
     const judged: Promise<void> = opts.stat(filePath).then(

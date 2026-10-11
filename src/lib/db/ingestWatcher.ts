@@ -32,10 +32,11 @@ import type { IngestWatcherMode } from "@/lib/types/init";
 //    debounced reconcile is mid-flight, schedule one more pass for after
 //    completion. Prevents two transactions racing on the writer.
 //
-// 5. **30 s mtime sweep belt-and-braces** — chokidar can silently drop
+// 5. **Periodic mtime sweep belt-and-braces** — chokidar can silently drop
 //    events on WSL or network shares. The periodic sweep catches anything
-//    the watcher missed. Cheap because the no-op gate skips unchanged
-//    files immediately.
+//    the watcher missed (every 30 s, or 5 min under a native watch — see
+//    `resolveSweepIntervalMs`). The no-op gate skips unchanged files, but
+//    at ~15k transcripts a sweep is still not free.
 //
 // 6. **Singleton on globalThis** — Next.js HMR will reload this module
 //    on every dev save. The watcher must close cleanly before a new one
@@ -43,6 +44,26 @@ import type { IngestWatcherMode } from "@/lib/types/init";
 
 const DEBOUNCE_MS = 250;
 const SWEEP_INTERVAL_MS = 30_000;
+// With a live native recursive watch the sweep only backstops dropped events,
+// and a full sweep stats ~15k transcripts — 30 s of that was a constant CPU
+// floor (#655). Non-Claude adapter sessions (Codex/Gemini) are not watched, so
+// they now land within 5 min rather than 30 s in this mode.
+const NATIVE_SWEEP_INTERVAL_MS = 5 * 60_000;
+
+/**
+ * Delay before the next safety sweep. `MINDER_SWEEP_INTERVAL_MS` (a positive
+ * integer) overrides every mode; otherwise native watching earns the long
+ * interval and chokidar / polling / sweep-only keep 30 s, since there the
+ * sweep may be the only thing noticing changes. Exported for unit tests.
+ */
+export function resolveSweepIntervalMs(
+  mode: IngestWatcherMode,
+  env: Record<string, string | undefined> = process.env
+): number {
+  const override = Number(env.MINDER_SWEEP_INTERVAL_MS);
+  if (Number.isInteger(override) && override > 0) return override;
+  return mode === "native" ? NATIVE_SWEEP_INTERVAL_MS : SWEEP_INTERVAL_MS;
+}
 const AWAIT_WRITE_FINISH_MS = 250;
 // Cap on how long we'll wait for chokidar's initial scan. A malformed
 // watch path or a permission issue can leave `ready` un-emitted; we
@@ -80,10 +101,17 @@ interface WatcherState {
   initialReconcileInFlight: boolean;
   sweepTimer: NodeJS.Timeout | null;
   /**
+   * Re-arms a PENDING sweep at the current mode's interval; a no-op while a
+   * sweep runs (its own re-arm reads the new mode) or with the sweep disabled.
+   * Set by `startSweep`. Without it, a native watch that dies just after
+   * arming a 5 min sweep leaves the index blind for those 5 min.
+   */
+  rearmSweep: (() => void) | null;
+  /**
    * True when the caller pinned an explicit projectsDir (tests, worker
    * wiring). When false, reconcile passes omit projectsDir so
    * `reconcileAllSessions` resolves ALL readable Claude homes (primary +
-   * config.claudeHomes) each pass — the 30s sweep is what keeps extra
+   * config.claudeHomes) each pass — the periodic sweep is what keeps extra
    * (e.g. WSL) homes ingested, since chokidar only watches the primary
    * tree (native fs events don't propagate over \\wsl.localhost).
    */
@@ -140,7 +168,7 @@ export interface StartIngestWatcherOptions {
    * gates the test runtime upstream in `instrumentation.ts`.
    */
   bypassEnvFlag?: boolean;
-  /** Suppress the 30 s sweep timer (tests don't want background timers). */
+  /** Suppress the periodic sweep timer (tests don't want background timers). */
   disableSweep?: boolean;
   /**
    * Force chokidar polling mode. Default false. Some Windows fixtures
@@ -299,6 +327,7 @@ export async function startIngestWatcher(
     needsAnotherPass: new Set(),
     initialReconcileInFlight: false,
     sweepTimer: null,
+    rearmSweep: null,
     explicitProjectsDir: options.projectsDir != null,
     stopped: false,
     activeWork: new Set(),
@@ -314,6 +343,7 @@ export async function startIngestWatcher(
   const setWatcherMode = (mode: IngestWatcherMode): void => {
     if (state.watcherMode === mode) return;
     state.watcherMode = mode;
+    state.rearmSweep?.();
     try {
       options.onWatcherMode?.(mode);
     } catch {
@@ -347,7 +377,7 @@ export async function startIngestWatcher(
         await reconcileAllSessions(db, {
           ...(state.explicitProjectsDir ? { projectsDir } : {}),
           // #470: the initial pass is the one whose completion changes what the
-          // index can answer, so it is the one that gets recorded. The 30 s
+          // index can answer, so it is the one that gets recorded. The periodic
           // sweep below runs the same function and deliberately does not.
           recordRun: "reconcile",
           logTiming: true,
@@ -827,7 +857,20 @@ function startSweep(state: WatcherState): void {
   // before the first finished, contending on the writer connection and
   // doubling the work. setTimeout-after-completion guarantees one sweep
   // at a time. `stopIngestWatcher` clears whichever phase is pending.
+  //
+  // The interval is read at every arm, not once here: the mode can change
+  // mid-run (a native watch dying drops to sweep-only), and the sweep is what
+  // covers for it.
+  let ticking = false;
+  const arm = (): void => {
+    state.sweepTimer = setTimeout(
+      () => { void trackWork(state, tick()); },
+      resolveSweepIntervalMs(state.watcherMode)
+    );
+    state.sweepTimer.unref?.();
+  };
   const tick = async (): Promise<void> => {
+    ticking = true;
     try {
       // Bail once shutting down — don't start a full reconcile that would
       // write to index.db while the shutdown disposer is closing it.
@@ -852,15 +895,17 @@ function startSweep(state: WatcherState): void {
       // eslint-disable-next-line no-console
       console.warn(`[ingest-watcher] sweep failed: ${(err as Error).message}`);
     } finally {
+      ticking = false;
       // Re-arm only if we're still the active watcher AND not shutting down
       // (stopIngestWatcher sets `stopped` and detaches the singleton via
       // `delete g.__minderIngestWatcher`).
-      if (!state.stopped && g.__minderIngestWatcher === state) {
-        state.sweepTimer = setTimeout(() => { void trackWork(state, tick()); }, SWEEP_INTERVAL_MS);
-        state.sweepTimer.unref?.();
-      }
+      if (!state.stopped && g.__minderIngestWatcher === state) arm();
     }
   };
-  state.sweepTimer = setTimeout(() => { void trackWork(state, tick()); }, SWEEP_INTERVAL_MS);
-  state.sweepTimer.unref?.();
+  state.rearmSweep = () => {
+    if (ticking || state.stopped || !state.sweepTimer) return;
+    clearTimeout(state.sweepTimer);
+    arm();
+  };
+  arm();
 }

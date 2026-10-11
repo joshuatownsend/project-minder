@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The background indexer's safety sweep, which re-checks every transcript on disk for changes the file watcher missed, now runs every 5 minutes instead of every 30 seconds while the native recursive watch is live (#655). The 30-second sweep stays for the chokidar and sweep-only modes, where the sweep may be the only way changes are noticed. If the native watch fails, the pending sweep is moved up to the 30-second schedule at once. New `MINDER_SWEEP_INTERVAL_MS` overrides the interval. Codex and Gemini sessions, which are not watched, now appear within 5 minutes rather than 30 seconds.
+- Each sweep is cheaper: the Claude transcript tree is walked once instead of twice, and the per-transcript database statements are compiled once per connection instead of on every file (#655).
+- When the indexing worker exhausts its crash budget (5 crashes in an hour) and any of those crashes hit its 1 GB heap ceiling, indexing now pauses for an hour and then retries the worker, instead of moving indexing onto the server's main thread, which has no ceiling (#656). The index is stale but intact during the pause. Other crash patterns still fall back to main-thread indexing as before.
+
 ## [1.16.11] - 2026-10-10
 
 *A performance release for the tray server. The background indexer stops re-reading whole session transcripts after nearly every tool call, which was the main cause of the server's constant ~1-core CPU use with several active Claude sessions, and the indexing worker gets a heap ceiling and a smaller database memory map.*

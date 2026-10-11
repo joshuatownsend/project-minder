@@ -20,7 +20,7 @@ import { DERIVED_VERSION } from "./derivationVersion";
 // declared in the original schema for this and never written; this module is
 // the writer it was waiting for.
 
-/** Full-corpus passes only. The 30 s sweep is not one — see `recordRun`. */
+/** Full-corpus passes only. The periodic sweep is not one — see `recordRun`. */
 export type IndexerRunKind = "reconcile" | "rebuild";
 
 export type IndexBuildState = "building" | "ready";
@@ -450,9 +450,9 @@ function pruneAbortedRuns(db: DatabaseT.Database): void {
 /**
  * `'building'` until the index has completed its first full pass.
  *
- * Deliberately NOT "a reconcile is running right now". The 30 s sweep re-runs
+ * Deliberately NOT "a reconcile is running right now". The periodic sweep re-runs
  * `reconcileAllSessions` forever, so a live-run predicate would flap a report
- * in and out of availability every half minute for the life of the process.
+ * in and out of availability on every sweep for the life of the process.
  * What consumers actually need to know is whether the corpus has been read
  * through **once**, which is a latch: false until it happens, true thereafter.
  *
