@@ -3178,7 +3178,7 @@ export interface ReconcileOptions {
   config?: MinderConfig;
   /**
    * Test seam: override the discovered non-Claude session files. Defaults to
-   * `discoverAllSessions(config)` minus Claude. Lets tests drive the adapter
+   * `discoverAllSessions(config, { exclude: ["claude"] })`. Lets tests drive the adapter
    * pass with fixtures instead of the real `~/.codex` / `~/.gemini` homes.
    */
   adapterSessions?: SessionFile[];
@@ -3193,8 +3193,8 @@ export interface ReconcileOptions {
    * index has ever been read through (#470).
    *
    * Opt-in, and that is load-bearing: the watcher re-runs `reconcileAllSessions`
-   * on a 30 s sweep for the life of the process, so recording unconditionally
-   * would write a row every half minute forever and make any "is a pass running"
+   * on a periodic sweep for the life of the process, so recording unconditionally
+   * would write a row on every sweep forever and make any "is a pass running"
    * reading flap. Only the INITIAL pass — the one whose completion actually
    * changes what the index can answer — passes this.
    *
@@ -3232,7 +3232,7 @@ export interface FileReconcileResult {
 const reportedIdCollisions = new Set<string>();
 
 function idOwnerPath(db: DatabaseT.Database, sessionId: string): string | undefined {
-  return (db.prepare("SELECT file_path FROM sessions WHERE session_id = ?").get(sessionId) as
+  return (prepareCached(db, "SELECT file_path FROM sessions WHERE session_id = ?").get(sessionId) as
     | { file_path: string }
     | undefined)?.file_path;
 }
@@ -3281,6 +3281,20 @@ async function isIdHeldByOtherFile(sessionId: string, storedPath: string, filePa
   return true;
 }
 
+// Statements on the per-file sweep path are compiled once per connection rather
+// than per call — the sweep visits every transcript (~15k), and better-sqlite3
+// has no statement cache of its own (#655). Keyed weakly so a closed-and-reopened
+// connection gets fresh statements.
+const statementCache = new WeakMap<DatabaseT.Database, Map<string, DatabaseT.Statement>>();
+
+function prepareCached(db: DatabaseT.Database, sql: string): DatabaseT.Statement {
+  let byDb = statementCache.get(db);
+  if (!byDb) statementCache.set(db, (byDb = new Map()));
+  let stmt = byDb.get(sql);
+  if (!stmt) byDb.set(sql, (stmt = db.prepare(sql)));
+  return stmt;
+}
+
 /**
  * Reconcile a single JSONL file into the DB. Caller is responsible for
  * `loadPricing()` having completed first.
@@ -3323,11 +3337,10 @@ export async function reconcileSessionFile(
         byte_offset: number;
         derived_version: number;
       }
-    | undefined = db
-    .prepare(
+    | undefined = prepareCached(
+      db,
       "SELECT file_path, project_dir_name, file_mtime_ms, file_size, byte_offset, derived_version FROM sessions WHERE session_id = ?"
-    )
-    .get(sessionId) as typeof existing;
+    ).get(sessionId) as typeof existing;
   // Checked under `force` too: a rebuild re-derives rows, it does not pick a different owner for an id.
   if (existing && (await isIdHeldByOtherFile(sessionId, existing.file_path, filePath))) return empty;
   const ownerSeen = existing?.file_path;
@@ -3377,9 +3390,10 @@ export async function reconcileSessionFile(
     mtimeMs >= existing.file_mtime_ms;
 
   if (canTail) {
-    const startTurnIndex = (db
-      .prepare("SELECT COALESCE(MAX(turn_index), -1) + 1 AS next_idx FROM turns WHERE session_id = ?")
-      .get(sessionId) as { next_idx: number }).next_idx;
+    const startTurnIndex = (prepareCached(
+      db,
+      "SELECT COALESCE(MAX(turn_index), -1) + 1 AS next_idx FROM turns WHERE session_id = ?"
+    ).get(sessionId) as { next_idx: number }).next_idx;
     const tailResult = await readJsonlSession(filePath, projectDirName, mtimeMs, size, {
       fromOffset: existing!.byte_offset,
       startTurnIndex,
@@ -3391,7 +3405,8 @@ export async function reconcileSessionFile(
     // `safeOffset` is a partial line that hasn't been flushed.
     if (!tailResult || !tailResult.parsed) {
       const newCursor = tailResult?.safeOffset ?? existing!.byte_offset;
-      db.prepare(
+      prepareCached(
+        db,
         "UPDATE sessions SET file_mtime_ms = ?, file_size = ?, byte_offset = ?, indexed_at_ms = ? WHERE session_id = ?"
       ).run(mtimeMs, size, newCursor, Date.now(), sessionId);
       return empty;
@@ -3861,7 +3876,7 @@ async function reconcileAdapterSessionFile(
  * a WSL-only setup with a configured extra home, and on any machine that has
  * Claude Code installed but no sessions yet. Counting that as an incomplete
  * enumeration marked EVERY pass aborted, so no completed run was ever recorded,
- * every 30 s sweep repeated the outcome, and the timecard stayed permanently
+ * every sweep repeated the outcome, and the timecard stayed permanently
  * unavailable while the readable home had in fact been scanned in full.
  * (Codex P1, PR #471 — a regression from the previous commit's fix.)
  *
@@ -4004,7 +4019,7 @@ async function reconcileAllSessionsSerialized(
   options: ReconcileOptions = {}
 ): Promise<IngestStats> {
   // #470: the pass records itself only when asked. See `ReconcileOptions.recordRun`
-  // for why the 30 s sweep must not.
+  // for why the periodic sweep must not.
   // Clock first: opening the run row can itself wait on a busy DB, and that wait
   // belongs in `totalMs` (the matching finish is counted).
   const timing = createReconcileTiming();
@@ -4057,7 +4072,7 @@ async function reconcileAllSessionsSerialized(
     // Written by EVERY full pass, whatever `recordRun` said (#529, finding 1).
     //
     // `indexer_runs` cannot carry this: `recordOptionForSweep` deliberately
-    // returns `{}` once a clean full pass exists, so the 30-second sweeps write
+    // returns `{}` once a clean full pass exists, so the periodic sweeps write
     // no row at all. Reading the latest RECORDED run therefore answers with the
     // startup pass forever, and a permissions failure appearing an hour later
     // stays invisible — on the DEFAULT backend.
@@ -4099,9 +4114,9 @@ async function runReconcileAllSessions(
   // ── Multi-harness setup ─────────────────────────────────────────────────
   // Resolve config + discover non-Claude session files BEFORE the Claude walk
   // so a missing `~/.claude/projects` (a Codex/Gemini-only user who never ran
-  // Claude) doesn't abort the whole reconcile. With the default config
-  // (`enabledAdapters` unset → ["claude"]) `discoverAllSessions` yields Claude
-  // files only and the `!== "claude"` filter empties the list — a pure no-op.
+  // Claude) doesn't abort the whole reconcile. Claude is excluded from discovery
+  // (the walk below covers it), so with the default config (`enabledAdapters`
+  // unset → ["claude"]) no adapter runs at all — a pure no-op.
   const config = options.config ?? (await timed("config", () => readConfig()));
 
   // Claude projects dirs: an explicit options.projectsDir (tests, worker
@@ -4163,9 +4178,7 @@ async function runReconcileAllSessions(
   try {
     adapterSessions =
       options.adapterSessions ??
-      (await timed("adapterDiscovery", () => discoverAllSessions(config))).filter(
-          (f) => f.source !== "claude"
-        );
+      await timed("adapterDiscovery", () => discoverAllSessions(config, { exclude: ["claude"] }));
   } catch (err) {
     adapterSessions = [];
     adapterDiscoveryFailed = true;

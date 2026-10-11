@@ -85,11 +85,32 @@ const MAX_RESPAWNS_PER_HOUR = 5;
  * V8 old-space ceiling for the ingest worker (#656). A runaway guard, not a
  * tuning knob: observed heap stays well under 400 MB, and 1 GB leaves room
  * for a full re-parse of a 50 MB transcript. Hitting it is a crash like any
- * other (respawn + backoff). Not covered: past `MAX_RESPAWNS_PER_HOUR`,
- * ingest falls back to the in-process watcher on the main thread.
+ * other (respawn + backoff); past `MAX_RESPAWNS_PER_HOUR` see
+ * `HEAP_CEILING_COOLDOWN_MS`.
  */
 const WORKER_MAX_OLD_GENERATION_MB = 1024;
 const ONE_HOUR_MS = 60 * 60 * 1000;
+/**
+ * How long ingest stays off when the crash budget runs out and at least one of
+ * those crashes hit the heap ceiling (#656). The usual exhausted-budget move —
+ * hand ingest to the in-process watcher — would run the same runaway on the
+ * HTTP server's main thread, which has no ceiling and takes the dashboard down
+ * with it. So the worker is retried after the crash window has aged out
+ * instead. Trade-off, deliberately chosen: the index is stale (not wrong) for
+ * the hour. Crashes that never hit the ceiling keep the in-process fallback.
+ */
+const HEAP_CEILING_COOLDOWN_MS = ONE_HOUR_MS;
+
+/**
+ * A worker that hits its heap ceiling also fails any pending start handshake,
+ * with this same error and before the exit handler runs. That failure must not
+ * reach `onStartFailure`: the exit handler owns a crash's recovery (respawn, or
+ * the cooldown above), and the fallback would move the runaway onto the main
+ * thread — the one outcome the cooldown exists to prevent (Codex, PR #668).
+ */
+function isHeapCeilingError(err: Error): boolean {
+  return (err as NodeJS.ErrnoException).code === "ERR_WORKER_OUT_OF_MEMORY";
+}
 
 type MessageSubscriber = (msg: unknown) => void;
 
@@ -102,6 +123,14 @@ interface WorkerHostState {
   lastMessageAt: number | null;
   /** Recent crash timestamps (ms). Pruned to the last hour on read + write. */
   crashHistory: number[];
+  /**
+   * When the worker last hit its heap ceiling (`ERR_WORKER_OUT_OF_MEMORY`). Within
+   * the crash window it keeps an exhausted budget off the main-thread fallback —
+   * see `HEAP_CEILING_COOLDOWN_MS`.
+   */
+  lastHeapCeilingAt: number | null;
+  /** See `WorkerHostStatus.pausedUntil`. Cleared when the cooldown respawn fires. */
+  pausedUntil: number | null;
   respawnTimer: NodeJS.Timeout | null;
   /** Set true once stopWorker is called; suppresses respawn. */
   stopping: boolean;
@@ -231,6 +260,8 @@ function freshState(readyTimeoutMs: number, workerEntry: string): WorkerHostStat
     lastReadyAt: null,
     lastMessageAt: null,
     crashHistory: [],
+    lastHeapCeilingAt: null,
+    pausedUntil: null,
     respawnTimer: null,
     stopping: false,
     readyPromise: null,
@@ -261,6 +292,12 @@ export interface WorkerHostStatus {
   memory: WorkerMemorySample | null;
   /** Watcher state inside the worker, last report (#558). Null until `started` arrives. */
   watcher: WorkerWatcherSnapshot | null;
+  /**
+   * Set while ingest is deliberately paused after heap-ceiling crashes (#656):
+   * when the worker will be retried. Null otherwise. Not a pending reconcile —
+   * nothing is running, and waiters must not hold off for it.
+   */
+  pausedUntil: number | null;
 }
 
 export interface StartWorkerOptions {
@@ -387,7 +424,7 @@ export async function startWorker(options: StartWorkerOptions = {}): Promise<Wor
           err,
           elapsedMs: Date.now() - handshakeStartedAt,
           timeoutMs: state.startTimeoutMs,
-          willFallBack: state.onStartFailure !== null,
+          willFallBack: state.onStartFailure !== null && !isHeapCeilingError(err),
         });
         throw err;
       }
@@ -400,7 +437,7 @@ export async function startWorker(options: StartWorkerOptions = {}): Promise<Wor
       // already logged above). The worker also emits `started` /
       // `error/phase=start` on the subscriber bus regardless.
       startPromise.catch((err: Error) => {
-        state.onStartFailure?.(err);
+        if (!isHeapCeilingError(err)) state.onStartFailure?.(err);
       });
     }
   }
@@ -633,6 +670,7 @@ export function getWorkerStatus(): WorkerHostStatus {
       workerEntry: "",
       memory: null,
       watcher: null,
+      pausedUntil: null,
     };
   }
   return snapshot(state);
@@ -675,6 +713,7 @@ function snapshot(state: WorkerHostState): WorkerHostStatus {
     workerEntry: state.workerEntry,
     memory: state.worker !== null ? state.memory : null,
     watcher: state.worker !== null ? state.watcher : null,
+    pausedUntil: state.pausedUntil,
   };
 }
 
@@ -862,7 +901,9 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
     console.warn(`[ingest-worker] error: ${err.message}`);
     // The heap ceiling must be findable in `minder.log` as its own cause; the
     // exit handler only sees a non-zero code and logs it as a generic crash.
-    if ((err as NodeJS.ErrnoException).code === "ERR_WORKER_OUT_OF_MEMORY") {
+    if (isHeapCeilingError(err)) {
+      // `error` precedes `exit`, so the exit handler's budget check sees this.
+      state.lastHeapCeilingAt = Date.now();
       serviceLog({
         level: "error",
         subsystem: "ingest-worker",
@@ -919,7 +960,11 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
       crashesLastHour: crashes,
     });
 
-    if (crashes >= MAX_RESPAWNS_PER_HOUR) {
+    const overBudget = crashes >= MAX_RESPAWNS_PER_HOUR;
+    // Runaway memory is never moved onto the main thread (#656).
+    const hitHeapCeiling =
+      state.lastHeapCeilingAt !== null && state.lastHeapCeilingAt >= Date.now() - ONE_HOUR_MS;
+    if (overBudget && !hitHeapCeiling) {
       // Hand off to the in-process watcher rather than stopping dead.
       //
       // This used to just give up, which was survivable while worker mode was
@@ -954,12 +999,26 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
       }
       return;
     }
+    if (overBudget) {
+      serviceLog({
+        level: "error",
+        subsystem: "ingest-worker",
+        msg:
+          `crash budget exceeded (${crashes}/${MAX_RESPAWNS_PER_HOUR} in last hour, at least one ` +
+          `at the heap ceiling); not falling back to the main thread, which has no ceiling. ` +
+          `Ingest paused; retrying the worker in ${HEAP_CEILING_COOLDOWN_MS / 60_000} min.`,
+        crashesLastHour: crashes,
+      });
+    }
+    const respawnDelayMs = overBudget
+      ? HEAP_CEILING_COOLDOWN_MS
+      : CRASH_RESPAWN_BACKOFF_MS[Math.min(crashes - 1, CRASH_RESPAWN_BACKOFF_MS.length - 1)];
+    if (overBudget) state.pausedUntil = Date.now() + respawnDelayMs;
 
-    const backoffIdx = Math.min(crashes - 1, CRASH_RESPAWN_BACKOFF_MS.length - 1);
-    const backoff = CRASH_RESPAWN_BACKOFF_MS[backoffIdx];
     state.worker = null;
     state.respawnTimer = setTimeout(() => {
       state.respawnTimer = null;
+      state.pausedUntil = null;
       if (state.stopping || g.__minderWorker !== state) return;
       spawnAndAttach(state, entry);
       const respawnedAt = Date.now();
@@ -994,16 +1053,16 @@ function spawnAndAttach(state: WorkerHostState, entry: string): void {
                 err,
                 elapsedMs: Date.now() - respawnHandshakeStartedAt,
                 timeoutMs: timeout,
-                willFallBack: fail !== null && fail !== undefined,
+                willFallBack: fail != null && !isHeapCeilingError(err),
               });
-              fail?.(err);
+              if (!isHeapCeilingError(err)) fail?.(err);
             });
           })
           .catch(() => {
             /* readyPromise rejected — reported by the handler above */
           });
       }
-    }, backoff);
+    }, respawnDelayMs);
     state.respawnTimer.unref?.();
   });
 }

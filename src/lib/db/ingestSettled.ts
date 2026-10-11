@@ -80,6 +80,9 @@ export async function readInitialReconcilePending(): Promise<boolean> {
       import("./ingestWatcher"),
     ]);
     const worker = getWorkerStatus();
+    // Ingest deliberately paused after heap-ceiling crashes (#656): no reconcile
+    // is running, so nothing to wait for (Codex, PR #668).
+    if (worker.pausedUntil != null) return false;
     const initialReconcileMs = worker.running
       ? (worker.watcher?.initialReconcileMs ?? null)
       : getWatcherStatus().initialReconcileMs;

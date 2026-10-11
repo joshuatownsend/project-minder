@@ -119,4 +119,17 @@ describe("adapter registry", () => {
       expect(typeof f.projectDirName).toBe("string");
     }
   });
+
+  it("discoverAllSessions never calls discover() on an excluded adapter (#655)", async () => {
+    const { discoverAllSessions, getAdapter } = await import("@/lib/adapters");
+    const claude = getAdapter("claude")!;
+    const codex = getAdapter("codex")!;
+    const claudeDiscover = vi.spyOn(claude, "discover");
+    const codexDiscover = vi.spyOn(codex, "discover").mockResolvedValue([]);
+    await discoverAllSessions({ enabledAdapters: ["claude", "codex"] } as any, { exclude: ["claude"] });
+    expect(claudeDiscover).not.toHaveBeenCalled();
+    expect(codexDiscover).toHaveBeenCalledTimes(1);
+    claudeDiscover.mockRestore();
+    codexDiscover.mockRestore();
+  });
 });

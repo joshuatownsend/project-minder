@@ -3,8 +3,9 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 // The live reader imports these on demand. Stubbed so the regression test below
 // controls exactly what "ingest is running but has not reported" looks like,
 // without starting a watcher or touching a database.
+const workerStatus = vi.hoisted(() => ({ running: false, pausedUntil: null as number | null }));
 vi.mock("@/lib/db/workerHost", () => ({
-  getWorkerStatus: () => ({ running: false }),
+  getWorkerStatus: () => workerStatus,
 }));
 vi.mock("@/lib/db/ingestWatcher", () => ({
   getWatcherStatus: () => ({ initialReconcileMs: null }),
@@ -63,6 +64,20 @@ describe("readInitialReconcilePending", () => {
     vi.stubEnv("MINDER_INDEXER", "");
     vi.stubEnv("MINDER_USE_DB", "0");
     await expect(readInitialReconcilePending()).resolves.toBe(true);
+  });
+
+  it("does not wait while ingest is paused after heap-ceiling crashes (#656)", async () => {
+    // Codex, PR #668: the cooldown leaves no reconcile running, so the grade
+    // sweep must not sit out the 30 min settle ceiling waiting for one.
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("MINDER_DEMO", "");
+    vi.stubEnv("MINDER_INDEXER", "");
+    workerStatus.pausedUntil = Date.now() + 60_000;
+    try {
+      await expect(readInitialReconcilePending()).resolves.toBe(false);
+    } finally {
+      workerStatus.pausedUntil = null;
+    }
   });
 
   it("does not wait when the indexer itself is off (MINDER_INDEXER=0)", async () => {

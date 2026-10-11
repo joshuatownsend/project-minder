@@ -57,9 +57,12 @@ export function getEnabledAdapters(config: MinderConfig): SessionAdapter[] {
 }
 
 export async function discoverAllSessions(
-  config: MinderConfig
+  config: MinderConfig,
+  options: { exclude?: readonly string[] } = {}
 ): Promise<SessionFile[]> {
-  const adapters = getEnabledAdapters(config);
+  // Excluded adapters' `discover()` is never called.
+  const exclude = new Set(options.exclude);
+  const adapters = getEnabledAdapters(config).filter((a) => !exclude.has(a.id));
   const results = await Promise.all(adapters.map((a) => a.discover()));
   return results.flat();
 }
