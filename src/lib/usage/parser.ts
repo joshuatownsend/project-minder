@@ -1382,13 +1382,9 @@ function sweepGate(): Promise<void> {
 function setSweepGate(p: Promise<unknown>): void {
   // Swallow rejection on the GATE only. The caller still awaits its own
   // promise and sees the error; the gate exists to order the next sweep, and a
-  // failed sweep must not poison every sweep after it.
-  //
-  // Discard the VALUE too. A settled promise keeps its result alive, and the
-  // gate outlives every sweep, so `p.catch(() => undefined)` pinned the last
-  // `buildAllSessions()` map — every parsed turn in the corpus, evicted from
-  // the FileCache or not — for the life of the process: 1.35 GB of a 1.46 GB
-  // heap on a 15k-session corpus (Wave 5).
+  // failed sweep must not poison every sweep after it. Drop the value too: the
+  // gate outlives every sweep, and a settled promise keeps its result alive —
+  // `.catch` alone pinned the last full-corpus map for good (Wave 5).
   globalForParser.__usageSweepGate = p.then(() => undefined, () => undefined);
 }
 

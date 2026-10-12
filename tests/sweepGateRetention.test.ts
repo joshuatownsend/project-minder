@@ -1,12 +1,6 @@
 /**
- * Wave 5 — the sweep gate must not keep the last sweep's result alive.
- *
- * The gate orders sweeps; nothing reads its value. But a settled promise holds
- * its result, and the gate lives on globalThis for the life of the process, so
- * when it was `p.catch(() => undefined)` it pinned the whole
- * `buildAllSessions()` map: every parsed turn in the corpus, including the ones
- * the FileCache's byte budget had evicted. On the live tray server that was
- * 1.35 GB of a 1.46 GB heap.
+ * Wave 5 — the sweep gate lives on globalThis forever, so if it settles to the
+ * sweep's value it pins every parsed turn in the corpus (1.35 GB on the tray).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "path";
