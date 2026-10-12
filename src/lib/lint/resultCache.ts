@@ -416,8 +416,10 @@ export async function lintFingerprint(
     for (const e of entries) {
       const childRel = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) {
-        // `.claude/worktrees` (see `isUnderClaudeWorktrees`), by name: the walk never enters one, so only its root is ever met.
-        if (SKIP_DIRS.has(e.name) || (e.name === "worktrees" && path.basename(dir) === ".claude")) continue;
+        // Judged on the project-relative path with the same predicate `library.ts` filters findings
+        // by, so both sides classify exactly the same paths (a project that is itself named `.claude`
+        // keeps its top-level `worktrees/`).
+        if (SKIP_DIRS.has(e.name) || isUnderClaudeWorktrees(childRel)) continue;
         const childAbs = path.join(dir, e.name);
         // Custom rules are executable code that can import anything: not trackable, so not cached.
         if (e.name === ".claudelint" && (await fs.stat(path.join(childAbs, "rules")).then(() => true, () => false))) {

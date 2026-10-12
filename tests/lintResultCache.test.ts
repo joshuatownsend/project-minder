@@ -186,6 +186,15 @@ describe("lintFingerprint", () => {
     expect(await lintFingerprint(project, "1.0.0")).not.toBe(mid);
   });
 
+  it("still tracks a top-level worktrees/ when the project itself is named .claude (its findings are kept)", async () => {
+    const dotClaude = path.join(root, ".claude");
+    fs.mkdirSync(path.join(dotClaude, "worktrees", "w"), { recursive: true });
+    fs.writeFileSync(path.join(dotClaude, "worktrees", "w", "CLAUDE.md"), "# a\n");
+    const before = await lintFingerprint(dotClaude, "1.0.0");
+    fs.writeFileSync(path.join(dotClaude, "worktrees", "w", "CLAUDE.md"), "# b\n");
+    expect(await lintFingerprint(dotClaude, "1.0.0")).not.toBe(before);
+  });
+
   it("does NOT skip build-output directories the CLI still globs (e.g. .next, target)", async () => {
     const before = await lintFingerprint(project, "1.0.0");
     write(".next/server/CLAUDE.md", "# generated\n");
