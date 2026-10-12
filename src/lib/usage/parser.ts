@@ -60,7 +60,7 @@ const globalForParser = globalThis as unknown as {
   };
   /** Tail of the sweep chain — see `sweepGate`. Ordering only; never awaited
    *  for a value. */
-  __usageSweepGate?: Promise<unknown>;
+  __usageSweepGate?: Promise<void>;
 };
 
 function getFileCache(): FileCache<UsageTurn[]> {
@@ -1376,14 +1376,16 @@ function warnOnceParser(key: string, message: string): void {
  * correctness depends on having seen every live file. Two sweeps running at
  * once each evict the other's files.
  */
-function sweepGate(): Promise<unknown> {
+function sweepGate(): Promise<void> {
   return globalForParser.__usageSweepGate ?? Promise.resolve();
 }
 function setSweepGate(p: Promise<unknown>): void {
   // Swallow rejection on the GATE only. The caller still awaits its own
   // promise and sees the error; the gate exists to order the next sweep, and a
-  // failed sweep must not poison every sweep after it.
-  globalForParser.__usageSweepGate = p.catch(() => undefined);
+  // failed sweep must not poison every sweep after it. Drop the value too: the
+  // gate outlives every sweep, and a settled promise keeps its result alive —
+  // `.catch` alone pinned the last full-corpus map for good (Wave 5).
+  globalForParser.__usageSweepGate = p.then(() => undefined, () => undefined);
 }
 
 /**

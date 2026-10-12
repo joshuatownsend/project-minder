@@ -65,6 +65,18 @@ worker) explains #654's CPU, not its RSS.
 
 ## Wave 5 — main-thread heap 1.4–1.9 GB (new, unfiled)
 
+**Found (2026-10-11, live 1.16.14, 31 min uptime, inspector).** Heap after GC 1,464 MB.
+Not the FileCache: dropping all 5,926 slots freed nothing. The holder was the parser's
+sweep gate, `__usageSweepGate = p.catch(() => undefined)`, which settles to the last
+`buildAllSessions()` map (15,237 sessions, 330k turns) and lives on globalThis forever.
+Replacing it with a value-less promise: heap 1,463 → 111 MB, RSS 1.63 GB → 254 MB. After a
+fresh sweep with only the gate released (the fix's steady state): 1,473 → 329 MB, RSS 1.6 GB →
+477 MB — so the bounded FileCache itself costs ~220 MB, not ~2 GB. Fix: the gate settles to
+`undefined` (`p.then(() => undefined, () => undefined)`, as `serialGate.ts` already does).
+Side note: a cold `/api/memory/usage` sweep took 290 s on this corpus.
+
+Original notes:
+
 Main heap in the hourly samples: 1.4–1.9 GB used, with dips to 350–740 MB (so collectable/
 retained, not a hard leak). Source unknown — **profile before fixing**: take a heap snapshot of
 the live tray server via the inspector recipe in memory note
@@ -163,7 +175,7 @@ Fixes:
 | 3 | #655, #584 | M | PR B |
 | 4 | #657 | M | PR C |
 | 4b | #672 | S | PR D — found by the Wave 4 after-measurement: live-status rebuild stat'ed all 13.5k transcripts (~5 CPU-s, 7-20 s wall > 6 s TTL → ~0.35 cores while any page polls); now asks the index for recent files |
-| 5 | main-thread heap | ? | profile first |
+| 5 | main-thread heap | S | PR E — sweep gate pinned the last full-corpus parse map (1.35 GB); gate now settles to undefined |
 | — | #627 | — | deferred |
 
 Each PR: `/simplify` pass, typecheck + full suite + `pnpm build`, `/pr-resolve` to convergence,
