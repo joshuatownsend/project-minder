@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.16.15] - 2026-10-11
+
+*A one-fix memory release. The tray server's main heap had sat at 1.4–1.9 GB for weeks. Profiling the running server showed that nearly all of it was one forgotten copy of every parsed Claude transcript, held for the server's whole lifetime. Releasing it brings the server down to roughly 330 MB.*
+
 ### Fixed
 
 - The tray server no longer keeps every parsed Claude transcript in memory after a full history read. Reading the whole history (the dashboard's efficiency grades, the memory page and some project tabs do this) left a copy of every session's parsed turns held for the life of the server, outside the parse cache's 1 GiB budget. On a 15,000-session history that was about 1.35 GB of a 1.46 GB heap. The server now settles at roughly 330 MB, of which the bounded parse cache is about 220 MB.
