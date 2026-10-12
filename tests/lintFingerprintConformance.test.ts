@@ -85,8 +85,18 @@ function findingsOutsideWorktrees(stdout: string): string[] {
   return lines.sort();
 }
 
+/** The real CLI over the fixture, with a home of its own. */
+function runCli(extraEnv: Record<string, string> = {}) {
+  return spawnSync(process.execPath, [resolveClaudelintBin(), "check-all", "--format", "json", "--no-cache"], {
+    cwd: project,
+    encoding: "utf-8",
+    maxBuffer: 1 << 26,
+    env: { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, ".config"), ...extraEnv },
+  });
+}
+
 beforeAll(() => {
-  base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "lint-conf-")));
+  base =fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "lint-conf-")));
   home = path.join(base, "home");
   project = path.join(base, "proj");
   fs.mkdirSync(home, { recursive: true });
@@ -98,19 +108,7 @@ beforeAll(() => {
   const tracer = path.join(base, "trace tools", "fsTrace.cjs");
   fs.mkdirSync(path.dirname(tracer), { recursive: true });
   fs.copyFileSync(TRACER, tracer);
-  const result = spawnSync(process.execPath, [resolveClaudelintBin(), "check-all", "--format", "json", "--no-cache"], {
-    cwd: project,
-    encoding: "utf-8",
-    maxBuffer: 1 << 26,
-    env: {
-      ...process.env,
-      HOME: home,
-      USERPROFILE: home,
-      XDG_CONFIG_HOME: path.join(home, ".config"),
-      FSTRACE_OUT: traceFile,
-      NODE_OPTIONS: `--require "${tracer.split(path.sep).join("/")}"`,
-    },
-  });
+  const result = runCli({ FSTRACE_OUT: traceFile, NODE_OPTIONS: `--require "${tracer.split(path.sep).join("/")}"` });
   // exit 1 just means findings were reported; the run must still have produced a report
   expect(() => JSON.parse(result.stdout)).not.toThrow();
   tracedReport = result.stdout;
@@ -220,14 +218,9 @@ describe("lint fingerprint conformance (claude-code-lint, traced)", () => {
     const parked = path.join(base, "parked-worktrees");
     fs.renameSync(path.join(project, ".claude", "worktrees"), parked);
     try {
-      const bare = spawnSync(process.execPath, [resolveClaudelintBin(), "check-all", "--format", "json", "--no-cache"], {
-        cwd: project,
-        encoding: "utf-8",
-        maxBuffer: 1 << 26,
-        env: { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, ".config") },
-      });
-      expect(findingsOutsideWorktrees(bare.stdout)).toEqual(findingsOutsideWorktrees(tracedReport));
-      expect(findingsOutsideWorktrees(bare.stdout).length).toBeGreaterThan(0); // compared something real
+      const bare = findingsOutsideWorktrees(runCli().stdout);
+      expect(bare).toEqual(findingsOutsideWorktrees(tracedReport));
+      expect(bare.length).toBeGreaterThan(0); // compared something real
     } finally {
       fs.renameSync(parked, path.join(project, ".claude", "worktrees"));
     }

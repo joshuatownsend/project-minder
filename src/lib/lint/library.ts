@@ -160,8 +160,8 @@ function reportToFindings(report: CliReport, projectPath: string): LintFinding[]
     const messages = [...(validator.errors ?? []), ...(validator.warnings ?? [])];
     for (const msg of messages) {
       // An agent worktree's copy of the project's own config: the same finding again, and outside
-      // what the cache fingerprints (`isUnderClaudeWorktrees`).
-      if (msg.file && isUnderClaudeWorktrees(path.isAbsolute(msg.file) ? path.relative(projectPath, msg.file) : msg.file)) continue;
+      // what the cache fingerprints. Judged relative to the project, which may itself be a worktree.
+      if (msg.file && isUnderClaudeWorktrees(path.relative(projectPath, path.resolve(projectPath, msg.file)))) continue;
       findings.push(toFinding(msg, target));
     }
   }
