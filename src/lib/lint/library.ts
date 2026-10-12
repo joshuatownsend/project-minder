@@ -6,6 +6,7 @@ import {
   getCachedLintReport,
   lintCacheEnabled,
   lintCacheEpoch,
+  isUnderClaudeWorktrees,
   lintFingerprint,
   putCachedLintReport,
 } from "./resultCache";
@@ -102,7 +103,7 @@ export async function runLibraryCli(
   const fingerprint = cacheOn && version !== "unknown" ? await lintFingerprint(projectPath, version) : null;
   if (fingerprint) {
     const hit = await getCachedLintReport(projectPath, fingerprint);
-    if (hit) return reportToFindings(hit as CliReport); // stored from a CliReport below
+    if (hit) return reportToFindings(hit as CliReport, projectPath); // stored from a CliReport below
   }
 
   const { stdout, error, signal } = await spawnClaudelint(
@@ -136,8 +137,8 @@ export async function runLibraryCli(
 
   // Store only if the tree looks the same after the run as before it. This narrows the window
   // in which the report could describe a state the fingerprint does not (a file edited
-  // mid-run); it cannot see a change that is made and reverted within the run, which the 4 h
-  // age limit and the Rescan button cover. `epoch` drops the store if the cache was cleared
+  // mid-run); it cannot see a change that is made and reverted within the run, which the
+  // `MAX_AGE_MS` limit and the Rescan button cover. `epoch` drops the store if the cache was cleared
   // (a forced rescan) while this run was in flight.
   if (fingerprint && (await lintFingerprint(projectPath, version)) === fingerprint) {
     await putCachedLintReport(
@@ -148,16 +149,19 @@ export async function runLibraryCli(
       epoch,
     );
   }
-  return reportToFindings(report);
+  return reportToFindings(report, projectPath);
 }
 
-function reportToFindings(report: CliReport): LintFinding[] {
+function reportToFindings(report: CliReport, projectPath: string): LintFinding[] {
   const findings: LintFinding[] = [];
   for (const validator of report.validators ?? []) {
     const target = VALIDATOR_TARGET[validator.name];
     if (!target) continue;
     const messages = [...(validator.errors ?? []), ...(validator.warnings ?? [])];
     for (const msg of messages) {
+      // An agent worktree's copy of the project's own config: the same finding again, and outside
+      // what the cache fingerprints (`isUnderClaudeWorktrees`).
+      if (msg.file && isUnderClaudeWorktrees(path.isAbsolute(msg.file) ? path.relative(projectPath, msg.file) : msg.file)) continue;
       findings.push(toFinding(msg, target));
     }
   }

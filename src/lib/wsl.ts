@@ -125,7 +125,10 @@ interface WslCache {
 }
 
 // globalThis so dev-server HMR reloads of this module share one cache.
-const g = globalThis as typeof globalThis & { __minderWslCache?: WslCache };
+const g = globalThis as typeof globalThis & {
+  __minderWslCache?: WslCache;
+  __minderWslInflight?: { promise?: Promise<WslDistro[] | null> };
+};
 
 /**
  * Asymmetric TTLs. A cached "everything relevant is Running" answer is what
@@ -155,17 +158,30 @@ export async function listWslDistros(): Promise<WslDistro[] | null> {
       : WSL_CACHE_TTL_MS;
     if (Date.now() - cached.fetchedAt < ttl) return cached.distros;
   }
-  let distros: WslDistro[] | null;
-  try {
-    // encoding:"buffer" so we can UTF-16-decode ourselves.
-    const stdout = await runWsl(["-l", "-v"]);
-    distros = parseWslDistroList(decodeWslOutput(stdout));
-  } catch {
-    // wsl.exe missing, WSL not enabled, or no distros installed (exit 1).
-    distros = null;
-  }
-  g.__minderWslCache = { distros, fetchedAt: Date.now() };
-  return distros;
+  // Concurrent callers share one spawn: a scan batch asks for every project at once, and each
+  // miss used to start its own wsl.exe (43 per scan, #584).
+  const shared = g.__minderWslInflight?.promise;
+  if (shared) return shared;
+  const flight: { promise?: Promise<WslDistro[] | null> } = {};
+  g.__minderWslInflight = flight;
+  flight.promise = (async () => {
+    let distros: WslDistro[] | null;
+    try {
+      // encoding:"buffer" so we can UTF-16-decode ourselves.
+      const stdout = await runWsl(["-l", "-v"]);
+      distros = parseWslDistroList(decodeWslOutput(stdout));
+    } catch {
+      // wsl.exe missing, WSL not enabled, or no distros installed (exit 1).
+      distros = null;
+    }
+    // A `clearWslCache()` while this ran asked for a newer answer than this one: don't cache it.
+    if (g.__minderWslInflight === flight) {
+      g.__minderWslCache = { distros, fetchedAt: Date.now() };
+      g.__minderWslInflight = undefined;
+    }
+    return distros;
+  })();
+  return flight.promise;
 }
 
 /**
@@ -177,6 +193,7 @@ export async function listWslDistros(): Promise<WslDistro[] | null> {
  */
 export function clearWslCache(): void {
   g.__minderWslCache = undefined;
+  g.__minderWslInflight = undefined;
 }
 
 export interface WslDistroSuggestion {

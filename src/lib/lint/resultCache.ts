@@ -42,12 +42,21 @@ interface CacheState {
 }
 
 const FILE_VERSION = 1;
-/** Bounds the damage of any input the fingerprint does not cover; a forced rescan clears the cache outright. */
-export const MAX_AGE_MS = 4 * 60 * 60 * 1000;
+/**
+ * Bounds the damage of any input the fingerprint does not cover; a forced rescan clears the cache outright.
+ * A day, not four hours: four hours expired every entry overnight, so the first boot of the day re-linted
+ * every project, ~2 min of `claudelint` on the boot scan (#584).
+ */
+export const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_ENTRIES = 500;
 const FLUSH_DELAY_MS = 1000;
-/** Directory entries visited while fingerprinting; a tree bigger than this is not cached. */
-export const MAX_WALK_ENTRIES = 25_000;
+/**
+ * Directory entries visited while fingerprinting; a tree bigger than this is not cached. The walk is
+ * paid on every scan, hit or miss, but it is cheap: a 50,000-entry tree (a Next.js build's `.next`
+ * alone is about that) walked in 0.15-0.35 s, against the 2-12 s lint it saves. At 25,000 the largest
+ * projects, which are also the slowest to lint, were re-linted on every scan (#584).
+ */
+export const MAX_WALK_ENTRIES = 200_000;
 
 /**
  * Exactly what the CLI ignores by default (`DEFAULT_IGNORES`, gitignore semantics, so at any
@@ -55,6 +64,17 @@ export const MAX_WALK_ENTRIES = 25_000;
  * would lint a `CLAUDE.md` under `.next/` or `target/`, so a change there has to miss.
  */
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "coverage", ".claudelint-cache"]);
+/**
+ * Claude Code's agent worktrees: whole checkouts of the project under `.claude/worktrees/<name>`, at
+ * any depth (a build copy of the project carries its own). The CLI lints them, and `check-all` has no
+ * way to exclude them, but their findings are copies of the project's own and `library.ts` drops
+ * them, so the fingerprint skips them too. Without this a project with a few worktrees blew the walk
+ * cap and was re-linted on every scan, the slowest lints of all (#584).
+ */
+export function isUnderClaudeWorktrees(relPath: string): boolean {
+  return /(^|[\\/])\.claude[\\/]worktrees([\\/]|$)/.test(relPath);
+}
+
 /** Everything under these is fingerprinted, whatever it is called. */
 const CONFIG_DIRS = new Set([
   ".claude", ".claude-plugin", ".claudelint", "skills", "agents", "commands", "hooks",
@@ -400,7 +420,7 @@ export async function lintFingerprint(
     for (const e of entries) {
       const childRel = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) {
-        if (SKIP_DIRS.has(e.name)) continue;
+        if (SKIP_DIRS.has(e.name) || isUnderClaudeWorktrees(childRel)) continue;
         const childAbs = path.join(dir, e.name);
         // Custom rules are executable code that can import anything: not trackable, so not cached.
         if (e.name === ".claudelint" && (await fs.stat(path.join(childAbs, "rules")).then(() => true, () => false))) {

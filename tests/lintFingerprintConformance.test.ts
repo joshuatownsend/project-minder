@@ -4,7 +4,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { resolveClaudelintBin } from "@/lib/lint/library";
-import { lintFingerprint } from "@/lib/lint/resultCache";
+import { isUnderClaudeWorktrees, lintFingerprint } from "@/lib/lint/resultCache";
 
 // #617 — the fingerprint is an allowlist of what the lint CLI reads, so it can only be as complete as
 // our reading of the CLI. This test removes the guesswork: it runs the REAL installed CLI under an fs
@@ -12,7 +12,7 @@ import { lintFingerprint } from "@/lib/lint/resultCache";
 // ANY file the CLI touched moves the fingerprint.
 //
 // If a claude-code-lint upgrade starts reading something new, this fails on the Dependabot bump
-// naming the path, instead of the cache serving stale results for up to four hours.
+// naming the path, instead of the cache serving stale results until the entry expires.
 
 const TRACER = path.join(process.cwd(), "tests", "_helpers", "fsTrace.cjs");
 
@@ -20,6 +20,7 @@ let base: string;
 let home: string;
 let project: string;
 let traced: string[] = [];
+let tracedReport = "";
 
 const w = (abs: string, content: string) => {
   fs.mkdirSync(path.dirname(abs), { recursive: true });
@@ -62,6 +63,26 @@ function buildFixture() {
   w(p(".gitignore"), "ignored/\n");
   w(p("package.json"), JSON.stringify({ name: "fixture", version: "1.0.0" }));
   w(p("ignored/CLAUDE.md"), "@docs/ignored-import.md\n");
+
+  // An agent worktree (#584): a checkout of the same project, so the same skills, agents, hooks and
+  // settings again. The CLI lints it; Minder drops its findings and the fingerprint skips it.
+  const wt = p(".claude/worktrees/agent-1");
+  for (const rel of ["CLAUDE.md", "docs", "skills", "agents", "commands", "hooks", "scripts", ".mcp.json", ".claude/settings.json"]) {
+    fs.cpSync(p(rel), path.join(wt, rel), { recursive: true });
+  }
+}
+
+/** The CLI's report, as comparable lines, minus anything under an agent worktree. */
+function findingsOutsideWorktrees(stdout: string): string[] {
+  const report = JSON.parse(stdout) as { validators?: Array<{ name: string; errors?: unknown[]; warnings?: unknown[] }> };
+  const lines: string[] = [];
+  for (const v of report.validators ?? []) {
+    for (const m of [...(v.errors ?? []), ...(v.warnings ?? [])] as Array<{ file?: string; ruleId?: string; message?: string }>) {
+      if (m.file && isUnderClaudeWorktrees(path.relative(project, m.file))) continue;
+      lines.push(`${v.name} | ${m.ruleId} | ${m.file ? path.relative(project, m.file) : ""} | ${m.message}`);
+    }
+  }
+  return lines.sort();
 }
 
 beforeAll(() => {
@@ -92,6 +113,7 @@ beforeAll(() => {
   });
   // exit 1 just means findings were reported; the run must still have produced a report
   expect(() => JSON.parse(result.stdout)).not.toThrow();
+  tracedReport = result.stdout;
   traced = fs.existsSync(traceFile) ? fs.readFileSync(traceFile, "utf-8").split("\n").filter(Boolean) : [];
 }, 120_000);
 
@@ -156,6 +178,8 @@ describe("lint fingerprint conformance (claude-code-lint, traced)", () => {
         kind = "missing";
       }
       if (kind === "dir") continue; // directories are covered by the tree walk; a listing cannot be "edited"
+      // Read by the CLI, but its findings are dropped (see the test below); the fingerprint skips it.
+      if (isUnderClaudeWorktrees(path.relative(project, target))) continue;
 
       let restore: () => void;
       if (kind === "file") {
@@ -186,5 +210,26 @@ describe("lint fingerprint conformance (claude-code-lint, traced)", () => {
       expect(await lintFingerprint(project, "1.0.0")).toBe(baseline);
     }
     expect(untracked, "the CLI reads these but the fingerprint does not see them change").toEqual([]);
+  }, 120_000);
+
+  it("the CLI lints the agent worktree, but nothing it finds outside the worktree depends on it", () => {
+    const touched = touchedUnderFixture();
+    expect(touched.some((p) => isUnderClaudeWorktrees(path.relative(project, p))), "the worktree was never read").toBe(true);
+    // The same project without the worktree must produce exactly the same findings everywhere else;
+    // otherwise skipping it in the fingerprint could serve a stale finding about the project itself.
+    const parked = path.join(base, "parked-worktrees");
+    fs.renameSync(path.join(project, ".claude", "worktrees"), parked);
+    try {
+      const bare = spawnSync(process.execPath, [resolveClaudelintBin(), "check-all", "--format", "json", "--no-cache"], {
+        cwd: project,
+        encoding: "utf-8",
+        maxBuffer: 1 << 26,
+        env: { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, ".config") },
+      });
+      expect(findingsOutsideWorktrees(bare.stdout)).toEqual(findingsOutsideWorktrees(tracedReport));
+      expect(findingsOutsideWorktrees(bare.stdout).length).toBeGreaterThan(0); // compared something real
+    } finally {
+      fs.renameSync(parked, path.join(project, ".claude", "worktrees"));
+    }
   }, 120_000);
 });

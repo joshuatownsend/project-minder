@@ -165,6 +165,27 @@ describe("lintFingerprint", () => {
     expect(await lintFingerprint(project, "1.0.0")).toBeNull();
   });
 
+  it("skips agent worktree copies under .claude/worktrees, at any depth (#584)", async () => {
+    const before = await lintFingerprint(project, "1.0.0");
+    write(".claude/worktrees/agent-1/CLAUDE.md", "# copy\n");
+    write(".claude/worktrees/agent-1/.claude/agents/a.md", "---\nname: a\n---\n");
+    write("target/debug/app/.claude/worktrees/agent-2/skills/s/SKILL.md", "# s\n");
+    // ...and their size no longer counts against the walk cap.
+    for (let i = 0; i < 20; i++) write(`.claude/worktrees/agent-1/src/f${i}.ts`, "");
+    expect(await lintFingerprint(project, "1.0.0", 15)).not.toBeNull();
+    expect(await lintFingerprint(project, "1.0.0")).not.toBe(before); // target/debug/app/ itself is new
+    const withWorktrees = await lintFingerprint(project, "1.0.0");
+    write(".claude/worktrees/agent-1/CLAUDE.md", "# copy, edited\n");
+    write(".claude/worktrees/agent-3/CLAUDE.md", "# another\n");
+    expect(await lintFingerprint(project, "1.0.0")).toBe(withWorktrees);
+    // Only that directory: the rest of .claude, and a `worktrees` directory anywhere else, still count.
+    write(".claude/agents/b.md", "---\nname: b\n---\n");
+    const mid = await lintFingerprint(project, "1.0.0");
+    expect(mid).not.toBe(withWorktrees);
+    write("worktrees/CLAUDE.md", "# not an agent worktree\n");
+    expect(await lintFingerprint(project, "1.0.0")).not.toBe(mid);
+  });
+
   it("does NOT skip build-output directories the CLI still globs (e.g. .next, target)", async () => {
     const before = await lintFingerprint(project, "1.0.0");
     write(".next/server/CLAUDE.md", "# generated\n");
