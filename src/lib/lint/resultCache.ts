@@ -42,12 +42,18 @@ interface CacheState {
 }
 
 const FILE_VERSION = 1;
-/** Bounds the damage of any input the fingerprint does not cover; a forced rescan clears the cache outright. */
-export const MAX_AGE_MS = 4 * 60 * 60 * 1000;
+/**
+ * Bounds the damage of any input the fingerprint does not cover; a forced rescan clears the cache outright.
+ * Long enough to survive a night, so the first boot of the day is not a full re-lint (#584).
+ */
+export const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_ENTRIES = 500;
 const FLUSH_DELAY_MS = 1000;
-/** Directory entries visited while fingerprinting; a tree bigger than this is not cached. */
-export const MAX_WALK_ENTRIES = 25_000;
+/**
+ * Directory entries visited while fingerprinting; a tree bigger than this is not cached. The walk is
+ * paid on every scan, but a 50,000-entry tree takes 0.15-0.35 s against the 2-12 s lint it saves (#584).
+ */
+export const MAX_WALK_ENTRIES = 200_000;
 
 /**
  * Exactly what the CLI ignores by default (`DEFAULT_IGNORES`, gitignore semantics, so at any
@@ -55,6 +61,16 @@ export const MAX_WALK_ENTRIES = 25_000;
  * would lint a `CLAUDE.md` under `.next/` or `target/`, so a change there has to miss.
  */
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "coverage", ".claudelint-cache"]);
+/**
+ * Claude Code's agent worktrees: whole checkouts of the project under `.claude/worktrees/<name>`, at
+ * any depth. The CLI lints them (`check-all` cannot exclude them), but their findings repeat the
+ * project's own, so `library.ts` drops them and the fingerprint skips them (#584).
+ */
+const CLAUDE_WORKTREES_RE = /(^|[\\/])\.claude[\\/]worktrees([\\/]|$)/;
+export function isUnderClaudeWorktrees(relPath: string): boolean {
+  return CLAUDE_WORKTREES_RE.test(relPath);
+}
+
 /** Everything under these is fingerprinted, whatever it is called. */
 const CONFIG_DIRS = new Set([
   ".claude", ".claude-plugin", ".claudelint", "skills", "agents", "commands", "hooks",
@@ -400,7 +416,10 @@ export async function lintFingerprint(
     for (const e of entries) {
       const childRel = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) {
-        if (SKIP_DIRS.has(e.name)) continue;
+        // Judged on the project-relative path with the same predicate `library.ts` filters findings
+        // by, so both sides classify exactly the same paths (a project that is itself named `.claude`
+        // keeps its top-level `worktrees/`).
+        if (SKIP_DIRS.has(e.name) || isUnderClaudeWorktrees(childRel)) continue;
         const childAbs = path.join(dir, e.name);
         // Custom rules are executable code that can import anything: not trackable, so not cached.
         if (e.name === ".claudelint" && (await fs.stat(path.join(childAbs, "rules")).then(() => true, () => false))) {

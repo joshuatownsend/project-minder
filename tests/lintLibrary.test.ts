@@ -92,6 +92,35 @@ describe("runLibraryCli", () => {
     expect(claudeMdFindings).toHaveLength(0);
   });
 
+  it("drops findings from agent worktree copies under .claude/worktrees (#584)", async () => {
+    const project = path.resolve("/project");
+    const msg = (file: string) => ({ message: "body too short", ruleId: "agent-body-too-short", severity: "warning", file });
+    const report = JSON.stringify({
+      validators: [{
+        name: "Agents Validator",
+        warnings: [
+          msg(path.join(project, ".claude", "agents", "real.md")),
+          msg(path.join(project, ".claude", "worktrees", "agent-1", ".claude", "agents", "real.md")),
+          msg(path.join(project, "target", "app", ".claude", "worktrees", "agent-2", "agents", "x.md")),
+          msg(".claude/worktrees/agent-3/agents/y.md"),
+          msg("worktrees/agents/z.md"),
+        ],
+      }],
+    });
+    mockSpawn.mockReturnValue(makeFakeProcess(report, 1));
+    const files = (await runLibraryCli(project, [])).map((f) => f.file);
+    expect(files).toEqual([path.join(project, ".claude", "agents", "real.md"), "worktrees/agents/z.md"]);
+  });
+
+  it("judges the worktree path relative to the project, so a project that IS a worktree keeps its findings", async () => {
+    const project = path.resolve("/repo/.claude/worktrees/agent-9");
+    const own = path.join(project, ".claude", "agents", "real.md");
+    mockSpawn.mockReturnValue(makeFakeProcess(JSON.stringify({
+      validators: [{ name: "Agents Validator", warnings: [{ message: "m", ruleId: "r", severity: "warning", file: own }] }],
+    }), 1));
+    expect((await runLibraryCli(project, [])).map((f) => f.file)).toEqual([own]);
+  });
+
   it("preserves file path on findings that have one", async () => {
     mockSpawn.mockReturnValue(makeFakeProcess(SAMPLE_REPORT, 1));
     const findings = await runLibraryCli("/project", []);

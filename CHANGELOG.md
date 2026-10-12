@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The project scan re-lints fewer projects on every pass (#584). Each scan was re-running the config linter on 19 of 67 projects, because the lint cache refused them. That made a scan take about 50 seconds even when nothing had changed, and two to seven minutes at startup. The biggest refusal was size. The cache gave up on any project with more than 25,000 files, which ruled out the largest projects, and those are also the slowest to lint (up to 12.5 seconds each). Claude Code's agent worktrees (whole checkouts of the project under `.claude/worktrees/`) made this worse. The cache now skips agent worktrees and accepts projects of up to 200,000 files, which takes 0.1 to 0.35 seconds to check against the lint time it saves. Minder also drops lint findings from inside agent worktrees, since they repeat the project's own. Cached results now last 24 hours instead of 4, so the first startup of the day no longer re-lints every project. Projects the cache still refuses (symlinked skills, plugin and marketplace repositories, `apiKeyHelper`) are unchanged.
+- A scan now checks WSL's distro list once per batch of projects instead of once per project (43 `wsl.exe` launches per scan before).
+
 ## [1.16.15] - 2026-10-11
 
 *A one-fix memory release. The tray server's main heap had sat at 1.4–1.9 GB for weeks. Profiling the running server showed that nearly all of it was one forgotten copy of every parsed Claude transcript, held for the server's whole lifetime. Releasing it brings the server down to roughly 330 MB.*

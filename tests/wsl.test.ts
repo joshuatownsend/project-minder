@@ -164,6 +164,44 @@ describe("listWslDistros", () => {
     expect(await listWslDistros()).toBeNull();
     expect(mockExecFile).toHaveBeenCalledTimes(1);
   });
+
+  /** wsl.exe that answers only when the test says so: `finish()` completes the oldest pending call. */
+  function mockWslDeferred() {
+    const pending: Array<(text: string) => void> = [];
+    mockExecFile.mockImplementation(((_f: unknown, _a: unknown, _o: unknown, cb: unknown) => {
+      pending.push((text) =>
+        (cb as (e: Error | null, stdout: Buffer, stderr: Buffer) => void)(null, wslBuffer(text), Buffer.alloc(0)),
+      );
+      return {} as never;
+    }) as never);
+    return { finish: (text: string = SAMPLE_LIST, index = 0) => pending.splice(index, 1)[0](text) };
+  }
+
+  it("shares one wsl.exe between callers that miss at the same time (a scan batch)", async () => {
+    setPlatform("win32");
+    const wsl = mockWslDeferred();
+    const calls = Array.from({ length: 10 }, () => listWslDistros());
+    wsl.finish();
+    const results = await Promise.all(calls);
+    expect(mockExecFile).toHaveBeenCalledTimes(1);
+    for (const r of results) expect(r).toHaveLength(3);
+  });
+
+  it("a clear while wsl.exe runs starts a fresh listing, and the older answer is not cached", async () => {
+    setPlatform("win32");
+    const wsl = mockWslDeferred();
+    const before = listWslDistros();
+    clearWslCache(); // the user just started a distro: they want a NEW answer
+    const after = listWslDistros();
+    expect(mockExecFile).toHaveBeenCalledTimes(2);
+    wsl.finish(SAMPLE_LIST, 1); // the fresh listing answers first...
+    expect((await after)?.[0].state).toBe("Running");
+    wsl.finish(SAMPLE_LIST.replace("Running", "Stopped"), 0); // ...then the stale, pre-clear one
+    expect((await before)?.[0].state).toBe("Stopped");
+    // The fresh answer is still the cached one, and serving it spawns nothing.
+    expect((await listWslDistros())?.[0].state).toBe("Running");
+    expect(mockExecFile).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("checkWslRoot", () => {
