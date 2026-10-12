@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.16.16] - 2026-10-12
+
+*A startup-speed release. Startup and every project scan were waiting on the config linter, which was re-checking 19 of 67 projects on every pass because its cache refused them. Those included the largest projects, which are also the slowest to lint. The cache now covers the largest projects and survives overnight. On an identical test setup, a warm rescan drops from about 37 seconds to 21.*
+
 ### Changed
 
 - The project scan re-lints fewer projects on every pass (#584). Each scan was re-running the config linter on 19 of 67 projects, because the lint cache refused them. That made a scan take about 50 seconds even when nothing had changed, and two to seven minutes at startup. The biggest refusal was size. The cache gave up on any project with more than 25,000 files, which ruled out the largest projects, and those are also the slowest to lint (up to 12.5 seconds each). Claude Code's agent worktrees (whole checkouts of the project under `.claude/worktrees/`) made this worse. The cache now skips agent worktrees and accepts projects of up to 200,000 files, which takes 0.1 to 0.35 seconds to check against the lint time it saves. Minder also drops lint findings from inside agent worktrees, since they repeat the project's own. Cached results now last 24 hours instead of 4, so the first startup of the day no longer re-lints every project. Projects the cache still refuses (symlinked skills, plugin and marketplace repositories, `apiKeyHelper`) are unchanged.
