@@ -60,7 +60,7 @@ const globalForParser = globalThis as unknown as {
   };
   /** Tail of the sweep chain — see `sweepGate`. Ordering only; never awaited
    *  for a value. */
-  __usageSweepGate?: Promise<unknown>;
+  __usageSweepGate?: Promise<void>;
 };
 
 function getFileCache(): FileCache<UsageTurn[]> {
@@ -1376,14 +1376,20 @@ function warnOnceParser(key: string, message: string): void {
  * correctness depends on having seen every live file. Two sweeps running at
  * once each evict the other's files.
  */
-function sweepGate(): Promise<unknown> {
+function sweepGate(): Promise<void> {
   return globalForParser.__usageSweepGate ?? Promise.resolve();
 }
 function setSweepGate(p: Promise<unknown>): void {
   // Swallow rejection on the GATE only. The caller still awaits its own
   // promise and sees the error; the gate exists to order the next sweep, and a
   // failed sweep must not poison every sweep after it.
-  globalForParser.__usageSweepGate = p.catch(() => undefined);
+  //
+  // Discard the VALUE too. A settled promise keeps its result alive, and the
+  // gate outlives every sweep, so `p.catch(() => undefined)` pinned the last
+  // `buildAllSessions()` map — every parsed turn in the corpus, evicted from
+  // the FileCache or not — for the life of the process: 1.35 GB of a 1.46 GB
+  // heap on a 15k-session corpus (Wave 5).
+  globalForParser.__usageSweepGate = p.then(() => undefined, () => undefined);
 }
 
 /**
