@@ -558,6 +558,8 @@ const codexAdapter: SessionAdapter = {
 
     // Walk both dirs in parallel; sessions/ takes priority over archived/ for dedup
     const [sessionFiles, archivedFiles] = await Promise.all(searchDirs.map((d) => walkJsonlFiles(d, shouldStop)));
+    // A stop during the last readdir: the walk checks only before each one, and no batch may follow.
+    throwIfStopped(shouldStop);
     const allFiles = [...sessionFiles, ...archivedFiles];
 
     // Read metadata in bounded batches to avoid hitting the FD limit (EMFILE)

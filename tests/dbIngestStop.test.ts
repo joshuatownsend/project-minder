@@ -295,6 +295,20 @@ describe("codex discover shouldStop (#683)", () => {
     }
   });
 
+  it("sees a stop that lands during the walk's last readdir, when no files follow", async () => {
+    const home = stubCodexHome();
+    try {
+      await fs.mkdir(path.join(home, "sessions"), { recursive: true });
+      const readdir = vi.spyOn(fs, "readdir");
+      const { default: codexAdapter } = await import("@/lib/adapters/codex");
+      // Both walks (sessions/, archived_sessions/) start in parallel: stop once both have read.
+      const pass = codexAdapter.discover({ shouldStop: () => readdir.mock.calls.length >= 2 });
+      await expect(pass).rejects.toMatchObject(STOPPED);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("stops between batches of metadata reads", async () => {
     const home = stubCodexHome();
     try {
