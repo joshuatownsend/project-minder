@@ -3214,6 +3214,28 @@ export interface ReconcileOptions {
    * log on it would emit a line every recovery sweep. Only the initial pass asks.
    */
   logTiming?: boolean;
+  /**
+   * Asked between files; once it returns true the pass throws
+   * {@link ReconcileStoppedError} (#677). A full pass walks ~15k files in 6-18 s, and
+   * shutdown gives the ingest worker 2 s to exit before terminating it, which
+   * costs the clean-shutdown marker and the next boot a ~100 s `quick_check`. Throwing
+   * rather than returning early is load-bearing: a partial walk must never reach the
+   * prune pass (which deletes every row it did not see), and a thrown pass records
+   * itself as aborted instead of leaving a clean verdict for a corpus it half-read.
+   */
+  shouldStop?: () => boolean;
+}
+
+/** A full pass that stopped because its caller is shutting down (#677). Not a failure. */
+export class ReconcileStoppedError extends Error {
+  constructor() {
+    super("reconcile stopped: ingest is shutting down");
+    this.name = "ReconcileStoppedError";
+  }
+}
+
+function throwIfStopped(options: ReconcileOptions): void {
+  if (options.shouldStop?.()) throw new ReconcileStoppedError();
 }
 
 export interface FileReconcileResult {
@@ -4113,6 +4135,8 @@ async function runReconcileAllSessions(
 
   const { counts, timed, timedSync } = timing;
 
+  // A pass queued behind another on `fullPassChain` may start after its stop.
+  throwIfStopped(options);
   await timed("pricing", () => loadPricing());
 
   // ── Multi-harness setup ─────────────────────────────────────────────────
@@ -4270,6 +4294,7 @@ async function runReconcileAllSessions(
   // worker_thread wrap (P2a-2.4) is where we'd consider a producer/consumer
   // split if ingest throughput becomes a bottleneck.
   for (const { projectsDir, dirName } of subdirs) {
+    throwIfStopped(options);
     const dirPath = path.join(projectsDir, dirName);
     let filePaths: string[];
     let sessionDirs: string[];
@@ -4319,6 +4344,7 @@ async function runReconcileAllSessions(
       }
     }
     for (const filePath of filePaths) {
+      throwIfStopped(options);
       liveFilePaths.add(filePath);
       stats.filesSeen++;
       try {
@@ -4343,6 +4369,7 @@ async function runReconcileAllSessions(
   // -> writeSession. Each live file is registered so the prune pass below
   // doesn't treat it as vanished.
   for (const file of adapterSessions) {
+    throwIfStopped(options);
     liveFilePaths.add(file.filePath);
     stats.filesSeen++;
     try {
@@ -4397,6 +4424,7 @@ async function runReconcileAllSessions(
   // bulk-deleted here in one scan before the cascade — same contract as
   // `writeSession`'s pre-delete.
   const stalePruned = new Set<string>();
+  throwIfStopped(options);
   timedSync("prune", () => {
     const allSessions = db
       .prepare("SELECT session_id, project_slug, file_path, derived_version FROM sessions")

@@ -644,10 +644,22 @@ export async function stopWorker(): Promise<StopWorkerResult> {
     }
     if (!exited) {
       forced = state.lastReadyAt !== null;
+      const t = performance.now();
       try {
         await worker.terminate();
       } catch {
         /* swallow */
+      }
+      // #677: terminate() cannot interrupt a native better-sqlite3 call, so how long it took
+      // separates "busy in JS" from "stuck inside one long statement" the next time this happens.
+      if (forced) {
+        serviceLog({
+          level: "warn",
+          subsystem: "ingest",
+          msg: "ingest worker did not exit after stop; terminated",
+          graceMs: STOP_GRACE_MS,
+          terminateMs: Math.round(performance.now() - t),
+        });
       }
     }
     state.worker = null;

@@ -3,7 +3,7 @@ import path from "path";
 import os from "os";
 import { startNativeRecursiveWatch } from "./nativeWatch";
 import { initDb } from "./migrations";
-import { reconcileAllSessions, reconcileSessionFile } from "./ingest";
+import { ReconcileStoppedError, reconcileAllSessions, reconcileSessionFile } from "./ingest";
 import { getDb, getDbSync, getDbError, isDbAvailable, isDriverLoaded } from "./connection";
 import { isShuttingDown } from "@/lib/lifecycle";
 import { closeOrphanedIndexerRuns, recordOptionForSweep } from "./indexerRuns";
@@ -386,13 +386,17 @@ export async function startIngestWatcher(
           // sweep below runs the same function and deliberately does not.
           recordRun: "reconcile",
           logTiming: true,
+          shouldStop: () => state.stopped,
         });
       }
     } catch (err) {
       error = (err as Error).message;
-      // eslint-disable-next-line no-console
-      console.warn(`[ingest-watcher] initial reconcile failed: ${error}`);
-      state.errors++;
+      // A pass stopped by shutdown is not a failure; don't count or warn about it.
+      if (!(err instanceof ReconcileStoppedError)) {
+        // eslint-disable-next-line no-console
+        console.warn(`[ingest-watcher] initial reconcile failed: ${error}`);
+        state.errors++;
+      }
     } finally {
       state.initialReconcileInFlight = false;
       state.initialReconcileMs = Date.now() - t0;
@@ -656,7 +660,7 @@ class ReadyTimeoutError extends Error {
 export async function stopIngestWatcher(): Promise<void> {
   const state = g.__minderIngestWatcher;
   if (!state) return;
-  state.stopped = true; // synchronous: reconcile/sweep checkpoints bail now
+  state.stopped = true; // synchronous: a running full pass throws at its next file (`shouldStop`, #677)
   for (const t of state.pendingTimers.values()) clearTimeout(t);
   state.pendingTimers.clear();
   state.inFlight.clear();
@@ -824,13 +828,14 @@ function scheduleUnlink(state: WatcherState, filePath: string): void {
         // as live — one deleted local JSONL could purge every ingested
         // extra-home (WSL) session.
         if (db) {
-          await reconcileAllSessions(
-            db,
-            state.explicitProjectsDir ? { projectsDir: state.projectsDir } : {}
-          );
+          await reconcileAllSessions(db, {
+            ...(state.explicitProjectsDir ? { projectsDir: state.projectsDir } : {}),
+            shouldStop: () => state.stopped,
+          });
         }
         state.eventsHandled++;
       } catch (err) {
+        if (err instanceof ReconcileStoppedError) return;
         state.errors++;
         // eslint-disable-next-line no-console
         console.warn(
@@ -904,12 +909,15 @@ function startSweep(state: WatcherState): void {
           // latched off forever with the engagement report 503'ing on an index
           // that sweeps have since populated.
           ...recordOptionForSweep(db),
+          shouldStop: () => state.stopped,
         });
       }
     } catch (err) {
-      state.errors++;
-      // eslint-disable-next-line no-console
-      console.warn(`[ingest-watcher] sweep failed: ${(err as Error).message}`);
+      if (!(err instanceof ReconcileStoppedError)) {
+        state.errors++;
+        // eslint-disable-next-line no-console
+        console.warn(`[ingest-watcher] sweep failed: ${(err as Error).message}`);
+      }
     } finally {
       if (attempted) lastSweepAt = performance.now();
       // Re-arm only if we're still the active watcher AND not shutting down
