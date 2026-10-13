@@ -1,6 +1,6 @@
 import type { UsageTurn } from "@/lib/usage/types";
 import type { SessionTurnsMeta } from "@/lib/usage/parser";
-import type { ShouldStop } from "@/lib/db/reconcileStop";
+import type { ShouldStop } from "@/lib/reconcileStop";
 
 export interface DiscoverOptions {
   /**

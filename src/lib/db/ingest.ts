@@ -61,9 +61,13 @@ import { serviceLog } from "@/lib/serviceLog";
 import { parseStoredArgs } from "./storedArgs";
 import { detectResumeAnomaly } from "@/lib/usage/resumeAnomaly";
 import { discoverAllSessions, getAdapter } from "@/lib/adapters";
-import { ReconcileStoppedError, throwIfStopped, yieldThenThrowIfStopped, type ShouldStop } from "./reconcileStop";
-
-export { ReconcileStoppedError };
+import {
+  ReconcileStoppedError,
+  rethrowIfStopped,
+  throwIfStopped,
+  yieldThenThrowIfStopped,
+  type ShouldStop,
+} from "@/lib/reconcileStop";
 import type { SessionFile } from "@/lib/adapters/types";
 import { readConfig } from "@/lib/config";
 import type { MinderConfig } from "@/lib/types";
@@ -689,7 +693,8 @@ async function readJsonlSession(
     return null;
   }
   if (PROFILE) tick("fileRead", performance.now() - tRead);
-  await yieldThenThrowIfStopped(options.shouldStop);
+  // No yield needed: the read was itself an await, so a stop sent during it has landed.
+  throwIfStopped(options.shouldStop);
 
   const turns: ParsedTurn[] = [];
   let startTs: string | null = null;
@@ -3445,7 +3450,6 @@ export async function reconcileSessionFile(
       return empty;
     }
     const tailParsed = tailResult.parsed;
-    // Last chance before the write, which runs to the end once started (#683).
     await yieldThenThrowIfStopped(options.shouldStop);
     let rows = 0;
     const txn = db.transaction(() => {
@@ -4243,7 +4247,7 @@ async function runReconcileAllSessions(
         discoverAllSessions(config, { exclude: ["claude"], shouldStop: options.shouldStop })
       );
   } catch (err) {
-    if (err instanceof ReconcileStoppedError) throw err;
+    rethrowIfStopped(err);
     adapterSessions = [];
     adapterDiscoveryFailed = true;
     // Same class as a failed `readdir`, and load-bearing for readiness for the
@@ -4395,7 +4399,7 @@ async function runReconcileAllSessions(
           stats.rowsWritten += result.rowsWritten;
         }
       } catch (err) {
-        if (err instanceof ReconcileStoppedError) throw err;
+        rethrowIfStopped(err);
         stats.errors++;
       }
     }
@@ -4428,7 +4432,7 @@ async function runReconcileAllSessions(
         stats.rowsWritten += result.rowsWritten;
       }
     } catch (err) {
-      if (err instanceof ReconcileStoppedError) throw err;
+      rethrowIfStopped(err);
       stats.errors++;
     }
   }

@@ -1,5 +1,5 @@
-// Stop checks for a full reconcile pass (#677, #683). A leaf module, so the adapters'
-// `discover()` can honour the same stop request without importing the ingest pipeline.
+// Stop checks for a full reconcile pass (#677, #683). A dependency-free leaf, so the adapters'
+// `discover()` and the ingest pipeline share one stop request without importing each other.
 
 /** Once it returns true it must keep returning true: a pass re-asks only at its next checkpoint. */
 export type ShouldStop = () => boolean;
@@ -14,6 +14,11 @@ export class ReconcileStoppedError extends Error {
 
 export function throwIfStopped(shouldStop: ShouldStop | undefined): void {
   if (shouldStop?.()) throw new ReconcileStoppedError();
+}
+
+/** For a catch that otherwise tolerates a failure and carries on: a stop is not one of those. */
+export function rethrowIfStopped(err: unknown): void {
+  if (err instanceof ReconcileStoppedError) throw err;
 }
 
 /**

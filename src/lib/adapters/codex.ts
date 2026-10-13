@@ -4,7 +4,7 @@ import { promises as fs } from "fs";
 import type { FileHandle } from "fs/promises";
 import { parse as parseToml } from "smol-toml";
 import type { DiscoverOptions, SessionAdapter, SessionFile, HarnessConfig, HarnessConfigRule, HarnessResource } from "./types";
-import { throwIfStopped, type ShouldStop } from "@/lib/db/reconcileStop";
+import { throwIfStopped, type ShouldStop } from "@/lib/reconcileStop";
 import type { UsageTurn, ToolCall } from "@/lib/usage/types";
 import type { SessionTurnsMeta } from "@/lib/usage/parser";
 import { encodeProjectPath } from "@/lib/usage/projectMatch";

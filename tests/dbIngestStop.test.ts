@@ -54,6 +54,9 @@ async function writeSession(projectsDir: string, project: string, id: string): P
   await fs.writeFile(file, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
 }
 
+// By name: each test reloads its modules, so the class it would compare against is a different copy.
+const STOPPED = { name: "ReconcileStoppedError" };
+
 const sessionCount = (db: import("better-sqlite3").Database) =>
   (db.prepare("SELECT COUNT(*) AS n FROM sessions").get() as { n: number }).n;
 
@@ -64,7 +67,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions shouldStop (#677)", () =
       for (let i = 0; i < 6; i++) await writeSession(projectsDir, i < 3 ? "C--dev-a" : "C--dev-b", `s${i}`);
       // Stop once two files have been written, whatever order the directories list in.
       const pass = ingest.reconcileAllSessions(db, { projectsDir, shouldStop: () => sessionCount(db) >= 2 });
-      await expect(pass).rejects.toBeInstanceOf(ingest.ReconcileStoppedError);
+      await expect(pass).rejects.toMatchObject(STOPPED);
       expect(sessionCount(db)).toBe(2);
     } finally {
       conn.closeDb();
@@ -82,7 +85,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions shouldStop (#677)", () =
       // A pass that returned early instead of throwing would go on to prune every row it never saw.
       let calls = 0;
       const pass = ingest.reconcileAllSessions(db, { projectsDir, shouldStop: () => ++calls > 1 });
-      await expect(pass).rejects.toBeInstanceOf(ingest.ReconcileStoppedError);
+      await expect(pass).rejects.toMatchObject(STOPPED);
       expect(sessionCount(db)).toBe(4);
     } finally {
       conn.closeDb();
@@ -94,7 +97,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions shouldStop (#677)", () =
     try {
       await writeSession(projectsDir, "C--dev-a", "s0");
       const pass = ingest.reconcileAllSessions(db, { projectsDir, recordRun: "reconcile", shouldStop: () => true });
-      await expect(pass).rejects.toBeInstanceOf(ingest.ReconcileStoppedError);
+      await expect(pass).rejects.toMatchObject(STOPPED);
       expect(runs.getIndexBuildState(db)).toBe("building");
       // Labelled as a stop, not a failure: this row is read when diagnosing a slow or broken boot.
       expect(db.prepare("SELECT error FROM indexer_runs").get()).toEqual({ error: "reconcile stopped" });
@@ -114,7 +117,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions shouldStop (#677)", () =
       expect(readReconcileVerdict(db, version)?.incomplete).toBe(false);
 
       const pass = ingest.reconcileAllSessions(db, { projectsDir, shouldStop: () => true });
-      await expect(pass).rejects.toBeInstanceOf(ingest.ReconcileStoppedError);
+      await expect(pass).rejects.toMatchObject(STOPPED);
       expect(readReconcileVerdict(db, version)?.incomplete).toBe(false);
     } finally {
       conn.closeDb();
@@ -129,7 +132,7 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions shouldStop (#677)", () =
       // Stop once the first subagents/ listing has been attempted.
       const subagentListings = () => readdir.mock.calls.filter((c) => String(c[0]).endsWith("subagents")).length;
       const pass = ingest.reconcileAllSessions(db, { projectsDir, shouldStop: () => subagentListings() >= 1 });
-      await expect(pass).rejects.toBeInstanceOf(ingest.ReconcileStoppedError);
+      await expect(pass).rejects.toMatchObject(STOPPED);
       expect(subagentListings()).toBe(1);
     } finally {
       conn.closeDb();
@@ -168,10 +171,10 @@ function markerParses(): () => number {
 
 describe("yieldThenThrowIfStopped (#683)", () => {
   it("lets a queued stop land before checking, so a check after synchronous work is not stale", async () => {
-    const { yieldThenThrowIfStopped, ReconcileStoppedError } = await import("@/lib/db/reconcileStop");
+    const { yieldThenThrowIfStopped } = await import("@/lib/reconcileStop");
     let stopped = false;
     setImmediate(() => (stopped = true));
-    await expect(yieldThenThrowIfStopped(() => stopped)).rejects.toBeInstanceOf(ReconcileStoppedError);
+    await expect(yieldThenThrowIfStopped(() => stopped)).rejects.toMatchObject(STOPPED);
   });
 });
 
@@ -183,7 +186,7 @@ describe.skipIf(!driverAvailable)("reconcileSessionFile shouldStop (#683)", () =
       await writeMarkedSession(file, 2, 100);
       const parses = markerParses();
       const pass = ingest.reconcileSessionFile(db, file, "C--dev-a", { shouldStop: () => true });
-      await expect(pass).rejects.toBeInstanceOf(ingest.ReconcileStoppedError);
+      await expect(pass).rejects.toMatchObject(STOPPED);
       expect(parses()).toBe(0);
     } finally {
       conn.closeDb();
@@ -197,7 +200,7 @@ describe.skipIf(!driverAvailable)("reconcileSessionFile shouldStop (#683)", () =
       await writeMarkedSession(file, 12, 1024 * 1024); // ~12 MB: several parse checkpoints
       const parses = markerParses();
       const pass = ingest.reconcileSessionFile(db, file, "C--dev-a", { shouldStop: () => parses() > 0 });
-      await expect(pass).rejects.toBeInstanceOf(ingest.ReconcileStoppedError);
+      await expect(pass).rejects.toMatchObject(STOPPED);
       expect(parses()).toBeGreaterThan(0);
       expect(parses()).toBeLessThan(12);
     } finally {
@@ -212,7 +215,7 @@ describe.skipIf(!driverAvailable)("reconcileSessionFile shouldStop (#683)", () =
       await writeMarkedSession(file, 2, 100);
       const parses = markerParses();
       const pass = ingest.reconcileSessionFile(db, file, "C--dev-a", { shouldStop: () => parses() > 0 });
-      await expect(pass).rejects.toBeInstanceOf(ingest.ReconcileStoppedError);
+      await expect(pass).rejects.toMatchObject(STOPPED);
       expect(sessionCount(db)).toBe(0);
     } finally {
       conn.closeDb();
@@ -232,7 +235,7 @@ describe.skipIf(!driverAvailable)("reconcileSessionFile shouldStop (#683)", () =
       await writeMarkedSession(file, 2, 100);
       const parses = markerParses();
       const pass = ingest.reconcileSessionFile(db, file, "C--dev-a", { shouldStop: () => parses() > 0 });
-      await expect(pass).rejects.toBeInstanceOf(ingest.ReconcileStoppedError);
+      await expect(pass).rejects.toMatchObject(STOPPED);
       // An advanced cursor or size would make the next pass skip the appended turns for good.
       expect({ cursor: cursor(), turns: turnCount() }).toEqual(before);
     } finally {
@@ -262,7 +265,7 @@ describe.skipIf(!driverAvailable)("reconcileSessionFile shouldStop (#683)", () =
         },
         shouldStop: () => parsed,
       });
-      await expect(pass).rejects.toBeInstanceOf(ingest.ReconcileStoppedError);
+      await expect(pass).rejects.toMatchObject(STOPPED);
       expect(sessionCount(db)).toBe(0);
     } finally {
       conn.closeDb();
@@ -284,9 +287,8 @@ describe("codex discover shouldStop (#683)", () => {
       for (let i = 0; i < 5; i++) await fs.mkdir(path.join(home, "sessions", `d${i}`, "x"), { recursive: true });
       const readdir = vi.spyOn(fs, "readdir");
       const { default: codexAdapter } = await import("@/lib/adapters/codex");
-      const { ReconcileStoppedError } = await import("@/lib/db/reconcileStop");
       const pass = codexAdapter.discover({ shouldStop: () => readdir.mock.calls.length > 0 });
-      await expect(pass).rejects.toBeInstanceOf(ReconcileStoppedError);
+      await expect(pass).rejects.toMatchObject(STOPPED);
       expect(readdir.mock.calls.length).toBeLessThan(5);
     } finally {
       vi.unstubAllEnvs();
@@ -304,9 +306,8 @@ describe("codex discover shouldStop (#683)", () => {
       }
       const open = vi.spyOn(fs, "open");
       const { default: codexAdapter } = await import("@/lib/adapters/codex");
-      const { ReconcileStoppedError } = await import("@/lib/db/reconcileStop");
       const pass = codexAdapter.discover({ shouldStop: () => open.mock.calls.length > 0 });
-      await expect(pass).rejects.toBeInstanceOf(ReconcileStoppedError);
+      await expect(pass).rejects.toMatchObject(STOPPED);
       expect(open.mock.calls.length).toBeLessThan(40);
     } finally {
       vi.unstubAllEnvs();
@@ -326,7 +327,7 @@ describe("codex discover shouldStop (#683)", () => {
         config: { statuses: {}, hidden: [], portOverrides: {}, devRoot: tmpHome, enabledAdapters: ["claude", "codex"] },
         shouldStop: codexListed,
       });
-      await expect(pass).rejects.toBeInstanceOf(ingest.ReconcileStoppedError);
+      await expect(pass).rejects.toMatchObject(STOPPED);
       expect(warn.mock.calls.some((c) => String(c[0]).includes("adapter discovery failed"))).toBe(false);
     } finally {
       vi.unstubAllEnvs();
