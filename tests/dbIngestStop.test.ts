@@ -96,6 +96,26 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions shouldStop (#677)", () =
       const pass = ingest.reconcileAllSessions(db, { projectsDir, recordRun: "reconcile", shouldStop: () => true });
       await expect(pass).rejects.toBeInstanceOf(ingest.ReconcileStoppedError);
       expect(runs.getIndexBuildState(db)).toBe("building");
+      // Labelled as a stop, not a failure: this row is read when diagnosing a slow or broken boot.
+      expect(db.prepare("SELECT error FROM indexer_runs").get()).toEqual({ error: "reconcile stopped" });
+    } finally {
+      conn.closeDb();
+    }
+  });
+
+  it("leaves the last completeness verdict standing, so a quit does not raise 'corpus incomplete'", async () => {
+    const { conn, ingest, db, projectsDir } = await setup();
+    const { computeCorpusVersion, readReconcileVerdict } = await import("@/lib/db/reconcileVerdict");
+    const { readConfig } = await import("@/lib/config");
+    try {
+      await writeSession(projectsDir, "C--dev-a", "s0");
+      await ingest.reconcileAllSessions(db, { projectsDir });
+      const version = computeCorpusVersion(await readConfig());
+      expect(readReconcileVerdict(db, version)?.incomplete).toBe(false);
+
+      const pass = ingest.reconcileAllSessions(db, { projectsDir, shouldStop: () => true });
+      await expect(pass).rejects.toBeInstanceOf(ingest.ReconcileStoppedError);
+      expect(readReconcileVerdict(db, version)?.incomplete).toBe(false);
     } finally {
       conn.closeDb();
     }

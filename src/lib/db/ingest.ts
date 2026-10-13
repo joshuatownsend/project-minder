@@ -4009,7 +4009,8 @@ function createReconcileTiming(): ReconcileTiming {
 function logReconcileTiming(
   timing: ReconcileTiming,
   stats: IngestStats | undefined,
-  kind: string
+  kind: string,
+  stopped = false
 ): void {
   // Monotonic clock throughout: a wall-clock correction mid-pass would otherwise
   // produce negative durations in the very diagnostic meant to be trustworthy.
@@ -4027,9 +4028,13 @@ function logReconcileTiming(
   // total by up to a millisecond apiece.
   phaseMs.other = Math.max(0, Math.round(rawTotal - rawSum));
   serviceLog({
-    level: stats ? "info" : "warn",
+    level: stats || stopped ? "info" : "warn",
     subsystem: "ingest",
-    msg: stats ? `reconcile finished in ${totalMs} ms` : `reconcile threw after ${totalMs} ms`,
+    msg: stats
+      ? `reconcile finished in ${totalMs} ms`
+      : stopped
+        ? `reconcile stopped after ${totalMs} ms`
+        : `reconcile threw after ${totalMs} ms`,
     kind,
     totalMs,
     phaseMs,
@@ -4055,6 +4060,7 @@ async function reconcileAllSessionsSerialized(
   // pass was actually asked to walk. Reading it afterwards would let a config
   // change landing mid-pass label stale observations as current (#529).
   let corpusVersion: string | null = null;
+  let stopped = false;
   try {
     // ONE snapshot, used for the version AND handed to the pass. The pass reads
     // config again itself — after an `await loadPricing()` — so computing the
@@ -4074,6 +4080,9 @@ async function reconcileAllSessionsSerialized(
     }
     stats = await runReconcileAllSessions(db, passOptions, timing);
     return stats;
+  } catch (err) {
+    stopped = err instanceof ReconcileStoppedError;
+    throw err;
   } finally {
     // `finally`, not the happy path: a pass that threw still has to stop
     // reading as in-progress, or a killed reconcile latches the row open and
@@ -4087,14 +4096,14 @@ async function reconcileAllSessionsSerialized(
       // Both counts, not the first one that happens to be non-zero: a pass can
       // fail an enumeration AND hit unparseable files, and reporting only the
       // former discards the diagnostic the `error` column exists to carry.
-      error: stats ? describeRunError(stats) : "reconcile threw",
+      error: stats ? describeRunError(stats) : stopped ? "reconcile stopped" : "reconcile threw",
       // Not read through: the pass threw, OR it completed but could not
       // enumerate some directory it was supposed to. Per-file PARSE errors are
       // a different thing — the file was seen and the pass finished — so those
       // stay `aborted: false` and count as ready. (#471, Codex P1.)
       aborted: stats === undefined || stats.enumerationFailures > 0,
     });
-    if (options.logTiming) logReconcileTiming(timing, stats, options.recordRun ?? "unrecorded");
+    if (options.logTiming) logReconcileTiming(timing, stats, options.recordRun ?? "unrecorded", stopped);
     // Written by EVERY full pass, whatever `recordRun` said (#529, finding 1).
     //
     // `indexer_runs` cannot carry this: `recordOptionForSweep` deliberately
@@ -4106,7 +4115,12 @@ async function reconcileAllSessionsSerialized(
     // Same `finally` as the run row, for the same reason: a pass that threw
     // enumerated nothing it can vouch for, and must say so rather than leave
     // the previous pass's answer standing.
-    if (corpusVersion) {
+    //
+    // Except a pass stopped by shutdown (#677): it observed no failure, and the verdict surfaces in
+    // /api/claude-homes as "the corpus is incomplete", so writing one would raise that warning after
+    // every quit until the next boot's pass replaced it. The previous verdict is still the last real
+    // observation.
+    if (corpusVersion && !stopped) {
       try {
         writeReconcileVerdict(db, corpusVersion, {
           incomplete: stats === undefined || stats.enumerationFailures > 0,

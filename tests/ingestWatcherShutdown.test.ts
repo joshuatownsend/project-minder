@@ -137,4 +137,30 @@ describe("stopIngestWatcher drain (F7)", () => {
     expect(reported).not.toBeNull();
     expect(getWatcherStatus().running).toBe(false);
   });
+
+  it("hands the periodic sweep the same stop predicate, since a quit usually lands mid-sweep (#677)", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("MINDER_SWEEP_INTERVAL_MS", "60000");
+    try {
+      vi.mocked(reconcileAllSessions).mockResolvedValue(undefined as never);
+      await startIngestWatcher({
+        bypassEnvFlag: true,
+        watchStrategy: "chokidar",
+        projectsDir: "/fake/projects",
+        deferInitialReconcile: false,
+      });
+      expect(reconcileAllSessions).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(reconcileAllSessions).toHaveBeenCalledTimes(2);
+
+      const { shouldStop } = vi.mocked(reconcileAllSessions).mock.calls[1][1] ?? {};
+      expect(shouldStop?.()).toBe(false);
+      const stopP = stopIngestWatcher();
+      expect(shouldStop?.()).toBe(true);
+      await stopP;
+    } finally {
+      vi.unstubAllEnvs();
+      vi.useRealTimers();
+    }
+  });
 });

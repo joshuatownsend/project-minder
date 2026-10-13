@@ -644,20 +644,28 @@ export async function stopWorker(): Promise<StopWorkerResult> {
     }
     if (!exited) {
       forced = state.lastReadyAt !== null;
+      // #677: terminate() cannot interrupt a native better-sqlite3 call. Logged on both sides, so a
+      // first line with no second is the signature of a worker stuck inside one long statement
+      // (shutdown's budget runs out before terminate() returns), and terminateMs separates the rest.
+      if (forced) {
+        serviceLog({
+          level: "warn",
+          subsystem: "ingest",
+          msg: "ingest worker did not exit after stop; terminating",
+          graceMs: STOP_GRACE_MS,
+        });
+      }
       const t = performance.now();
       try {
         await worker.terminate();
       } catch {
         /* swallow */
       }
-      // #677: terminate() cannot interrupt a native better-sqlite3 call, so how long it took
-      // separates "busy in JS" from "stuck inside one long statement" the next time this happens.
       if (forced) {
         serviceLog({
           level: "warn",
           subsystem: "ingest",
-          msg: "ingest worker did not exit after stop; terminated",
-          graceMs: STOP_GRACE_MS,
+          msg: "ingest worker terminated",
           terminateMs: Math.round(performance.now() - t),
         });
       }
