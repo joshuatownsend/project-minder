@@ -314,6 +314,24 @@ describe("codex discover shouldStop (#683)", () => {
     }
   });
 
+  it("sees a stop that lands during the only batch of metadata reads", async () => {
+    const home = stubCodexHome();
+    try {
+      const dir = path.join(home, "sessions");
+      await fs.mkdir(dir, { recursive: true });
+      for (let i = 0; i < 3; i++) {
+        const meta = { type: "session_meta", payload: { id: `s${i}`, cwd: "/w" } };
+        await fs.writeFile(path.join(dir, `s${i}.jsonl`), JSON.stringify(meta) + "\n");
+      }
+      const open = vi.spyOn(fs, "open");
+      const { default: codexAdapter } = await import("@/lib/adapters/codex");
+      const pass = codexAdapter.discover({ shouldStop: () => open.mock.calls.length > 0 });
+      await expect(pass).rejects.toMatchObject(STOPPED);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it.skipIf(!driverAvailable)("a stop during discovery stops the pass instead of reading as a failed discovery", async () => {
     const { conn, ingest, db, projectsDir } = await setup();
     const home = stubCodexHome();

@@ -112,8 +112,9 @@ async function batchedMap<T, R>(
 ): Promise<R[]> {
   const results: R[] = [];
   for (let i = 0; i < items.length; i += limit) {
-    throwIfStopped(shouldStop);
     results.push(...await Promise.all(items.slice(i, i + limit).map(fn)));
+    // After the batch, not before: a stop that lands during the last (or only) batch is still seen.
+    throwIfStopped(shouldStop);
   }
   return results;
 }
