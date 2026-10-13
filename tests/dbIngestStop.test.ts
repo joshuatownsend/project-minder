@@ -120,4 +120,19 @@ describe.skipIf(!driverAvailable)("reconcileAllSessions shouldStop (#677)", () =
       conn.closeDb();
     }
   });
+
+  it("stops between session directories too, before listing the rest of their subagents/ folders", async () => {
+    const { conn, ingest, db, projectsDir } = await setup();
+    try {
+      for (let i = 0; i < 5; i++) await fs.mkdir(path.join(projectsDir, "C--dev-a", `session-${i}`), { recursive: true });
+      const readdir = vi.spyOn(fs, "readdir");
+      // Stop once the first subagents/ listing has been attempted.
+      const subagentListings = () => readdir.mock.calls.filter((c) => String(c[0]).endsWith("subagents")).length;
+      const pass = ingest.reconcileAllSessions(db, { projectsDir, shouldStop: () => subagentListings() >= 1 });
+      await expect(pass).rejects.toBeInstanceOf(ingest.ReconcileStoppedError);
+      expect(subagentListings()).toBe(1);
+    } finally {
+      conn.closeDb();
+    }
+  });
 });

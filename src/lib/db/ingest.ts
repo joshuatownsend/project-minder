@@ -4340,6 +4340,8 @@ async function runReconcileAllSessions(
     // treat their session rows as vanished and delete them every sweep.
     // They ingest under the PROJECT dir name, not "subagents".
     for (const sessionDir of sessionDirs) {
+      // Up to thousands of readdirs per project before the first file is reached (Codex, PR #682).
+      throwIfStopped(options);
       const subagentsDir = path.join(dirPath, sessionDir, "subagents");
       try {
         counts.subagentReaddirs++;
