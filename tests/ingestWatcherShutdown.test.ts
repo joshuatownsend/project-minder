@@ -16,6 +16,7 @@ vi.mock("@/lib/db/connection", () => ({
   getDbSync: vi.fn().mockReturnValue({}),
 }));
 vi.mock("@/lib/db/ingest", () => ({
+  ReconcileStoppedError: class ReconcileStoppedError extends Error {},
   reconcileAllSessions: vi.fn(),
   reconcileSessionFile: vi.fn().mockResolvedValue({ rowsWritten: 0 }),
 }));
@@ -31,7 +32,7 @@ vi.mock("chokidar", () => ({
 }));
 
 import { startIngestWatcher, stopIngestWatcher, getWatcherStatus } from "@/lib/db/ingestWatcher";
-import { reconcileAllSessions } from "@/lib/db/ingest";
+import { ReconcileStoppedError, reconcileAllSessions } from "@/lib/db/ingest";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -104,5 +105,62 @@ describe("stopIngestWatcher drain (F7)", () => {
     expect(getWatcherStatus().running).toBe(false);
     // No further reconcile passes were scheduled/started by the teardown.
     expect(reconcileAllSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks a running pass to stop the moment shutdown begins, instead of draining it to the end (#677)", async () => {
+    let rejectReconcile!: (err: Error) => void;
+    vi.mocked(reconcileAllSessions).mockReturnValue(
+      new Promise<never>((_resolve, reject) => {
+        rejectReconcile = reject;
+      }) as never,
+    );
+    let reported: { error?: string } | null = null;
+    await startIngestWatcher({
+      bypassEnvFlag: true,
+      watchStrategy: "chokidar",
+      projectsDir: "/fake/projects",
+      deferInitialReconcile: true,
+      disableSweep: true,
+      onInitialReconcile: (r) => {
+        reported = r;
+      },
+    });
+    const { shouldStop } = vi.mocked(reconcileAllSessions).mock.calls[0][1] ?? {};
+    expect(shouldStop?.()).toBe(false);
+
+    const stopP = stopIngestWatcher();
+    // Synchronous: the pass sees it at its next file, not after the drain.
+    expect(shouldStop?.()).toBe(true);
+
+    rejectReconcile(new ReconcileStoppedError());
+    await stopP;
+    expect(reported).not.toBeNull();
+    expect(getWatcherStatus().running).toBe(false);
+  });
+
+  it("hands the periodic sweep the same stop predicate, since a quit usually lands mid-sweep (#677)", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("MINDER_SWEEP_INTERVAL_MS", "60000");
+    try {
+      vi.mocked(reconcileAllSessions).mockResolvedValue(undefined as never);
+      await startIngestWatcher({
+        bypassEnvFlag: true,
+        watchStrategy: "chokidar",
+        projectsDir: "/fake/projects",
+        deferInitialReconcile: false,
+      });
+      expect(reconcileAllSessions).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(reconcileAllSessions).toHaveBeenCalledTimes(2);
+
+      const { shouldStop } = vi.mocked(reconcileAllSessions).mock.calls[1][1] ?? {};
+      expect(shouldStop?.()).toBe(false);
+      const stopP = stopIngestWatcher();
+      expect(shouldStop?.()).toBe(true);
+      await stopP;
+    } finally {
+      vi.unstubAllEnvs();
+      vi.useRealTimers();
+    }
   });
 });

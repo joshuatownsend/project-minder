@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Quitting or updating the tray no longer risks a 100-second database check on the next startup (#677). The background indexer finished its whole pass over session history (6–18 seconds) before it would stop, but shutdown gives it 2 seconds. When a shutdown landed mid-pass, the indexer was force-stopped and the next startup re-verified the entire database. The pass now stops at the next file, and never runs its stale-row cleanup on a pass it didn't finish.
+
 ## [1.16.16] - 2026-10-12
 
 *A startup-speed release. Startup and every project scan were waiting on the config linter, which was re-checking 19 of 67 projects on every pass because its cache refused them. Those included the largest projects, which are also the slowest to lint. The cache now covers the largest projects and survives overnight. On an identical test setup, a warm rescan drops from about 37 seconds to 21.*

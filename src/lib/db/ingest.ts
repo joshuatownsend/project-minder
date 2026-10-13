@@ -3214,6 +3214,28 @@ export interface ReconcileOptions {
    * log on it would emit a line every recovery sweep. Only the initial pass asks.
    */
   logTiming?: boolean;
+  /**
+   * Asked between files; once it returns true the pass throws
+   * {@link ReconcileStoppedError} (#677). A full pass walks ~15k files in 6-18 s, and
+   * shutdown gives the ingest worker 2 s to exit before terminating it, which
+   * costs the clean-shutdown marker and the next boot a ~100 s `quick_check`. Throwing
+   * rather than returning early is load-bearing: a partial walk must never reach the
+   * prune pass (which deletes every row it did not see), and a thrown pass records
+   * itself as aborted instead of leaving a clean verdict for a corpus it half-read.
+   */
+  shouldStop?: () => boolean;
+}
+
+/** A full pass that stopped because its caller is shutting down (#677). Not a failure. */
+export class ReconcileStoppedError extends Error {
+  constructor() {
+    super("reconcile stopped: ingest is shutting down");
+    this.name = "ReconcileStoppedError";
+  }
+}
+
+function throwIfStopped(options: ReconcileOptions): void {
+  if (options.shouldStop?.()) throw new ReconcileStoppedError();
 }
 
 export interface FileReconcileResult {
@@ -3983,11 +4005,15 @@ function createReconcileTiming(): ReconcileTiming {
   };
 }
 
+/** How a full pass ended. "stopped" is its caller shutting down (#677), not a failure. */
+type ReconcileOutcome = "finished" | "stopped" | "threw";
+
 /** One line per pass that sets `logTiming` (the initial pass); sweeps stay silent. */
 function logReconcileTiming(
   timing: ReconcileTiming,
   stats: IngestStats | undefined,
-  kind: string
+  kind: string,
+  outcome: ReconcileOutcome
 ): void {
   // Monotonic clock throughout: a wall-clock correction mid-pass would otherwise
   // produce negative durations in the very diagnostic meant to be trustworthy.
@@ -4005,9 +4031,9 @@ function logReconcileTiming(
   // total by up to a millisecond apiece.
   phaseMs.other = Math.max(0, Math.round(rawTotal - rawSum));
   serviceLog({
-    level: stats ? "info" : "warn",
+    level: outcome === "threw" ? "warn" : "info",
     subsystem: "ingest",
-    msg: stats ? `reconcile finished in ${totalMs} ms` : `reconcile threw after ${totalMs} ms`,
+    msg: outcome === "finished" ? `reconcile finished in ${totalMs} ms` : `reconcile ${outcome} after ${totalMs} ms`,
     kind,
     totalMs,
     phaseMs,
@@ -4033,6 +4059,7 @@ async function reconcileAllSessionsSerialized(
   // pass was actually asked to walk. Reading it afterwards would let a config
   // change landing mid-pass label stale observations as current (#529).
   let corpusVersion: string | null = null;
+  let stopped = false;
   try {
     // ONE snapshot, used for the version AND handed to the pass. The pass reads
     // config again itself — after an `await loadPricing()` — so computing the
@@ -4052,7 +4079,11 @@ async function reconcileAllSessionsSerialized(
     }
     stats = await runReconcileAllSessions(db, passOptions, timing);
     return stats;
+  } catch (err) {
+    stopped = err instanceof ReconcileStoppedError;
+    throw err;
   } finally {
+    const outcome: ReconcileOutcome = stats ? "finished" : stopped ? "stopped" : "threw";
     // `finally`, not the happy path: a pass that threw still has to stop
     // reading as in-progress, or a killed reconcile latches the row open and
     // `closeOrphanedIndexerRuns` becomes the only thing that can clear it.
@@ -4065,14 +4096,14 @@ async function reconcileAllSessionsSerialized(
       // Both counts, not the first one that happens to be non-zero: a pass can
       // fail an enumeration AND hit unparseable files, and reporting only the
       // former discards the diagnostic the `error` column exists to carry.
-      error: stats ? describeRunError(stats) : "reconcile threw",
+      error: stats ? describeRunError(stats) : `reconcile ${outcome}`,
       // Not read through: the pass threw, OR it completed but could not
       // enumerate some directory it was supposed to. Per-file PARSE errors are
       // a different thing — the file was seen and the pass finished — so those
       // stay `aborted: false` and count as ready. (#471, Codex P1.)
       aborted: stats === undefined || stats.enumerationFailures > 0,
     });
-    if (options.logTiming) logReconcileTiming(timing, stats, options.recordRun ?? "unrecorded");
+    if (options.logTiming) logReconcileTiming(timing, stats, options.recordRun ?? "unrecorded", outcome);
     // Written by EVERY full pass, whatever `recordRun` said (#529, finding 1).
     //
     // `indexer_runs` cannot carry this: `recordOptionForSweep` deliberately
@@ -4084,7 +4115,12 @@ async function reconcileAllSessionsSerialized(
     // Same `finally` as the run row, for the same reason: a pass that threw
     // enumerated nothing it can vouch for, and must say so rather than leave
     // the previous pass's answer standing.
-    if (corpusVersion) {
+    //
+    // Except a pass stopped by shutdown (#677): it observed no failure, and the verdict surfaces in
+    // /api/claude-homes as "the corpus is incomplete", so writing one would raise that warning after
+    // every quit until the next boot's pass replaced it. The previous verdict is still the last real
+    // observation.
+    if (corpusVersion && outcome !== "stopped") {
       try {
         writeReconcileVerdict(db, corpusVersion, {
           incomplete: stats === undefined || stats.enumerationFailures > 0,
@@ -4113,6 +4149,8 @@ async function runReconcileAllSessions(
 
   const { counts, timed, timedSync } = timing;
 
+  // A pass queued behind another on `fullPassChain` may start after its stop.
+  throwIfStopped(options);
   await timed("pricing", () => loadPricing());
 
   // ── Multi-harness setup ─────────────────────────────────────────────────
@@ -4270,6 +4308,7 @@ async function runReconcileAllSessions(
   // worker_thread wrap (P2a-2.4) is where we'd consider a producer/consumer
   // split if ingest throughput becomes a bottleneck.
   for (const { projectsDir, dirName } of subdirs) {
+    throwIfStopped(options);
     const dirPath = path.join(projectsDir, dirName);
     let filePaths: string[];
     let sessionDirs: string[];
@@ -4301,6 +4340,8 @@ async function runReconcileAllSessions(
     // treat their session rows as vanished and delete them every sweep.
     // They ingest under the PROJECT dir name, not "subagents".
     for (const sessionDir of sessionDirs) {
+      // Up to thousands of readdirs per project before the first file is reached (Codex, PR #682).
+      throwIfStopped(options);
       const subagentsDir = path.join(dirPath, sessionDir, "subagents");
       try {
         counts.subagentReaddirs++;
@@ -4319,6 +4360,7 @@ async function runReconcileAllSessions(
       }
     }
     for (const filePath of filePaths) {
+      throwIfStopped(options);
       liveFilePaths.add(filePath);
       stats.filesSeen++;
       try {
@@ -4343,6 +4385,7 @@ async function runReconcileAllSessions(
   // -> writeSession. Each live file is registered so the prune pass below
   // doesn't treat it as vanished.
   for (const file of adapterSessions) {
+    throwIfStopped(options);
     liveFilePaths.add(file.filePath);
     stats.filesSeen++;
     try {
@@ -4397,6 +4440,7 @@ async function runReconcileAllSessions(
   // bulk-deleted here in one scan before the cascade — same contract as
   // `writeSession`'s pre-delete.
   const stalePruned = new Set<string>();
+  throwIfStopped(options);
   timedSync("prune", () => {
     const allSessions = db
       .prepare("SELECT session_id, project_slug, file_path, derived_version FROM sessions")
