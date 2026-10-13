@@ -3,7 +3,8 @@ import os from "os";
 import { promises as fs } from "fs";
 import type { FileHandle } from "fs/promises";
 import { parse as parseToml } from "smol-toml";
-import type { SessionAdapter, SessionFile, HarnessConfig, HarnessConfigRule, HarnessResource } from "./types";
+import type { DiscoverOptions, SessionAdapter, SessionFile, HarnessConfig, HarnessConfigRule, HarnessResource } from "./types";
+import { throwIfStopped, type ShouldStop } from "@/lib/db/reconcileStop";
 import type { UsageTurn, ToolCall } from "@/lib/usage/types";
 import type { SessionTurnsMeta } from "@/lib/usage/parser";
 import { encodeProjectPath } from "@/lib/usage/projectMatch";
@@ -33,10 +34,11 @@ function resolveCodexHome(): string {
 
 // ─── file walk ──────────────────────────────────────────────────────────────
 
-async function walkJsonlFiles(dir: string): Promise<string[]> {
+async function walkJsonlFiles(dir: string, shouldStop?: ShouldStop): Promise<string[]> {
   const results: string[] = [];
   const stack: string[] = [dir];
   while (stack.length > 0) {
+    throwIfStopped(shouldStop);
     const current = stack.pop()!;
     let entries;
     try {
@@ -102,9 +104,15 @@ async function readSessionMeta(filePath: string): Promise<SessionMeta | null> {
 }
 
 // Runs fn over items in batches to cap concurrent open file handles
-async function batchedMap<T, R>(items: T[], fn: (item: T) => Promise<R>, limit: number): Promise<R[]> {
+async function batchedMap<T, R>(
+  items: T[],
+  fn: (item: T) => Promise<R>,
+  limit: number,
+  shouldStop?: ShouldStop
+): Promise<R[]> {
   const results: R[] = [];
   for (let i = 0; i < items.length; i += limit) {
+    throwIfStopped(shouldStop);
     results.push(...await Promise.all(items.slice(i, i + limit).map(fn)));
   }
   return results;
@@ -539,7 +547,7 @@ const codexAdapter: SessionAdapter = {
   id: ADAPTER_ID,
   displayName: DISPLAY_NAME,
 
-  async discover(): Promise<SessionFile[]> {
+  async discover({ shouldStop }: DiscoverOptions = {}): Promise<SessionFile[]> {
     const codexHome = resolveCodexHome();
 
     const searchDirs = [
@@ -548,11 +556,11 @@ const codexAdapter: SessionAdapter = {
     ];
 
     // Walk both dirs in parallel; sessions/ takes priority over archived/ for dedup
-    const [sessionFiles, archivedFiles] = await Promise.all(searchDirs.map(walkJsonlFiles));
+    const [sessionFiles, archivedFiles] = await Promise.all(searchDirs.map((d) => walkJsonlFiles(d, shouldStop)));
     const allFiles = [...sessionFiles, ...archivedFiles];
 
     // Read metadata in bounded batches to avoid hitting the FD limit (EMFILE)
-    const metas = await batchedMap(allFiles, readSessionMeta, META_READ_CONCURRENCY);
+    const metas = await batchedMap(allFiles, readSessionMeta, META_READ_CONCURRENCY, shouldStop);
 
     const seen = new Set<string>();
     const files: SessionFile[] = [];
