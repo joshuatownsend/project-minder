@@ -913,11 +913,10 @@ function startSweep(state: WatcherState): void {
         });
       }
     } catch (err) {
-      if (!(err instanceof ReconcileStoppedError)) {
-        state.errors++;
-        // eslint-disable-next-line no-console
-        console.warn(`[ingest-watcher] sweep failed: ${(err as Error).message}`);
-      }
+      if (err instanceof ReconcileStoppedError) return;
+      state.errors++;
+      // eslint-disable-next-line no-console
+      console.warn(`[ingest-watcher] sweep failed: ${(err as Error).message}`);
     } finally {
       if (attempted) lastSweepAt = performance.now();
       // Re-arm only if we're still the active watcher AND not shutting down
