@@ -183,4 +183,12 @@ describe("serviceLog activation gating", () => {
     expect(parsed.subsystem).toBe("test");
     expect(parsed.ts).toEqual(expect.any(String));
   });
+
+  it("keeps a relayed entry's own ts (the worker's clock, not the relay's)", () => {
+    initServiceLog();
+    statSync.mockReturnValue({ size: 10 } as unknown as ReturnType<typeof fs.statSync>);
+    serviceLog({ msg: "watcher armed", ts: "2026-10-14T12:54:18.100Z" });
+    const parsed = JSON.parse(String(appendFileSync.mock.calls[0][1]).trimEnd());
+    expect(parsed.ts).toBe("2026-10-14T12:54:18.100Z");
+  });
 });
