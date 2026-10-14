@@ -18,6 +18,7 @@ import path from "path";
 import { runLibraryCli } from "@/lib/lint/library";
 import {
   MAX_AGE_MS,
+  RENEW_AFTER_MS,
   _resetLintCacheForTesting,
   flushLintCache,
   getCachedLintReport,
@@ -514,11 +515,45 @@ describe("clearLintCache with caching disabled", () => {
 });
 
 describe("cache entry freshness", () => {
-  it("expires after MAX_AGE_MS, bounding an input the fingerprint missed", async () => {
+  it("expires after MAX_AGE_MS without a hit", async () => {
     const report = { validators: [] };
     await putCachedLintReport(project, "fp", report, 1_000);
-    expect(await getCachedLintReport(project, "fp", 1_000 + MAX_AGE_MS)).toBe(report);
     expect(await getCachedLintReport(project, "fp", 1_000 + MAX_AGE_MS + 1)).toBeNull();
+  });
+
+  it("a hit renews the entry, so a project scanned daily never expires", async () => {
+    const report = { validators: [] };
+    await putCachedLintReport(project, "fp", report, 0);
+    const day = MAX_AGE_MS - 1;
+    for (let t = day; t <= 5 * day; t += day) {
+      expect(await getCachedLintReport(project, "fp", t)).toBe(report);
+    }
+  });
+
+  it("a hit younger than RENEW_AFTER_MS does not renew", async () => {
+    const report = { validators: [] };
+    await putCachedLintReport(project, "fp", report, 0);
+    expect(await getCachedLintReport(project, "fp", RENEW_AFTER_MS - 1)).toBe(report);
+    expect(await getCachedLintReport(project, "fp", MAX_AGE_MS + 1)).toBeNull();
+  });
+
+  it("persists the renewal, so it survives a restart", async () => {
+    const report = { validators: [] };
+    await putCachedLintReport(project, "fp", report, 0);
+    await flushLintCache();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      expect(await getCachedLintReport(project, "fp", MAX_AGE_MS)).toEqual(report);
+      await vi.runOnlyPendingTimersAsync(); // the flush the hit scheduled, not one called here
+    } finally {
+      vi.useRealTimers();
+    }
+    await vi.waitFor(() => {
+      const saved = JSON.parse(fs.readFileSync(path.join(root, "state", "lint-cache.json"), "utf-8"));
+      expect(Object.values(saved.entries)[0]).toMatchObject({ savedAt: MAX_AGE_MS });
+    });
+    _resetLintCacheForTesting();
+    expect(await getCachedLintReport(project, "fp", MAX_AGE_MS + MAX_AGE_MS / 2)).toEqual(report);
   });
 
   it("misses on a different fingerprint and on a clock that went backwards", async () => {

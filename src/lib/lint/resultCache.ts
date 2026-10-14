@@ -15,7 +15,7 @@ import { withFileLock, writeFileAtomic } from "../atomicWrite";
 //   - the fingerprint is a SUPERSET of what the CLI reads (extra files only cost a spawn);
 //   - anything unfingerprintable (too many entries, an unreadable dir) means "do not cache";
 //   - a changed CLI version is part of the key;
-//   - entries expire (`MAX_AGE_MS`), bounding the damage of a file the fingerprint missed.
+//   - entries unused for `MAX_AGE_MS` expire, and a forced rescan clears the cache outright.
 // The raw validator output is stored, not Minder's mapped findings, so a change to the
 // mapping in `library.ts` takes effect on the next scan without invalidating anything.
 
@@ -25,6 +25,7 @@ export interface CachedCliReport {
 
 interface CacheEntry {
   fingerprint: string;
+  /** When the entry was last saved or served (a hit renews it; see `RENEW_AFTER_MS`). */
   savedAt: number;
   report: CachedCliReport;
 }
@@ -43,10 +44,13 @@ interface CacheState {
 
 const FILE_VERSION = 1;
 /**
- * Bounds the damage of any input the fingerprint does not cover; a forced rescan clears the cache outright.
- * Long enough to survive a night, so the first boot of the day is not a full re-lint (#584).
+ * How long an entry lasts without being used. A hit renews it, so a project scanned at least daily
+ * keeps its entry until its fingerprint changes. Counting from the first lint instead re-linted
+ * every project once a day, at whichever boot fell past the 24 hours (1.16.17's first boot: 51 of 54).
  */
 export const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** A hit renews an entry only once it is this old, so a busy scan does not rewrite the file each time. */
+export const RENEW_AFTER_MS = 60 * 60 * 1000;
 const MAX_ENTRIES = 500;
 const FLUSH_DELAY_MS = 1000;
 /**
@@ -493,6 +497,10 @@ export async function getCachedLintReport(
   if (!entry || entry.fingerprint !== fingerprint) return null;
   const age = now - entry.savedAt;
   if (age < 0 || age > MAX_AGE_MS) return null;
+  if (age >= RENEW_AFTER_MS) {
+    entry.savedAt = now;
+    scheduleFlush(state);
+  }
   return entry.report;
 }
 
@@ -517,6 +525,10 @@ export async function putCachedLintReport(
   await state.loaded;
   if (epoch !== undefined && epoch !== lintCacheEpoch()) return;
   state.entries.set(keyFor(projectPath), { fingerprint, savedAt: now, report });
+  scheduleFlush(state);
+}
+
+function scheduleFlush(state: CacheState): void {
   if (state.timer) return;
   state.timer = setTimeout(() => {
     state.timer = null;
