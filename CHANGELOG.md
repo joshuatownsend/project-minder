@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- A cached lint result now lasts as long as it keeps being used. Each result expired 24 hours after the project was first linted, even if every scan since had used it, so about once a day a startup re-linted nearly every project from scratch (51 of 54 on 1.16.17's first startup, about 3 minutes 20 seconds until projects were ready instead of 1 minute 40). Using a result now renews it. A result expires only after 24 hours unused, or when the project's config files change, and a forced rescan still clears the whole cache.
+
+### Fixed
+
+- `minder.log` now records the background indexer's lines at the time they happened. The server logged each one when it got around to reading it, which at startup could be many seconds late, so the session watcher looked as if it started 30 to 90 seconds into startup. A line that reached the server a second or more late now says by how much (`relayLagMs`), which also shows how long the server was too busy to read it.
+
 ## [1.16.17] - 2026-10-13
 
 *A shutdown release. Quitting or updating the tray could catch the background indexer mid-pass, and the next startup then spent about 100 seconds re-checking the whole database. The indexer now stops within about a second, wherever it is in its work.*

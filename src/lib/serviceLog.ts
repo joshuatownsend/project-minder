@@ -148,7 +148,7 @@ export function serviceLog(entry: LogEntry): void {
   // than let a caller's malformed field take the process down.
   let line: string;
   try {
-    line = JSON.stringify({ ts, ...entry });
+    line = JSON.stringify({ ts, ...entry }); // a caller's `ts` wins: worker relays depend on it
   } catch {
     line = JSON.stringify({
       ts,
@@ -180,8 +180,9 @@ export function serviceLog(entry: LogEntry): void {
     try {
       // `level` last, so the computed default wins even when a caller passes
       // `level: undefined` explicitly (the spread would otherwise reinstate it
-      // and JSON.stringify would drop the field on the host side).
-      parentPort.postMessage({ type: "service-log", entry: { ...entry, level } });
+      // and JSON.stringify would drop the field on the host side). `ts` too:
+      // the host reads it off a busy main thread, sometimes many seconds later.
+      parentPort.postMessage({ type: "service-log", entry: { ...entry, ts, level } });
     } catch {
       /* console tee already fired */
     }

@@ -80,6 +80,8 @@ export const DEFAULT_START_TIMEOUT_MS = 300_000;
 // At 5 s — the whole budget — a mid-ingest worker starved the SQLite close, so
 // no clean-shutdown marker was written and the next boot ran a full quick_check.
 const STOP_GRACE_MS = 2_000;
+/** A worker log line relayed at least this late carries `relayLagMs`. */
+const RELAY_LAG_LOG_MS = 1_000;
 const CRASH_RESPAWN_BACKOFF_MS = [500, 2_000, 10_000];
 const MAX_RESPAWNS_PER_HOUR = 5;
 /**
@@ -801,10 +803,17 @@ export function absorbWorkerMessage(
     case "service-log": {
       // The worker's `serviceLog` cannot write the file (its `active` flag is
       // per-isolate), so it forwards the entry; stamp it so the reader can
-      // tell which thread spoke.
+      // tell which thread spoke. It keeps the worker's own `ts`, since this runs
+      // only when the main thread is free; a late relay adds `relayLagMs`, which
+      // also measures main-thread stalls. Worker lines may sit out of order.
       const entry = m.entry as LogEntry | undefined;
       if (entry && typeof entry === "object" && typeof entry.msg === "string") {
-        serviceLog({ ...entry, thread: "ingest-worker" });
+        const lag = typeof entry.ts === "string" ? Date.now() - Date.parse(entry.ts) : NaN;
+        serviceLog({
+          ...entry,
+          thread: "ingest-worker",
+          ...(lag >= RELAY_LAG_LOG_MS ? { relayLagMs: lag } : {}),
+        });
       }
       return;
     }

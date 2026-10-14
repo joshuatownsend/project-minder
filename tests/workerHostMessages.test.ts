@@ -133,6 +133,22 @@ describe("absorbWorkerMessage", () => {
     });
   });
 
+  it("keeps the worker's ts and flags a relay that arrived late", () => {
+    const ts = new Date(Date.now() - 6_400).toISOString();
+    absorbWorkerMessage(fresh(), { type: "service-log", entry: { level: "info", msg: "watcher armed", ts } });
+    const logged = vi.mocked(serviceLog).mock.calls[0][0];
+    expect(logged.ts).toBe(ts);
+    expect(logged.relayLagMs).toBeGreaterThanOrEqual(6_400);
+  });
+
+  it("adds no relayLagMs to a relay that arrived promptly", () => {
+    const ts = new Date().toISOString();
+    absorbWorkerMessage(fresh(), { type: "service-log", entry: { level: "info", msg: "watcher armed", ts } });
+    const logged = vi.mocked(serviceLog).mock.calls[0][0];
+    expect(logged.ts).toBe(ts);
+    expect(logged).not.toHaveProperty("relayLagMs");
+  });
+
   it("drops a service-log message with no usable entry", () => {
     absorbWorkerMessage(fresh(), { type: "service-log", entry: { level: "warn" } });
     absorbWorkerMessage(fresh(), { type: "service-log" });
