@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.16.17] - 2026-10-13
+
+*A shutdown release. Quitting or updating the tray could catch the background indexer mid-pass, and the next startup then spent about 100 seconds re-checking the whole database. The indexer now stops within about a second, wherever it is in its work.*
+
 ### Fixed
 
 - Quitting or updating the tray no longer risks a 100-second database check on the next startup (#677). The background indexer finished its whole pass over session history (6–18 seconds) before it would stop, but shutdown gives it 2 seconds. When a shutdown landed mid-pass, the indexer was force-stopped and the next startup re-verified the entire database. The pass now stops at the next file, and never runs its stale-row cleanup on a pass it didn't finish. It also stops partway through a large session file (up to 50 MB, about 1.5 seconds each) and while it is still finding Codex sessions (#683). A stop now waits about a second at most, on the largest files.
