@@ -544,14 +544,11 @@ describe("cache entry freshness", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       expect(await getCachedLintReport(project, "fp", MAX_AGE_MS)).toEqual(report);
-      await vi.runOnlyPendingTimersAsync(); // the flush the hit scheduled, not one called here
+      expect(vi.getTimerCount()).toBe(1); // the hit scheduled its own flush
     } finally {
       vi.useRealTimers();
     }
-    await vi.waitFor(() => {
-      const saved = JSON.parse(fs.readFileSync(path.join(root, "state", "lint-cache.json"), "utf-8"));
-      expect(Object.values(saved.entries)[0]).toMatchObject({ savedAt: MAX_AGE_MS });
-    });
+    await flushLintCache();
     _resetLintCacheForTesting();
     expect(await getCachedLintReport(project, "fp", MAX_AGE_MS + MAX_AGE_MS / 2)).toEqual(report);
   });

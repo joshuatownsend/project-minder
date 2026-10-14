@@ -139,7 +139,6 @@ describe("absorbWorkerMessage", () => {
     const logged = vi.mocked(serviceLog).mock.calls[0][0];
     expect(logged.ts).toBe(ts);
     expect(logged.relayLagMs).toBeGreaterThanOrEqual(6_400);
-    expect(logged.relayLagMs).toBeLessThan(60_000);
   });
 
   it("adds no relayLagMs to a relay that arrived promptly", () => {

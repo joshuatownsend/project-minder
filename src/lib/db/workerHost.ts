@@ -803,12 +803,9 @@ export function absorbWorkerMessage(
     case "service-log": {
       // The worker's `serviceLog` cannot write the file (its `active` flag is
       // per-isolate), so it forwards the entry; stamp it so the reader can
-      // tell which thread spoke. The entry keeps the worker's own `ts`: this
-      // handler runs only when the main thread is free. At boot the worker's
-      // "armed" and "reconcile finished" lines, sent 6.4 s apart, were logged
-      // 2 ms apart, which read as the watcher arming 33 s into the boot. A late relay says
-      // so (`relayLagMs`), which also makes it a measure of main-thread stalls.
-      // Worker lines can therefore sit slightly out of order in the file.
+      // tell which thread spoke. It keeps the worker's own `ts`, since this runs
+      // only when the main thread is free; a late relay adds `relayLagMs`, which
+      // also measures main-thread stalls. Worker lines may sit out of order.
       const entry = m.entry as LogEntry | undefined;
       if (entry && typeof entry === "object" && typeof entry.msg === "string") {
         const lag = typeof entry.ts === "string" ? Date.now() - Date.parse(entry.ts) : NaN;

@@ -148,7 +148,7 @@ export function serviceLog(entry: LogEntry): void {
   // than let a caller's malformed field take the process down.
   let line: string;
   try {
-    line = JSON.stringify({ ts, ...entry });
+    line = JSON.stringify({ ts, ...entry }); // a caller's `ts` wins: worker relays depend on it
   } catch {
     line = JSON.stringify({
       ts,

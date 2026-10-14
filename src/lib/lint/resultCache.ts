@@ -45,8 +45,7 @@ interface CacheState {
 const FILE_VERSION = 1;
 /**
  * How long an entry lasts without being used. A hit renews it, so a project scanned at least daily
- * keeps its entry until its fingerprint changes. Counting from the first lint instead re-linted
- * every project once a day, at whichever boot fell past the 24 hours (1.16.17's first boot: 51 of 54).
+ * keeps its entry until its fingerprint changes.
  */
 export const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 /** A hit renews an entry only once it is this old, so a busy scan does not rewrite the file each time. */
