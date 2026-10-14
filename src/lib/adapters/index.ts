@@ -1,4 +1,4 @@
-import type { SessionAdapter, SessionFile } from "./types";
+import type { DiscoverOptions, SessionAdapter, SessionFile } from "./types";
 import type { MinderConfig } from "@/lib/types";
 import claudeAdapter from "./claude";
 import codexAdapter from "./codex";
@@ -58,12 +58,12 @@ export function getEnabledAdapters(config: MinderConfig): SessionAdapter[] {
 
 export async function discoverAllSessions(
   config: MinderConfig,
-  options: { exclude?: readonly string[] } = {}
+  options: { exclude?: readonly string[] } & DiscoverOptions = {}
 ): Promise<SessionFile[]> {
   // Excluded adapters' `discover()` is never called.
   const exclude = new Set(options.exclude);
   const adapters = getEnabledAdapters(config).filter((a) => !exclude.has(a.id));
-  const results = await Promise.all(adapters.map((a) => a.discover()));
+  const results = await Promise.all(adapters.map((a) => a.discover({ shouldStop: options.shouldStop })));
   return results.flat();
 }
 

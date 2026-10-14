@@ -1,5 +1,16 @@
 import type { UsageTurn } from "@/lib/usage/types";
 import type { SessionTurnsMeta } from "@/lib/usage/parser";
+import type { ShouldStop } from "@/lib/reconcileStop";
+
+export interface DiscoverOptions {
+  /**
+   * The index's full pass passes this so a shutdown need not wait out a whole harness
+   * history (#683). Once it returns true, `discover()` throws `ReconcileStoppedError`
+   * (`throwIfStopped`) rather than returning a partial list, which a caller would take for
+   * the whole corpus and prune against.
+   */
+  shouldStop?: ShouldStop;
+}
 
 export interface SessionFile {
   source: string;
@@ -10,7 +21,7 @@ export interface SessionFile {
 export interface SessionAdapter {
   id: string;
   displayName: string;
-  discover(): Promise<SessionFile[]>;
+  discover(options?: DiscoverOptions): Promise<SessionFile[]>;
   /**
    * Parse one transcript into turns.
    *

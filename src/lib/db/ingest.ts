@@ -61,6 +61,13 @@ import { serviceLog } from "@/lib/serviceLog";
 import { parseStoredArgs } from "./storedArgs";
 import { detectResumeAnomaly } from "@/lib/usage/resumeAnomaly";
 import { discoverAllSessions, getAdapter } from "@/lib/adapters";
+import {
+  ReconcileStoppedError,
+  rethrowIfStopped,
+  throwIfStopped,
+  yieldThenThrowIfStopped,
+  type ShouldStop,
+} from "@/lib/reconcileStop";
 import type { SessionFile } from "@/lib/adapters/types";
 import { readConfig } from "@/lib/config";
 import type { MinderConfig } from "@/lib/types";
@@ -573,7 +580,15 @@ interface ReadOptions {
   fromOffset?: number;
   /** Turn index to assign to the first parsed turn. 0 for full parse. */
   startTurnIndex?: number;
+  /** See {@link ReconcileOptions.shouldStop}. Checked after the read and every few MB of parsing. */
+  shouldStop?: ShouldStop;
 }
+
+/**
+ * How much JSON to parse between stop checks. A 47 MB transcript parses in ~0.4 s
+ * without a break, during which a stop request cannot even be received (#683).
+ */
+const PARSE_STOP_CHECK_CHARS = 4 * 1024 * 1024;
 
 /**
  * Parse a session JSONL (full or tail). Returns the parsed session and
@@ -678,6 +693,8 @@ async function readJsonlSession(
     return null;
   }
   if (PROFILE) tick("fileRead", performance.now() - tRead);
+  // No yield needed: the read was itself an await, so a stop sent during it has landed.
+  throwIfStopped(options.shouldStop);
 
   const turns: ParsedTurn[] = [];
   let startTs: string | null = null;
@@ -768,12 +785,22 @@ async function readJsonlSession(
   // Tool results appear in user turns AFTER the assistant turn that called
   // the tool, so two logical passes over the array are still required.
   const rawLines = raw.split("\n");
-  const parsedLines: Array<{ line: string; entry: ConversationEntry | null }> = rawLines.map((line) => {
+  const parsedLines: Array<{ line: string; entry: ConversationEntry | null }> = [];
+  let charsSinceStopCheck = 0;
+  for (const line of rawLines) {
     const trimmed = line.trim();
-    if (!trimmed) return { line, entry: null };
-    try { return { line, entry: JSON.parse(trimmed) as ConversationEntry }; }
-    catch { return { line, entry: null }; }
-  });
+    let entry: ConversationEntry | null = null;
+    if (trimmed) {
+      try { entry = JSON.parse(trimmed) as ConversationEntry; }
+      catch { entry = null; }
+    }
+    parsedLines.push({ line, entry });
+    charsSinceStopCheck += line.length;
+    if (charsSinceStopCheck >= PARSE_STOP_CHECK_CHARS) {
+      charsSinceStopCheck = 0;
+      await yieldThenThrowIfStopped(options.shouldStop);
+    }
+  }
 
   const errorByToolUseId = new Map<string, { isError: boolean; content: string }>();
   // A1: why a tool call was refused (`permission-rule`, `automode-blocked`,
@@ -3215,27 +3242,15 @@ export interface ReconcileOptions {
    */
   logTiming?: boolean;
   /**
-   * Asked between files; once it returns true the pass throws
-   * {@link ReconcileStoppedError} (#677). A full pass walks ~15k files in 6-18 s, and
+   * Asked between files, inside a large file's parse, and during adapter discovery (#683);
+   * once it returns true the pass throws {@link ReconcileStoppedError} (#677). A full pass walks ~15k files in 6-18 s, and
    * shutdown gives the ingest worker 2 s to exit before terminating it, which
    * costs the clean-shutdown marker and the next boot a ~100 s `quick_check`. Throwing
    * rather than returning early is load-bearing: a partial walk must never reach the
    * prune pass (which deletes every row it did not see), and a thrown pass records
    * itself as aborted instead of leaving a clean verdict for a corpus it half-read.
    */
-  shouldStop?: () => boolean;
-}
-
-/** A full pass that stopped because its caller is shutting down (#677). Not a failure. */
-export class ReconcileStoppedError extends Error {
-  constructor() {
-    super("reconcile stopped: ingest is shutting down");
-    this.name = "ReconcileStoppedError";
-  }
-}
-
-function throwIfStopped(options: ReconcileOptions): void {
-  if (options.shouldStop?.()) throw new ReconcileStoppedError();
+  shouldStop?: ShouldStop;
 }
 
 export interface FileReconcileResult {
@@ -3325,7 +3340,7 @@ export async function reconcileSessionFile(
   db: DatabaseT.Database,
   filePath: string,
   projectDirName: string,
-  options: { force?: boolean } = {}
+  options: { force?: boolean; shouldStop?: ShouldStop } = {}
 ): Promise<FileReconcileResult> {
   const empty: FileReconcileResult = {
     rowsWritten: 0,
@@ -3419,6 +3434,7 @@ export async function reconcileSessionFile(
     const tailResult = await readJsonlSession(filePath, projectDirName, mtimeMs, size, {
       fromOffset: existing!.byte_offset,
       startTurnIndex,
+      shouldStop: options.shouldStop,
     });
     // `parsed === null` means "tail had no usable turns" — still update
     // the cursor + file_size so we don't keep re-reading the same
@@ -3434,6 +3450,7 @@ export async function reconcileSessionFile(
       return empty;
     }
     const tailParsed = tailResult.parsed;
+    await yieldThenThrowIfStopped(options.shouldStop);
     let rows = 0;
     const txn = db.transaction(() => {
       rows = appendSessionTail(db, tailParsed, mtimeMs, size).rows;
@@ -3459,8 +3476,12 @@ export async function reconcileSessionFile(
   }
 
   // Full replace path.
-  const fullResult = await readJsonlSession(filePath, projectDirName, mtimeMs, size);
+  const fullResult = await readJsonlSession(filePath, projectDirName, mtimeMs, size, {
+    shouldStop: options.shouldStop,
+  });
   if (!fullResult || !fullResult.parsed) return empty;
+  // Last chance before the write, which runs to the end once started (#683).
+  await yieldThenThrowIfStopped(options.shouldStop);
 
   let rows = 0;
   const txn = db.transaction(() => {
@@ -3795,7 +3816,8 @@ async function reconcileAdapterSessionFile(
   existingMeta:
     | { file_mtime_ms: number; file_size: number; derived_version: number }
     | undefined,
-  force: boolean
+  force: boolean,
+  shouldStop?: ShouldStop
 ): Promise<FileReconcileResult> {
   const empty: FileReconcileResult = {
     rowsWritten: 0,
@@ -3846,6 +3868,7 @@ async function reconcileAdapterSessionFile(
   }
   const parsed = buildAdapterParsedSession(file, turns, mtimeMs, size);
   if (!parsed) return empty;
+  await yieldThenThrowIfStopped(shouldStop);
   // `sessions.file_path` is UNIQUE. Look up any row already holding this path:
   // if its session_id DIFFERS from the freshly parsed one (an adapter parser
   // change can alter the resolved id), `writeSession`'s session_id-keyed DELETE
@@ -4150,7 +4173,7 @@ async function runReconcileAllSessions(
   const { counts, timed, timedSync } = timing;
 
   // A pass queued behind another on `fullPassChain` may start after its stop.
-  throwIfStopped(options);
+  throwIfStopped(options.shouldStop);
   await timed("pricing", () => loadPricing());
 
   // ── Multi-harness setup ─────────────────────────────────────────────────
@@ -4220,8 +4243,11 @@ async function runReconcileAllSessions(
   try {
     adapterSessions =
       options.adapterSessions ??
-      await timed("adapterDiscovery", () => discoverAllSessions(config, { exclude: ["claude"] }));
+      await timed("adapterDiscovery", () =>
+        discoverAllSessions(config, { exclude: ["claude"], shouldStop: options.shouldStop })
+      );
   } catch (err) {
+    rethrowIfStopped(err);
     adapterSessions = [];
     adapterDiscoveryFailed = true;
     // Same class as a failed `readdir`, and load-bearing for readiness for the
@@ -4308,7 +4334,7 @@ async function runReconcileAllSessions(
   // worker_thread wrap (P2a-2.4) is where we'd consider a producer/consumer
   // split if ingest throughput becomes a bottleneck.
   for (const { projectsDir, dirName } of subdirs) {
-    throwIfStopped(options);
+    throwIfStopped(options.shouldStop);
     const dirPath = path.join(projectsDir, dirName);
     let filePaths: string[];
     let sessionDirs: string[];
@@ -4341,7 +4367,7 @@ async function runReconcileAllSessions(
     // They ingest under the PROJECT dir name, not "subagents".
     for (const sessionDir of sessionDirs) {
       // Up to thousands of readdirs per project before the first file is reached (Codex, PR #682).
-      throwIfStopped(options);
+      throwIfStopped(options.shouldStop);
       const subagentsDir = path.join(dirPath, sessionDir, "subagents");
       try {
         counts.subagentReaddirs++;
@@ -4360,7 +4386,7 @@ async function runReconcileAllSessions(
       }
     }
     for (const filePath of filePaths) {
-      throwIfStopped(options);
+      throwIfStopped(options.shouldStop);
       liveFilePaths.add(filePath);
       stats.filesSeen++;
       try {
@@ -4372,7 +4398,8 @@ async function runReconcileAllSessions(
           stats.filesChanged++;
           stats.rowsWritten += result.rowsWritten;
         }
-      } catch {
+      } catch (err) {
+        rethrowIfStopped(err);
         stats.errors++;
       }
     }
@@ -4385,7 +4412,7 @@ async function runReconcileAllSessions(
   // -> writeSession. Each live file is registered so the prune pass below
   // doesn't treat it as vanished.
   for (const file of adapterSessions) {
-    throwIfStopped(options);
+    throwIfStopped(options.shouldStop);
     liveFilePaths.add(file.filePath);
     stats.filesSeen++;
     try {
@@ -4395,7 +4422,8 @@ async function runReconcileAllSessions(
           file,
           parseAdapterFile,
           existingAdapterMeta.get(file.filePath),
-          options.force ?? false
+          options.force ?? false,
+          options.shouldStop
         )
       );
       if (result.skippedNewerDerivation) stats.newerDerivationSkips++;
@@ -4403,7 +4431,8 @@ async function runReconcileAllSessions(
         stats.filesChanged++;
         stats.rowsWritten += result.rowsWritten;
       }
-    } catch {
+    } catch (err) {
+      rethrowIfStopped(err);
       stats.errors++;
     }
   }
@@ -4440,7 +4469,7 @@ async function runReconcileAllSessions(
   // bulk-deleted here in one scan before the cascade — same contract as
   // `writeSession`'s pre-delete.
   const stalePruned = new Set<string>();
-  throwIfStopped(options);
+  throwIfStopped(options.shouldStop);
   timedSync("prune", () => {
     const allSessions = db
       .prepare("SELECT session_id, project_slug, file_path, derived_version FROM sessions")

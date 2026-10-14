@@ -16,7 +16,6 @@ vi.mock("@/lib/db/connection", () => ({
   getDbSync: vi.fn().mockReturnValue({}),
 }));
 vi.mock("@/lib/db/ingest", () => ({
-  ReconcileStoppedError: class ReconcileStoppedError extends Error {},
   reconcileAllSessions: vi.fn(),
   reconcileSessionFile: vi.fn().mockResolvedValue({ rowsWritten: 0 }),
 }));
@@ -32,7 +31,8 @@ vi.mock("chokidar", () => ({
 }));
 
 import { startIngestWatcher, stopIngestWatcher, getWatcherStatus } from "@/lib/db/ingestWatcher";
-import { ReconcileStoppedError, reconcileAllSessions } from "@/lib/db/ingest";
+import { reconcileAllSessions } from "@/lib/db/ingest";
+import { ReconcileStoppedError } from "@/lib/reconcileStop";
 
 beforeEach(() => {
   vi.clearAllMocks();

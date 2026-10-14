@@ -3,7 +3,8 @@ import path from "path";
 import os from "os";
 import { startNativeRecursiveWatch } from "./nativeWatch";
 import { initDb } from "./migrations";
-import { ReconcileStoppedError, reconcileAllSessions, reconcileSessionFile } from "./ingest";
+import { reconcileAllSessions, reconcileSessionFile } from "./ingest";
+import { ReconcileStoppedError } from "@/lib/reconcileStop";
 import { getDb, getDbSync, getDbError, isDbAvailable, isDriverLoaded } from "./connection";
 import { isShuttingDown } from "@/lib/lifecycle";
 import { closeOrphanedIndexerRuns, recordOptionForSweep } from "./indexerRuns";
@@ -660,7 +661,7 @@ class ReadyTimeoutError extends Error {
 export async function stopIngestWatcher(): Promise<void> {
   const state = g.__minderIngestWatcher;
   if (!state) return;
-  state.stopped = true; // synchronous: a running full pass throws at its next file (`shouldStop`, #677)
+  state.stopped = true; // synchronous: a running full pass throws at its next checkpoint (`shouldStop`, #677, #683)
   for (const t of state.pendingTimers.values()) clearTimeout(t);
   state.pendingTimers.clear();
   state.inFlight.clear();
