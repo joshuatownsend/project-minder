@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.16.18] - 2026-10-14
+
+*A startup follow-up release. About once a day a startup re-linted nearly every project, because cached lint results expired even when they were still in use; now they last as long as they are used. The server log also stops showing the session watcher starting late, which turned out to be the server reading the watcher's log lines late. Those lines now say how late they arrived, which measures how long the server is busy during startup.*
+
 ### Changed
 
 - A cached lint result now lasts as long as it keeps being used. Each result expired 24 hours after the project was first linted, even if every scan since had used it, so about once a day a startup re-linted nearly every project from scratch (51 of 54 on 1.16.17's first startup, about 3 minutes 20 seconds until projects were ready instead of 1 minute 40). Using a result now renews it. A result expires only after 24 hours unused, or when the project's config files change, and a forced rescan still clears the whole cache.
