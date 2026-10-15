@@ -48,6 +48,18 @@ tauri-plugin-autostart = "2"
 # download still trips SmartScreen/Gatekeeper even though updates are verified.
 tauri-plugin-updater = "2"
 
+[target.'cfg(windows)'.dependencies]
+# Session-end handling (src/session_end.rs): a hidden top-level window that
+# hears WM_QUERYENDSESSION / WM_ENDSESSION, which Tauri doesn't surface. 0.59
+# is already in the lockfile through Tauri's own dependency tree.
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Shutdown",
+  "Win32_System_Threading",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
 [profile.release]
 # Smaller, faster-to-ship tray binary.
 codegen-units = 1

@@ -13,6 +13,8 @@ mod health;
 mod memory_guard;
 mod notify;
 mod service_handoff;
+#[cfg(windows)]
+mod session_end;
 mod supervisor;
 mod tray;
 mod updater;
@@ -72,6 +74,10 @@ fn main() {
 
             let supervisor: Arc<Supervisor> =
                 Supervisor::start(cfg.clone(), payload_dir, state_dir.clone());
+            // Stop the server cleanly on sign-out / restart / shutdown too, not
+            // only on Quit (crate::session_end).
+            #[cfg(windows)]
+            session_end::watch(supervisor.clone());
 
             tray::init(app, &cfg, supervisor, state_dir)?;
             Ok(())

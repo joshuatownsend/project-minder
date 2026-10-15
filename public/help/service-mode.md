@@ -260,4 +260,4 @@ So the check is now skipped when **all** of these hold:
 - the `-wal` sidecar is absent or empty, which is independent evidence the graceful path completed;
 - the index is at least 256 MB. Below that the scan is milliseconds, so it always runs.
 
-Anything short of that proof runs the full check, which means a reboot, a force-kill, or a power loss still gets verified. Set `MINDER_FORCE_QUICK_CHECK=1` to force it regardless. The `db: probed` line in `~/.minder/logs/minder.log` records how long the open actually took in its `ms` field.
+Anything short of that proof runs the full check, which means a force-kill, a crash, or a power loss still gets verified. A Windows sign-out, restart, or shutdown is a graceful stop when the tray app is running the server, because the tray stops it first. Under the Phase A service it is not, so those still get verified too. Set `MINDER_FORCE_QUICK_CHECK=1` to force it regardless. The `db: probed` line in `~/.minder/logs/minder.log` records how long the open actually took in its `ms` field.

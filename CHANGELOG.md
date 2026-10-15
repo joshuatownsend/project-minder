@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- On Windows, the tray now stops the server cleanly when you sign out, restart, or shut down. Before, Windows ended the server mid-run, so the next start spent about two minutes checking the whole index before anything else could start (112 seconds after a Windows Update restart on 1.16.18). The tray now hears Windows' session-end notice, asks Windows to notify it before the server, and stops the server the same way Quit does, which takes well under a second.
+
 ## [1.16.18] - 2026-10-14
 
 *A startup follow-up release. About once a day a startup re-linted nearly every project, because cached lint results expired even when they were still in use; now they last as long as they are used. The server log also stops showing the session watcher starting late, which turned out to be the server reading the watcher's log lines late. Those lines now say how late they arrived, which measures how long the server is busy during startup.*

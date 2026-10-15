@@ -8,8 +8,14 @@
 - [x] After an UNCLEAN stop (reboot, or `taskkill /F`), confirm only ONE `quick_check` runs at the next boot
   In `minder.log` the `watcher armed after N ms` line's `phaseMs.initDb` should be near 0 (it was 31,401 ms at the 2026-10-03 16:42 EDT boot, when the worker repeated the server's 95 s scan). `db: probed` (the server's own check) will still be slow after an unclean stop — that is expected until the tray handles Windows session end (not yet built).
   Result 2026-10-04 (v1.16.4): `Stop-Process -Force` on the server (PID 58232, 12:51:35Z) wrote no shutdown lines; the tray supervisor restarted it within ~2.4 s. Boot with a stale marker and a 6 MB WAL: the server's own check ran (`db: probed` 28.7 s, warm cache), the worker's did not (`initDb` **19 ms**, was 31,401 ms). DB healthy (`quarantineRuns` 0), 0 warn/error lines, ingest native, `crashesLastHour` 0. First `/api/health` answer ~110 s after server start (quick_check 28.7 s + scan ~50 s, event loop blocked) versus ~68 s after a graceful stop. Not tested: the cold-cache reboot case, where the server's check still takes ~95 s. Side finding: `eventsHandled` jumped to 8,666 within ~90 s of arming from access-time bumps, filed as #604.
-- [ ] Decide on the follow-up: make a start-menu reboot run the graceful stop
+- [x] Decide on the follow-up: make a start-menu reboot run the graceful stop
   A reboot never reaches the server's disposers (the tray prevents implicit exits and does not handle Windows session end), so the marker still goes stale on every reboot. Needs a Rust change in `src-tauri/src/main.rs` / `supervisor.rs`, with a ~6 s stop window.
+  Decided 2026-10-15: built on branch `fix/tray-session-end` (`src-tauri/src/session_end.rs`).
+- [ ] After the release with the session-end fix is installed, sign out of Windows (or restart), sign back in, and check the log
+  The tray only gets the fix once the update is installed. The first sign-out after that is the test.
+  In `~/.minder/logs/minder.log` the last lines before the gap should be `shutdown requested via stdin control channel` and `shutdown complete`. `~/.minder/index.db.clean` `closedAt` should match the sign-out time.
+  The next start's `db: probed` line should show `ms` under 1000 (it was 112,632 after the 2026-10-15 Windows Update restart).
+  If it is still slow, Node exited before the tray stopped it. In that case report the last log lines.
 
 ---
 
