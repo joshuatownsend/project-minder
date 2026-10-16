@@ -168,6 +168,32 @@ describe("no-index search sees the list the page shows (Codex, PR #705)", () => 
   });
 });
 
+describe("demo mode never reuses real summaries (Copilot, PR #705)", () => {
+  it("keeps a scan that started outside demo mode out of demo searches", async () => {
+    await state.reload();
+    const { scanAllSessions } = await import("@/lib/scanner/claudeConversations");
+    const { demoMode } = await import("@/lib/demo/demoMode");
+    let finishScan!: (s: SessionSummary[]) => void;
+    vi.mocked(scanAllSessions).mockReturnValue(new Promise((resolve) => (finishScan = resolve)));
+    vi.mocked(demoMode).mockResolvedValue(false);
+    const { getSessionsList, searchSessions } = await import("@/lib/data");
+
+    try {
+      const listing = getSessionsList(); // a real scan, in flight
+      await new Promise((r) => setTimeout(r, 0));
+      vi.mocked(demoMode).mockResolvedValue(true); // demo switched on mid-scan
+      finishScan([session("private-real-session", { searchableText: "zzprivatemarker" })]);
+      await listing;
+
+      const result = await searchSessions("zzprivatemarker", "both", 50);
+      expect(result.hits.map((h) => h.sessionId)).not.toContain("private-real-session");
+    } finally {
+      // The mocked module outlives `state.reload()`.
+      vi.mocked(demoMode).mockResolvedValue(false);
+    }
+  });
+});
+
 describe("no-index search follows the enabled sources (PR #705)", () => {
   it("does not let a disabled source's matches use up the limit", async () => {
     // Default config: Claude only (always on); Codex is not enabled.

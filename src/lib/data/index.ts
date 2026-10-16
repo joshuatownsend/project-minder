@@ -1123,18 +1123,22 @@ export interface SessionsListResult {
  * no-index search reads it through `sessionsForSearch` instead.
  */
 export async function getSessionsList(): Promise<SessionsListResult> {
-  const result = await loadSessionsList();
+  // Read once: the same mode picks the source and labels what the search
+  // reuses, or a toggle mid-scan would file real summaries as demo ones
+  // (Copilot, PR #705).
+  const demo = await demoMode();
+  const result = await loadSessionsList(demo);
   if (result.meta.backend === "file") {
     // Every list load refreshes what the no-index search scans, so a search can
     // never see an older list than the one the page is showing (Codex, PR #705).
-    rememberFileList(await demoMode(), Promise.resolve(result.sessions));
+    rememberFileList(demo, Promise.resolve(result.sessions));
   }
   return { ...result, sessions: withoutSearchableText(result.sessions) };
 }
 
 /** {@link getSessionsList} with the file parse's and demo fixtures' text kept. */
-async function loadSessionsList(): Promise<SessionsListResult> {
-  if (await demoMode()) return demoSessionsList(Date.now());
+async function loadSessionsList(demo: boolean): Promise<SessionsListResult> {
+  if (demo) return demoSessionsList(Date.now());
   if (!dbModeRequested()) return runFileSessionsList();
 
   const db = await getReadyDb();
