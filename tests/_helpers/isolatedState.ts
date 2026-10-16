@@ -264,6 +264,7 @@ export function installIsolatedState(
     delete g[DB_GLOBAL];
     // The façade's schema-init state describes the handle just dropped.
     delete g.__minderDbInit;
+    delete g.__minderHistoryParses;
     for (const key of extraGlobals) delete g[key];
   };
 

@@ -60,7 +60,11 @@ interface HistoryParse {
   offset: number;
   map: Map<string, HistoryEntry[]>;
 }
-const historyParses = new Map<string, HistoryParse>();
+// On `globalThis`, unlike the view cache above: the production build bundles
+// this module three times, and each copy would otherwise parse and hold the
+// whole file again. Tests reset it with `__minderHistoryParses`.
+const historyParses = ((globalThis as unknown as { __minderHistoryParses?: Map<string, HistoryParse> })
+  .__minderHistoryParses ??= new Map());
 
 function addHistoryLines(text: string, parse: HistoryParse, scopedMappings: PathMapping[]): void {
   for (const line of text.split("\n").filter(Boolean)) {

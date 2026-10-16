@@ -24,6 +24,7 @@ describe("scanClaudeSessions — case-insensitive session lookup (B1)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
+    delete (globalThis as Record<string, unknown>).__minderHistoryParses;
     // Offset readers (history parse, transcript tails) see the readFile fixtures.
     mockOpen.mockImplementation(openViaReadFile(mockReadFile as never) as never);
     // B1 case-folding is Windows-only (POSIX paths are case-sensitive, so

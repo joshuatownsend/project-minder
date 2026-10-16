@@ -15,6 +15,7 @@ const displays = (map: Map<string, Array<{ display?: string }>>) =>
 
 beforeEach(async () => {
   vi.resetModules(); // fresh per-home parse state
+  delete (globalThis as Record<string, unknown>).__minderHistoryParses;
   ({ readHistory } = await import("@/lib/scanner/claudeSessions"));
   home = mkdtempSync(path.join(os.tmpdir(), "pm-history-"));
 });

@@ -45,6 +45,7 @@ const originalPlatform = process.platform;
 beforeEach(() => {
   vi.clearAllMocks();
   vi.resetModules();
+  delete (globalThis as Record<string, unknown>).__minderHistoryParses;
   // Offset readers (history parse, transcript tails) see the readFile fixtures.
   mockOpen.mockImplementation(openViaReadFile(mockReadFile as never) as never);
   Object.defineProperty(process, "platform", { value: "win32", configurable: true });
