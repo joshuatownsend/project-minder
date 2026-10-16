@@ -137,7 +137,8 @@ export function registerResources(server: McpServer): void {
     "session",
     new ResourceTemplate("minder://sessions/{sessionId}", {
       list: async () => {
-        const { sessions } = await getSessionsList();
+        // Enabled sources only, like search and the other listings (#706).
+        const sessions = await onlyEnabledSources((await getSessionsList()).sessions);
         // Cap to 200 — listings of all sessions can be huge on long-time users
         // and the MCP list payload should fit comfortably in context.
         return {
