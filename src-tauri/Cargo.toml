@@ -50,8 +50,8 @@ tauri-plugin-updater = "2"
 
 [target.'cfg(windows)'.dependencies]
 # Session-end handling (src/session_end.rs): a hidden top-level window that
-# hears WM_QUERYENDSESSION / WM_ENDSESSION, which Tauri doesn't surface. 0.59
-# is already in the lockfile through Tauri's own dependency tree.
+# hears WM_QUERYENDSESSION / WM_ENDSESSION, which Tauri doesn't surface. Same
+# major version Tauri's own dependency tree uses, so nothing extra compiles.
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
   "Win32_System_LibraryLoader",

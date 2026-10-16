@@ -9,20 +9,17 @@
 //!
 //! So we own one hidden **top-level** window on a dedicated thread whose only
 //! job is to wait for those two messages. On `WM_ENDSESSION` it runs the same
-//! [`Supervisor::shutdown`] the tray's Quit item does (stdin `shutdown`, ~150 ms
-//! in practice, force-kill after the 6 s grace window) before returning, because
+//! [`Supervisor::shutdown`] the tray's Quit item does before returning, because
 //! Windows ends the process as soon as the handler returns.
 //!
-//! Ordering matters. The server's `node.exe` also gets told: it has a hidden
-//! console, and Node's default answer to `CTRL_SHUTDOWN_EVENT` is to exit on the
-//! spot, skipping the disposers. Windows notifies processes from the highest
-//! shutdown level to the lowest, so the tray raises itself to the top of the
-//! application range and stops the server before Windows reaches it.
+//! This is best effort: if the stop loses the race (see [`SHUTDOWN_LEVEL`]),
+//! the marker's staleness check still catches it and the next boot verifies.
 
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, OnceLock};
 use std::thread;
 
+use windows_sys::core::w;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Shutdown::{ShutdownBlockReasonCreate, ShutdownBlockReasonDestroy};
@@ -37,7 +34,9 @@ use crate::supervisor::{self, Supervisor};
 
 /// Highest level in the range Windows reserves for applications (0x100-0x3FF).
 /// Higher levels are shut down first, ahead of the default 0x280 that
-/// `node.exe` runs at.
+/// `node.exe` runs at. That ordering matters: the server has a hidden console,
+/// and Node's default answer to `CTRL_SHUTDOWN_EVENT` is to exit on the spot,
+/// skipping the disposers.
 const SHUTDOWN_LEVEL: u32 = 0x3FF;
 /// `SHUTDOWN_NORETRY`: if the tray ever hangs here, Windows ends it without
 /// the "this app is preventing shutdown" retry dialog.
@@ -72,29 +71,25 @@ fn start(on_end: OnEnd, ready: Option<SyncSender<isize>>) {
     }
 }
 
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
 fn run_window(ready: Option<SyncSender<isize>>) {
-    let class = wide("MinderTraySessionEnd");
-    // SAFETY: standard window-class registration and creation; every pointer
-    // passed outlives the calls (`class` lives for the whole loop below).
+    let class = w!("MinderTraySessionEnd");
+    // SAFETY: standard window-class registration and creation with static
+    // strings and a zeroed class struct.
     unsafe {
         let instance = GetModuleHandleW(std::ptr::null());
         let mut wc: WNDCLASSW = std::mem::zeroed();
         wc.lpfnWndProc = Some(window_proc);
         wc.hInstance = instance;
-        wc.lpszClassName = class.as_ptr();
+        wc.lpszClassName = class;
+        // Top-level (no parent) and never shown. Not HWND_MESSAGE: a
+        // message-only window would miss the session-end broadcast.
         let hwnd = if RegisterClassW(&wc) == 0 {
             std::ptr::null_mut()
         } else {
-            // Top-level (no parent) and never shown. Not HWND_MESSAGE: a
-            // message-only window would miss the session-end broadcast.
             CreateWindowExW(
                 WS_EX_TOOLWINDOW,
-                class.as_ptr(),
-                class.as_ptr(),
+                class,
+                class,
                 WS_OVERLAPPED,
                 0,
                 0,
@@ -126,8 +121,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         WM_QUERYENDSESSION => {
             // Agree to end, and give Windows a readable reason to show if the
             // stop below runs long.
-            let reason = wide("Saving the Project Minder index…");
-            ShutdownBlockReasonCreate(hwnd, reason.as_ptr());
+            ShutdownBlockReasonCreate(hwnd, w!("Saving the Project Minder index…"));
             1
         }
         WM_ENDSESSION => {
