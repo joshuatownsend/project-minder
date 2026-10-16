@@ -5,6 +5,7 @@ import { inferLiveSessionStatus } from "@/lib/scanner/liveSessionStatus";
 import { decodeDirName, toSlug } from "@/lib/scanner/claudeConversations";
 import { WORKTREE_SEP } from "@/lib/scanner/worktrees";
 import { getLiveProcesses } from "@/lib/claudeAgentsCli";
+import { readTailLines } from "@/lib/jsonlTail";
 import type { ConversationEntry } from "@/lib/scanner/claudeConversations";
 import type { LiveSession, LiveSessionStatus } from "@/lib/types";
 
@@ -44,8 +45,7 @@ const g = globalThis as unknown as {
 
 async function readTailEntries(filePath: string): Promise<ConversationEntry[]> {
   try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    const lines = raw.split("\n").filter(Boolean).slice(-200);
+    const lines = await readTailLines(filePath, 200);
     const entries: ConversationEntry[] = [];
     for (const line of lines) {
       try { entries.push(JSON.parse(line)); } catch { /* malformed line */ }

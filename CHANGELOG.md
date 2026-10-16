@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Project scans do less work. The git details for each project now take one git process instead of three, run alongside the remote lookup. Each project's latest session is read from the end of its transcript instead of loading the whole file. And the prompt history file is read only from where the last scan stopped, instead of in full every time (#690).
+
 ### Fixed
 
 - The SQL console's endpoint (`/api/sql`) no longer runs its own database setup. It ran a second one on its first query, which could repeat the full index check and freeze the server the same way the startup freeze did. It now uses the server's single shared setup (#694).

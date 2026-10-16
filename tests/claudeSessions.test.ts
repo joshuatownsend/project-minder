@@ -5,13 +5,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 vi.mock("fs", () => ({
   promises: {
     readFile: vi.fn(),
+    open: vi.fn(),
     readdir: vi.fn(),
     stat: vi.fn(),
   },
 }));
 
 import { promises as fs } from "fs";
+import { openViaReadFile } from "./_helpers/openViaReadFile";
 const mockReadFile = vi.mocked(fs.readFile);
+const mockOpen = vi.mocked(fs.open);
 const mockReaddir = vi.mocked(fs.readdir) as unknown as ReturnType<typeof vi.fn>;
 const mockStat = vi.mocked(fs.stat);
 
@@ -21,6 +24,8 @@ describe("scanClaudeSessions — case-insensitive session lookup (B1)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
+    // Offset readers (history parse, transcript tails) see the readFile fixtures.
+    mockOpen.mockImplementation(openViaReadFile(mockReadFile as never) as never);
     // B1 case-folding is Windows-only (POSIX paths are case-sensitive, so
     // folding is intentionally off there — PR #251 review). Simulate win32
     // before the dynamic import below so platform.ts's `isWindows` gate is on
