@@ -26,7 +26,7 @@ use windows_sys::Win32::System::Shutdown::{ShutdownBlockReasonCreate, ShutdownBl
 use windows_sys::Win32::System::Threading::SetProcessShutdownParameters;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassW,
-    TranslateMessage, ENDSESSION_LOGOFF, MSG, WM_ENDSESSION, WM_QUERYENDSESSION, WNDCLASSW,
+    TranslateMessage, ENDSESSION_CLOSEAPP, ENDSESSION_LOGOFF, MSG, WM_ENDSESSION, WM_QUERYENDSESSION, WNDCLASSW,
     WS_EX_TOOLWINDOW, WS_OVERLAPPED,
 };
 
@@ -44,7 +44,17 @@ const SHUTDOWN_LEVEL: u32 = 0x3FF;
 /// the "this app is preventing shutdown" retry dialog.
 const SHUTDOWN_NORETRY: u32 = 0x1;
 
-type OnEnd = Box<dyn Fn() + Send + Sync>;
+/// Why Windows is ending the tray.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EndKind {
+    /// Sign-out, restart, or shutdown: the user's session is over.
+    SessionEnding,
+    /// Restart Manager (`ENDSESSION_CLOSEAPP`, e.g. an installer): only the
+    /// app is asked to close, and the session goes on.
+    AppClosing,
+}
+
+type OnEnd = Box<dyn Fn(EndKind) + Send + Sync>;
 
 /// What `WM_ENDSESSION` runs. Set once per process.
 static ON_END: OnceLock<OnEnd> = OnceLock::new();
@@ -56,11 +66,17 @@ pub fn watch(supervisor: Arc<Supervisor>, app: AppHandle) {
     if unsafe { SetProcessShutdownParameters(SHUTDOWN_LEVEL, SHUTDOWN_NORETRY) } == 0 {
         supervisor::log("session end: could not raise the shutdown priority");
     }
-    // Exactly what Quit does. Exiting matters for Restart Manager
-    // (`ENDSESSION_CLOSEAPP`, e.g. an installer): the session goes on, and a
-    // tray left running would keep its files in use with no server behind it.
+    // What the tray's Quit item does (`tray.rs`), and exiting matters: after a
+    // Restart Manager close the session goes on, so a tray left running would
+    // keep its files in use with no server behind it.
     start(
-        Box::new(move || {
+        Box::new(move |kind| {
+            // Quit's first step, needed only when the session goes on: put back
+            // a logon service an unfinished update stopped. When the session is
+            // ending, the logon service starts again at the next logon anyway.
+            if kind == EndKind::AppClosing {
+                crate::service_handoff::restore_if_armed();
+            }
             supervisor.shutdown();
             app.exit(0);
         }),
@@ -140,10 +156,17 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             // can skip the query. Logoff, restart, shutdown, and Restart
             // Manager closes all need the same clean stop.
             if wparam != 0 {
-                let kind = if (lparam as u32) & ENDSESSION_LOGOFF != 0 { "sign-out" } else { "shutdown" };
-                supervisor::log(&format!("session end ({kind}): stopping the server"));
+                let flags = lparam as u32;
+                let (kind, label) = if flags & ENDSESSION_CLOSEAPP != 0 {
+                    (EndKind::AppClosing, "app close")
+                } else if flags & ENDSESSION_LOGOFF != 0 {
+                    (EndKind::SessionEnding, "sign-out")
+                } else {
+                    (EndKind::SessionEnding, "shutdown")
+                };
+                supervisor::log(&format!("session end ({label}): stopping the server"));
                 if let Some(on_end) = ON_END.get() {
-                    on_end();
+                    on_end(kind);
                 }
                 supervisor::log("session end: server stopped");
             }
@@ -164,6 +187,7 @@ mod tests {
     use windows_sys::Win32::UI::WindowsAndMessaging::{EnumWindows, SendMessageW};
 
     static ENDS: AtomicUsize = AtomicUsize::new(0);
+    static APP_CLOSES: AtomicUsize = AtomicUsize::new(0);
     static FOUND: AtomicUsize = AtomicUsize::new(0);
 
     unsafe extern "system" fn find(hwnd: HWND, target: LPARAM) -> BOOL {
@@ -179,8 +203,11 @@ mod tests {
     fn top_level_window_stops_the_server_on_session_end_only() {
         let (tx, rx) = sync_channel(1);
         start(
-            Box::new(|| {
+            Box::new(|kind| {
                 ENDS.fetch_add(1, Ordering::SeqCst);
+                if kind == EndKind::AppClosing {
+                    APP_CLOSES.fetch_add(1, Ordering::SeqCst);
+                }
             }),
             Some(tx),
         );
@@ -200,7 +227,13 @@ mod tests {
             SendMessageW(h, WM_ENDSESSION, 0, 0); // shutdown cancelled
             assert_eq!(ENDS.load(Ordering::SeqCst), 0, "a cancelled shutdown stops nothing");
             SendMessageW(h, WM_ENDSESSION, 1, ENDSESSION_LOGOFF as LPARAM);
+            assert_eq!(ENDS.load(Ordering::SeqCst), 1, "a real session end stops the server");
+            assert_eq!(APP_CLOSES.load(Ordering::SeqCst), 0, "sign-out is not an app close");
+            SendMessageW(h, WM_ENDSESSION, 1, 0); // shutdown / restart
+            assert_eq!(APP_CLOSES.load(Ordering::SeqCst), 0, "shutdown is not an app close");
+            SendMessageW(h, WM_ENDSESSION, 1, ENDSESSION_CLOSEAPP as LPARAM);
         }
-        assert_eq!(ENDS.load(Ordering::SeqCst), 1, "a real session end stops the server");
+        assert_eq!(ENDS.load(Ordering::SeqCst), 3);
+        assert_eq!(APP_CLOSES.load(Ordering::SeqCst), 1, "Restart Manager close is told apart");
     }
 }
