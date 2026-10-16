@@ -34,7 +34,7 @@ import type { SessionCostRow } from "./sessionsInWindow";
 import type { FileEdit } from "@/lib/usage/fileActivity";
 import type { PathMapping } from "@/lib/types";
 import { demoMode } from "@/lib/demo/demoMode";
-import { readConfig } from "@/lib/config";
+import { readConfig, enabledSources } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
 import { mapLocalPath } from "@/lib/pathMapping";
 import { demoSessionsList, demoSessionDetail } from "@/lib/demo/sessions";
@@ -1559,9 +1559,10 @@ function rememberFileList(demo: boolean, sessions: Promise<SessionSummary[]>): v
 }
 
 /**
- * The file-parse (or demo) summaries: the last list load's summaries (`getSessionsList` records them), else a load
- * of its own; reused for up to 30 s, like the `/api/sessions` slot, because the
- * file parse stats every transcript and a search fires on each typing pause.
+ * The file-parse (or demo) summaries: the last list load's (`getSessionsList`
+ * records them), else a load of its own. Reused for up to 30 s, like the
+ * `/api/sessions` slot, because the file parse stats every transcript and a
+ * search fires on each typing pause.
  */
 async function fileSessionsForSearch(demo: boolean): Promise<SessionSummary[]> {
   const memo = searchListHolder.__minderSearchList;
@@ -1588,18 +1589,16 @@ export async function searchSessions(
 ): Promise<SessionSearchResult> {
   const demo = await demoMode();
   // Only the sources `/api/sessions` lists, applied before the limit like the
-  // other facets, on both backends (#706). Demo fixtures are all Claude and
-  // always listed. Set here so the page and the MCP tool get the same answer.
-  if (!demo) {
-    facets = { ...facets, sources: (await readConfig()).enabledAdapters ?? ["claude"] };
-  }
+  // other facets, on both backends (#706). Set here so the page and the MCP
+  // tool get the same answer.
+  const scoped = { ...facets, sources: enabledSources(await readConfig(), demo) };
 
   // The list is not served from the index (no index, demo, or an index that
   // is empty or still being built): scan those summaries, which carry text.
   const fileList = await sessionsForSearch(demo);
   if (fileList) {
     return {
-      hits: searchSessionSummaries(fileList, query, scope, limit, facets),
+      hits: searchSessionSummaries(fileList, query, scope, limit, scoped),
       meta: { backend: "file" },
     };
   }
@@ -1630,7 +1629,7 @@ export async function searchSessions(
     }
   }
 
-  const hits = searchSessionsInDb(db, query, scope, limit, semanticKeys, facets);
+  const hits = searchSessionsInDb(db, query, scope, limit, semanticKeys, scoped);
   return { hits, meta: { backend: "db" } };
 }
 

@@ -91,6 +91,17 @@ function applyConfigInvariants(value: MinderConfig): MinderConfig {
   return { ...value, enabledAdapters: normalizeEnabledAdapters(value.enabledAdapters) };
 }
 
+/**
+ * The adapter sources whose sessions are listed and searched: `enabledAdapters`
+ * (Claude when unset), plus Claude in demo mode, whose fixtures are all Claude
+ * sessions. The one definition behind `/api/sessions` and session search, so
+ * the search cannot cover a different set than the list shows (#706).
+ */
+export function enabledSources(config: MinderConfig, demo: boolean): string[] {
+  const ids = config.enabledAdapters ?? ["claude"];
+  return demo && !ids.includes("claude") ? [...ids, "claude"] : [...ids];
+}
+
 export async function readConfig(): Promise<MinderConfig> {
   if (configCache && Date.now() < configCache.expiresAt) return configCache.value;
   try {
