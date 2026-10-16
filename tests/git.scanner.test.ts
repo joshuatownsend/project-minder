@@ -130,6 +130,10 @@ describe("headBranchFromDecorations", () => {
     expect(headBranchFromDecorations("tag: v1, HEAD -> feat/x")).toBe("feat/x");
   });
 
+  it("strips refs/heads/ if a full decoration gets through (log.decorate=full)", () => {
+    expect(headBranchFromDecorations("HEAD -> refs/heads/main, refs/remotes/origin/main")).toBe("main");
+  });
+
   it("reports a detached HEAD as null", () => {
     expect(headBranchFromDecorations("HEAD")).toBeNull();
     expect(headBranchFromDecorations("HEAD, origin/main")).toBeNull();
@@ -159,6 +163,9 @@ describe("scanGit — branch, commit and remote (#690)", () => {
       remoteUrl: "https://github.com/user/repo",
     });
     expect(invoked.sort()).toEqual(["log", "remote"]);
+    // Short decorations whatever the user's log.decorate says.
+    const logArgs = execFileAsyncMock.mock.calls.map(([, a]) => a as string[]).find((a) => a[2] === "log");
+    expect(logArgs).toContain("--decorate=short");
   });
 
   it("labels a detached HEAD with the short SHA and keeps commit/remote (B4)", async () => {

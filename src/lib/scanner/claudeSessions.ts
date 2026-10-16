@@ -87,7 +87,27 @@ function addHistoryLines(text: string, parse: HistoryParse, scopedMappings: Path
   }
 }
 
-export async function readHistory(home: string, scopedMappings: PathMapping[]): Promise<Map<string, HistoryEntry[]>> {
+/** Each home's latest read, so the next one waits for it. On `globalThis` with the parses. */
+const historyReads = ((globalThis as unknown as { __minderHistoryReads?: Map<string, Promise<unknown>> })
+  .__minderHistoryReads ??= new Map());
+
+/**
+ * Read a home's history, one read at a time per home. The scanner's project
+ * batch calls this concurrently when the view cache lapses, and two reads that
+ * both saw the old offset would add the same appended entries twice, inflating
+ * session counts until the next reset (Codex review, PR #701).
+ */
+export function readHistory(home: string, scopedMappings: PathMapping[]): Promise<Map<string, HistoryEntry[]>> {
+  const previous = historyReads.get(home) ?? Promise.resolve();
+  const read = previous.then(() => readHistoryNow(home, scopedMappings));
+  historyReads.set(home, read);
+  void read.finally(() => {
+    if (historyReads.get(home) === read) historyReads.delete(home);
+  });
+  return read;
+}
+
+async function readHistoryNow(home: string, scopedMappings: PathMapping[]): Promise<Map<string, HistoryEntry[]>> {
   const file = path.join(home, "history.jsonl");
   const mappingsKey = JSON.stringify(scopedMappings);
   let handle;

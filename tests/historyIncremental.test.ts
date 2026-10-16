@@ -16,6 +16,7 @@ const displays = (map: Map<string, Array<{ display?: string }>>) =>
 beforeEach(async () => {
   vi.resetModules(); // fresh per-home parse state
   delete (globalThis as Record<string, unknown>).__minderHistoryParses;
+  delete (globalThis as Record<string, unknown>).__minderHistoryReads;
   ({ readHistory } = await import("@/lib/scanner/claudeSessions"));
   home = mkdtempSync(path.join(os.tmpdir(), "pm-history-"));
 });
@@ -64,6 +65,15 @@ describe("readHistory — incremental parse of history.jsonl (#690)", () => {
     const mapped = await readHistory(home, [{ from: "/home/josh", to: "\\\\wsl.localhost\\Ubuntu\\home\\josh" }] as never);
     expect([...mapped.keys()].some((k) => k.includes("wsl.localhost"))).toBe(true);
     expect(displays(mapped)).toEqual(["wsl"]);
+  });
+
+  it("concurrent reads after an append add each new entry once (Codex review, PR #701)", async () => {
+    const file = path.join(home, "history.jsonl");
+    writeFileSync(file, entry("C:\\dev\\a", "one"));
+    await readHistory(home, []);
+    appendFileSync(file, entry("C:\\dev\\a", "two"));
+    const results = await Promise.all(Array.from({ length: 10 }, () => readHistory(home, [])));
+    for (const map of results) expect(displays(map)).toEqual(["one", "two"]);
   });
 
   it("returns an empty map when the home has no history file", async () => {

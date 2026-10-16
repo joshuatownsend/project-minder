@@ -182,7 +182,8 @@ const LOG_SEP = "\x1f";
  */
 export function headBranchFromDecorations(refs: string): string | null | undefined {
   for (const ref of refs.split(", ")) {
-    if (ref.startsWith("HEAD -> ")) return ref.slice("HEAD -> ".length);
+    // The prefix strip is a backstop for a full decoration getting through.
+    if (ref.startsWith("HEAD -> ")) return ref.slice("HEAD -> ".length).replace(/^refs\/heads\//, "");
     if (ref === "HEAD") return null;
   }
   return undefined;
@@ -196,7 +197,9 @@ export async function scanGit(projectPath: string): Promise<GitInfo | undefined>
   // be three or four processes in a row per project, and starting git
   // processes was the scan's largest single cost (#690).
   const [logLine, rawRemote] = await Promise.all([
-    runGit(["log", "-1", `--format=%aI${LOG_SEP}%s${LOG_SEP}%h${LOG_SEP}%D`], projectPath),
+    // `--decorate=short` overrides a user's `log.decorate=full`, which would
+    // print `HEAD -> refs/heads/main` (Codex review, PR #701).
+    runGit(["log", "-1", "--decorate=short", `--format=%aI${LOG_SEP}%s${LOG_SEP}%h${LOG_SEP}%D`], projectPath),
     runGit(["remote", "get-url", "origin"], projectPath),
   ]);
 
