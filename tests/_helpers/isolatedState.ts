@@ -262,6 +262,8 @@ export function installIsolatedState(
   const clearGlobals = (): void => {
     const g = globalThis as Record<string, unknown>;
     delete g[DB_GLOBAL];
+    // The façade's schema-init state describes the handle just dropped.
+    delete g.__minderDbInit;
     for (const key of extraGlobals) delete g[key];
   };
 

@@ -180,4 +180,25 @@ describe.skipIf(!driverAvailable)("data façade — ensureSchemaReady retry on f
     // to provide; the failure-recovery fix must not regress it.
     expect(initSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("a second copy of the façade module reuses the first copy's init instead of running initDb again", async () => {
+    // The production build bundles `@/lib/data` more than once; see initHolder.
+    process.env.MINDER_USE_DB = "1";
+    const first = await reloadModules();
+    await first.facade.ensureSchemaReady();
+    expect(first.facade.getInitStatus().state).toBe("success");
+
+    // A fresh module registry stands in for the second bundled copy; the
+    // process globals (DB handle, init state) are deliberately kept.
+    vi.resetModules();
+    const facade2 = await import("@/lib/data");
+    const mig2 = await import("@/lib/db/migrations");
+    expect(facade2).not.toBe(first.facade);
+    const initSpy = vi.spyOn(mig2, "initDb");
+
+    const result = await facade2.ensureSchemaReady();
+    expect(result.available).toBe(true);
+    expect(initSpy).not.toHaveBeenCalled();
+    expect(facade2.getInitStatus().state).toBe("success");
+  });
 });
