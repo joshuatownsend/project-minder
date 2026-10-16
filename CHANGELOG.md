@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.16.19] - 2026-10-15
+
+*A startup release, from measuring 1.16.18's real startups. Every start froze the server for 17 to 37 seconds, because the first dashboard request re-ran the database setup and its full index check; it now runs once. And a Windows sign-out, restart, or update no longer leaves the index unverified, which cost the next start about two minutes: the tray now stops the server cleanly first.*
+
 ### Fixed
 
 - The server no longer freezes for 17 to 37 seconds early in every startup. The production build includes the database setup code more than once, and each copy kept its own "already checked" flag. So the first dashboard request ran the setup a second time, including a full integrity check of the index, and the server could answer nothing while it ran, not even the tray's health check (40 seconds in a reproduction). All copies now share one setup, which runs once per start. The same duplication had also let up to three heavy usage reports run at once, despite the one-at-a-time rule from #563; they now share one queue too.
