@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.16.21] - 2026-10-16
+
+*A Sessions page release. The list no longer carries a copy of every session's text for the search box: measured on a real 13,500-session index, the response drops from 34 MB to 21 MB and the first load after startup from 5.2 to 1.5 seconds. Searching message content now happens only on the server, which already covered more (whole messages, thinking, subagent transcripts). Search also now covers only the sources enabled in Settings, so a turned-off one can no longer crowd out sessions you can see.*
+
 ### Changed
 
 - The Sessions page loads about 40% less data. Its list response carried up to 4,000 characters of each session's text so the search box could match content in the browser, 13 MB of a 34 MB response. The text is no longer sent, and the index no longer reads it to build the list. Measured against a copy of a real 13,500-session index: the response went from 34.1 to 20.9 MB, a refresh after the 30-second cache from 1.57 to 1.20 seconds, and the first load after startup from 5.2 to 1.5 seconds. Content search now goes only through the server's search, which already ran on every query and covers more: whole messages, extended thinking and subagent transcripts. Two visible differences: inside message content, a search matches whole words and word beginnings ("ingest" finds "ingested" but not "reingest"), and returns at most 200 sessions (#700).
