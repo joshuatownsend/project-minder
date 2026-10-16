@@ -77,7 +77,7 @@ fn main() {
             // Stop the server cleanly on sign-out / restart / shutdown too, not
             // only on Quit (crate::session_end).
             #[cfg(windows)]
-            session_end::watch(supervisor.clone());
+            session_end::watch(supervisor.clone(), app.handle().clone());
 
             tray::init(app, &cfg, supervisor, state_dir)?;
             Ok(())

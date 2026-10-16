@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- On Windows, the tray now stops the server cleanly when you sign out, restart, or shut down. Before, Windows ended the server mid-run, so the next start spent about two minutes checking the whole index before anything else could start (112 seconds after a Windows Update restart on 1.16.18). The tray now hears Windows' session-end notice, asks Windows to notify it before the server, and stops the server the same way Quit does, which takes well under a second.
+- On Windows, the tray now stops the server cleanly when you sign out, restart, or shut down. Before, Windows ended the server mid-run, so the next start spent about two minutes checking the whole index before anything else could start (112 seconds after a Windows Update restart on 1.16.18). The tray now hears Windows' session-end notice, asks Windows to notify it before the server, and stops the server and exits the same way Quit does, which takes well under a second. It also closes itself this way when an installer asks running apps to close.
 
 ## [1.16.18] - 2026-10-14
 

@@ -8,9 +8,9 @@
 //! full integrity probe of `index.db` (~2 minutes on a 3 GB index).
 //!
 //! So we own one hidden **top-level** window on a dedicated thread whose only
-//! job is to wait for those two messages. On `WM_ENDSESSION` it runs the same
-//! [`Supervisor::shutdown`] the tray's Quit item does before returning, because
-//! Windows ends the process as soon as the handler returns.
+//! job is to wait for those two messages. On `WM_ENDSESSION` it does what the
+//! tray's Quit item does, [`Supervisor::shutdown`] then exit, and only then
+//! returns, because Windows ends the process as soon as the handler returns.
 //!
 //! This is best effort: if the stop loses the race (see [`SHUTDOWN_LEVEL`]),
 //! the marker's staleness check still catches it and the next boot verifies.
@@ -29,6 +29,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     TranslateMessage, ENDSESSION_LOGOFF, MSG, WM_ENDSESSION, WM_QUERYENDSESSION, WNDCLASSW,
     WS_EX_TOOLWINDOW, WS_OVERLAPPED,
 };
+
+use tauri::AppHandle;
 
 use crate::supervisor::{self, Supervisor};
 
@@ -49,12 +51,21 @@ static ON_END: OnceLock<OnEnd> = OnceLock::new();
 
 /// Start watching for session end. Never fails tray startup: any problem is
 /// logged and the tray carries on without it.
-pub fn watch(supervisor: Arc<Supervisor>) {
+pub fn watch(supervisor: Arc<Supervisor>, app: AppHandle) {
     // SAFETY: plain Win32 call with constant arguments.
     if unsafe { SetProcessShutdownParameters(SHUTDOWN_LEVEL, SHUTDOWN_NORETRY) } == 0 {
         supervisor::log("session end: could not raise the shutdown priority");
     }
-    start(Box::new(move || supervisor.shutdown()), None);
+    // Exactly what Quit does. Exiting matters for Restart Manager
+    // (`ENDSESSION_CLOSEAPP`, e.g. an installer): the session goes on, and a
+    // tray left running would keep its files in use with no server behind it.
+    start(
+        Box::new(move || {
+            supervisor.shutdown();
+            app.exit(0);
+        }),
+        None,
+    );
 }
 
 /// Spawn the window thread. `ready` (tests) receives the window handle as an
