@@ -210,10 +210,9 @@ describe.skipIf(!driverAvailable)("/api/sql", () => {
   });
 
   it("auto-initializes schema on first call (no prior initDb)", async () => {
-    // Cold start: tmpHome has no ~/.minder/index.db. The route must run
-    // initDb() itself rather than letting `getDb()` open an empty DB and
-    // fall into the 400 'no such table' path. Verifies the schema-
-    // readiness gate calls initDb on first request.
+    // Cold start: tmpHome has no ~/.minder/index.db. The route must bring the
+    // schema up (through the façade's init) rather than letting `getDb()` open
+    // an empty DB and fall into the 400 'no such table' path.
     const { route } = await reloadModules();
     const res = await route.GET(mkGet("SELECT COUNT(*) AS n FROM sessions"));
     expect(res.status).toBe(200);
