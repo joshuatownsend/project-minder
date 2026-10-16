@@ -171,38 +171,61 @@ export async function readBranchCommits(
   return commits;
 }
 
-export async function scanGit(projectPath: string): Promise<GitInfo | undefined> {
-  // Use a single git command to get branch + last commit info
-  // Avoid `git status` entirely — it's extremely slow on Windows with many repos
-  let branch = await runGit(["branch", "--show-current"], projectPath);
-  if (!branch) {
-    // `branch --show-current` returns "" for detached HEAD (and for a repo
-    // with zero commits). Previously this discarded the entire GitInfo block
-    // — commit date/message/remote — for a perfectly valid repo (B4). Fall
-    // back to a short SHA as the branch label so it keeps populating.
-    const shortSha = await runGit(["rev-parse", "--short", "HEAD"], projectPath);
-    if (!shortSha) return undefined; // not a git repo, or no commits at all
-    branch = shortSha;
+/** Field separator in the `log -1` line: the ASCII unit separator, which no field contains. */
+const LOG_SEP = "\x1f";
+
+/**
+ * The branch HEAD points at, from a `%D` ref-decoration list such as
+ * `HEAD -> main, origin/main, tag: v1`. `null` when HEAD is detached (the list
+ * has a bare `HEAD`), `undefined` when the list says nothing about HEAD, which
+ * happens when a user's decoration config filters it out.
+ */
+export function headBranchFromDecorations(refs: string): string | null | undefined {
+  for (const ref of refs.split(", ")) {
+    // The prefix strip is a backstop for a full decoration getting through.
+    if (ref.startsWith("HEAD -> ")) return ref.slice("HEAD -> ".length).replace(/^refs\/heads\//, "");
+    if (ref === "HEAD") return null;
   }
+  return undefined;
+}
 
-  const logLine = await runGit(
-    ["log", "-1", "--format=%aI|||%s"],
-    projectPath
-  );
+export async function scanGit(projectPath: string): Promise<GitInfo | undefined> {
+  // Avoid `git status` entirely — it's extremely slow on Windows with many repos.
+  //
+  // One `log -1` gives the last commit, its short SHA and, through HEAD's ref
+  // decoration, the branch; the remote lookup runs alongside it. This used to
+  // be three or four processes in a row per project, and starting git
+  // processes was the scan's largest single cost (#690).
+  const [logLine, rawRemote] = await Promise.all([
+    // `--decorate=short` overrides a user's `log.decorate=full`, which would
+    // print `HEAD -> refs/heads/main` (Codex review, PR #701).
+    runGit(["log", "-1", "--decorate=short", `--format=%aI${LOG_SEP}%s${LOG_SEP}%h${LOG_SEP}%D`], projectPath),
+    runGit(["remote", "get-url", "origin"], projectPath),
+  ]);
 
+  let branch: string | undefined;
+  let shortSha: string | undefined;
   let lastCommitDate: string | undefined;
   let lastCommitMessage: string | undefined;
 
   if (logLine) {
-    const sep = logLine.indexOf("|||");
-    if (sep !== -1) {
-      lastCommitDate = logLine.slice(0, sep) || undefined;
-      lastCommitMessage = logLine.slice(sep + 3) || undefined;
-    }
+    const [date, subject, sha, refs = ""] = logLine.split(LOG_SEP);
+    lastCommitDate = date || undefined;
+    lastCommitMessage = subject || undefined;
+    shortSha = sha || undefined;
+    const head = headBranchFromDecorations(refs);
+    if (head !== undefined) branch = head ?? shortSha;
+  }
+  if (!branch) {
+    // No log line (a repo with no commits yet, or not a repo at all), or a
+    // decoration config that hides HEAD: ask for the branch directly.
+    // Detached HEAD then falls back to the short SHA rather than dropping the
+    // whole GitInfo block — commit date/message/remote — for a valid repo (B4).
+    branch = (await runGit(["branch", "--show-current"], projectPath)) || shortSha;
+    if (!branch) return undefined; // not a git repo, or no commits at all
   }
 
-  // Get remote URL and convert to HTTPS browser URL
-  const rawRemote = await runGit(["remote", "get-url", "origin"], projectPath);
+  // Convert the remote URL to an HTTPS browser URL.
   let remoteUrl: string | undefined;
   if (rawRemote) {
     // Convert SSH format (git@github.com:user/repo.git) to HTTPS

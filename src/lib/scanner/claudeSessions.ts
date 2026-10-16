@@ -3,6 +3,7 @@ import path from "path";
 import { normalizePathKey, isWindows } from "../platform";
 import { encodePath, type ConversationEntry } from "./claudeConversations";
 import { inferSessionStatus } from "./sessionStatus";
+import { readTailLines } from "../jsonlTail";
 import { readConfig } from "../config";
 import { getReadableClaudeHomes, scopeMappingsToHome } from "../claudeHome";
 import { mapForeignPath, mapLocalPath } from "../pathMapping";
@@ -46,35 +47,117 @@ let cacheTime = 0;
 let cacheConfigKey = "";
 const HISTORY_CACHE_TTL = 60_000; // 1 minute
 
+/**
+ * Each home's parsed `history.jsonl`, and how far into the file it got.
+ * Claude Code only appends to it, so a rebuild reads just the new bytes
+ * instead of re-parsing the whole file (~3 MB, about 0.6 s per scan) every
+ * time the 60 s view cache lapses (#690). A file that shrank, or a change of
+ * path mappings, starts over.
+ */
+interface HistoryParse {
+  mappingsKey: string;
+  /** Byte offset just past the last line parsed. */
+  offset: number;
+  map: Map<string, HistoryEntry[]>;
+}
+// On `globalThis`, unlike the view cache above: the production build bundles
+// this module three times, and each copy would otherwise parse and hold the
+// whole file again. Tests reset it with `__minderHistoryParses`.
+const historyParses = ((globalThis as unknown as { __minderHistoryParses?: Map<string, HistoryParse> })
+  .__minderHistoryParses ??= new Map());
+
+function addHistoryLines(text: string, parse: HistoryParse, scopedMappings: PathMapping[]): void {
+  for (const line of text.split("\n").filter(Boolean)) {
+    try {
+      const entry = JSON.parse(line) as HistoryEntry;
+      if (!entry.project) continue;
+      // Two normalizations before the lookup key:
+      //  - mapForeignPath: a WSL home records Linux paths (/home/josh/dev/x);
+      //    mapping them onto this machine's view (\\wsl.localhost\...) lets
+      //    them match the scanner's projectPath. Unmapped paths pass through.
+      //  - normalizePathKey: lowercased on Windows — drive-letter/segment
+      //    casing in history.jsonl can differ from the scanner's casing (B1).
+      const key = normalizePathKey(mapForeignPath(entry.project, scopedMappings));
+      const list = parse.map.get(key) || [];
+      list.push(entry);
+      parse.map.set(key, list);
+    } catch {
+      // Skip invalid lines
+    }
+  }
+}
+
+/** Each home's latest read, so the next one waits for it. On `globalThis` with the parses. */
+const historyReads = ((globalThis as unknown as { __minderHistoryReads?: Map<string, Promise<unknown>> })
+  .__minderHistoryReads ??= new Map());
+
+/**
+ * Read a home's history, one read at a time per home. The scanner's project
+ * batch calls this concurrently when the view cache lapses, and two reads that
+ * both saw the old offset would add the same appended entries twice, inflating
+ * session counts until the next reset (Codex review, PR #701).
+ */
+export function readHistory(home: string, scopedMappings: PathMapping[]): Promise<Map<string, HistoryEntry[]>> {
+  const previous = historyReads.get(home) ?? Promise.resolve();
+  const read = previous.then(() => readHistoryNow(home, scopedMappings));
+  historyReads.set(home, read);
+  void read.finally(() => {
+    if (historyReads.get(home) === read) historyReads.delete(home);
+  });
+  return read;
+}
+
+async function readHistoryNow(home: string, scopedMappings: PathMapping[]): Promise<Map<string, HistoryEntry[]>> {
+  const file = path.join(home, "history.jsonl");
+  const mappingsKey = JSON.stringify(scopedMappings);
+  let handle;
+  try {
+    handle = await fs.open(file, "r");
+  } catch {
+    historyParses.delete(home);
+    return new Map(); // No history file in this home
+  }
+  try {
+    const { size } = await handle.stat();
+    let parse = historyParses.get(home);
+    if (!parse || parse.mappingsKey !== mappingsKey || size < parse.offset) {
+      parse = { mappingsKey, offset: 0, map: new Map() };
+    }
+    if (size > parse.offset) {
+      const buf = Buffer.alloc(size - parse.offset);
+      const { bytesRead } = await handle.read(buf, 0, buf.length, parse.offset);
+      const chunk = buf.subarray(0, bytesRead);
+      // Parse whole lines only, so a line still being written is read next time.
+      // An unterminated last line counts when it already parses: that is a
+      // complete entry written without a trailing newline.
+      let end = chunk.lastIndexOf(0x0a) + 1;
+      const tail = chunk.subarray(end).toString("utf8");
+      if (tail.trim()) {
+        try {
+          JSON.parse(tail);
+          end = chunk.length;
+        } catch {
+          // Incomplete: leave it for the next read.
+        }
+      }
+      addHistoryLines(chunk.subarray(0, end).toString("utf8"), parse, scopedMappings);
+      parse.offset += end;
+    }
+    historyParses.set(home, parse);
+    return parse.map;
+  } catch {
+    return new Map();
+  } finally {
+    await handle.close();
+  }
+}
+
 async function buildHomeView(home: string, mappings: PathMapping[]): Promise<HomeView> {
   // Scope the rewrites to this home's distro: with two distros sharing a
   // foreign prefix (both `/home/josh`), an unscoped first-match would map
   // this home's history onto the OTHER distro's UNC projects.
   const scopedMappings = scopeMappingsToHome(home, mappings);
-  const map = new Map<string, HistoryEntry[]>();
-  try {
-    const content = await fs.readFile(path.join(home, "history.jsonl"), "utf-8");
-    for (const line of content.split("\n").filter(Boolean)) {
-      try {
-        const entry = JSON.parse(line) as HistoryEntry;
-        if (!entry.project) continue;
-        // Two normalizations before the lookup key:
-        //  - mapForeignPath: a WSL home records Linux paths (/home/josh/dev/x);
-        //    mapping them onto this machine's view (\\wsl.localhost\...) lets
-        //    them match the scanner's projectPath. Unmapped paths pass through.
-        //  - normalizePathKey: lowercased on Windows — drive-letter/segment
-        //    casing in history.jsonl can differ from the scanner's casing (B1).
-        const key = normalizePathKey(mapForeignPath(entry.project, scopedMappings));
-        const list = map.get(key) || [];
-        list.push(entry);
-        map.set(key, list);
-      } catch {
-        // Skip invalid lines
-      }
-    }
-  } catch {
-    // No history file in this home
-  }
+  const map = await readHistory(home, scopedMappings);
 
   let projectDirs: string[] = [];
   try {
@@ -130,10 +213,8 @@ async function inferStatusFromJSONL(
 ): Promise<SessionStatus | undefined> {
   try {
     const fstat = await fs.stat(filePath);
-    const raw = await fs.readFile(filePath, "utf-8");
-    const lines = raw.split("\n").filter(Boolean);
     // Tail-only parse: last 200 lines cover the relevant assistant turn and trailing entries.
-    const tailLines = lines.slice(-200);
+    const tailLines = await readTailLines(filePath, 200);
     const entries: ConversationEntry[] = [];
     for (const line of tailLines) {
       try { entries.push(JSON.parse(line)); } catch { /* skip */ }

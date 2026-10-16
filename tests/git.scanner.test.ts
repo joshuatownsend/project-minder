@@ -19,6 +19,7 @@ vi.mock("child_process", () => ({ execFile: execFileMock }));
 
 import {
   filterCommitsInInterval,
+  headBranchFromDecorations,
   scanGit,
   scanGitDirtyStatus,
   runGitChecked,
@@ -39,6 +40,26 @@ function stubGitCalls(results: Array<string | Error>) {
     if (next instanceof Error) return Promise.reject(next);
     return Promise.resolve({ stdout: next ?? "", stderr: "" });
   });
+}
+
+/**
+ * Stub scanGit's git calls by subcommand. It runs `log` and `remote` in
+ * parallel, so call order says nothing; `branch` is its fallback. A missing
+ * entry answers "" (the command failed). Returns the subcommands invoked.
+ */
+function stubScanGit(out: { log?: string; remote?: string; branch?: string }): string[] {
+  const invoked: string[] = [];
+  execFileAsyncMock.mockImplementation((_bin: string, args: string[]) => {
+    const sub = args[2] as "log" | "remote" | "branch";
+    invoked.push(sub);
+    return Promise.resolve({ stdout: out[sub] ?? "", stderr: "" });
+  });
+  return invoked;
+}
+
+/** A `log -1` line in scanGit's format: date, subject, short SHA, decorations. */
+function logLine(date: string, subject: string, sha: string, refs: string): string {
+  return [date, subject, sha, refs].join("\x1f");
 }
 
 function commit(date: string, subject = "msg"): CommitMeta {
@@ -103,42 +124,85 @@ describe("filterCommitsInInterval", () => {
   });
 });
 
-describe("scanGit — detached HEAD fallback (B4)", () => {
+describe("headBranchFromDecorations", () => {
+  it("reads the branch HEAD points at", () => {
+    expect(headBranchFromDecorations("HEAD -> main, origin/main, tag: v1")).toBe("main");
+    expect(headBranchFromDecorations("tag: v1, HEAD -> feat/x")).toBe("feat/x");
+  });
+
+  it("strips refs/heads/ if a full decoration gets through (log.decorate=full)", () => {
+    expect(headBranchFromDecorations("HEAD -> refs/heads/main, refs/remotes/origin/main")).toBe("main");
+  });
+
+  it("reports a detached HEAD as null", () => {
+    expect(headBranchFromDecorations("HEAD")).toBeNull();
+    expect(headBranchFromDecorations("HEAD, origin/main")).toBeNull();
+  });
+
+  it("reports undefined when the decorations say nothing about HEAD", () => {
+    expect(headBranchFromDecorations("")).toBeUndefined();
+    expect(headBranchFromDecorations("origin/main, tag: v1")).toBeUndefined();
+  });
+});
+
+describe("scanGit — branch, commit and remote (#690)", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("falls back to a short SHA and still populates commit/remote when branch --show-current is empty", async () => {
-    // Call order: branch --show-current ("" = detached) -> rev-parse --short
-    // HEAD (fallback label) -> log -1 (commit meta) -> remote get-url origin.
-    stubGitCalls([
-      "",
-      "abc1234",
-      "2026-01-01T00:00:00+00:00|||Initial commit",
-      "https://github.com/user/repo.git",
-    ]);
+  it("reads the branch from one log -1 call, with the remote alongside: two git processes", async () => {
+    const invoked = stubScanGit({
+      log: logLine("2026-01-01T00:00:00+00:00", "Initial commit", "abc1234", "HEAD -> main, origin/main"),
+      remote: "https://github.com/user/repo.git",
+    });
+    const info = await scanGit("C:\\dev\\normal-repo");
+    expect(info).toEqual({
+      branch: "main",
+      lastCommitDate: "2026-01-01T00:00:00+00:00",
+      lastCommitMessage: "Initial commit",
+      isDirty: false,
+      uncommittedCount: 0,
+      remoteUrl: "https://github.com/user/repo",
+    });
+    expect(invoked.sort()).toEqual(["log", "remote"]);
+    // Short decorations whatever the user's log.decorate says.
+    const logArgs = execFileAsyncMock.mock.calls.map(([, a]) => a as string[]).find((a) => a[2] === "log");
+    expect(logArgs).toContain("--decorate=short");
+  });
 
+  it("labels a detached HEAD with the short SHA and keeps commit/remote (B4)", async () => {
+    stubScanGit({
+      log: logLine("2026-01-01T00:00:00+00:00", "Initial commit", "abc1234", "HEAD, origin/main"),
+      remote: "https://github.com/user/repo.git",
+    });
     const info = await scanGit("C:\\dev\\detached-repo");
-
-    expect(info).toBeDefined();
     expect(info?.branch).toBe("abc1234");
-    expect(info?.lastCommitDate).toBe("2026-01-01T00:00:00+00:00");
     expect(info?.lastCommitMessage).toBe("Initial commit");
     expect(info?.remoteUrl).toBe("https://github.com/user/repo");
   });
 
-  it("returns undefined when neither branch nor a short SHA resolve (not a git repo)", async () => {
-    stubGitCalls(["", ""]);
-    const info = await scanGit("C:\\dev\\not-a-repo");
-    expect(info).toBeUndefined();
+  it("asks for the branch directly when the decorations hide HEAD", async () => {
+    const invoked = stubScanGit({
+      log: logLine("2026-01-01T00:00:00+00:00", "msg", "abc1234", ""),
+      branch: "develop",
+    });
+    expect((await scanGit("C:\\dev\\repo"))?.branch).toBe("develop");
+    expect(invoked).toContain("branch");
   });
 
-  it("still uses the real branch name when show-current succeeds (regression guard)", async () => {
-    stubGitCalls([
-      "main",
-      "2026-01-01T00:00:00+00:00|||Initial commit",
-      "https://github.com/user/repo.git",
-    ]);
-    const info = await scanGit("C:\\dev\\normal-repo");
+  it("falls back to the short SHA when the decorations hide HEAD and HEAD is detached", async () => {
+    stubScanGit({ log: logLine("2026-01-01T00:00:00+00:00", "msg", "abc1234", ""), branch: "" });
+    expect((await scanGit("C:\\dev\\repo"))?.branch).toBe("abc1234");
+  });
+
+  it("keeps the branch of a repo with no commits yet", async () => {
+    stubScanGit({ log: "", branch: "main" });
+    const info = await scanGit("C:\\dev\\new-repo");
     expect(info?.branch).toBe("main");
+    expect(info?.lastCommitDate).toBeUndefined();
+  });
+
+  it("returns undefined for a directory that is not a git repo", async () => {
+    stubScanGit({});
+    expect(await scanGit("C:\\dev\\not-a-repo")).toBeUndefined();
   });
 });
 
@@ -224,7 +288,7 @@ describe("safe.directory waiver", () => {
   });
 
   it("applies to scanGit's invocations too", async () => {
-    stubGitCalls(["main", "", ""]);
+    stubScanGit({ branch: "main" });
     await scanGit("\\\\wsl.localhost\\Ubuntu\\home\\josh\\repo");
 
     expect(execFileAsyncMock.mock.calls.length).toBeGreaterThan(0);
@@ -238,9 +302,8 @@ describe("safe.directory waiver", () => {
 describe("scanGit — remote URL normalization", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  /** branch, then the `log -1` line, then `remote get-url origin`. */
   async function remoteFor(rawRemote: string): Promise<string | undefined> {
-    stubGitCalls(["main", "2026-01-01T00:00:00Z|||msg", rawRemote]);
+    stubScanGit({ log: logLine("2026-01-01T00:00:00Z", "msg", "abc1234", "HEAD -> main"), remote: rawRemote });
     const info = await scanGit("C:\\dev\\repo");
     return info?.remoteUrl;
   }
