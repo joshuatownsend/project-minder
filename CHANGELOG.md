@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- The Sessions list no longer freezes the server for several seconds every time it refreshes. The server rebuilt the whole list from the index at least every 30 seconds while the page was open, about 4 to 5 seconds of work during which nothing else could be answered. It now keeps the list until the index actually changes, and only updates each session's active/idle state on a refresh (#689).
+- The Sessions list no longer freezes the server for several seconds every time it refreshes. The server rebuilt the whole list from the index at least every 30 seconds while the page was open, about 4 to 5 seconds of work during which nothing else could be answered. Nearly all of that was re-reading every session's text for the page's search box, which scans the whole index. That text is now kept and re-read only for sessions that changed, and when nothing changed the list is reused with only each session's active/idle state updated (#689).
 
 ### Fixed
 
