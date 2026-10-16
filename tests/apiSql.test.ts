@@ -223,6 +223,19 @@ describe.skipIf(!driverAvailable)("/api/sql", () => {
     expect(body.rows[0].n).toBe(0);
   });
 
+  it("reuses the process-wide init instead of running initDb again (#694)", async () => {
+    // A second initDb() re-runs PRAGMA quick_check whenever the clean marker
+    // is stale, which blocks the main thread on a large index.
+    const { route } = await reloadModules();
+    const facade = await import("@/lib/data");
+    const mig = await import("@/lib/db/migrations");
+    await facade.ensureSchemaReady();
+    const initSpy = vi.spyOn(mig, "initDb");
+    const res = await route.GET(mkGet("SELECT 1 AS one"));
+    expect(res.status).toBe(200);
+    expect(initSpy).not.toHaveBeenCalled();
+  });
+
   it("returns 503 when initDb reports the schema is unavailable", async () => {
     // Drive the `init.available === false` branch: the driver loaded but
     // initDb couldn't bring the schema up (e.g. corrupt rebuild loop,

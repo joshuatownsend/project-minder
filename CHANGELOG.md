@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The SQL console's endpoint (`/api/sql`) no longer runs its own database setup. It ran a second one on its first query, which could repeat the full index check and freeze the server the same way the startup freeze did. It now uses the server's single shared setup (#694).
+
 ## [1.16.18] - 2026-10-14
 
 *A startup follow-up release. About once a day a startup re-linted nearly every project, because cached lint results expired even when they were still in use; now they last as long as they are used. The server log also stops showing the session watcher starting late, which turned out to be the server reading the watcher's log lines late. Those lines now say how late they arrived, which measures how long the server is busy during startup.*
