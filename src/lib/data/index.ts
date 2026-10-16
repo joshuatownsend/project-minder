@@ -4,7 +4,7 @@ import { getJsonlMaxMtime } from "@/lib/usage/parser";
 import { looksLikeSessionId } from "@/lib/sessionId";
 import { scanAllSessions, scanSessionDetail } from "@/lib/scanner/claudeConversations";
 import { getSessionMeta } from "@/lib/scanner/claudeStats";
-import { getDb, isDriverLoaded } from "@/lib/db/connection";
+import { getDb, isDriverLoaded, prepCached } from "@/lib/db/connection";
 import { initDb, type InitResult } from "@/lib/db/migrations";
 import {
   loadUsageReportFromSql,
@@ -1133,16 +1133,7 @@ async function loadSessionsList(): Promise<SessionsListResult> {
   if (!dbModeRequested()) return runFileSessionsList();
 
   const db = await getReadyDb();
-  if (await checkV3Gate("getSessionsList", db)) {
-    logIntentionalFallthrough(
-      "getSessionsList",
-      "DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)"
-    );
-    return runFileSessionsList();
-  }
-  if (await checkBuildStateFallback("getSessionsList", db)) {
-    return runFileSessionsList();
-  }
+  if (!(await indexMayServeSessionsList(db))) return runFileSessionsList();
   const sessions = await callDbLoader("getSessionsList", () =>
     loadSessionsListFromDb(db)
   );
@@ -1158,6 +1149,24 @@ async function loadSessionsList(): Promise<SessionsListResult> {
     return runFileSessionsList();
   }
   return { sessions, meta: { backend: "db", maxMtimeMs: getDbMaxMtimeMs(db) } };
+}
+
+/**
+ * The gates in front of the index-backed session list: false while the index
+ * awaits the v3 reconcile or is being built or re-derived, when the list comes
+ * from the file parse instead. Shared with the search so the two cannot follow
+ * different backends (Copilot, PR #705). The list also falls back on an empty
+ * result, which the search checks for itself.
+ */
+async function indexMayServeSessionsList(db: DbHandle): Promise<boolean> {
+  if (await checkV3Gate("getSessionsList", db)) {
+    logIntentionalFallthrough(
+      "getSessionsList",
+      "DB awaiting v3 reconcile (cost_usd / one-shot counts not yet populated)"
+    );
+    return false;
+  }
+  return !(await checkBuildStateFallback("getSessionsList", db));
 }
 
 async function runFileSessionsList(): Promise<SessionsListResult> {
@@ -1445,9 +1454,10 @@ export interface SessionSearchResult {
 /**
  * Run a session search through the indexed FTS5 + sessions tables.
  *
- * - `MINDER_USE_DB=0` or demo mode: no FTS index, so a substring scan over
- *   the session summaries (`searchSessionSummaries`), reported as
- *   `backend: 'file'`.
+ * - Whenever the Sessions list itself comes from the file parse or demo
+ *   fixtures (`MINDER_USE_DB=0`, demo mode, an empty or still-building
+ *   index): a substring scan over those summaries
+ *   (`searchSessionSummaries`), reported as `backend: 'file'`.
  * - DB mode + healthy DB: SQL-backed via `searchSessionsInDb`.
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  *
@@ -1513,15 +1523,42 @@ const searchListHolder = globalThis as unknown as {
 };
 
 /**
- * The text-carrying list the no-index search scans. Kept for 30 s, because the
- * file parse stats every transcript and a search fires on each typing pause.
+ * The text-carrying summaries to scan when the Sessions list is not served from
+ * the index, or `null` when it is and FTS should answer. Follows the list's own
+ * choice rather than `MINDER_USE_DB` alone: while the index is empty or still
+ * being built the list comes from the file parse, and a search of the partial
+ * index would miss sessions the page shows (Copilot, PR #705).
  */
-async function sessionsForSearch(): Promise<SessionSummary[]> {
+async function sessionsForSearch(): Promise<SessionSummary[] | null> {
   const demo = await demoMode();
+  if (!demo && dbModeRequested()) {
+    const db = await getReadyDb();
+    // `turn_count > 0` is the list loader's own filter, so this is its
+    // "index empty" fallback without building the list.
+    const listed = prepCached(db, "SELECT 1 FROM sessions WHERE turn_count > 0 LIMIT 1").get();
+    if (listed && (await indexMayServeSessionsList(db))) return null;
+  }
+  return fileSessionsForSearch(demo);
+}
+
+/**
+ * The file-parse (or demo) summaries, enabled sources only as `/api/sessions`
+ * shows them (demo fixtures are all Claude and always shown), so a disabled
+ * source's matches cannot use up the search limit (Copilot, PR #705).
+ *
+ * Kept for 30 s, like the `/api/sessions` slot, because the file parse stats
+ * every transcript and a search fires on each typing pause.
+ */
+async function fileSessionsForSearch(demo: boolean): Promise<SessionSummary[]> {
   const now = Date.now();
   let memo = searchListHolder.__minderSearchList;
   if (!memo || memo.demo !== demo || now - memo.at > SEARCH_LIST_TTL_MS) {
-    const sessions = loadSessionsList().then((r) => r.sessions);
+    const sessions = demo
+      ? Promise.resolve(demoSessionsList(now).sessions)
+      : Promise.all([runFileSessionsList(), readConfig()]).then(([{ sessions }, config]) => {
+          const enabled = new Set(config.enabledAdapters ?? ["claude"]);
+          return sessions.filter((s) => enabled.has(s.source ?? "claude"));
+        });
     memo = searchListHolder.__minderSearchList = { at: now, demo, sessions };
     // A failed load must not be served for the next 30 s.
     sessions.catch(() => {
@@ -1541,11 +1578,12 @@ export async function searchSessions(
    */
   facets?: SessionSearchFacets
 ): Promise<SessionSearchResult> {
-  // No FTS index to ask: scan the summaries, which on these two paths still
-  // carry their text.
-  if ((await demoMode()) || !dbModeRequested()) {
+  // The list is not served from the index (no index, demo, or an index that
+  // is empty or still being built): scan those summaries, which carry text.
+  const fileList = await sessionsForSearch();
+  if (fileList) {
     return {
-      hits: searchSessionSummaries(await sessionsForSearch(), query, scope, limit, facets),
+      hits: searchSessionSummaries(fileList, query, scope, limit, facets),
       meta: { backend: "file" },
     };
   }

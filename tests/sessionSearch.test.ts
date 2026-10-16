@@ -169,12 +169,15 @@ describe.skipIf(!driverAvailable)("searchSessionsInDb", () => {
     // The route's `instanceof SessionSearchError` branch was unreachable
     // and parse failures returned 500 instead of 400. The data layer
     // must let SessionSearchError pass through unchanged.
-    const { conn, search, projectsDir } = await setup();
+    const { conn, ingest, search, projectsDir } = await setup();
     await writeJsonl(path.join(projectsDir, "C--dev-app", "any.jsonl"), [
       userTurn("2026-04-30T10:00:00Z", "anything"),
       assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "ok"),
     ]);
     const db = (await conn.getDb())!;
+    // Indexed and recorded as read through, so the façade answers from FTS
+    // rather than the file-parse scan it uses until then (PR #705).
+    await ingest.reconcileAllSessions(db, { projectsDir, recordRun: "reconcile" });
     // Force an FTS5 parse failure by passing a query that the
     // tokenizer can't escape into a valid expression. The function
     // should surface SessionSearchError("fts-parse"), not a wrapped
@@ -191,6 +194,28 @@ describe.skipIf(!driverAvailable)("searchSessionsInDb", () => {
     expect(() => search.searchSessionsInDb(db, "x", "bogus" as any)).toThrow(
       search.SessionSearchError
     );
+    conn.closeDb();
+  });
+
+  it("searches the file-parse summaries while the index is empty, as the list does (PR #705)", async () => {
+    // The list falls back to the file parse until the index has sessions, and
+    // it carries no text any more (#700), so a search of the empty index would
+    // hide content matches the page used to find.
+    const { conn, ingest, projectsDir } = await setup();
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "warmup.jsonl"), [
+      userTurn("2026-04-30T10:00:00Z", "the zzwarmupmarker needs fixing"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "ok"),
+    ]);
+    const facade = await import("@/lib/data");
+    const before = await facade.searchSessions("zzwarmupmarker", "both", 10);
+    expect(before.meta.backend).toBe("file");
+    expect(before.hits.map((h) => h.sessionId)).toEqual(["warmup"]);
+
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir, recordRun: "reconcile" });
+    const after = await facade.searchSessions("zzwarmupmarker", "both", 10);
+    expect(after.meta.backend).toBe("db");
+    expect(after.hits.map((h) => h.sessionId)).toEqual(["warmup"]);
     conn.closeDb();
   });
 

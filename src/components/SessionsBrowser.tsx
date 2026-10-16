@@ -812,16 +812,22 @@ export function SessionsBrowser() {
   const [entrypointFilter, setEntrypointFilter] = useState<string>("all");
   const [collapsedSlugs, setCollapsedSlugs] = useState<Set<string>>(new Set());
   const [searchState, setSearchState] = useState<SearchState>({ kind: "idle" });
+  // The query + facets whose results are on screen. A rerun with the same key
+  // is a refresh: it keeps the current hits until the new ones arrive.
+  const shownSearchKey = useRef<string | null>(null);
 
   useEffect(() => {
     const trimmed = search.trim();
     if (trimmed.length < MIN_SEARCH_CHARS) {
+      shownSearchKey.current = null;
       setSearchState({ kind: "idle" });
       return;
     }
+    const searchKey = JSON.stringify([trimmed, starredOnly, sourceFilter, entrypointFilter]);
+    const refreshing = shownSearchKey.current === searchKey;
     const controller = new AbortController();
     const timer = setTimeout(async () => {
-      setSearchState({ kind: "pending" });
+      if (!refreshing) setSearchState({ kind: "pending" });
       try {
         // Facets go to the SERVER, not just to the client-side filter
         // below. The API applies them inside each retriever's query, so
@@ -841,7 +847,7 @@ export function SessionsBrowser() {
         });
         if (controller.signal.aborted) return;
         if (!res.ok) {
-          setSearchState({ kind: "failed" });
+          if (!refreshing) setSearchState({ kind: "failed" });
           return;
         }
         const json = (await res.json()) as SearchApiResponse;
@@ -855,9 +861,10 @@ export function SessionsBrowser() {
             json.hits.map((h, i) => [h.sessionId, { rank: i, snippet: h.snippet }])
           ),
         });
+        shownSearchKey.current = searchKey;
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
-        setSearchState({ kind: "failed" });
+        if (!refreshing) setSearchState({ kind: "failed" });
       }
     }, SEARCH_DEBOUNCE_MS);
     return () => {
@@ -869,7 +876,11 @@ export function SessionsBrowser() {
     // out would re-run only the client-side filter against ids ranked
     // under the previous facet set — stale in exactly the direction
     // #425 is about, and invisible because the list still renders.
-  }, [search, starredOnly, sourceFilter, entrypointFilter]);
+    //
+    // `data` is one too: content matches come only from the server (#700),
+    // so when the list refreshes, a new session or reply that matches the
+    // query must be searched for again to appear (Copilot, PR #705).
+  }, [search, starredOnly, sourceFilter, entrypointFilter, data]);
 
   // Relevance ordering is only meaningful while a search is active, so it
   // becomes the sort when one starts and steps back down when it ends.
@@ -932,7 +943,11 @@ export function SessionsBrowser() {
       const serverIds = searchState.kind === "hits" ? searchState.ids : null;
       result = result.filter((s) => serverIds?.has(s.sessionId) || matchesTitleScope(s, q));
     }
-    const rank = searchState.kind === "hits" ? searchState.ids : null;
+    // Only FTS hits are ranked; the no-index scan is ordered by recency, so on
+    // that backend relevance falls back to recency for every row rather than
+    // putting server hits ahead of newer title matches (Copilot, PR #705).
+    const rank =
+      searchState.kind === "hits" && searchState.backend === "db" ? searchState.ids : null;
     const endedAt = (s: typeof result[number]) =>
       s.endTime ? new Date(s.endTime).getTime() : 0;
     return [...result].sort((a, b) => {

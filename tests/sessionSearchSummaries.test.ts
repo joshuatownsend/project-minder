@@ -151,6 +151,26 @@ describe("searchSessions without an index (MINDER_USE_DB=0)", () => {
   });
 });
 
+describe("no-index search follows the enabled sources (PR #705)", () => {
+  it("does not let a disabled source's matches use up the limit", async () => {
+    // Default config: Claude only (always on); Codex is not enabled.
+    await state.reload();
+    const { scanAllSessions } = await import("@/lib/scanner/claudeConversations");
+    const codex = Array.from({ length: 5 }, (_, i) =>
+      session(`codex-${i}`, {
+        source: "codex",
+        endTime: `2026-10-1${i}T00:00:00Z`,
+        searchableText: "tokenizer",
+      })
+    );
+    const claude = session("claude", { endTime: "2026-01-01T00:00:00Z", searchableText: "tokenizer" });
+    vi.mocked(scanAllSessions).mockResolvedValue([...codex, claude]);
+    const { searchSessions } = await import("@/lib/data");
+    const result = await searchSessions("tokenizer", "both", 3);
+    expect(result.hits.map((h) => h.sessionId)).toEqual(["claude"]);
+  });
+});
+
 describe("getSessionsList never carries searchableText (#700)", () => {
   // Every caller sends the list out of the server (`/api/sessions`, MCP), and
   // the text was 13 MB of a 34 MB response. The file parse still fills it.
