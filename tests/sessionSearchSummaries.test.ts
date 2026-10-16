@@ -104,6 +104,13 @@ describe("searchSessionSummaries", () => {
     expect(searchSessionSummaries([blank, cli], "tokenizer", "both", 50, { source: "claude" }).map((h) => h.sessionId)).toEqual(["blank"]);
   });
 
+  it("searches only the listed sources, and nothing for an empty list (#706)", () => {
+    const claude = session("c", { searchableText: "tokenizer" });
+    const codex = session("x", { source: "codex", searchableText: "tokenizer" });
+    expect(searchSessionSummaries([claude, codex], "tokenizer", "both", 50, { sources: ["claude"] }).map((h) => h.sessionId)).toEqual(["c"]);
+    expect(searchSessionSummaries([claude, codex], "tokenizer", "both", 50, { sources: [] })).toEqual([]);
+  });
+
   it("returns nothing for a blank query", () => {
     expect(searchSessionSummaries([older], "   ")).toEqual([]);
   });

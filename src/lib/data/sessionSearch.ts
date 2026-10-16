@@ -59,6 +59,13 @@ export interface SessionSearchFacets {
   source?: string;
   /** When true, restrict to sessions with a non-empty `starred_at`. */
   starredOnly?: boolean;
+  /**
+   * Adapter source ids to search within (absent rows count as `claude`): the
+   * sources enabled in Settings, which are all `/api/sessions` lists. Without
+   * it, a disabled adapter's indexed sessions could fill the limit and push out
+   * enabled ones the page would show (#706). An empty list matches nothing.
+   */
+  sources?: readonly string[];
 }
 
 /**
@@ -109,6 +116,14 @@ function buildFacetPredicate(facets: SessionSearchFacets | undefined): {
   }
   if (facets.starredOnly) {
     clauses.push("s.starred_at IS NOT NULL AND s.starred_at != ''");
+  }
+  if (facets.sources !== undefined) {
+    clauses.push(
+      facets.sources.length
+        ? `COALESCE(s.source, 'claude') IN (${facets.sources.map(() => "?").join(", ")})`
+        : "0"
+    );
+    params.push(...facets.sources);
   }
 
   return { sql: clauses.length ? clauses.map((c) => `(${c})`).join(" AND ") : "", params };

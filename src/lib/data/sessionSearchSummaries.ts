@@ -47,6 +47,7 @@ function matchesFacets(s: SessionSummary, facets: SessionSearchFacets | undefine
     return false;
   }
   if (facets.starredOnly && !s.starredAt) return false;
+  if (facets.sources !== undefined && !facets.sources.includes(s.source ?? "claude")) return false;
   return true;
 }
 

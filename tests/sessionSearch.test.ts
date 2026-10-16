@@ -729,6 +729,53 @@ describe.skipIf(!driverAvailable)("searchSessionsInDb — facets", () => {
     conn.closeDb();
   });
 
+  async function disabledSourceCrowd() {
+    // The #425 geometry with sources: seven dense matches from a source that
+    // is not enabled, and one weak Claude match that ranks below the cut.
+    const ctx = await setup();
+    const { conn, ingest, projectsDir } = ctx;
+    for (let i = 0; i < 7; i++) {
+      await writeJsonl(path.join(projectsDir, "C--dev-app", `codex-${i}.jsonl`), [
+        userTurn(`2026-04-30T10:0${i}:00Z`, "srcword srcword srcword srcword"),
+        assistantTurn(`2026-04-30T10:0${i}:01Z`, "claude-sonnet-4-5", "srcword ok"),
+      ]);
+    }
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "claude-target.jsonl"), [
+      userTurn(
+        "2026-04-30T11:00:00Z",
+        "srcword mentioned once amid a great deal of surrounding prose that dilutes " +
+          "the term frequency considerably so that bm25 ranks this document last of all " +
+          "the candidates in this particular corpus of otherwise dense matches"
+      ),
+      assistantTurn("2026-04-30T11:00:01Z", "claude-sonnet-4-5", "understood"),
+    ]);
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir, recordRun: "reconcile" });
+    for (let i = 0; i < 7; i++) setFacets(db, `codex-${i}`, { source: "codex" });
+    return { ...ctx, db };
+  }
+
+  it("keeps a disabled source's matches from filling the limit (#706)", async () => {
+    const { conn, search, db } = await disabledSourceCrowd();
+    const unfaceted = search.searchSessionsInDb(db, "srcword", "prompts", 2);
+    expect(unfaceted.find((h: any) => h.sessionId === "claude-target")).toBeUndefined();
+
+    const faceted = search.searchSessionsInDb(db, "srcword", "prompts", 2, [], { sources: ["claude"] });
+    expect(faceted.map((h: any) => h.sessionId)).toEqual(["claude-target"]);
+    expect(search.searchSessionsInDb(db, "srcword", "prompts", 2, [], { sources: [] })).toEqual([]);
+    conn.closeDb();
+  });
+
+  it("the façade searches only the enabled sources (#706)", async () => {
+    // Default config enables Claude only.
+    const { conn } = await disabledSourceCrowd();
+    const facade = await import("@/lib/data");
+    const result = await facade.searchSessions("srcword", "prompts", 2);
+    expect(result.meta.backend).toBe("db");
+    expect(result.hits.map((h) => h.sessionId)).toEqual(["claude-target"]);
+    conn.closeDb();
+  });
+
   it("applies the facet to EVERY title column, not just the last OR arm", async () => {
     const { conn, ingest, search, projectsDir } = await setup();
     // The titles query is a seven-column OR chain. If the facet predicate
