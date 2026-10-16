@@ -47,10 +47,11 @@ import { SessionSearchError } from "@/lib/data/sessionSearch";
 // type keeps the two from drifting again as fields are added.
 //
 // Notes:
-//   - `backend: 'file'` means MINDER_USE_DB=0 — the SessionsBrowser
-//     should fall back to client-side filtering of cached
-//     `searchableText`. Distinct from `hits: []` under `backend: 'db'`
-//     (which means "DB has no matches").
+//   - `backend: 'file'` means there is no FTS index to ask (MINDER_USE_DB=0
+//     or demo mode): the hits come from a substring scan of the session
+//     summaries, most recent first, not ranked by relevance. The list
+//     response carries no session text, so this is the only content search
+//     the Sessions page has (#700).
 //   - 400 on empty `q` after trim (the caller should keep a debounced
 //     input that holds back the request until the user stops typing).
 //   - 400 on FTS5 parse error — surfaced as a `SessionSearchError`

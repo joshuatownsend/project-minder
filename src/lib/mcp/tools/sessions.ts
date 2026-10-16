@@ -70,8 +70,8 @@ export function registerSessionTools(server: McpServer): void {
       title: "Full-text search across sessions",
       description:
         "Search session titles and/or prompts. DB-backed when MINDER_USE_DB=1 (FTS5 index); " +
-        "falls back to a simple substring scan across cached summaries otherwise. Returns " +
-        "matching session hits with the matching context.",
+        "falls back to a substring scan across session summaries otherwise (backend 'file'). " +
+        "Returns matching session hits with the matching context.",
       inputSchema: {
         q: z.string().min(1),
         scope: z.enum(["titles", "prompts", "both"]).default("both"),
@@ -81,32 +81,6 @@ export function registerSessionTools(server: McpServer): void {
     },
     async ({ q, scope, limit }) => {
       const result = await searchSessions(q, scope, limit);
-
-      // File-parse fallback when the DB-backed search returns empty for the
-      // documented `backend: 'file'` reason — give the user something useful
-      // by substring-matching the cached summaries' searchableText.
-      if (result.meta.backend === "file" && result.hits.length === 0) {
-        const { sessions } = await getSessionsList();
-        const needle = q.toLowerCase();
-        const summaries = sessions
-          .filter((s) => {
-            const hay = (s.searchableText ?? "") + " " + (s.initialPrompt ?? "");
-            return hay.toLowerCase().includes(needle);
-          })
-          .slice(0, limit);
-        return jsonResult({
-          backend: "file-substring-fallback",
-          total: summaries.length,
-          hits: summaries.map((s) => ({
-            sessionId: s.sessionId,
-            slug: s.slug,
-            projectSlug: s.projectSlug,
-            startTime: s.startTime,
-            initialPrompt: s.initialPrompt,
-            generatedTitle: s.generatedTitle,
-          })),
-        });
-      }
 
       return jsonResult({
         backend: result.meta.backend,

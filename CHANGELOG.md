@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The Sessions page loads about 40% less data. Its list response carried up to 4,000 characters of each session's text so the search box could match content in the browser, 13 MB of a 34 MB response. The text is no longer sent, and the index no longer reads it to build the list. Measured against a copy of a real 13,500-session index: the response went from 34.1 to 20.9 MB, a refresh after the 30-second cache from 1.57 to 1.20 seconds, and the first load after startup from 5.2 to 1.5 seconds. Content search now goes only through the server's search, which already ran on every query and covers more: whole messages, extended thinking and subagent transcripts. Two visible differences: inside message content, a search matches whole words and word beginnings ("ingest" finds "ingested" but not "reingest"), and returns at most 200 sessions (#700).
+- Whenever the Sessions list itself comes from the transcripts rather than the index (`MINDER_USE_DB=0`, demo mode, or while the index is empty or still being built), `/api/sessions/search` now answers with a substring scan of those sessions, newest first and limited to enabled sources, instead of returning no hits (or searching a partial index) and leaving the browser to filter. An active search on the Sessions page also re-runs when the list refreshes, so a new session or reply that matches appears without retyping. The MCP `search-sessions` tool uses the same scan, so its no-index answer is reported as `backend: "file"` with the regular hit shape rather than `file-substring-fallback`.
+- `/api/sessions`, the MCP `list-sessions` tool and the `minder://projects/{slug}/sessions` resource no longer include `searchableText` on session summaries (#700).
+
 ## [1.16.20] - 2026-10-15
 
 *A responsiveness release, fixing what profiling 1.16.19 found. The Sessions page no longer stalls the server for 6 to 10 seconds each time it refreshes: about 1.6 seconds now. Project scans are about a quarter faster (59 to 42 seconds in a measured startup). And the SQL console can no longer trigger a second full check of the index.*

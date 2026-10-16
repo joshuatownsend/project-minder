@@ -27,17 +27,10 @@ import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptP
 // 1. `recaps`: `undefined` (was: parsed from `entry.type === "system"
 //    && subtype === "away_summary"`). Ingest skips non-user/non-assistant
 //    entries.
-// 2. `searchableText`: **restored as of P2c** — built from indexed
-//    `turns.text_preview` rows in turn-order with the same caps and
-//    slicing as file-parse (cap 4000 chars per session, assistant text
-//    sliced to 500 per turn, user text untruncated since ingest already
-//    capped `text_preview` at 500). Closes the silent search regression
-//    in `SessionsBrowser.tsx`. Small remaining quirk: file-parse
-//    iterates BLOCKS (one append per text block) while DB iterates
-//    TURNS (text_preview is the joined-and-truncated text from all
-//    blocks per turn) — for multi-text-block assistant turns the DB
-//    undercounts slightly. Already covered by detail loader divergence
-//    #6; practical impact is negligible.
+// 2. `searchableText`: `undefined` (#700). The list used to carry up to
+//    4,000 characters per session for the Sessions page to filter on
+//    locally, 13 MB of a 34 MB response. Content search goes through
+//    `/api/sessions/search` (FTS5 over the full turn text) instead.
 // 3. `status`: **`needs_attention` restored as of P2c.** Ingest now
 //    walks each parsed session inline with the same pending-pairs
 //    algorithm as `inferSessionStatus` (`src/lib/scanner/sessionStatus.ts`)
@@ -184,9 +177,6 @@ interface SessionRow {
   entrypoint: string | null;
   /** Gates the #395 tree roll-up — see `rollUpTreeDelegation`. */
   derived_version: number;
-  /** When ingest last wrote this session; with `byte_offset`, marks turn changes. */
-  indexed_at_ms: number | null;
-  byte_offset: number | null;
 }
 
 interface ToolCountRow {
@@ -211,20 +201,6 @@ interface ModelRow {
   session_id: string;
   model: string;
 }
-
-interface TextPreviewRow {
-  session_id: string;
-  role: "user" | "assistant";
-  text_preview: string;
-  tool_result_preview: string | null;
-}
-
-// File-parse caps `searchableText` at 4000 chars per session
-// (`scanSessionFile` in `claudeConversations.ts`); each assistant text
-// fragment is sliced to 500 chars before append, user text is
-// untruncated (but ingest already capped `text_preview` at 500).
-const SEARCHABLE_TEXT_CAP = 4000;
-const ASSISTANT_TEXT_SLICE = 500;
 
 /**
  * The last list built, kept until the index changes (#689). Building it runs
@@ -283,85 +259,6 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
 /** How recently a transcript must have been written for its session to count as active. */
 const ACTIVE_WINDOW_MS = 2 * 60_000;
 
-/**
- * Each session's `searchableText`, kept between builds and re-read only for
- * sessions whose turns changed (#689). Reading it for everyone is a scan of
- * the whole `turns` table, 270k rows and ~200M characters on a 3 GB index:
- * 3.7 s warm and 9.8 s cold, nearly all of a build. The ingest worker commits
- * every few seconds while any session runs, so the list itself rebuilds often;
- * this is what makes that rebuild cheap.
- *
- * A session's turns are written only by ingest, which also stamps the
- * session row's `indexed_at_ms` and `byte_offset`; a re-derive moves
- * `derived_version`. Those three are the stamp.
- */
-interface SearchableTextCache {
-  db: DatabaseT.Database;
-  byId: Map<string, { stamp: string; text: string | undefined }>;
-}
-const searchableHolder = globalThis as unknown as { __minderSearchableTextCache?: SearchableTextCache };
-/** Above this many changed sessions, one table scan beats per-session lookups. */
-const SEARCHABLE_FULL_SCAN_AT = 500;
-const SEARCHABLE_LOOKUP_CHUNK = 250;
-
-// Read each turn's `text_preview` in turn-order so per-session aggregation
-// mirrors file-parse's append order. The query also pulls
-// `tool_result_preview` because for user turns ingest stores
-// `text_preview = userText || toolResultText` — when there's no human text,
-// `text_preview` falls back to the tool_result content. File-parse never
-// folds tool output into `searchableText` (only human text + assistant text),
-// so `groupSearchable` skips user turns where `text_preview` is a prefix of
-// `tool_result_preview` (the tool-result-only signal — same heuristic the
-// detail loader uses to skip these from the timeline).
-const SEARCHABLE_COLUMNS = `SELECT session_id, role, text_preview, tool_result_preview
-       FROM turns
-       WHERE text_preview IS NOT NULL AND text_preview <> ''`;
-
-function loadSearchableText(
-  db: DatabaseT.Database,
-  headers: SessionRow[],
-): Map<string, string | undefined> {
-  let cache = searchableHolder.__minderSearchableTextCache;
-  if (!cache || cache.db !== db) {
-    cache = searchableHolder.__minderSearchableTextCache = { db, byId: new Map() };
-  }
-  const stampOf = (h: SessionRow) => `${h.indexed_at_ms}:${h.byte_offset}:${h.derived_version}`;
-  const stale = headers.filter((h) => cache.byId.get(h.session_id)?.stamp !== stampOf(h));
-
-  let fresh: Map<string, string>;
-  if (stale.length > SEARCHABLE_FULL_SCAN_AT) {
-    fresh = groupSearchable(
-      prepCached(db, `${SEARCHABLE_COLUMNS} ORDER BY session_id, turn_index`).all() as TextPreviewRow[]
-    );
-  } else {
-    fresh = new Map();
-    // The turns primary key starts with session_id, so each lookup is a seek.
-    for (let i = 0; i < stale.length; i += SEARCHABLE_LOOKUP_CHUNK) {
-      const ids = stale.slice(i, i + SEARCHABLE_LOOKUP_CHUNK).map((h) => h.session_id);
-      const rows = db
-        .prepare(
-          `${SEARCHABLE_COLUMNS} AND session_id IN (${ids.map(() => "?").join(",")})
-           ORDER BY session_id, turn_index`
-        )
-        .all(...ids) as TextPreviewRow[];
-      for (const [id, text] of groupSearchable(rows)) fresh.set(id, text);
-    }
-  }
-
-  // Rebuilt from the current headers, so sessions pruned from the index drop out.
-  const byId: SearchableTextCache["byId"] = new Map();
-  const out = new Map<string, string | undefined>();
-  for (const h of headers) {
-    const stamp = stampOf(h);
-    const prev = cache.byId.get(h.session_id);
-    const entry = prev && prev.stamp === stamp ? prev : { stamp, text: fresh.get(h.session_id) };
-    byId.set(h.session_id, entry);
-    out.set(h.session_id, entry.text);
-  }
-  cache.byId = byId;
-  return out;
-}
-
 function buildSessionsList(
   db: DatabaseT.Database,
   now: number,
@@ -385,7 +282,7 @@ function buildSessionsList(
             work_mode_testing_pct, work_mode_other_pct,
             source,
             session_kind, ai_title, entrypoint,
-            derived_version, indexed_at_ms, byte_offset
+            derived_version
      FROM sessions
      -- turn_count counts PRIMARY turns only. Sidechain-only rows (subagent
      -- transcripts ingested from <session>/subagents/*.jsonl — needed so
@@ -499,8 +396,6 @@ function buildSessionsList(
     ).all() as ModelRow[]
   );
 
-  const searchableBySession = loadSearchableText(db, headers);
-
   // T2.2: PRs harvested from `gh pr create` tool_result text at ingest.
   // Empty for sessions that never created a PR — single SELECT bulk-fetch
   // keeps this O(table-scan) once instead of N per-session queries.
@@ -529,7 +424,6 @@ function buildSessionsList(
     const toolUsage = toolsBySession.get(h.session_id) ?? {};
     const skillsUsed = skillsBySession.get(h.session_id) ?? {};
     const modelsUsed = modelsBySession.get(h.session_id) ?? [];
-    const searchableText = searchableBySession.get(h.session_id);
 
     const isActive = now - h.file_mtime_ms < ACTIVE_WINDOW_MS;
     const status = computeStatus(h.status, h.file_mtime_ms, now, isActive);
@@ -569,7 +463,7 @@ function buildSessionsList(
         toolUsage,
         skillsUsed,
         modelsUsed,
-        searchableText,
+        searchableText: undefined,
       }),
       recaps: undefined,
       // Stored at ingest. File-parse reprices live from token buckets instead
@@ -655,64 +549,6 @@ function groupTickets(rows: TicketRow[]): Map<string, TicketLink[]> {
     else map.set(r.session_id, [link]);
   }
   return map;
-}
-
-/**
- * Build per-session `searchableText` from in-order text_preview rows.
- * Mirrors file-parse's `searchParts` accumulator in `scanSessionFile`:
- * stop appending once total length reaches `SEARCHABLE_TEXT_CAP`,
- * slice assistant fragments to `ASSISTANT_TEXT_SLICE` (user text is
- * left as-is — it's already truncated to 500 chars at ingest), then
- * `parts.join(' ').slice(0, SEARCHABLE_TEXT_CAP)`.
- *
- * Small remaining divergence: file-parse iterates BLOCKS (one append
- * per text block) while DB iterates TURNS (one append per turn —
- * `text_preview` is the joined-and-truncated text from all blocks in
- * the turn). For multi-text-block assistant turns the DB undercounts
- * slightly (single 500-char window instead of N). Already covered
- * conceptually by detail loader divergence #6; the practical impact
- * for content search is negligible because real prompts almost never
- * span multiple text blocks anyway.
- */
-function groupSearchable(rows: TextPreviewRow[]): Map<string, string> {
-  const builders = new Map<string, { parts: string[]; len: number }>();
-  for (const row of rows) {
-    // Skip tool-result-only user turns. Ingest stores
-    // `text_preview = userText || toolResultText` for user turns, so a
-    // turn with no human text gets the tool_result_preview as its
-    // text_preview prefix (text_preview is hard-truncated to 500;
-    // tool_result_preview keeps up to 2000). File-parse's
-    // searchableText accumulator never folds tool output into search
-    // (only humanText + assistant text blocks). The `startsWith`
-    // detection is the same one the detail loader uses to skip these
-    // from the timeline — see the `tool_result_preview.startsWith(...)`
-    // test in `sessionDetailFromDb.ts`.
-    if (
-      row.role === "user" &&
-      row.tool_result_preview !== null &&
-      row.tool_result_preview.startsWith(row.text_preview)
-    ) {
-      continue;
-    }
-
-    let b = builders.get(row.session_id);
-    if (!b) {
-      b = { parts: [], len: 0 };
-      builders.set(row.session_id, b);
-    }
-    if (b.len >= SEARCHABLE_TEXT_CAP) continue;
-    const text =
-      row.role === "assistant"
-        ? row.text_preview.slice(0, ASSISTANT_TEXT_SLICE)
-        : row.text_preview;
-    b.parts.push(text);
-    b.len += text.length;
-  }
-  const result = new Map<string, string>();
-  for (const [sessionId, b] of builders) {
-    result.set(sessionId, b.parts.join(" ").slice(0, SEARCHABLE_TEXT_CAP));
-  }
-  return result;
 }
 
 /**

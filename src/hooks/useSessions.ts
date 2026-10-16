@@ -4,6 +4,12 @@ import { useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { sessionsQuery, sessionDetailQuery } from "@/lib/queryOptions";
 import { useLiveEventsEnabled } from "@/components/ConfigProvider";
+import type { SessionSummary } from "@/lib/types";
+
+// One shared empty list, so `data` keeps its identity while nothing has loaded.
+// A fresh `[]` per render re-fires every effect keyed on `data` (the Sessions
+// page's search effect is one) on every render (Copilot, PR #705).
+const NO_SESSIONS: SessionSummary[] = [];
 
 export function useAllSessions() {
   const liveEvents = useLiveEventsEnabled();
@@ -21,7 +27,7 @@ export function useAllSessions() {
     await refetch();
   }, [refetch]);
 
-  return { data: query.data ?? [], loading: query.isPending, refresh };
+  return { data: query.data ?? NO_SESSIONS, loading: query.isPending, refresh };
 }
 
 export function useSessionDetail(sessionId: string) {
