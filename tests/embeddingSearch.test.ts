@@ -162,6 +162,9 @@ d("semanticSearch", () => {
     const keys = await semanticSessionKeys(db, "the migration is failing", 1, new Set(["s-deploy", "s-styling"]));
     expect(keys).toHaveLength(1);
     expect(keys[0]).not.toBe("s-migration");
+    // Only the allowed sessions' vectors are scored, and the stats say so.
+    const { stats } = await semanticSearch(db, "migration", 1, new Set(["s-deploy"]));
+    expect(stats?.scanned).toBe(1);
   });
 
   it("semanticSessionKeys returns just the ranked ids", async () => {

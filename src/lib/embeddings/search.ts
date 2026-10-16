@@ -129,9 +129,11 @@ export async function semanticSearch(
   const started = Date.now();
   const { keys, buffer, dims } = cache;
   const bestBySession = new Map<string, number>();
+  let scanned = 0;
 
   for (let i = 0; i < keys.length; i++) {
     if (allowed && !allowed.has(keys[i].sessionId)) continue;
+    scanned++;
     const offset = i * dims;
     let dot = 0;
     for (let d = 0; d < dims; d++) dot += queryVec[d] * buffer[offset + d];
@@ -151,7 +153,7 @@ export async function semanticSearch(
     .sort((a, b) => b.score - a.score || a.sessionId.localeCompare(b.sessionId))
     .slice(0, limit);
 
-  return { hits, stats: { scanned: keys.length, durationMs: Date.now() - started } };
+  return { hits, stats: { scanned, durationMs: Date.now() - started } };
 }
 
 /** Convenience: just the ranked ids, which is what the fusion consumes. */
