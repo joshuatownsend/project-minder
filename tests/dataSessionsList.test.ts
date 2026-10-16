@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import path from "path";
 import { promises as fs } from "fs";
 import { installIsolatedState } from "./_helpers/isolatedState";
@@ -304,5 +304,92 @@ describe.skipIf(!driverAvailable)("data façade — getSessionsList backend pari
     const dbWt = dbResult.sessions.find((s) => s.sessionId === SESSION_WT)!;
     expect(dbWt).toBeDefined();
     expect(dbWt.isWorktree).toBe(true);
+  });
+});
+
+describe.skipIf(!driverAvailable)("loadSessionsListFromDb — reuse until the index changes (#689)", () => {
+  async function seeded() {
+    const projectsDir = await setupFixture();
+    process.env.MINDER_USE_DB = "1";
+    const { conn, mig, ingest } = await reloadModules();
+    expect((await mig.initDb()).available).toBe(true);
+    const db = (await conn.getDb())!;
+    assertReconcileClean(await ingest.reconcileAllSessions(db, { projectsDir, recordRun: "reconcile" }));
+    const list = await import("@/lib/data/sessionsListFromDb");
+    return { conn, db, list };
+  }
+
+  it("rebuilds only after a write, from this connection or another one", async () => {
+    const { conn, db, list } = await seeded();
+    const first = list.loadSessionsListFromDb(db);
+    expect(first.length).toBe(2);
+
+    const prep = vi.spyOn(conn, "prepCached");
+    const again = list.loadSessionsListFromDb(db);
+    expect(again).toEqual(first);
+    // Only the change-key query ran; none of the build's whole-table queries.
+    expect(prep).toHaveBeenCalledTimes(1);
+    prep.mockClear();
+
+    // A write on this connection (e.g. starring) moves total_changes().
+    db.prepare("UPDATE sessions SET starred_at = ? WHERE session_id = ?").run("2026-10-16T00:00:00Z", SESSION_A);
+    const afterOwnWrite = list.loadSessionsListFromDb(db);
+    expect(prep.mock.calls.length).toBeGreaterThan(1);
+    expect(afterOwnWrite.find((s) => s.sessionId === SESSION_A)?.starredAt).toBe("2026-10-16T00:00:00Z");
+
+    // A commit on another connection (the ingest worker) moves data_version.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Database = require("better-sqlite3");
+    const other = new Database(conn.DB_PATH);
+    try {
+      other.prepare("UPDATE sessions SET starred_at = NULL WHERE session_id = ?").run(SESSION_A);
+    } finally {
+      other.close();
+    }
+    const afterWorkerWrite = list.loadSessionsListFromDb(db);
+    expect(afterWorkerWrite.find((s) => s.sessionId === SESSION_A)?.starredAt).toBeUndefined();
+  });
+
+  it("re-reads search text only for sessions whose turns changed", async () => {
+    const { conn, db, list } = await seeded();
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+    const before = list.loadSessionsListFromDb(db);
+    const textB = before.find((s) => s.sessionId === SESSION_B)!.searchableText;
+    expect(before.find((s) => s.sessionId === SESSION_A)!.searchableText).toContain("fix the bug in the parser");
+
+    // A appends a turn; B is untouched.
+    await fs.appendFile(
+      path.join(projectsDir, "C--dev-app-x", `${SESSION_A}.jsonl`),
+      JSON.stringify(userTurn("2026-04-15T10:05:00Z", "now rename the tokenizer")) + "\n",
+    );
+    const ingest = await import("@/lib/db/ingest");
+    assertReconcileClean(await ingest.reconcileAllSessions(db, { projectsDir }));
+
+    const prep = vi.spyOn(conn, "prepCached");
+    const after = list.loadSessionsListFromDb(db);
+    expect(after.find((s) => s.sessionId === SESSION_A)!.searchableText).toContain("now rename the tokenizer");
+    expect(after.find((s) => s.sessionId === SESSION_B)!.searchableText).toBe(textB);
+    // No whole-table scan of turns for the search text.
+    const scannedAllTurns = prep.mock.calls.some(([, sql]) => /FROM turns\s+WHERE text_preview/.test(sql));
+    expect(scannedAllTurns).toBe(false);
+  });
+
+  it("recomputes isActive and status on a reused list, and keeps the memo private", async () => {
+    const { db, list } = await seeded();
+    const row = db.prepare("SELECT file_mtime_ms AS m FROM sessions WHERE session_id = ?").get(SESSION_B) as { m: number };
+    const now = vi.spyOn(Date, "now");
+    try {
+      now.mockReturnValue(row.m + 30_000);
+      const fresh = list.loadSessionsListFromDb(db).find((s) => s.sessionId === SESSION_B)!;
+      expect(fresh.isActive).toBe(true);
+      fresh.starredAt = "edited by a caller";
+
+      now.mockReturnValue(row.m + 10 * 60_000);
+      const later = list.loadSessionsListFromDb(db).find((s) => s.sessionId === SESSION_B)!;
+      expect(later.isActive).toBe(false);
+      expect(later.starredAt).toBeUndefined();
+    } finally {
+      now.mockRestore();
+    }
   });
 });

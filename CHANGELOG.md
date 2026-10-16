@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The Sessions list no longer freezes the server for several seconds every time it refreshes. The server rebuilt the whole list from the index at least every 30 seconds while the page was open, about 4 to 5 seconds of work during which nothing else could be answered. Nearly all of that was re-reading every session's text for the page's search box, which scans the whole index. That text is now kept and re-read only for sessions that changed, and when nothing changed the list is reused with only each session's active/idle state updated (#689).
 - Project scans do less work. The git details for each project now take one git process instead of three, run alongside the remote lookup. Each project's latest session is read from the end of its transcript instead of loading the whole file. And the prompt history file is read only from where the last scan stopped, instead of in full every time (#690).
 
 ### Fixed
