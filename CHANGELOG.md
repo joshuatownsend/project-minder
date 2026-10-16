@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The server no longer freezes for 17 to 37 seconds early in every startup. The production build includes the database setup code more than once, and each copy kept its own "already checked" flag. So the first dashboard request ran the setup a second time, including a full integrity check of the index, and the server could answer nothing while it ran, not even the tray's health check (40 seconds in a reproduction). All copies now share one setup, which runs once per start. The same duplication had also let up to three heavy usage reports run at once, despite the one-at-a-time rule from #563; they now share one queue too.
+
 ## [1.16.18] - 2026-10-14
 
 *A startup follow-up release. About once a day a startup re-linted nearly every project, because cached lint results expired even when they were still in use; now they last as long as they are used. The server log also stops showing the session watcher starting late, which turned out to be the server reading the watcher's log lines late. Those lines now say how late they arrived, which measures how long the server is busy during startup.*
