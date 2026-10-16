@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.16.20] - 2026-10-15
+
+*A responsiveness release, fixing what profiling 1.16.19 found. The Sessions page no longer stalls the server for 6 to 10 seconds each time it refreshes: about 1.6 seconds now. Project scans are about a quarter faster (59 to 42 seconds in a measured startup). And the SQL console can no longer trigger a second full check of the index.*
+
 ### Changed
 
 - The Sessions list no longer freezes the server for several seconds every time it refreshes. The server rebuilt the whole list from the index at least every 30 seconds while the page was open, about 4 to 5 seconds of work during which nothing else could be answered. Nearly all of that was re-reading every session's text for the page's search box, which scans the whole index. That text is now kept and re-read only for sessions that changed, and when nothing changed the list is reused with only each session's active/idle state updated (#689).
