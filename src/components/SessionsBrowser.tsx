@@ -1014,6 +1014,11 @@ export function SessionsBrowser() {
   });
 
   const ftsActive = searchState.kind === "hits" && searchState.backend === "db";
+  // Below the server's minimum only the title-class fields are matched, here in
+  // the browser; message content is searched on the server alone (#700). Said
+  // on the input rather than left as a silent narrowing (Codex, PR #705).
+  const trimmedLength = search.trim().length;
+  const titlesOnly = trimmedLength > 0 && trimmedLength < MIN_SEARCH_CHARS;
   const sortOptions: { value: SortOption; label: string }[] = [
     // Offered only while the FTS backend is actually serving ranked hits.
     // Under `MINDER_USE_DB=0` the server's substring scan is ordered by
@@ -1057,7 +1062,7 @@ export function SessionsBrowser() {
             placeholder="Search sessions…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            style={{ width: "100%", height: "32px", paddingLeft: "30px", paddingRight: ftsActive ? "60px" : "10px", fontSize: "0.78rem", fontFamily: "var(--font-body)", color: "var(--text-primary)", background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: "var(--radius)", outline: "none" }}
+            style={{ width: "100%", height: "32px", paddingLeft: "30px", paddingRight: ftsActive ? "60px" : titlesOnly ? "84px" : "10px", fontSize: "0.78rem", fontFamily: "var(--font-body)", color: "var(--text-primary)", background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: "var(--radius)", outline: "none" }}
           />
           {ftsActive && (
             <span
@@ -1078,6 +1083,25 @@ export function SessionsBrowser() {
               }}
             >
               FTS
+            </span>
+          )}
+          {titlesOnly && (
+            <span
+              title={`Type at least ${MIN_SEARCH_CHARS} characters to search message content. Until then only titles, prompts, project, branch and session ID are matched.`}
+              style={{
+                position: "absolute",
+                right: "9px",
+                top: "50%",
+                transform: "translateY(-50%)",
+                fontFamily: "var(--font-mono)",
+                fontSize: "0.6rem",
+                color: "var(--text-muted)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "3px",
+                padding: "1px 5px",
+              }}
+            >
+              titles only
             </span>
           )}
         </div>
