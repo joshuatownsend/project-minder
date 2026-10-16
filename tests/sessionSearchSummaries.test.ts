@@ -104,6 +104,13 @@ describe("searchSessionSummaries", () => {
     expect(searchSessionSummaries([blank, cli], "tokenizer", "both", 50, { source: "claude" }).map((h) => h.sessionId)).toEqual(["blank"]);
   });
 
+  it("searches only the listed sources, and nothing for an empty list (#706)", () => {
+    const claude = session("c", { searchableText: "tokenizer" });
+    const codex = session("x", { source: "codex", searchableText: "tokenizer" });
+    expect(searchSessionSummaries([claude, codex], "tokenizer", "both", 50, { sources: ["claude"] }).map((h) => h.sessionId)).toEqual(["c"]);
+    expect(searchSessionSummaries([claude, codex], "tokenizer", "both", 50, { sources: [] })).toEqual([]);
+  });
+
   it("returns nothing for a blank query", () => {
     expect(searchSessionSummaries([older], "   ")).toEqual([]);
   });
@@ -211,6 +218,15 @@ describe("no-index search follows the enabled sources (PR #705)", () => {
     const { searchSessions } = await import("@/lib/data");
     const result = await searchSessions("tokenizer", "both", 3);
     expect(result.hits.map((h) => h.sessionId)).toEqual(["claude"]);
+  });
+});
+
+describe("onlyEnabledSources (Codex, PR #707)", () => {
+  it("keeps the sources the list and search cover, so MCP listings agree with search", async () => {
+    await state.reload();
+    const { onlyEnabledSources } = await import("@/lib/data");
+    const kept = await onlyEnabledSources([session("c"), session("x", { source: "codex" })]);
+    expect(kept.map((s) => s.sessionId)).toEqual(["c"]);
   });
 });
 

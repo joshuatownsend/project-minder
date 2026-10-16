@@ -140,6 +140,8 @@ Scope: **full URLs only.** A full URL is self-validating — provider, key, and 
 
 Filters (starred, source, entrypoint) are applied **inside the search query**, not to its results. This matters whenever a search matches a lot of sessions: search returns a ranked top slice, so filtering that slice afterwards could report **"no sessions"** for a filter that genuinely had matches — they just ranked below the cut. That is the failure this design avoids, and it is worth knowing about because the wrong answer looked exactly like a right one: an empty list, with no indication anything had been truncated.
 
+Search also covers only the **sources enabled in Settings** — the same sessions the list shows. A disabled adapter's sessions can stay in the index, and without this its matches could take up the result limit and push out sessions you can actually see.
+
 The practical consequence is that a filter now changes **which** sessions the search ranks, so switching a filter re-runs the search rather than re-filtering what is already on screen. Counts under a filter can be trusted.
 
 *(Without the FTS index — `MINDER_USE_DB=0` — the server's substring scan applies the filters before its cut too, so the same holds there.)*

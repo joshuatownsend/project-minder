@@ -1,7 +1,7 @@
 import "server-only";
 import type { QueryClient } from "@tanstack/react-query";
 import { getSessionsList, type SessionsListResult } from "@/lib/data";
-import { readConfig } from "@/lib/config";
+import { readConfig, enabledSources } from "@/lib/config";
 import { demoMode } from "@/lib/demo/demoMode";
 import type { SessionSummary } from "@/lib/types";
 import { queryKeys } from "@/lib/queryKeys";
@@ -115,12 +115,8 @@ export function filterSessions(
 
 /** Resolve the enabled adapter set from config (route + prefetch share this). */
 export async function getEnabledAdapters(): Promise<Set<string>> {
-  const config = await readConfig();
-  const set = new Set(config.enabledAdapters ?? ["claude"]);
-  // Demo sessions are all source:"claude"; keep the adapter filter from dropping
-  // them when the user has disabled the Claude adapter in Settings.
-  if (await demoMode()) set.add("claude");
-  return set;
+  // Shared with session search (#706), so the two cover the same sources.
+  return new Set(enabledSources(await readConfig(), await demoMode()));
 }
 
 /**

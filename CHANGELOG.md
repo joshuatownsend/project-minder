@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Whenever the Sessions list itself comes from the transcripts rather than the index (`MINDER_USE_DB=0`, demo mode, or while the index is empty or still being built), `/api/sessions/search` now answers with a substring scan of those sessions, newest first and limited to enabled sources, instead of returning no hits (or searching a partial index) and leaving the browser to filter. An active search on the Sessions page also re-runs when the list refreshes, so a new session or reply that matches appears without retyping. The MCP `search-sessions` tool uses the same scan, so its no-index answer is reported as `backend: "file"` with the regular hit shape rather than `file-substring-fallback`.
 - `/api/sessions`, the MCP `list-sessions` tool and the `minder://projects/{slug}/sessions` resource no longer include `searchableText` on session summaries (#700).
 
+### Fixed
+
+- Session search covers only the adapters enabled in Settings, the same sessions the Sessions list shows. A disabled adapter's sessions can stay in the index, and their matches could fill the 200-result limit and push out matching sessions from enabled sources, which then never appeared. The filter is applied inside the search before the limit, on the indexed, the optional semantic and the no-index search, and the MCP `search-sessions` tool follows it too, as do MCP `list-sessions` and the `minder://projects/{slug}/sessions` and `minder://sessions/{sessionId}` resource listings, so an MCP client never lists a session it cannot find by search. Semantic search now also applies the starred and launch-type filters before its own candidate cut, so those filters no longer under-report when it is turned on (#706).
+
 ## [1.16.20] - 2026-10-15
 
 *A responsiveness release, fixing what profiling 1.16.19 found. The Sessions page no longer stalls the server for 6 to 10 seconds each time it refreshes: about 1.6 seconds now. Project scans are about a quarter faster (59 to 42 seconds in a measured startup). And the SQL console can no longer trigger a second full check of the index.*

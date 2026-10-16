@@ -22,7 +22,7 @@ import { loadSessionsListFromDb } from "./sessionsListFromDb";
 import { loadAgentUsageFromDb } from "./agentsUsageFromDb";
 import { loadSkillUsageFromDb } from "./skillsUsageFromDb";
 import { loadClaudeUsageStatsFromDb } from "./claudeUsageFromDb";
-import { searchSessionsInDb } from "./sessionSearch";
+import { searchSessionsInDb, facetedSessionIds } from "./sessionSearch";
 import { searchSessionSummaries, withoutSearchableText } from "./sessionSearchSummaries";
 import type {
   SessionSearchHit,
@@ -34,7 +34,7 @@ import type { SessionCostRow } from "./sessionsInWindow";
 import type { FileEdit } from "@/lib/usage/fileActivity";
 import type { PathMapping } from "@/lib/types";
 import { demoMode } from "@/lib/demo/demoMode";
-import { readConfig } from "@/lib/config";
+import { readConfig, enabledSources } from "@/lib/config";
 import { getFlag } from "@/lib/featureFlags";
 import { mapLocalPath } from "@/lib/pathMapping";
 import { demoSessionsList, demoSessionDetail } from "@/lib/demo/sessions";
@@ -1136,6 +1136,16 @@ export async function getSessionsList(): Promise<SessionsListResult> {
   return { ...result, sessions: withoutSearchableText(result.sessions) };
 }
 
+/**
+ * Only the sessions from sources enabled in Settings, the set `/api/sessions`
+ * lists and session search covers (#706). For other surfaces that list
+ * sessions (MCP), so listing and searching agree (Codex, PR #707).
+ */
+export async function onlyEnabledSources(sessions: SessionSummary[]): Promise<SessionSummary[]> {
+  const sources = new Set(enabledSources(await readConfig(), await demoMode()));
+  return sessions.filter((s) => sources.has(s.source ?? "claude"));
+}
+
 /** {@link getSessionsList} with the file parse's and demo fixtures' text kept. */
 async function loadSessionsList(demo: boolean): Promise<SessionsListResult> {
   if (demo) return demoSessionsList(Date.now());
@@ -1538,8 +1548,7 @@ const searchListHolder = globalThis as unknown as {
  * being built the list comes from the file parse, and a search of the partial
  * index would miss sessions the page shows (Copilot, PR #705).
  */
-async function sessionsForSearch(): Promise<SessionSummary[] | null> {
-  const demo = await demoMode();
+async function sessionsForSearch(demo: boolean): Promise<SessionSummary[] | null> {
   if (!demo && dbModeRequested()) {
     const db = await getReadyDb();
     // `turn_count > 0` is the list loader's own filter, so this is its
@@ -1560,13 +1569,10 @@ function rememberFileList(demo: boolean, sessions: Promise<SessionSummary[]>): v
 }
 
 /**
- * The file-parse (or demo) summaries, enabled sources only as `/api/sessions`
- * shows them (demo fixtures are all Claude and always shown), so a disabled
- * source's matches cannot use up the search limit (Copilot, PR #705).
- *
- * The last list load's summaries (`getSessionsList` records them), else a load
- * of its own; reused for up to 30 s, like the `/api/sessions` slot, because the
- * file parse stats every transcript and a search fires on each typing pause.
+ * The file-parse (or demo) summaries: the last list load's (`getSessionsList`
+ * records them), else a load of its own. Reused for up to 30 s, like the
+ * `/api/sessions` slot, because the file parse stats every transcript and a
+ * search fires on each typing pause.
  */
 async function fileSessionsForSearch(demo: boolean): Promise<SessionSummary[]> {
   const memo = searchListHolder.__minderSearchList;
@@ -1578,10 +1584,7 @@ async function fileSessionsForSearch(demo: boolean): Promise<SessionSummary[]> {
         : runFileSessionsList().then((r) => r.sessions)
     );
   }
-  const sessions = await searchListHolder.__minderSearchList!.sessions;
-  if (demo) return sessions;
-  const enabled = new Set((await readConfig()).enabledAdapters ?? ["claude"]);
-  return sessions.filter((s) => enabled.has(s.source ?? "claude"));
+  return searchListHolder.__minderSearchList!.sessions;
 }
 
 export async function searchSessions(
@@ -1594,12 +1597,18 @@ export async function searchSessions(
    */
   facets?: SessionSearchFacets
 ): Promise<SessionSearchResult> {
+  const demo = await demoMode();
+  // Only the sources `/api/sessions` lists, applied before the limit like the
+  // other facets, on both backends (#706). Set here so the page and the MCP
+  // tool get the same answer.
+  const scoped = { ...facets, sources: enabledSources(await readConfig(), demo) };
+
   // The list is not served from the index (no index, demo, or an index that
   // is empty or still being built): scan those summaries, which carry text.
-  const fileList = await sessionsForSearch();
+  const fileList = await sessionsForSearch(demo);
   if (fileList) {
     return {
-      hits: searchSessionSummaries(fileList, query, scope, limit, facets),
+      hits: searchSessionSummaries(fileList, query, scope, limit, scoped),
       meta: { backend: "file" },
     };
   }
@@ -1623,14 +1632,21 @@ export async function searchSessions(
       const config = await readConfig();
       if (getFlag(config.featureFlags, "semanticSearch", false)) {
         const { semanticSessionKeys } = await import("@/lib/embeddings/search");
-        semanticKeys = await semanticSessionKeys(db, query, (limit ?? 20) * 3);
+        semanticKeys = await semanticSessionKeys(
+          db,
+          query,
+          (limit ?? 20) * 3,
+          // Filtered before its candidate cut, or excluded sessions could
+          // fill it (Codex + Copilot, PR #707).
+          facetedSessionIds(db, scoped)
+        );
       }
     } catch {
       // Search must never fail because the optional retriever did.
     }
   }
 
-  const hits = searchSessionsInDb(db, query, scope, limit, semanticKeys, facets);
+  const hits = searchSessionsInDb(db, query, scope, limit, semanticKeys, scoped);
   return { hits, meta: { backend: "db" } };
 }
 
