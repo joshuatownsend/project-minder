@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import path from "path";
 import { promises as fs } from "fs";
 import { installIsolatedState } from "./_helpers/isolatedState";
@@ -763,6 +763,41 @@ describe.skipIf(!driverAvailable)("searchSessionsInDb — facets", () => {
     const faceted = search.searchSessionsInDb(db, "srcword", "prompts", 2, [], { sources: ["claude"] });
     expect(faceted.map((h: any) => h.sessionId)).toEqual(["claude-target"]);
     expect(search.searchSessionsInDb(db, "srcword", "prompts", 2, [], { sources: [] })).toEqual([]);
+    conn.closeDb();
+  });
+
+  it("the façade hands semantic retrieval only the sessions its facets keep (PR #707)", async () => {
+    // Semantic ranking happens outside SQL and cuts to a candidate limit, so
+    // the allowed set has to reach it; filtering its output afterwards lets
+    // excluded sessions fill the cut.
+    // Written before the setup's module reload, so config isn't read from cache.
+    const stateDir = process.env.MINDER_STATE_DIR!;
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, ".minder.json"),
+      JSON.stringify({ statuses: {}, hidden: [], featureFlags: { semanticSearch: true } })
+    );
+    const { conn } = await disabledSourceCrowd();
+    const semanticSessionKeys = vi.fn(async () => [] as string[]);
+    vi.doMock("@/lib/embeddings/search", () => ({ semanticSessionKeys }));
+    try {
+      const facade = await import("@/lib/data");
+      await facade.searchSessions("srcword", "both", 2);
+      expect(semanticSessionKeys).toHaveBeenCalledTimes(1);
+      const allowed = (semanticSessionKeys.mock.calls[0] as unknown[])[3] as Set<string>;
+      expect([...allowed]).toEqual(["claude-target"]);
+    } finally {
+      vi.doUnmock("@/lib/embeddings/search");
+      conn.closeDb();
+    }
+  });
+
+  it("facetedSessionIds lists the sessions that pass the facets, or null for none (PR #707)", async () => {
+    const { conn, search, db } = await disabledSourceCrowd();
+    expect(search.facetedSessionIds(db, undefined)).toBeNull();
+    expect(search.facetedSessionIds(db, {})).toBeNull();
+    expect([...search.facetedSessionIds(db, { sources: ["claude"] })!]).toEqual(["claude-target"]);
+    expect(search.facetedSessionIds(db, { sources: [] })!.size).toBe(0);
     conn.closeDb();
   });
 

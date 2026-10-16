@@ -100,7 +100,13 @@ export interface SemanticStats {
 export async function semanticSearch(
   db: DatabaseT.Database,
   query: string,
-  limit: number
+  limit: number,
+  /**
+   * Sessions that may rank, or all when absent. Applied before the `limit`
+   * cut, so sessions a search's facets exclude cannot crowd out ones they
+   * keep (#706, the #425 rule for the semantic retriever).
+   */
+  allowed?: ReadonlySet<string> | null
 ): Promise<{ hits: SemanticHit[]; stats: SemanticStats | null }> {
   const q = query.trim();
   if (!q || limit <= 0) return { hits: [], stats: null };
@@ -125,6 +131,7 @@ export async function semanticSearch(
   const bestBySession = new Map<string, number>();
 
   for (let i = 0; i < keys.length; i++) {
+    if (allowed && !allowed.has(keys[i].sessionId)) continue;
     const offset = i * dims;
     let dot = 0;
     for (let d = 0; d < dims; d++) dot += queryVec[d] * buffer[offset + d];
@@ -151,8 +158,9 @@ export async function semanticSearch(
 export async function semanticSessionKeys(
   db: DatabaseT.Database,
   query: string,
-  limit: number
+  limit: number,
+  allowed?: ReadonlySet<string> | null
 ): Promise<string[]> {
-  const { hits } = await semanticSearch(db, query, limit);
+  const { hits } = await semanticSearch(db, query, limit, allowed);
   return hits.map((h) => h.sessionId);
 }

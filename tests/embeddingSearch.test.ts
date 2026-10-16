@@ -154,6 +154,16 @@ d("semanticSearch", () => {
     expect((await semanticSearch(db, "migration", 0)).hits).toEqual([]);
   });
 
+  it("drops excluded sessions before the limit, so they cannot crowd out allowed ones (PR #707)", async () => {
+    // s-migration ranks first for this query; excluded, the one slot goes to
+    // the best allowed session instead of coming back empty.
+    const unfiltered = await semanticSessionKeys(db, "the migration is failing", 1);
+    expect(unfiltered).toEqual(["s-migration"]);
+    const keys = await semanticSessionKeys(db, "the migration is failing", 1, new Set(["s-deploy", "s-styling"]));
+    expect(keys).toHaveLength(1);
+    expect(keys[0]).not.toBe("s-migration");
+  });
+
   it("semanticSessionKeys returns just the ranked ids", async () => {
     const keys = await semanticSessionKeys(db, "the migration is failing", 3);
     expect(keys[0]).toBe("s-migration");

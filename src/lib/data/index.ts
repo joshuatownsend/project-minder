@@ -22,7 +22,7 @@ import { loadSessionsListFromDb } from "./sessionsListFromDb";
 import { loadAgentUsageFromDb } from "./agentsUsageFromDb";
 import { loadSkillUsageFromDb } from "./skillsUsageFromDb";
 import { loadClaudeUsageStatsFromDb } from "./claudeUsageFromDb";
-import { searchSessionsInDb } from "./sessionSearch";
+import { searchSessionsInDb, facetedSessionIds } from "./sessionSearch";
 import { searchSessionSummaries, withoutSearchableText } from "./sessionSearchSummaries";
 import type {
   SessionSearchHit,
@@ -1622,7 +1622,14 @@ export async function searchSessions(
       const config = await readConfig();
       if (getFlag(config.featureFlags, "semanticSearch", false)) {
         const { semanticSessionKeys } = await import("@/lib/embeddings/search");
-        semanticKeys = await semanticSessionKeys(db, query, (limit ?? 20) * 3);
+        semanticKeys = await semanticSessionKeys(
+          db,
+          query,
+          (limit ?? 20) * 3,
+          // Filtered before its candidate cut, or excluded sessions could
+          // fill it (Codex + Copilot, PR #707).
+          facetedSessionIds(db, scoped)
+        );
       }
     } catch {
       // Search must never fail because the optional retriever did.
