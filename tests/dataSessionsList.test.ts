@@ -350,6 +350,30 @@ describe.skipIf(!driverAvailable)("loadSessionsListFromDb — reuse until the in
     expect(afterWorkerWrite.find((s) => s.sessionId === SESSION_A)?.starredAt).toBeUndefined();
   });
 
+  it("re-reads search text only for sessions whose turns changed", async () => {
+    const { conn, db, list } = await seeded();
+    const projectsDir = path.join(tmpHome, ".claude", "projects");
+    const before = list.loadSessionsListFromDb(db);
+    const textB = before.find((s) => s.sessionId === SESSION_B)!.searchableText;
+    expect(before.find((s) => s.sessionId === SESSION_A)!.searchableText).toContain("fix the bug in the parser");
+
+    // A appends a turn; B is untouched.
+    await fs.appendFile(
+      path.join(projectsDir, "C--dev-app-x", `${SESSION_A}.jsonl`),
+      JSON.stringify(userTurn("2026-04-15T10:05:00Z", "now rename the tokenizer")) + "\n",
+    );
+    const ingest = await import("@/lib/db/ingest");
+    assertReconcileClean(await ingest.reconcileAllSessions(db, { projectsDir }));
+
+    const prep = vi.spyOn(conn, "prepCached");
+    const after = list.loadSessionsListFromDb(db);
+    expect(after.find((s) => s.sessionId === SESSION_A)!.searchableText).toContain("now rename the tokenizer");
+    expect(after.find((s) => s.sessionId === SESSION_B)!.searchableText).toBe(textB);
+    // No whole-table scan of turns for the search text.
+    const scannedAllTurns = prep.mock.calls.some(([, sql]) => /FROM turns\s+WHERE text_preview/.test(sql));
+    expect(scannedAllTurns).toBe(false);
+  });
+
   it("recomputes isActive and status on a reused list, and keeps the memo private", async () => {
     const { db, list } = await seeded();
     const row = db.prepare("SELECT file_mtime_ms AS m FROM sessions WHERE session_id = ?").get(SESSION_B) as { m: number };

@@ -184,6 +184,9 @@ interface SessionRow {
   entrypoint: string | null;
   /** Gates the #395 tree roll-up — see `rollUpTreeDelegation`. */
   derived_version: number;
+  /** When ingest last wrote this session; with `byte_offset`, marks turn changes. */
+  indexed_at_ms: number | null;
+  byte_offset: number | null;
 }
 
 interface ToolCountRow {
@@ -280,6 +283,85 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
 /** How recently a transcript must have been written for its session to count as active. */
 const ACTIVE_WINDOW_MS = 2 * 60_000;
 
+/**
+ * Each session's `searchableText`, kept between builds and re-read only for
+ * sessions whose turns changed (#689). Reading it for everyone is a scan of
+ * the whole `turns` table, 270k rows and ~200M characters on a 3 GB index:
+ * 3.7 s warm and 9.8 s cold, nearly all of a build. The ingest worker commits
+ * every few seconds while any session runs, so the list itself rebuilds often;
+ * this is what makes that rebuild cheap.
+ *
+ * A session's turns are written only by ingest, which also stamps the
+ * session row's `indexed_at_ms` and `byte_offset`; a re-derive moves
+ * `derived_version`. Those three are the stamp.
+ */
+interface SearchableTextCache {
+  db: DatabaseT.Database;
+  byId: Map<string, { stamp: string; text: string | undefined }>;
+}
+const searchableHolder = globalThis as unknown as { __minderSearchableTextCache?: SearchableTextCache };
+/** Above this many changed sessions, one table scan beats per-session lookups. */
+const SEARCHABLE_FULL_SCAN_AT = 500;
+const SEARCHABLE_LOOKUP_CHUNK = 250;
+
+// Read each turn's `text_preview` in turn-order so per-session aggregation
+// mirrors file-parse's append order. The query also pulls
+// `tool_result_preview` because for user turns ingest stores
+// `text_preview = userText || toolResultText` — when there's no human text,
+// `text_preview` falls back to the tool_result content. File-parse never
+// folds tool output into `searchableText` (only human text + assistant text),
+// so `groupSearchable` skips user turns where `text_preview` is a prefix of
+// `tool_result_preview` (the tool-result-only signal — same heuristic the
+// detail loader uses to skip these from the timeline).
+const SEARCHABLE_COLUMNS = `SELECT session_id, role, text_preview, tool_result_preview
+       FROM turns
+       WHERE text_preview IS NOT NULL AND text_preview <> ''`;
+
+function loadSearchableText(
+  db: DatabaseT.Database,
+  headers: SessionRow[],
+): Map<string, string | undefined> {
+  let cache = searchableHolder.__minderSearchableTextCache;
+  if (!cache || cache.db !== db) {
+    cache = searchableHolder.__minderSearchableTextCache = { db, byId: new Map() };
+  }
+  const stampOf = (h: SessionRow) => `${h.indexed_at_ms}:${h.byte_offset}:${h.derived_version}`;
+  const stale = headers.filter((h) => cache.byId.get(h.session_id)?.stamp !== stampOf(h));
+
+  let fresh: Map<string, string>;
+  if (stale.length > SEARCHABLE_FULL_SCAN_AT) {
+    fresh = groupSearchable(
+      prepCached(db, `${SEARCHABLE_COLUMNS} ORDER BY session_id, turn_index`).all() as TextPreviewRow[]
+    );
+  } else {
+    fresh = new Map();
+    // The turns primary key starts with session_id, so each lookup is a seek.
+    for (let i = 0; i < stale.length; i += SEARCHABLE_LOOKUP_CHUNK) {
+      const ids = stale.slice(i, i + SEARCHABLE_LOOKUP_CHUNK).map((h) => h.session_id);
+      const rows = db
+        .prepare(
+          `${SEARCHABLE_COLUMNS} AND session_id IN (${ids.map(() => "?").join(",")})
+           ORDER BY session_id, turn_index`
+        )
+        .all(...ids) as TextPreviewRow[];
+      for (const [id, text] of groupSearchable(rows)) fresh.set(id, text);
+    }
+  }
+
+  // Rebuilt from the current headers, so sessions pruned from the index drop out.
+  const byId: SearchableTextCache["byId"] = new Map();
+  const out = new Map<string, string | undefined>();
+  for (const h of headers) {
+    const stamp = stampOf(h);
+    const prev = cache.byId.get(h.session_id);
+    const entry = prev && prev.stamp === stamp ? prev : { stamp, text: fresh.get(h.session_id) };
+    byId.set(h.session_id, entry);
+    out.set(h.session_id, entry.text);
+  }
+  cache.byId = byId;
+  return out;
+}
+
 function buildSessionsList(
   db: DatabaseT.Database,
   now: number,
@@ -303,7 +385,7 @@ function buildSessionsList(
             work_mode_testing_pct, work_mode_other_pct,
             source,
             session_kind, ai_title, entrypoint,
-            derived_version
+            derived_version, indexed_at_ms, byte_offset
      FROM sessions
      -- turn_count counts PRIMARY turns only. Sidechain-only rows (subagent
      -- transcripts ingested from <session>/subagents/*.jsonl — needed so
@@ -417,29 +499,7 @@ function buildSessionsList(
     ).all() as ModelRow[]
   );
 
-  // Restore `searchableText` (closes P2b-5 divergence #2). Read each
-  // turn's `text_preview` in turn-order so per-session aggregation
-  // mirrors file-parse's append order. The query also pulls
-  // `tool_result_preview` because for user turns ingest stores
-  // `text_preview = userText || toolResultText` — when there's no
-  // human text, `text_preview` falls back to the tool_result content.
-  // File-parse never folds tool output into `searchableText` (only
-  // human text + assistant text), so `groupSearchable` skips user
-  // turns where `text_preview` is a prefix of `tool_result_preview`
-  // (the tool-result-only signal — same heuristic the detail loader
-  // uses to skip these from the timeline). The 6th query loads at most
-  // ~500 chars × turn_count rows for the typical ~150-session corpus —
-  // a few MB total, much smaller than the ~1 GB JSONL re-parse this
-  // read path replaced.
-  const searchableBySession = groupSearchable(
-    prepCached(
-      db,
-      `SELECT session_id, role, text_preview, tool_result_preview
-       FROM turns
-       WHERE text_preview IS NOT NULL AND text_preview <> ''
-       ORDER BY session_id, turn_index`
-    ).all() as TextPreviewRow[]
-  );
+  const searchableBySession = loadSearchableText(db, headers);
 
   // T2.2: PRs harvested from `gh pr create` tool_result text at ingest.
   // Empty for sessions that never created a PR — single SELECT bulk-fetch
