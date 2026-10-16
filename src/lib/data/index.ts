@@ -157,9 +157,9 @@ export class DbUnavailableError extends Error {
 //     `permanent-failed`. Two rebuild-and-still-failing rounds is the
 //     strongest signal we have that retrying further won't help.
 //
-// **Cache reset between tests**: existing tests use `vi.resetModules()`
-// which gives a fresh module-scope `initState`. Same mechanism as the
-// prior `cached` variable.
+// **Cache reset between tests**: the state lives on `globalThis.__minderDbInit`,
+// so `vi.resetModules()` alone does not reset it; `installIsolatedState()`
+// drops it together with the DB handle.
 
 const RETRY_DELAYS_MS = [100, 300, 900] as const;
 const TRANSIENT_TTL_MS = 30_000;
@@ -173,10 +173,6 @@ let _retryDelaysOverride: readonly number[] | null = null;
 /** @internal Test-only: shorten retry backoff for unit tests. */
 export function __setRetryDelaysForTests(delays: readonly number[] | null): void {
   _retryDelaysOverride = delays;
-}
-/** @internal Test-only: force the state machine back to `idle`. */
-export function __resetInitStateForTests(): void {
-  initState = { kind: "idle", quarantineRuns: 0 };
 }
 
 const TRANSIENT_CODES = new Set([
@@ -217,7 +213,12 @@ type InitState =
       lastError: Error;
     };
 
-let initState: InitState = { kind: "idle", quarantineRuns: 0 };
+// On `globalThis`, like the connection it guards (`db/connection.ts`): the
+// production build bundles this module more than once (boot path, API routes,
+// SSR), and module scope gave each copy its own "idle", so each re-ran
+// `initDb()` and its full `PRAGMA quick_check` on the main thread.
+const initHolder = ((globalThis as unknown as { __minderDbInit?: { state: InitState } })
+  .__minderDbInit ??= { state: { kind: "idle", quarantineRuns: 0 } });
 
 function getErrCode(err: unknown): string | undefined {
   return (err as NodeJS.ErrnoException | undefined)?.code;
@@ -265,7 +266,7 @@ async function runInitWithRetries(inFlight: InFlightState): Promise<InitResult> 
     }
     // Mutate the in-flight state object so getInitStatus() can report
     // live attempt/quarantine counts during long retries — the in-flight
-    // object IS the current `initState` until terminal commit below.
+    // object IS the current `initHolder.state` until terminal commit below.
     inFlight.attempts = attemptIdx + 1;
 
     let result: InitResult | null = null;
@@ -283,7 +284,7 @@ async function runInitWithRetries(inFlight: InFlightState): Promise<InitResult> 
     if (result?.quarantined) inFlight.quarantineRuns += 1;
 
     if (result?.available) {
-      initState = {
+      initHolder.state = {
         kind: "success",
         result,
         attempts: inFlight.attempts,
@@ -308,7 +309,7 @@ async function runInitWithRetries(inFlight: InFlightState): Promise<InitResult> 
 
   const finalError =
     lastError ?? new Error("initDb failed without surfacing an error");
-  initState = {
+  initHolder.state = {
     kind: permanent ? "permanent-failed" : "transient-failed",
     failedAt: Date.now(),
     attempts: inFlight.attempts,
@@ -334,16 +335,16 @@ async function runInitWithRetries(inFlight: InFlightState): Promise<InitResult> 
  * write to the DB independent of the read-path flag.
  */
 export function ensureSchemaReady(): Promise<InitResult> {
-  switch (initState.kind) {
+  switch (initHolder.state.kind) {
     case "success":
-      return Promise.resolve(initState.result);
+      return Promise.resolve(initHolder.state.result);
     case "in-flight":
-      return initState.promise;
+      return initHolder.state.promise;
     case "permanent-failed":
-      return Promise.resolve(synthFailureResult(initState.lastError));
+      return Promise.resolve(synthFailureResult(initHolder.state.lastError));
     case "transient-failed":
-      if (Date.now() - initState.failedAt < TRANSIENT_TTL_MS) {
-        return Promise.resolve(synthFailureResult(initState.lastError));
+      if (Date.now() - initHolder.state.failedAt < TRANSIENT_TTL_MS) {
+        return Promise.resolve(synthFailureResult(initHolder.state.lastError));
       }
       // TTL expired — start a fresh attempt. Carry forward the
       // cumulative quarantine count so a transient-failed→retry that
@@ -361,9 +362,9 @@ export function ensureSchemaReady(): Promise<InitResult> {
     kind: "in-flight",
     promise: undefined as unknown as Promise<InitResult>,
     attempts: 0,
-    quarantineRuns: initState.quarantineRuns,
+    quarantineRuns: initHolder.state.quarantineRuns,
   };
-  initState = inFlight;
+  initHolder.state = inFlight;
   inFlight.promise = runInitWithRetries(inFlight);
   return inFlight.promise;
 }
@@ -382,7 +383,7 @@ export async function probeInitStatus(): Promise<InitStatus> {
 }
 
 export function getInitStatus(): InitStatus {
-  const s = initState;
+  const s = initHolder.state;
   switch (s.kind) {
     case "idle":
       return {
@@ -780,10 +781,13 @@ export async function getUsage(
 }
 
 /**
- * Runs DB usage reports one at a time (#563), module-scoped so it spans all
- * `getUsage` callers. See `serialGate.ts` for why.
+ * Runs DB usage reports one at a time (#563) across all `getUsage` callers.
+ * On `globalThis` for the same reason as the init state above: each bundled
+ * copy of this module would otherwise get its own gate. See `serialGate.ts`.
  */
-const dbUsageReportGate = createSerialGate();
+const dbUsageReportGate = ((globalThis as unknown as {
+  __minderUsageReportGate?: ReturnType<typeof createSerialGate>;
+}).__minderUsageReportGate ??= createSerialGate());
 function serializeDbUsageReport<T>(fn: () => Promise<T>): Promise<T> {
   return dbUsageReportGate.run(fn);
 }
