@@ -151,6 +151,23 @@ describe("searchSessions without an index (MINDER_USE_DB=0)", () => {
   });
 });
 
+describe("no-index search sees the list the page shows (Codex, PR #705)", () => {
+  it("picks up a session from the latest list load, not a 30 s-old copy", async () => {
+    await state.reload();
+    const { scanAllSessions } = await import("@/lib/scanner/claudeConversations");
+    vi.mocked(scanAllSessions).mockResolvedValue([session("old", { searchableText: "tokenizer" })]);
+    const { searchSessions, getSessionsList } = await import("@/lib/data");
+    expect((await searchSessions("tokenizer", "both", 50)).hits.map((h) => h.sessionId)).toEqual(["old"]);
+
+    vi.mocked(scanAllSessions).mockResolvedValue([
+      session("new", { endTime: "2026-10-16T00:00:00Z", searchableText: "tokenizer" }),
+      session("old", { searchableText: "tokenizer" }),
+    ]);
+    await getSessionsList(); // the /api/sessions slot refreshing
+    expect((await searchSessions("tokenizer", "both", 50)).hits.map((h) => h.sessionId)).toEqual(["new", "old"]);
+  });
+});
+
 describe("no-index search follows the enabled sources (PR #705)", () => {
   it("does not let a disabled source's matches use up the limit", async () => {
     // Default config: Claude only (always on); Codex is not enabled.

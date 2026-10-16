@@ -1124,6 +1124,11 @@ export interface SessionsListResult {
  */
 export async function getSessionsList(): Promise<SessionsListResult> {
   const result = await loadSessionsList();
+  if (result.meta.backend === "file") {
+    // Every list load refreshes what the no-index search scans, so a search can
+    // never see an older list than the one the page is showing (Codex, PR #705).
+    rememberFileList(await demoMode(), Promise.resolve(result.sessions));
+  }
   return { ...result, sessions: withoutSearchableText(result.sessions) };
 }
 
@@ -1541,31 +1546,38 @@ async function sessionsForSearch(): Promise<SessionSummary[] | null> {
   return fileSessionsForSearch(demo);
 }
 
+function rememberFileList(demo: boolean, sessions: Promise<SessionSummary[]>): void {
+  const memo = { at: Date.now(), demo, sessions };
+  searchListHolder.__minderSearchList = memo;
+  // A failed load must not be served for the next 30 s.
+  sessions.catch(() => {
+    if (searchListHolder.__minderSearchList === memo) delete searchListHolder.__minderSearchList;
+  });
+}
+
 /**
  * The file-parse (or demo) summaries, enabled sources only as `/api/sessions`
  * shows them (demo fixtures are all Claude and always shown), so a disabled
  * source's matches cannot use up the search limit (Copilot, PR #705).
  *
- * Kept for 30 s, like the `/api/sessions` slot, because the file parse stats
- * every transcript and a search fires on each typing pause.
+ * The last list load's summaries (`getSessionsList` records them), else a load
+ * of its own; reused for up to 30 s, like the `/api/sessions` slot, because the
+ * file parse stats every transcript and a search fires on each typing pause.
  */
 async function fileSessionsForSearch(demo: boolean): Promise<SessionSummary[]> {
-  const now = Date.now();
-  let memo = searchListHolder.__minderSearchList;
-  if (!memo || memo.demo !== demo || now - memo.at > SEARCH_LIST_TTL_MS) {
-    const sessions = demo
-      ? Promise.resolve(demoSessionsList(now).sessions)
-      : Promise.all([runFileSessionsList(), readConfig()]).then(([{ sessions }, config]) => {
-          const enabled = new Set(config.enabledAdapters ?? ["claude"]);
-          return sessions.filter((s) => enabled.has(s.source ?? "claude"));
-        });
-    memo = searchListHolder.__minderSearchList = { at: now, demo, sessions };
-    // A failed load must not be served for the next 30 s.
-    sessions.catch(() => {
-      if (searchListHolder.__minderSearchList === memo) delete searchListHolder.__minderSearchList;
-    });
+  const memo = searchListHolder.__minderSearchList;
+  if (!memo || memo.demo !== demo || Date.now() - memo.at > SEARCH_LIST_TTL_MS) {
+    rememberFileList(
+      demo,
+      demo
+        ? Promise.resolve(demoSessionsList(Date.now()).sessions)
+        : runFileSessionsList().then((r) => r.sessions)
+    );
   }
-  return memo.sessions;
+  const sessions = await searchListHolder.__minderSearchList!.sessions;
+  if (demo) return sessions;
+  const enabled = new Set((await readConfig()).enabledAdapters ?? ["claude"]);
+  return sessions.filter((s) => enabled.has(s.source ?? "claude"));
 }
 
 export async function searchSessions(
