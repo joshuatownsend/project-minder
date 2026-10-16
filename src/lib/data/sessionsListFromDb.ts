@@ -224,12 +224,67 @@ const SEARCHABLE_TEXT_CAP = 4000;
 const ASSISTANT_TEXT_SLICE = 500;
 
 /**
+ * The last list built, kept until the index changes (#689). Building it runs
+ * eight whole-table queries and assembles every session, about 4-5 s on a
+ * 3 GB index, all synchronous on the main thread; the `/api/sessions` slot
+ * asked for it every 30 s. On `globalThis` because the production build
+ * bundles this module more than once.
+ *
+ * Keyed by the connection plus `PRAGMA data_version`, which moves when
+ * another connection (the ingest worker) commits, and `total_changes()`, which
+ * moves when this one writes (starring, titles, distills).
+ */
+interface SessionsListMemo {
+  db: DatabaseT.Database;
+  key: string;
+  sessions: SessionSummary[];
+  /** Per-session inputs of the two clock-derived fields, by index. */
+  clock: Array<{ storedStatus: string | null; fileMtimeMs: number }>;
+}
+const memoHolder = globalThis as unknown as { __minderSessionsListMemo?: SessionsListMemo };
+
+function indexChangeKey(db: DatabaseT.Database): string {
+  const dataVersion = db.pragma("data_version", { simple: true });
+  const changes = prepCached(db, "SELECT total_changes() AS n").get() as { n: number };
+  return `${dataVersion}:${changes.n}`;
+}
+
+/**
  * Read every indexed session into the `SessionSummary[]` shape that
  * `scanAllSessions` produces. Returns `[]` when no sessions are indexed
  * — caller's façade falls back to file-parse in that case, mirroring
  * the empty-corpus behavior of the file-parse path.
+ *
+ * Rebuilt only when the index changed since the last call; otherwise the
+ * last list is returned with `isActive` / `status`, the only fields that
+ * depend on the clock, recomputed for now.
  */
 export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[] {
+  const key = indexChangeKey(db);
+  const now = Date.now();
+  let memo = memoHolder.__minderSessionsListMemo;
+  if (!memo || memo.db !== db || memo.key !== key) {
+    const clock: SessionsListMemo["clock"] = [];
+    const sessions = buildSessionsList(db, now, clock);
+    memo = memoHolder.__minderSessionsListMemo = { db, key, sessions, clock };
+  }
+  // Shallow copies, so a caller that edits a summary can't change the memo.
+  const { sessions, clock } = memo;
+  return sessions.map((s, i) => {
+    const { storedStatus, fileMtimeMs } = clock[i];
+    const isActive = now - fileMtimeMs < ACTIVE_WINDOW_MS;
+    return { ...s, isActive, status: computeStatus(storedStatus, fileMtimeMs, now, isActive) };
+  });
+}
+
+/** How recently a transcript must have been written for its session to count as active. */
+const ACTIVE_WINDOW_MS = 2 * 60_000;
+
+function buildSessionsList(
+  db: DatabaseT.Database,
+  now: number,
+  clock: SessionsListMemo["clock"],
+): SessionSummary[] {
   const headers = prepCached(
     db,
     `SELECT session_id, project_slug, project_dir_name, file_path, file_mtime_ms,
@@ -409,7 +464,6 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
     ).all() as TicketRow[]
   );
 
-  const now = Date.now();
   const result: SessionSummary[] = [];
   for (const h of headers) {
     const toolUsage = toolsBySession.get(h.session_id) ?? {};
@@ -417,8 +471,9 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
     const modelsUsed = modelsBySession.get(h.session_id) ?? [];
     const searchableText = searchableBySession.get(h.session_id);
 
-    const isActive = now - h.file_mtime_ms < 2 * 60_000;
+    const isActive = now - h.file_mtime_ms < ACTIVE_WINDOW_MS;
     const status = computeStatus(h.status, h.file_mtime_ms, now, isActive);
+    clock.push({ storedStatus: h.status, fileMtimeMs: h.file_mtime_ms });
     result.push({
       // **The shared projection (#496).** Every field both backends can
       // produce is derived here rather than beside its counterpart in

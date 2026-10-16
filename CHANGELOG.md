@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The Sessions list no longer freezes the server for several seconds every time it refreshes. The server rebuilt the whole list from the index at least every 30 seconds while the page was open, about 4 to 5 seconds of work during which nothing else could be answered. It now keeps the list until the index actually changes, and only updates each session's active/idle state on a refresh (#689).
+
 ### Fixed
 
 - The server no longer freezes for 17 to 37 seconds early in every startup. The production build includes the database setup code more than once, and each copy kept its own "already checked" flag. So the first dashboard request ran the setup a second time, including a full integrity check of the index, and the server could answer nothing while it ran, not even the tray's health check (40 seconds in a reproduction). All copies now share one setup, which runs once per start. The same duplication had also let up to three heavy usage reports run at once, despite the one-at-a-time rule from #563; they now share one queue too.
