@@ -72,6 +72,24 @@ function buildFixture() {
   }
 }
 
+/**
+ * `renameSync`, retried briefly while Windows refuses because something still
+ * holds a handle in the tree: the lint CLI that just exited, Defender, or the
+ * search indexer. One such EPERM failed this suite once in a commit hook (#691).
+ */
+function renameRetryingWhileBusy(from: string, to: string): void {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (attempt >= 20 || !(code === "EPERM" || code === "EBUSY" || code === "EACCES")) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100); // 100 ms, synchronously
+    }
+  }
+}
+
 /** The CLI's report, as comparable lines, minus anything under an agent worktree. */
 function findingsOutsideWorktrees(stdout: string): string[] {
   const report = JSON.parse(stdout) as { validators?: Array<{ name: string; errors?: unknown[]; warnings?: unknown[] }> };
@@ -216,13 +234,13 @@ describe("lint fingerprint conformance (claude-code-lint, traced)", () => {
     // The same project without the worktree must produce exactly the same findings everywhere else;
     // otherwise skipping it in the fingerprint could serve a stale finding about the project itself.
     const parked = path.join(base, "parked-worktrees");
-    fs.renameSync(path.join(project, ".claude", "worktrees"), parked);
+    renameRetryingWhileBusy(path.join(project, ".claude", "worktrees"), parked);
     try {
       const bare = findingsOutsideWorktrees(runCli().stdout);
       expect(bare).toEqual(findingsOutsideWorktrees(tracedReport));
       expect(bare.length).toBeGreaterThan(0); // compared something real
     } finally {
-      fs.renameSync(parked, path.join(project, ".claude", "worktrees"));
+      renameRetryingWhileBusy(parked, path.join(project, ".claude", "worktrees"));
     }
   }, 120_000);
 });
