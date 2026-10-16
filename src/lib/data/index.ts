@@ -1136,6 +1136,16 @@ export async function getSessionsList(): Promise<SessionsListResult> {
   return { ...result, sessions: withoutSearchableText(result.sessions) };
 }
 
+/**
+ * Only the sessions from sources enabled in Settings, the set `/api/sessions`
+ * lists and session search covers (#706). For other surfaces that list
+ * sessions (MCP), so listing and searching agree (Codex, PR #707).
+ */
+export async function onlyEnabledSources(sessions: SessionSummary[]): Promise<SessionSummary[]> {
+  const sources = new Set(enabledSources(await readConfig(), await demoMode()));
+  return sessions.filter((s) => sources.has(s.source ?? "claude"));
+}
+
 /** {@link getSessionsList} with the file parse's and demo fixtures' text kept. */
 async function loadSessionsList(demo: boolean): Promise<SessionsListResult> {
   if (demo) return demoSessionsList(Date.now());

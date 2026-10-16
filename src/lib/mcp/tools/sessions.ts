@@ -5,6 +5,7 @@ import {
   getSessionsList,
   getSessionDetail,
   searchSessions,
+  onlyEnabledSources,
 } from "@/lib/data";
 import { SessionIdSchema, SlugSchema } from "../schemas";
 import { jsonResult, errorResult } from "../result";
@@ -30,7 +31,7 @@ export function registerSessionTools(server: McpServer): void {
     },
     async ({ project, limit, starredOnly }) => {
       const { sessions, meta } = await getSessionsList();
-      let filtered = sessions;
+      let filtered = await onlyEnabledSources(sessions);
       if (project) filtered = filtered.filter((s) => s.projectSlug === project);
       if (starredOnly) filtered = filtered.filter((s) => s.starredAt);
       if (limit) filtered = filtered.slice(0, limit);

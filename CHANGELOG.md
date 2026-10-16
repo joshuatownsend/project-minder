@@ -14,7 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Session search covers only the adapters enabled in Settings, the same sessions the Sessions list shows. A disabled adapter's sessions can stay in the index, and their matches could fill the 200-result limit and push out matching sessions from enabled sources, which then never appeared. The filter is applied inside the search before the limit, on the indexed, the optional semantic and the no-index search, and the MCP `search-sessions` tool follows it too. Semantic search now also applies the starred and launch-type filters before its own candidate cut, so those filters no longer under-report when it is turned on (#706).
+- Session search covers only the adapters enabled in Settings, the same sessions the Sessions list shows. A disabled adapter's sessions can stay in the index, and their matches could fill the 200-result limit and push out matching sessions from enabled sources, which then never appeared. The filter is applied inside the search before the limit, on the indexed, the optional semantic and the no-index search, and the MCP `search-sessions` tool follows it too, as do MCP `list-sessions` and the `minder://projects/{slug}/sessions` resource, so an MCP client never lists a session it cannot find by search. Semantic search now also applies the starred and launch-type filters before its own candidate cut, so those filters no longer under-report when it is turned on (#706).
 
 ## [1.16.20] - 2026-10-15
 

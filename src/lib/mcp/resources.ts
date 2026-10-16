@@ -2,7 +2,7 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 
 import { readConfig } from "@/lib/config";
 import { loadCatalog } from "@/lib/indexer/catalog";
-import { getUsage, getSessionDetail, getSessionsList, getClaudeUsage } from "@/lib/data";
+import { getUsage, getSessionDetail, getSessionsList, getClaudeUsage, onlyEnabledSources } from "@/lib/data";
 import { computeStats } from "@/lib/stats";
 import { getCachedOrFreshScan as getScan } from "./scanHelper";
 
@@ -127,7 +127,7 @@ export function registerResources(server: McpServer): void {
     async (uri, variables) => {
       const slug = String(variables.slug);
       const { sessions, meta } = await getSessionsList();
-      const filtered = sessions.filter((s) => s.projectSlug === slug);
+      const filtered = (await onlyEnabledSources(sessions)).filter((s) => s.projectSlug === slug);
       return jsonResource(uri, { backend: meta.backend, total: filtered.length, sessions: filtered });
     }
   );

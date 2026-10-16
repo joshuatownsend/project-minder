@@ -221,6 +221,15 @@ describe("no-index search follows the enabled sources (PR #705)", () => {
   });
 });
 
+describe("onlyEnabledSources (Codex, PR #707)", () => {
+  it("keeps the sources the list and search cover, so MCP listings agree with search", async () => {
+    await state.reload();
+    const { onlyEnabledSources } = await import("@/lib/data");
+    const kept = await onlyEnabledSources([session("c"), session("x", { source: "codex" })]);
+    expect(kept.map((s) => s.sessionId)).toEqual(["c"]);
+  });
+});
+
 describe("getSessionsList never carries searchableText (#700)", () => {
   // Every caller sends the list out of the server (`/api/sessions`, MCP), and
   // the text was 13 MB of a 34 MB response. The file parse still fills it.
