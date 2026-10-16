@@ -23,6 +23,7 @@ import { loadAgentUsageFromDb } from "./agentsUsageFromDb";
 import { loadSkillUsageFromDb } from "./skillsUsageFromDb";
 import { loadClaudeUsageStatsFromDb } from "./claudeUsageFromDb";
 import { searchSessionsInDb } from "./sessionSearch";
+import { searchSessionSummaries } from "./sessionSearchSummaries";
 import type {
   SessionSearchHit,
   SessionSearchScope,
@@ -1434,11 +1435,10 @@ export interface SessionSearchResult {
 /**
  * Run a session search through the indexed FTS5 + sessions tables.
  *
- * - `MINDER_USE_DB=0`: returns `{ hits: [], meta: { backend: 'file' } }`
- *   — the file-parse path doesn't ship an FTS index, so the
- *   SessionsBrowser should fall back to client-side filtering of the
- *   cached `searchableText` column. Distinct from "DB available but
- *   no matches" so the UI can detect this case.
+ * - `MINDER_USE_DB=0` or demo mode: no FTS index, so a substring scan over
+ *   the session summaries (`searchSessionSummaries`), reported as
+ *   `backend: 'file'`. The Sessions page used to run that scan itself over a
+ *   `searchableText` copy in the list response, 13 of its 34 MB (#700).
  * - DB mode + healthy DB: SQL-backed via `searchSessionsInDb`.
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  *
@@ -1507,13 +1507,14 @@ export async function searchSessions(
    */
   facets?: SessionSearchFacets
 ): Promise<SessionSearchResult> {
-  // Demo mode has no FTS index; return an empty (valid) result rather than
-  // touch the DB. Prompt search over fixtures isn't needed for screenshots.
-  if (await demoMode()) {
-    return { hits: [], meta: { backend: "file" } };
-  }
-  if (!dbModeRequested()) {
-    return { hits: [], meta: { backend: "file" } };
+  // No FTS index to ask: scan the summaries, which on these two paths still
+  // carry their text. `getSessionsList` picks demo fixtures or the file parse.
+  if ((await demoMode()) || !dbModeRequested()) {
+    const { sessions } = await getSessionsList();
+    return {
+      hits: searchSessionSummaries(sessions, query, scope, limit, facets),
+      meta: { backend: "file" },
+    };
   }
 
   const db = await getReadyDb();

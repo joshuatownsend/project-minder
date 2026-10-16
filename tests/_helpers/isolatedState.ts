@@ -267,7 +267,6 @@ export function installIsolatedState(
     delete g.__minderHistoryParses;
     delete g.__minderHistoryReads;
     delete g.__minderSessionsListMemo;
-    delete g.__minderSearchableTextCache;
     for (const key of extraGlobals) delete g[key];
   };
 

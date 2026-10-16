@@ -72,6 +72,11 @@ export interface SessionSummary {
   status: SessionStatus;
   skillsUsed: Record<string, number>; // skill name → invocation count
   oneShotRate?: number;
+  /**
+   * Prompt and reply text for substring search, up to 4,000 chars. Server-only:
+   * filled by the file-parse path (and demo fixtures) for the search fallback,
+   * never by the index, and stripped before a list reaches the browser (#700).
+   */
   searchableText?: string;
   /**
    * Claude Code's human-readable session label (e.g. `quirky-scribbling-plum`).

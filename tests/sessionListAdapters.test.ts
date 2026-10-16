@@ -599,7 +599,7 @@ describe("session list adapter discovery (#489)", () => {
     //   isActive       — a clock reading taken at two different instants.
     //   treeDelegation / continuedFromSessionId — DB-only, derived by passes
     //                    the file backend does not run.
-    //   searchableText — assembled from different-length previews on each side.
+    //   searchableText — file-parse only; the index never builds it (#700).
     const compare = (s: SessionSummary) => ({
       sessionId: s.sessionId,
       source: s.source,

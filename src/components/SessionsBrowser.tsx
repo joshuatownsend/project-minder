@@ -318,7 +318,7 @@ function SessionRow({
   session: SessionSummary;
   showProject?: boolean;
   search?: string;
-  /** FTS5 excerpt of the matched text, when the server returned one. */
+  /** The server's excerpt of the matched text, when it returned one. */
   ftsSnippet?: string;
 }) {
   const { currency, fxRate } = useCurrency();
@@ -343,17 +343,10 @@ function SessionRow({
     .reduce((sum, [name]) => sum + (session.toolUsage[name] ?? 0), 0);
   const trimmedSearch = search.trim();
   const searchLower = trimmedSearch.toLowerCase();
-  // Prefer the server's excerpt: it comes from the full indexed text, so
-  // it can show WHY a session matched even when the match lies past the
-  // 500-char preview, inside thinking, or inside a subagent transcript —
-  // none of which `searchableText` contains. The local check remains the
-  // fallback for the file backend (MINDER_USE_DB=0), which has no FTS and
-  // therefore no snippet.
-  const localContentMatch = trimmedSearch
-    ? !!(session.searchableText?.toLowerCase().includes(searchLower)) &&
-      !matchesTitleScope(session, searchLower)
-    : false;
-  const snippetText = ftsSnippet ?? (localContentMatch ? session.searchableText : undefined);
+  // The server's excerpt of the matched text. Content matching happens only
+  // on the server (#700): the list no longer carries session text, so this
+  // is the one place a content hit can show WHY it matched.
+  const snippetText = ftsSnippet;
 
   // Everything the title slot can display, in preference order.
   //
@@ -785,7 +778,7 @@ interface SearchApiResponse {
   backend: "db" | "file";
 }
 
-// Single source of truth for the FTS-backed search state. Replacing
+// Single source of truth for the server search state. Replacing
 // the prior split (`serverHitIds: Set | null` + `searchBackend:
 // "db"|"file"|"unknown"`) which could disagree on error paths — a
 // network failure marked the backend "file" while a pending fetch
@@ -794,21 +787,21 @@ interface SearchApiResponse {
 type SearchState =
   | { kind: "idle" } //  query under the 2-char gate
   | { kind: "pending" } //  fetch in flight
-  //  FTS-backed hits. A Map rather than a Set so RRF ordering survives:
+  //  Server hits. A Map rather than a Set so RRF ordering survives:
   //  `rank` is the hit's 0-based position from the API, which the
   //  `relevance` sort reads. Keeping only a Set discarded the ranking the
   //  server just computed, so a prompt-only hit could outrank a
   //  dual-retriever one in the list. `.has()` works the same, so the
   //  membership filter below is unchanged.
   //
-  //  `snippet` is FTS5's excerpt of the matched text. It is the ONLY
-  //  source of an excerpt for content the row can't otherwise see:
-  //  `searchableText` is built from `turns.text_preview` (500 chars,
-  //  and sidechain rows are excluded outright), so matches deep in a
-  //  body, in extended thinking, or in a subagent transcript have no
-  //  local text to highlight.
-  | { kind: "db"; ids: Map<string, { rank: number; snippet?: string }> }
-  | { kind: "file" }; //  MINDER_USE_DB=0 OR fetch failed
+  //  `snippet` is the server's excerpt of the matched text, the only
+  //  excerpt a content hit has: the list carries no session text (#700).
+  //
+  //  `backend` is `db` for FTS5 ranking and `file` for the substring scan
+  //  the server falls back to without an index (MINDER_USE_DB=0, demo),
+  //  which is ordered by recency rather than relevance.
+  | { kind: "hits"; backend: "db" | "file"; ids: Map<string, { rank: number; snippet?: string }> }
+  | { kind: "failed" }; //  request failed: titles still match locally
 
 export function SessionsBrowser() {
   const { data, loading } = useAllSessions();
@@ -838,9 +831,8 @@ export function SessionsBrowser() {
         // facet's matches all rank below the cutoff (#425).
         //
         // The client-side filters stay as well, and are not redundant:
-        // they serve the file backend, the no-search path, and the two
-        // non-FTS arms of the search union (title substring and cached
-        // `searchableText`), none of which the server ranked.
+        // they serve the no-search path and the local title-substring arm
+        // of the search union, which the server did not rank.
         const params = new URLSearchParams({ q: trimmed, scope: "both", limit: "200" });
         if (starredOnly) params.set("starred", "1");
         if (sourceFilter !== "all") params.set("source", sourceFilter);
@@ -850,26 +842,23 @@ export function SessionsBrowser() {
         });
         if (controller.signal.aborted) return;
         if (!res.ok) {
-          setSearchState({ kind: "file" });
+          setSearchState({ kind: "failed" });
           return;
         }
         const json = (await res.json()) as SearchApiResponse;
         if (controller.signal.aborted) return;
-        if (json.backend === "file") {
-          setSearchState({ kind: "file" });
-        } else {
-          // Preserve the server's RRF ordering as rank indices. `hits` is
-          // already sorted best-first by `searchSessionsInDb`.
-          setSearchState({
-            kind: "db",
-            ids: new Map(
-              json.hits.map((h, i) => [h.sessionId, { rank: i, snippet: h.snippet }])
-            ),
-          });
-        }
+        // Preserve the server's ordering as rank indices. `hits` is already
+        // sorted best-first.
+        setSearchState({
+          kind: "hits",
+          backend: json.backend,
+          ids: new Map(
+            json.hits.map((h, i) => [h.sessionId, { rank: i, snippet: h.snippet }])
+          ),
+        });
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
-        setSearchState({ kind: "file" });
+        setSearchState({ kind: "failed" });
       }
     }, SEARCH_DEBOUNCE_MS);
     return () => {
@@ -941,22 +930,17 @@ export function SessionsBrowser() {
     const trimmed = search.trim();
     if (trimmed) {
       const q = trimmed.toLowerCase();
-      const ftsIds = searchState.kind === "db" ? searchState.ids : null;
-      result = result.filter(
-        (s) =>
-          ftsIds?.has(s.sessionId) ||
-          matchesTitleScope(s, q) ||
-          s.searchableText?.toLowerCase().includes(q)
-      );
+      const serverIds = searchState.kind === "hits" ? searchState.ids : null;
+      result = result.filter((s) => serverIds?.has(s.sessionId) || matchesTitleScope(s, q));
     }
-    const rank = searchState.kind === "db" ? searchState.ids : null;
+    const rank = searchState.kind === "hits" ? searchState.ids : null;
     const endedAt = (s: typeof result[number]) =>
       s.endTime ? new Date(s.endTime).getTime() : 0;
     return [...result].sort((a, b) => {
       switch (sortBy) {
         case "relevance": {
           // Server-computed RRF order. Sessions matched only client-side
-          // (title substring / cached searchableText) carry no rank, so
+          // (title substring) carry no rank, so
           // they sort after every ranked hit rather than jumping to the
           // top on a rank of 0 — then fall back to recency among
           // themselves so the tail stays deterministic.
@@ -1030,12 +1014,13 @@ export function SessionsBrowser() {
     overscan: 6,
   });
 
+  const ftsActive = searchState.kind === "hits" && searchState.backend === "db";
   const sortOptions: { value: SortOption; label: string }[] = [
     // Offered only while the FTS backend is actually serving ranked hits.
-    // Under `MINDER_USE_DB=0` (or a failed request) matching is
-    // client-side substring filtering with no ranking at all, so the
-    // option would be a button that silently does nothing.
-    ...(searchState.kind === "db"
+    // Under `MINDER_USE_DB=0` the server's substring scan is ordered by
+    // recency, and a failed request has no ranking at all, so the option
+    // would be a button that silently does nothing.
+    ...(ftsActive
       ? ([{ value: "relevance", label: "Relevance" }] as { value: SortOption; label: string }[])
       : []),
     { value: "recent",  label: "Recent" },
@@ -1073,9 +1058,9 @@ export function SessionsBrowser() {
             placeholder="Search sessions…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            style={{ width: "100%", height: "32px", paddingLeft: "30px", paddingRight: searchState.kind === "db" ? "60px" : "10px", fontSize: "0.78rem", fontFamily: "var(--font-body)", color: "var(--text-primary)", background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: "var(--radius)", outline: "none" }}
+            style={{ width: "100%", height: "32px", paddingLeft: "30px", paddingRight: ftsActive ? "60px" : "10px", fontSize: "0.78rem", fontFamily: "var(--font-body)", color: "var(--text-primary)", background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: "var(--radius)", outline: "none" }}
           />
-          {searchState.kind === "db" && (
+          {ftsActive && (
             <span
               title="Full-text search is querying the SQLite FTS5 index (matches session content beyond the cached preview)."
               style={{
@@ -1245,7 +1230,7 @@ export function SessionsBrowser() {
                       showProject={item.showProject}
                       search={search}
                       ftsSnippet={
-                        searchState.kind === "db"
+                        searchState.kind === "hits"
                           ? searchState.ids.get(item.session.sessionId)?.snippet
                           : undefined
                       }

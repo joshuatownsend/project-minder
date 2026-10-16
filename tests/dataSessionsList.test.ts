@@ -238,20 +238,12 @@ describe.skipIf(!driverAvailable)("data façade — getSessionsList backend pari
       // dangling tool_uses, so both should return 'idle'.
       expect(d.status).toBe(f.status);
 
-      // searchableText restored as of P2c — should be present on both
-      // backends. We don't assert string equality (the file-parse path
-      // appends slightly differently from the per-turn DB path; see
-      // sessionsListFromDb.ts header divergence #2 quirk), but the DB
-      // value should contain the user prompt and at least the prefix
-      // of one assistant text. Empty string is the only failure case.
-      expect(typeof d.searchableText).toBe("string");
-      expect(d.searchableText!.length).toBeGreaterThan(0);
+      // searchableText: the index no longer builds it (#700); the file parse
+      // still does, for the server's search fallback, which strips it before
+      // a list leaves the server.
+      expect(d.searchableText).toBeUndefined();
       expect(typeof f.searchableText).toBe("string");
-      // Both should include the initial prompt text.
-      if (f.initialPrompt) {
-        expect(d.searchableText).toContain(f.initialPrompt);
-        expect(f.searchableText).toContain(f.initialPrompt);
-      }
+      if (f.initialPrompt) expect(f.searchableText).toContain(f.initialPrompt);
     }
   });
 
@@ -350,28 +342,14 @@ describe.skipIf(!driverAvailable)("loadSessionsListFromDb — reuse until the in
     expect(afterWorkerWrite.find((s) => s.sessionId === SESSION_A)?.starredAt).toBeUndefined();
   });
 
-  it("re-reads search text only for sessions whose turns changed", async () => {
+  it("never reads turn text to build the list (#700)", async () => {
     const { conn, db, list } = await seeded();
-    const projectsDir = path.join(tmpHome, ".claude", "projects");
-    const before = list.loadSessionsListFromDb(db);
-    const textB = before.find((s) => s.sessionId === SESSION_B)!.searchableText;
-    expect(before.find((s) => s.sessionId === SESSION_A)!.searchableText).toContain("fix the bug in the parser");
-
-    // A appends a turn; B is untouched.
-    await fs.appendFile(
-      path.join(projectsDir, "C--dev-app-x", `${SESSION_A}.jsonl`),
-      JSON.stringify(userTurn("2026-04-15T10:05:00Z", "now rename the tokenizer")) + "\n",
-    );
-    const ingest = await import("@/lib/db/ingest");
-    assertReconcileClean(await ingest.reconcileAllSessions(db, { projectsDir }));
-
     const prep = vi.spyOn(conn, "prepCached");
-    const after = list.loadSessionsListFromDb(db);
-    expect(after.find((s) => s.sessionId === SESSION_A)!.searchableText).toContain("now rename the tokenizer");
-    expect(after.find((s) => s.sessionId === SESSION_B)!.searchableText).toBe(textB);
-    // No whole-table scan of turns for the search text.
-    const scannedAllTurns = prep.mock.calls.some(([, sql]) => /FROM turns\s+WHERE text_preview/.test(sql));
-    expect(scannedAllTurns).toBe(false);
+    const sessions = list.loadSessionsListFromDb(db);
+    expect(sessions.length).toBeGreaterThan(0);
+    for (const s of sessions) expect(s.searchableText).toBeUndefined();
+    const readText = prep.mock.calls.some(([, sql]) => /text_preview/.test(sql));
+    expect(readText).toBe(false);
   });
 
   it("recomputes isActive and status on a reused list, and keeps the memo private", async () => {

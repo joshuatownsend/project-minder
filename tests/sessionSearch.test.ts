@@ -491,10 +491,9 @@ describe.skipIf(!driverAvailable)("searchSessionsInDb", () => {
   });
 
   it("returns a snippet of the matched text for prompt hits", async () => {
-    // Without this, a match deep in a body has nothing to render: the
-    // browser builds its excerpt from `SessionSummary.searchableText`,
-    // which comes from `turns.text_preview` (500 chars), so the row would
-    // show an unrelated preview and never say WHY it matched.
+    // Without this, a match has nothing to render: the browser has no
+    // session text of its own (#700), so the row would show an unrelated
+    // preview and never say WHY it matched.
     const { conn, ingest, search, projectsDir } = await setup();
     const filler = "padding text that is not interesting ";
     await writeJsonl(path.join(projectsDir, "C--dev-app", "snip.jsonl"), [
