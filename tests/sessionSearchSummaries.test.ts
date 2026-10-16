@@ -138,4 +138,33 @@ describe("searchSessions without an index (MINDER_USE_DB=0)", () => {
     expect(result.hits.map((h) => h.sessionId)).toEqual(["hit"]);
     expect(result.hits[0].snippet).toContain("flaky tokenizer");
   });
+
+  it("reuses one session list across searches instead of re-sweeping per keystroke", async () => {
+    await state.reload();
+    const { scanAllSessions } = await import("@/lib/scanner/claudeConversations");
+    vi.mocked(scanAllSessions).mockClear();
+    vi.mocked(scanAllSessions).mockResolvedValue([session("a", { searchableText: "tokenizer" })]);
+    const { searchSessions } = await import("@/lib/data");
+    await searchSessions("tok", "both", 50);
+    await searchSessions("token", "both", 50);
+    expect(scanAllSessions).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("getSessionsList never carries searchableText (#700)", () => {
+  // Every caller sends the list out of the server (`/api/sessions`, MCP), and
+  // the text was 13 MB of a 34 MB response. The file parse still fills it.
+  it("strips it on the file-parse path", async () => {
+    await state.reload();
+    const { scanAllSessions } = await import("@/lib/scanner/claudeConversations");
+    vi.mocked(scanAllSessions).mockResolvedValue([
+      session("a", { searchableText: "x".repeat(4000) }),
+      session("b"),
+    ]);
+    const { getSessionsList } = await import("@/lib/data");
+    const { sessions, meta } = await getSessionsList();
+    expect(meta.backend).toBe("file");
+    expect(sessions.map((s) => s.sessionId)).toEqual(["a", "b"]);
+    for (const s of sessions) expect("searchableText" in s).toBe(false);
+  });
 });

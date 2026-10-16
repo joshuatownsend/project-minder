@@ -6,7 +6,6 @@ import {
   getSessionDetail,
   searchSessions,
 } from "@/lib/data";
-import { withoutSearchableText } from "@/lib/data/sessionSearchSummaries";
 import { SessionIdSchema, SlugSchema } from "../schemas";
 import { jsonResult, errorResult } from "../result";
 
@@ -31,7 +30,7 @@ export function registerSessionTools(server: McpServer): void {
     },
     async ({ project, limit, starredOnly }) => {
       const { sessions, meta } = await getSessionsList();
-      let filtered = withoutSearchableText(sessions);
+      let filtered = sessions;
       if (project) filtered = filtered.filter((s) => s.projectSlug === project);
       if (starredOnly) filtered = filtered.filter((s) => s.starredAt);
       if (limit) filtered = filtered.slice(0, limit);

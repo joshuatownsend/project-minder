@@ -1,7 +1,6 @@
 import "server-only";
 import type { QueryClient } from "@tanstack/react-query";
 import { getSessionsList, type SessionsListResult } from "@/lib/data";
-import { withoutSearchableText } from "@/lib/data/sessionSearchSummaries";
 import { readConfig } from "@/lib/config";
 import { demoMode } from "@/lib/demo/demoMode";
 import type { SessionSummary } from "@/lib/types";
@@ -56,9 +55,7 @@ export async function getSessionsCacheSlot(): Promise<SessionsCacheSlot> {
   const demo = await demoMode();
   let cache = globalForSessions.__sessionsCache;
   if (!cache || cache.demo !== demo || Date.now() - cache.cachedAt > CACHE_TTL) {
-    // Everything in this slot is sent to the browser.
-    const listed = await getSessionsList();
-    const result = { ...listed, sessions: withoutSearchableText(listed.sessions) };
+    const result = await getSessionsList();
     cache = {
       result,
       cachedAt: Date.now(),

@@ -318,7 +318,10 @@ function SessionRow({
   session: SessionSummary;
   showProject?: boolean;
   search?: string;
-  /** The server's excerpt of the matched text, when it returned one. */
+  /**
+   * The server's excerpt of the matched text, when it returned one. The only
+   * way a content hit shows why it matched: the list carries no session text.
+   */
   ftsSnippet?: string;
 }) {
   const { currency, fxRate } = useCurrency();
@@ -343,10 +346,6 @@ function SessionRow({
     .reduce((sum, [name]) => sum + (session.toolUsage[name] ?? 0), 0);
   const trimmedSearch = search.trim();
   const searchLower = trimmedSearch.toLowerCase();
-  // The server's excerpt of the matched text. Content matching happens only
-  // on the server (#700): the list no longer carries session text, so this
-  // is the one place a content hit can show WHY it matched.
-  const snippetText = ftsSnippet;
 
   // Everything the title slot can display, in preference order.
   //
@@ -369,7 +368,7 @@ function SessionRow({
     session.gitBranch,
   ];
 
-  // A content hit already shows what matched, via `snippetText` above. This is
+  // A content hit already shows what matched, via `ftsSnippet`. This is
   // the equivalent for a title-slot hit. Recaps still win when not searching:
   // they describe what happened while you were away, which is more useful on a
   // row you are returning to than a title is.
@@ -464,8 +463,8 @@ function SessionRow({
                 shows the text that put it in the results; below them, a recap
                 outranks a title because it describes what happened while you
                 were away. `docs/help/sessions.md` documents this order. */}
-            {trimmedSearch && snippetText
-              ? <MatchSnippet text={snippetText} query={trimmedSearch} />
+            {trimmedSearch && ftsSnippet
+              ? <MatchSnippet text={ftsSnippet} query={trimmedSearch} />
               : trimmedSearch && matchedTitle
               ? <MatchSnippet text={matchedTitle} query={trimmedSearch} />
               : session.recaps && session.recaps.length > 0
@@ -1062,7 +1061,7 @@ export function SessionsBrowser() {
           />
           {ftsActive && (
             <span
-              title="Full-text search is querying the SQLite FTS5 index (matches session content beyond the cached preview)."
+              title="Full-text search is querying the SQLite FTS5 index (matches whole messages, thinking and subagent transcripts)."
               style={{
                 position: "absolute",
                 right: "9px",

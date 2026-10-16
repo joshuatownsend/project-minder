@@ -4,17 +4,14 @@ import type { SessionSearchFacets, SessionSearchHit, SessionSearchScope } from "
 
 // Session search without the index: a substring scan over session summaries.
 // Serves `searchSessions` when there is no FTS index to ask (`MINDER_USE_DB=0`,
-// demo mode). The Sessions page used to do this scan itself over a
-// `searchableText` copy shipped in every list response, 13 MB of a 34 MB
-// list (#700); the scan moved here so the list no longer carries it.
+// demo mode). The list sent to the browser carries no session text (#700), so
+// this is the only content search on those paths.
 //
 // The `titles` fields mirror the SQL `titles` retriever in `sessionSearch.ts`.
 
 /**
- * The summaries without `searchableText`, for anything that sends a list out of
- * the server. Only the scan below reads that text; it was 13 MB of a 34 MB
- * `/api/sessions` response (#700). The index never fills it, so on that path
- * the input comes back as is; the file parse and demo fixtures do fill it.
+ * The summaries without `searchableText`, which only the scan below reads.
+ * The index never fills it, so on that path the input comes back as is.
  */
 export function withoutSearchableText(sessions: SessionSummary[]): SessionSummary[] {
   if (!sessions.some((s) => s.searchableText !== undefined)) return sessions;

@@ -23,7 +23,7 @@ import { loadAgentUsageFromDb } from "./agentsUsageFromDb";
 import { loadSkillUsageFromDb } from "./skillsUsageFromDb";
 import { loadClaudeUsageStatsFromDb } from "./claudeUsageFromDb";
 import { searchSessionsInDb } from "./sessionSearch";
-import { searchSessionSummaries } from "./sessionSearchSummaries";
+import { searchSessionSummaries, withoutSearchableText } from "./sessionSearchSummaries";
 import type {
   SessionSearchHit,
   SessionSearchScope,
@@ -1117,8 +1117,18 @@ export interface SessionsListResult {
  * the route caches the unfiltered set so back-to-back "all
  * projects" then "single project" navigation reuses the cache.
  * Matches the file-parse route's existing post-cache filter pattern.
+ *
+ * Never carries `searchableText`: every caller sends the list somewhere
+ * (`/api/sessions`, MCP), and that text was 13 of its 34 MB (#700). The
+ * no-index search reads it through `sessionsForSearch` instead.
  */
 export async function getSessionsList(): Promise<SessionsListResult> {
+  const result = await loadSessionsList();
+  return { ...result, sessions: withoutSearchableText(result.sessions) };
+}
+
+/** {@link getSessionsList} with the file parse's and demo fixtures' text kept. */
+async function loadSessionsList(): Promise<SessionsListResult> {
   if (await demoMode()) return demoSessionsList(Date.now());
   if (!dbModeRequested()) return runFileSessionsList();
 
@@ -1437,8 +1447,7 @@ export interface SessionSearchResult {
  *
  * - `MINDER_USE_DB=0` or demo mode: no FTS index, so a substring scan over
  *   the session summaries (`searchSessionSummaries`), reported as
- *   `backend: 'file'`. The Sessions page used to run that scan itself over a
- *   `searchableText` copy in the list response, 13 of its 34 MB (#700).
+ *   `backend: 'file'`.
  * - DB mode + healthy DB: SQL-backed via `searchSessionsInDb`.
  * - DB mode + DB unhealthy: throws `DbUnavailableError` → 500.
  *
@@ -1497,6 +1506,31 @@ export async function loadProjectFileEdits(opts: {
   }
 }
 
+/** How long the no-index search reuses one session list, like the `/api/sessions` slot. */
+const SEARCH_LIST_TTL_MS = 30_000;
+const searchListHolder = globalThis as unknown as {
+  __minderSearchList?: { at: number; demo: boolean; sessions: Promise<SessionSummary[]> };
+};
+
+/**
+ * The text-carrying list the no-index search scans. Kept for 30 s, because the
+ * file parse stats every transcript and a search fires on each typing pause.
+ */
+async function sessionsForSearch(): Promise<SessionSummary[]> {
+  const demo = await demoMode();
+  const now = Date.now();
+  let memo = searchListHolder.__minderSearchList;
+  if (!memo || memo.demo !== demo || now - memo.at > SEARCH_LIST_TTL_MS) {
+    const sessions = loadSessionsList().then((r) => r.sessions);
+    memo = searchListHolder.__minderSearchList = { at: now, demo, sessions };
+    // A failed load must not be served for the next 30 s.
+    sessions.catch(() => {
+      if (searchListHolder.__minderSearchList === memo) delete searchListHolder.__minderSearchList;
+    });
+  }
+  return memo.sessions;
+}
+
 export async function searchSessions(
   query: string,
   scope: SessionSearchScope = "both",
@@ -1508,11 +1542,10 @@ export async function searchSessions(
   facets?: SessionSearchFacets
 ): Promise<SessionSearchResult> {
   // No FTS index to ask: scan the summaries, which on these two paths still
-  // carry their text. `getSessionsList` picks demo fixtures or the file parse.
+  // carry their text.
   if ((await demoMode()) || !dbModeRequested()) {
-    const { sessions } = await getSessionsList();
     return {
-      hits: searchSessionSummaries(sessions, query, scope, limit, facets),
+      hits: searchSessionSummaries(await sessionsForSearch(), query, scope, limit, facets),
       meta: { backend: "file" },
     };
   }

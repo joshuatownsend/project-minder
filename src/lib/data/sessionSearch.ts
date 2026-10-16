@@ -150,14 +150,11 @@ export interface SessionSearchHit {
    * best-ranked chunk. Present only for `prompts` hits — a `titles` hit
    * matched a column the row already displays.
    *
-   * This exists because the row renderer otherwise has nowhere to get
-   * one: `SessionSummary.searchableText` is assembled from
-   * `turns.text_preview` (500 chars, and `WHERE text_preview <> ''`
-   * excludes sidechain rows entirely), so a match in a long body, in
-   * extended thinking, or in a subagent transcript could not be shown at
-   * all — the row would display an unrelated preview instead. Since
-   * `prompts_fts` now holds the full text, the excerpt can come from the
-   * genuinely matched content.
+   * This exists because the row renderer has nowhere else to get one:
+   * the session list carries no session text (#700). Since `prompts_fts`
+   * holds the full text, the excerpt comes from the genuinely matched
+   * content, including long bodies, extended thinking and subagent
+   * transcripts.
    */
   snippet?: string;
 }

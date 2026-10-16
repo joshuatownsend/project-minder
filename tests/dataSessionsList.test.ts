@@ -238,12 +238,11 @@ describe.skipIf(!driverAvailable)("data façade — getSessionsList backend pari
       // dangling tool_uses, so both should return 'idle'.
       expect(d.status).toBe(f.status);
 
-      // searchableText: the index no longer builds it (#700); the file parse
-      // still does, for the server's search fallback, which strips it before
-      // a list leaves the server.
+      // searchableText: never on the list from either backend (#700). The
+      // index doesn't build it; the file parse does, for the server's search
+      // fallback, and `getSessionsList` strips it.
       expect(d.searchableText).toBeUndefined();
-      expect(typeof f.searchableText).toBe("string");
-      if (f.initialPrompt) expect(f.searchableText).toContain(f.initialPrompt);
+      expect(f.searchableText).toBeUndefined();
     }
   });
 
