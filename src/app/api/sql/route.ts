@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, getDbError, isDriverLoaded } from "@/lib/db/connection";
-import { initDb, type InitResult } from "@/lib/db/migrations";
+import { ensureSchemaReady } from "@/lib/data";
 
 // Read-only ad-hoc SQL endpoint against the local SQLite index.
 //
@@ -29,8 +29,8 @@ import { initDb, type InitResult } from "@/lib/db/migrations";
 //     `~/.minder/index.db` with no tables, so a naked `getDb()` check
 //     would let `SELECT * FROM sessions` fall into the 400 "no such
 //     table" path on first run instead of the documented 503. We call
-//     `initDb()` (idempotent; cached per process) to ensure schema is
-//     present before accepting queries.
+//     the façade's `ensureSchemaReady()`, the process-wide init (#694), to
+//     ensure schema is present before accepting queries.
 //   - Disallowed statement → 400 with `{error: "only SELECT…"}`.
 //   - Malformed / unknown-table SQL → 400 with the SQLite message.
 //
@@ -39,16 +39,6 @@ import { initDb, type InitResult } from "@/lib/db/migrations";
 
 export const MAX_ROWS = 10_000;
 
-// Once-per-process schema-readiness gate. `initDb()` is idempotent: on a
-// warm DB it just opens the handle, runs `PRAGMA quick_check`, and
-// confirms `meta.schema_version` matches the latest registry entry. We
-// cache the *promise* (not the result) so concurrent first requests
-// share one in-flight init instead of racing migrations.
-let initPromise: Promise<InitResult> | null = null;
-function ensureSchemaReady(): Promise<InitResult> {
-  if (!initPromise) initPromise = initDb();
-  return initPromise;
-}
 // First non-whitespace token must be SELECT or WITH (CTE → SELECT).
 // All other leading keywords (INSERT/UPDATE/DELETE/CREATE/DROP/ALTER/
 // ATTACH/DETACH/PRAGMA/VACUUM/REINDEX/REPLACE/TRUNCATE/BEGIN/COMMIT/

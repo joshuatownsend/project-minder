@@ -210,10 +210,9 @@ describe.skipIf(!driverAvailable)("/api/sql", () => {
   });
 
   it("auto-initializes schema on first call (no prior initDb)", async () => {
-    // Cold start: tmpHome has no ~/.minder/index.db. The route must run
-    // initDb() itself rather than letting `getDb()` open an empty DB and
-    // fall into the 400 'no such table' path. Verifies the schema-
-    // readiness gate calls initDb on first request.
+    // Cold start: tmpHome has no ~/.minder/index.db. The route must bring the
+    // schema up (through the façade's init) rather than letting `getDb()` open
+    // an empty DB and fall into the 400 'no such table' path.
     const { route } = await reloadModules();
     const res = await route.GET(mkGet("SELECT COUNT(*) AS n FROM sessions"));
     expect(res.status).toBe(200);
@@ -221,6 +220,19 @@ describe.skipIf(!driverAvailable)("/api/sql", () => {
     // Empty schema, but the table exists — count is 0 rather than a
     // 'no such table' error.
     expect(body.rows[0].n).toBe(0);
+  });
+
+  it("reuses the process-wide init instead of running initDb again (#694)", async () => {
+    // A second initDb() re-runs PRAGMA quick_check whenever the clean marker
+    // is stale, which blocks the main thread on a large index.
+    const { route } = await reloadModules();
+    const facade = await import("@/lib/data");
+    const mig = await import("@/lib/db/migrations");
+    await facade.ensureSchemaReady();
+    const initSpy = vi.spyOn(mig, "initDb");
+    const res = await route.GET(mkGet("SELECT 1 AS one"));
+    expect(res.status).toBe(200);
+    expect(initSpy).not.toHaveBeenCalled();
   });
 
   it("returns 503 when initDb reports the schema is unavailable", async () => {
