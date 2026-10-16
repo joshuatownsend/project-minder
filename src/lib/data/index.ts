@@ -158,9 +158,8 @@ export class DbUnavailableError extends Error {
 //     strongest signal we have that retrying further won't help.
 //
 // **Cache reset between tests**: the state lives on `globalThis.__minderDbInit`,
-// so `vi.resetModules()` alone does not reset it. `installIsolatedState()`
-// drops it together with the DB handle; other tests call
-// `__resetInitStateForTests()`.
+// so `vi.resetModules()` alone does not reset it; `installIsolatedState()`
+// drops it together with the DB handle.
 
 const RETRY_DELAYS_MS = [100, 300, 900] as const;
 const TRANSIENT_TTL_MS = 30_000;
@@ -174,10 +173,6 @@ let _retryDelaysOverride: readonly number[] | null = null;
 /** @internal Test-only: shorten retry backoff for unit tests. */
 export function __setRetryDelaysForTests(delays: readonly number[] | null): void {
   _retryDelaysOverride = delays;
-}
-/** @internal Test-only: force the state machine back to `idle`. */
-export function __resetInitStateForTests(): void {
-  initHolder.state = { kind: "idle", quarantineRuns: 0 };
 }
 
 const TRANSIENT_CODES = new Set([
@@ -218,13 +213,10 @@ type InitState =
       lastError: Error;
     };
 
-// On `globalThis`, like the connection it guards (`db/connection.ts`). The
-// production build bundles this module more than once (the boot path and the
-// API routes each get a copy), and a module-scope state gave each copy its own
-// "idle": the first API request ran `initDb()` a second time, by when the
-// ingest worker had already invalidated the clean-shutdown marker, so it ran a
-// full `PRAGMA quick_check` on the main thread. That froze the server for
-// 17-37 s on every boot of 1.16.18. One shared state means one init per process.
+// On `globalThis`, like the connection it guards (`db/connection.ts`): the
+// production build bundles this module more than once (boot path, API routes,
+// SSR), and module scope gave each copy its own "idle", so each re-ran
+// `initDb()` and its full `PRAGMA quick_check` on the main thread.
 const initHolder = ((globalThis as unknown as { __minderDbInit?: { state: InitState } })
   .__minderDbInit ??= { state: { kind: "idle", quarantineRuns: 0 } });
 
@@ -789,10 +781,13 @@ export async function getUsage(
 }
 
 /**
- * Runs DB usage reports one at a time (#563), module-scoped so it spans all
- * `getUsage` callers. See `serialGate.ts` for why.
+ * Runs DB usage reports one at a time (#563) across all `getUsage` callers.
+ * On `globalThis` for the same reason as the init state above: each bundled
+ * copy of this module would otherwise get its own gate. See `serialGate.ts`.
  */
-const dbUsageReportGate = createSerialGate();
+const dbUsageReportGate = ((globalThis as unknown as {
+  __minderUsageReportGate?: ReturnType<typeof createSerialGate>;
+}).__minderUsageReportGate ??= createSerialGate());
 function serializeDbUsageReport<T>(fn: () => Promise<T>): Promise<T> {
   return dbUsageReportGate.run(fn);
 }

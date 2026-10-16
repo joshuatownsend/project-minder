@@ -182,9 +182,7 @@ describe.skipIf(!driverAvailable)("data façade — ensureSchemaReady retry on f
   });
 
   it("a second copy of the façade module reuses the first copy's init instead of running initDb again", async () => {
-    // The production build bundles `@/lib/data` more than once (boot path and
-    // API routes). With module-scope state the routes' copy started `idle` and
-    // re-ran initDb(), whose quick_check froze the server for 17-37 s per boot.
+    // The production build bundles `@/lib/data` more than once; see initHolder.
     process.env.MINDER_USE_DB = "1";
     const first = await reloadModules();
     await first.facade.ensureSchemaReady();
