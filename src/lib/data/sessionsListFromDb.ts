@@ -184,6 +184,9 @@ interface SessionRow {
   entrypoint: string | null;
   /** Gates the #395 tree roll-up — see `rollUpTreeDelegation`. */
   derived_version: number;
+  /** When ingest last wrote this session; with `byte_offset`, marks turn changes. */
+  indexed_at_ms: number | null;
+  byte_offset: number | null;
 }
 
 interface ToolCountRow {
@@ -224,12 +227,146 @@ const SEARCHABLE_TEXT_CAP = 4000;
 const ASSISTANT_TEXT_SLICE = 500;
 
 /**
+ * The last list built, kept until the index changes (#689). Building it runs
+ * eight whole-table queries and assembles every session, about 4-5 s on a
+ * 3 GB index, all synchronous on the main thread; the `/api/sessions` slot
+ * asked for it every 30 s. On `globalThis` because the production build
+ * bundles this module more than once.
+ *
+ * Keyed by the connection plus `PRAGMA data_version`, which moves when
+ * another connection (the ingest worker) commits, and `total_changes()`, which
+ * moves when this one writes (starring, titles, distills).
+ */
+interface SessionsListMemo {
+  db: DatabaseT.Database;
+  key: string;
+  sessions: SessionSummary[];
+  /** Per-session inputs of the two clock-derived fields, by index. */
+  clock: Array<{ storedStatus: string | null; fileMtimeMs: number }>;
+}
+const memoHolder = globalThis as unknown as { __minderSessionsListMemo?: SessionsListMemo };
+
+function indexChangeKey(db: DatabaseT.Database): string {
+  const dataVersion = db.pragma("data_version", { simple: true });
+  const changes = prepCached(db, "SELECT total_changes() AS n").get() as { n: number };
+  return `${dataVersion}:${changes.n}`;
+}
+
+/**
  * Read every indexed session into the `SessionSummary[]` shape that
  * `scanAllSessions` produces. Returns `[]` when no sessions are indexed
  * — caller's façade falls back to file-parse in that case, mirroring
  * the empty-corpus behavior of the file-parse path.
+ *
+ * Rebuilt only when the index changed since the last call; otherwise the
+ * last list is returned with `isActive` / `status`, the only fields that
+ * depend on the clock, recomputed for now.
  */
 export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[] {
+  const key = indexChangeKey(db);
+  const now = Date.now();
+  let memo = memoHolder.__minderSessionsListMemo;
+  if (!memo || memo.db !== db || memo.key !== key) {
+    const clock: SessionsListMemo["clock"] = [];
+    const sessions = buildSessionsList(db, now, clock);
+    memo = memoHolder.__minderSessionsListMemo = { db, key, sessions, clock };
+  }
+  // Shallow copies, so a caller that edits a summary can't change the memo.
+  const { sessions, clock } = memo;
+  return sessions.map((s, i) => {
+    const { storedStatus, fileMtimeMs } = clock[i];
+    const isActive = now - fileMtimeMs < ACTIVE_WINDOW_MS;
+    return { ...s, isActive, status: computeStatus(storedStatus, fileMtimeMs, now, isActive) };
+  });
+}
+
+/** How recently a transcript must have been written for its session to count as active. */
+const ACTIVE_WINDOW_MS = 2 * 60_000;
+
+/**
+ * Each session's `searchableText`, kept between builds and re-read only for
+ * sessions whose turns changed (#689). Reading it for everyone is a scan of
+ * the whole `turns` table, 270k rows and ~200M characters on a 3 GB index:
+ * 3.7 s warm and 9.8 s cold, nearly all of a build. The ingest worker commits
+ * every few seconds while any session runs, so the list itself rebuilds often;
+ * this is what makes that rebuild cheap.
+ *
+ * A session's turns are written only by ingest, which also stamps the
+ * session row's `indexed_at_ms` and `byte_offset`; a re-derive moves
+ * `derived_version`. Those three are the stamp.
+ */
+interface SearchableTextCache {
+  db: DatabaseT.Database;
+  byId: Map<string, { stamp: string; text: string | undefined }>;
+}
+const searchableHolder = globalThis as unknown as { __minderSearchableTextCache?: SearchableTextCache };
+/** Above this many changed sessions, one table scan beats per-session lookups. */
+const SEARCHABLE_FULL_SCAN_AT = 500;
+const SEARCHABLE_LOOKUP_CHUNK = 250;
+
+// Read each turn's `text_preview` in turn-order so per-session aggregation
+// mirrors file-parse's append order. The query also pulls
+// `tool_result_preview` because for user turns ingest stores
+// `text_preview = userText || toolResultText` — when there's no human text,
+// `text_preview` falls back to the tool_result content. File-parse never
+// folds tool output into `searchableText` (only human text + assistant text),
+// so `groupSearchable` skips user turns where `text_preview` is a prefix of
+// `tool_result_preview` (the tool-result-only signal — same heuristic the
+// detail loader uses to skip these from the timeline).
+const SEARCHABLE_COLUMNS = `SELECT session_id, role, text_preview, tool_result_preview
+       FROM turns
+       WHERE text_preview IS NOT NULL AND text_preview <> ''`;
+
+function loadSearchableText(
+  db: DatabaseT.Database,
+  headers: SessionRow[],
+): Map<string, string | undefined> {
+  let cache = searchableHolder.__minderSearchableTextCache;
+  if (!cache || cache.db !== db) {
+    cache = searchableHolder.__minderSearchableTextCache = { db, byId: new Map() };
+  }
+  const stampOf = (h: SessionRow) => `${h.indexed_at_ms}:${h.byte_offset}:${h.derived_version}`;
+  const stale = headers.filter((h) => cache.byId.get(h.session_id)?.stamp !== stampOf(h));
+
+  let fresh: Map<string, string>;
+  if (stale.length > SEARCHABLE_FULL_SCAN_AT) {
+    fresh = groupSearchable(
+      prepCached(db, `${SEARCHABLE_COLUMNS} ORDER BY session_id, turn_index`).all() as TextPreviewRow[]
+    );
+  } else {
+    fresh = new Map();
+    // The turns primary key starts with session_id, so each lookup is a seek.
+    for (let i = 0; i < stale.length; i += SEARCHABLE_LOOKUP_CHUNK) {
+      const ids = stale.slice(i, i + SEARCHABLE_LOOKUP_CHUNK).map((h) => h.session_id);
+      const rows = db
+        .prepare(
+          `${SEARCHABLE_COLUMNS} AND session_id IN (${ids.map(() => "?").join(",")})
+           ORDER BY session_id, turn_index`
+        )
+        .all(...ids) as TextPreviewRow[];
+      for (const [id, text] of groupSearchable(rows)) fresh.set(id, text);
+    }
+  }
+
+  // Rebuilt from the current headers, so sessions pruned from the index drop out.
+  const byId: SearchableTextCache["byId"] = new Map();
+  const out = new Map<string, string | undefined>();
+  for (const h of headers) {
+    const stamp = stampOf(h);
+    const prev = cache.byId.get(h.session_id);
+    const entry = prev && prev.stamp === stamp ? prev : { stamp, text: fresh.get(h.session_id) };
+    byId.set(h.session_id, entry);
+    out.set(h.session_id, entry.text);
+  }
+  cache.byId = byId;
+  return out;
+}
+
+function buildSessionsList(
+  db: DatabaseT.Database,
+  now: number,
+  clock: SessionsListMemo["clock"],
+): SessionSummary[] {
   const headers = prepCached(
     db,
     `SELECT session_id, project_slug, project_dir_name, file_path, file_mtime_ms,
@@ -248,7 +385,7 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
             work_mode_testing_pct, work_mode_other_pct,
             source,
             session_kind, ai_title, entrypoint,
-            derived_version
+            derived_version, indexed_at_ms, byte_offset
      FROM sessions
      -- turn_count counts PRIMARY turns only. Sidechain-only rows (subagent
      -- transcripts ingested from <session>/subagents/*.jsonl — needed so
@@ -362,29 +499,7 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
     ).all() as ModelRow[]
   );
 
-  // Restore `searchableText` (closes P2b-5 divergence #2). Read each
-  // turn's `text_preview` in turn-order so per-session aggregation
-  // mirrors file-parse's append order. The query also pulls
-  // `tool_result_preview` because for user turns ingest stores
-  // `text_preview = userText || toolResultText` — when there's no
-  // human text, `text_preview` falls back to the tool_result content.
-  // File-parse never folds tool output into `searchableText` (only
-  // human text + assistant text), so `groupSearchable` skips user
-  // turns where `text_preview` is a prefix of `tool_result_preview`
-  // (the tool-result-only signal — same heuristic the detail loader
-  // uses to skip these from the timeline). The 6th query loads at most
-  // ~500 chars × turn_count rows for the typical ~150-session corpus —
-  // a few MB total, much smaller than the ~1 GB JSONL re-parse this
-  // read path replaced.
-  const searchableBySession = groupSearchable(
-    prepCached(
-      db,
-      `SELECT session_id, role, text_preview, tool_result_preview
-       FROM turns
-       WHERE text_preview IS NOT NULL AND text_preview <> ''
-       ORDER BY session_id, turn_index`
-    ).all() as TextPreviewRow[]
-  );
+  const searchableBySession = loadSearchableText(db, headers);
 
   // T2.2: PRs harvested from `gh pr create` tool_result text at ingest.
   // Empty for sessions that never created a PR — single SELECT bulk-fetch
@@ -409,7 +524,6 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
     ).all() as TicketRow[]
   );
 
-  const now = Date.now();
   const result: SessionSummary[] = [];
   for (const h of headers) {
     const toolUsage = toolsBySession.get(h.session_id) ?? {};
@@ -417,8 +531,9 @@ export function loadSessionsListFromDb(db: DatabaseT.Database): SessionSummary[]
     const modelsUsed = modelsBySession.get(h.session_id) ?? [];
     const searchableText = searchableBySession.get(h.session_id);
 
-    const isActive = now - h.file_mtime_ms < 2 * 60_000;
+    const isActive = now - h.file_mtime_ms < ACTIVE_WINDOW_MS;
     const status = computeStatus(h.status, h.file_mtime_ms, now, isActive);
+    clock.push({ storedStatus: h.status, fileMtimeMs: h.file_mtime_ms });
     result.push({
       // **The shared projection (#496).** Every field both backends can
       // produce is derived here rather than beside its counterpart in

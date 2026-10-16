@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The Sessions list no longer freezes the server for several seconds every time it refreshes. The server rebuilt the whole list from the index at least every 30 seconds while the page was open, about 4 to 5 seconds of work during which nothing else could be answered. Nearly all of that was re-reading every session's text for the page's search box, which scans the whole index. That text is now kept and re-read only for sessions that changed, and when nothing changed the list is reused with only each session's active/idle state updated (#689).
+
 ### Fixed
 
 - The SQL console's endpoint (`/api/sql`) no longer runs its own database setup. It ran a second one on its first query, which could repeat the full index check and freeze the server the same way the startup freeze did. It now uses the server's single shared setup (#694).
