@@ -612,6 +612,31 @@ describe.skipIf(!driverAvailable)("searchSessionsInDb", () => {
     conn.closeDb();
   });
 
+  it("snippets a title hit whose prompt match lies past what the list keeps (PR #709)", async () => {
+    // The list clips prompts (#704), so without an excerpt the row would show
+    // nothing that contains the query.
+    const { conn, ingest, search, projectsDir } = await setup();
+    await writeJsonl(path.join(projectsDir, "C--dev-app", "longprompt.jsonl"), [
+      userTurn("2026-04-30T10:00:00Z", "short opening"),
+      assistantTurn("2026-04-30T10:00:01Z", "claude-sonnet-4-5", "ok"),
+    ]);
+    const db = (await conn.getDb())!;
+    await ingest.reconcileAllSessions(db, { projectsDir });
+    const { LIST_PROMPT_CHARS } = await import("@/lib/data/sessionsListPayload");
+    const prompt = `${"filler ".repeat(LIST_PROMPT_CHARS / 4)}zzdeepword end`;
+    db.prepare("UPDATE sessions SET initial_prompt = ? WHERE session_id = ?").run(prompt, "longprompt");
+
+    const [deep] = search.searchSessionsInDb(db, "ZZDEEPWORD", "titles");
+    expect(deep.sessionId).toBe("longprompt");
+    expect(deep.source).toBe("titles");
+    expect(deep.snippet).toContain("zzdeepword");
+
+    // A match the clipped prompt still shows needs no excerpt.
+    const [near] = search.searchSessionsInDb(db, "filler", "titles");
+    expect(near.snippet).toBeUndefined();
+    conn.closeDb();
+  });
+
   it("returns [] for empty query", async () => {
     const { conn, search } = await setup();
     const db = (await conn.getDb())!;

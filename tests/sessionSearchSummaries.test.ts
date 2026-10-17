@@ -112,6 +112,16 @@ describe("searchSessionSummaries", () => {
     expect(searchSessionSummaries([claude, codex], "tokenizer", "both", 50, { sources: [] })).toEqual([]);
   });
 
+  it("snippets a title hit whose prompt match lies past what the list keeps (PR #709)", () => {
+    const prompt = `${"filler ".repeat(LIST_PROMPT_CHARS / 4)}zzdeepword end`;
+    const s = session("deep", { initialPrompt: prompt });
+    const [deep] = searchSessionSummaries([s], "zzdeepword", "titles");
+    expect(deep.source).toBe("titles");
+    expect(deep.snippet).toContain("zzdeepword");
+    const [near] = searchSessionSummaries([s], "filler", "titles");
+    expect(near.snippet).toBeUndefined();
+  });
+
   it("returns nothing for a blank query", () => {
     expect(searchSessionSummaries([older], "   ")).toEqual([]);
   });

@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- The Sessions list sends only the first 200 characters of each session's first and last prompt, enough to fill a row on most screens. The full first prompts were the largest remaining part of the response: about 6.7 million characters across 13,500 sessions, now about 2.7 million. The session page and search still use the whole stored prompt; only the instant match as you type sees just the first 200 characters, until the server's results arrive a moment later. MCP `list-sessions` and the `minder://projects/{slug}/sessions` resource return the same clipped prompts; `get-session` returns them uncut (#704).
+- The Sessions list sends only the first 200 characters of each session's first and last prompt, enough to fill a row on most screens. The full first prompts were the largest remaining part of the response: about 6.7 million characters across 13,500 sessions, now about 2.7 million. The session page and search still use the whole stored prompt; only the instant match as you type sees just the first 200 characters, until the server's results arrive a moment later, which show an excerpt around a match past the cut. MCP `list-sessions` and the `minder://projects/{slug}/sessions` resource return the same clipped prompts; `get-session` returns them uncut (#704).
 
 ## [1.16.21] - 2026-10-16
 
