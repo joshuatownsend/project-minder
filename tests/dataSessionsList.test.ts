@@ -351,6 +351,25 @@ describe.skipIf(!driverAvailable)("loadSessionsListFromDb — reuse until the in
     expect(readText).toBe(false);
   });
 
+  it("clips the prompts it lists (#704)", async () => {
+    const { db, list } = await seeded();
+    const { LIST_PROMPT_CHARS } = await import("@/lib/data/sessionsListPayload");
+    const long = "p".repeat(LIST_PROMPT_CHARS + 20);
+    db.prepare("UPDATE sessions SET initial_prompt = ? WHERE session_id = ?").run(long, SESSION_A);
+    const a = list.loadSessionsListFromDb(db).find((s) => s.sessionId === SESSION_A)!;
+    expect(a.initialPrompt).toBe(`${"p".repeat(LIST_PROMPT_CHARS)}…`);
+  });
+
+  it("keeps a last prompt that differs from the first only past the cut (Codex, PR #709)", async () => {
+    const { db, list } = await seeded();
+    const { LIST_PROMPT_CHARS } = await import("@/lib/data/sessionsListPayload");
+    const head = "p".repeat(LIST_PROMPT_CHARS + 5);
+    db.prepare("UPDATE sessions SET initial_prompt = ?, last_prompt = ? WHERE session_id = ?")
+      .run(`${head} first`, `${head} last`, SESSION_A);
+    const a = list.loadSessionsListFromDb(db).find((s) => s.sessionId === SESSION_A)!;
+    expect(a.lastPrompt).toBe(`${"p".repeat(LIST_PROMPT_CHARS)}…`);
+  });
+
   it("recomputes isActive and status on a reused list, and keeps the memo private", async () => {
     const { db, list } = await seeded();
     const row = db.prepare("SELECT file_mtime_ms AS m FROM sessions WHERE session_id = ?").get(SESSION_B) as { m: number };

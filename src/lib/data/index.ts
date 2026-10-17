@@ -23,7 +23,8 @@ import { loadAgentUsageFromDb } from "./agentsUsageFromDb";
 import { loadSkillUsageFromDb } from "./skillsUsageFromDb";
 import { loadClaudeUsageStatsFromDb } from "./claudeUsageFromDb";
 import { searchSessionsInDb, facetedSessionIds } from "./sessionSearch";
-import { searchSessionSummaries, withoutSearchableText } from "./sessionSearchSummaries";
+import { searchSessionSummaries } from "./sessionSearchSummaries";
+import { forSessionsList } from "./sessionsListPayload";
 import type {
   SessionSearchHit,
   SessionSearchScope,
@@ -1120,7 +1121,9 @@ export interface SessionsListResult {
  *
  * Never carries `searchableText`: every caller sends the list somewhere
  * (`/api/sessions`, MCP), and that text was 13 of its 34 MB (#700). The
- * no-index search reads it through `sessionsForSearch` instead.
+ * no-index search reads it through `sessionsForSearch` instead. For the same
+ * reason the prompts are clipped to `LIST_PROMPT_CHARS` (#704): the full first
+ * prompts were 7 of the remaining 21 MB.
  */
 export async function getSessionsList(): Promise<SessionsListResult> {
   // Read once: the same mode picks the source and labels what the search
@@ -1133,7 +1136,7 @@ export async function getSessionsList(): Promise<SessionsListResult> {
     // never see an older list than the one the page is showing (Codex, PR #705).
     rememberFileList(demo, Promise.resolve(result.sessions));
   }
-  return { ...result, sessions: withoutSearchableText(result.sessions) };
+  return { ...result, sessions: forSessionsList(result.sessions) };
 }
 
 /**

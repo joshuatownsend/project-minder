@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatKB, pluralize } from "@/lib/utils";
+import { formatKB, pluralize, truncate } from "@/lib/utils";
 
 describe("formatKB", () => {
   it("formats 0 bytes", () => {
@@ -34,5 +34,17 @@ describe("pluralize", () => {
     expect(pluralize(0, "file")).toBe("0 files");
     expect(pluralize(2, "file")).toBe("2 files");
     expect(pluralize(99, "rule")).toBe("99 rules");
+  });
+});
+
+describe("truncate", () => {
+  it("cuts at max and marks the cut", () => {
+    expect(truncate("abcdef", 3)).toBe("abc…");
+    expect(truncate("abc", 3)).toBe("abc");
+  });
+
+  it("does not split a surrogate pair at the cut", () => {
+    expect(truncate("ab\u{1F600}cd", 3)).toBe("ab…");
+    expect(truncate("ab\u{1F600}cd", 4)).toBe("ab\u{1F600}…");
   });
 });

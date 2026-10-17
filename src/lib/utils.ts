@@ -14,7 +14,10 @@ export function formatKB(bytes: number): string {
 }
 
 export function truncate(str: string, max = 160): string {
-  return str.length > max ? str.slice(0, max) + "…" : str;
+  if (str.length <= max) return str;
+  // Don't cut a surrogate pair in half, which would leave a lone surrogate.
+  const last = str.charCodeAt(max - 1);
+  return str.slice(0, last >= 0xd800 && last <= 0xdbff ? max - 1 : max) + "…";
 }
 
 export function formatRelativeTime(iso?: string): string {

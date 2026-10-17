@@ -2,6 +2,7 @@ import "server-only";
 import type DatabaseT from "better-sqlite3";
 import { prepCached } from "@/lib/db/connection";
 import { fuseRrf } from "./rrf";
+import { clippedPromptSnippet } from "./sessionSearchSummaries";
 
 // SQL-backed session search backing `/api/sessions/search`. Two distinct
 // paths are stitched together depending on `scope`:
@@ -179,8 +180,9 @@ export interface SessionSearchHit {
   ranks: { titles?: number; prompts?: number; semantic?: number };
   /**
    * Excerpt of the matched text, from FTS5's `snippet()` on the
-   * best-ranked chunk. Present only for `prompts` hits — a `titles` hit
-   * matched a column the row already displays.
+   * best-ranked chunk. A `titles` hit has one only when it matched a prompt
+   * past the part the list keeps (#704); otherwise it matched a column the
+   * row already displays.
    *
    * This exists because the row renderer has nowhere else to get one:
    * the session list carries no session text (#700). Since `prompts_fts`
@@ -283,6 +285,11 @@ interface FtsRow {
 
 interface TitleRow {
   session_id: string;
+}
+
+interface TitleMatchRow extends TitleRow {
+  initial_prompt: string | null;
+  last_prompt: string | null;
 }
 
 export function searchSessionsInDb(
@@ -455,7 +462,7 @@ export function searchSessionsInDb(
       // that looks exactly like a working one. This is the same
       // "identical paths, only one guarded" shape #425 itself warns
       // about, reproduced inside its own fix if the parens are dropped.
-      `SELECT session_id FROM sessions s
+      `SELECT session_id, initial_prompt, last_prompt FROM sessions s
          WHERE (
                 slug IS NOT NULL AND lower(slug) LIKE ?
             OR initial_prompt IS NOT NULL AND lower(initial_prompt) LIKE ?
@@ -468,12 +475,21 @@ export function searchSessionsInDb(
            ${facetSql ? `AND ${facetSql}` : ""}
          ORDER BY end_ts DESC
          LIMIT ?`
-    ).all(pat, pat, pat, pat, pat, pat, pat, ...facetParams, candidateLimit) as TitleRow[];
+    ).all(pat, pat, pat, pat, pat, pat, pat, ...facetParams, candidateLimit) as TitleMatchRow[];
 
     // `LIKE` yields no relevance score at all, so recency (`end_ts DESC`)
     // is the only ordering signal available. RRF's k=60 damping is what
     // keeps that weak signal from being over-trusted at deep ranks.
     titleKeys = rows.map((r) => r.session_id);
+
+    // The list carries only the start of each prompt (#704), so a match past
+    // it needs an excerpt, or the row shows nothing that contains the query.
+    // An FTS excerpt, when there is one, already shows the match.
+    for (const r of rows) {
+      if (snippetBySession.has(r.session_id)) continue;
+      const snippet = clippedPromptSnippet([r.initial_prompt, r.last_prompt], q.toLowerCase());
+      if (snippet !== undefined) snippetBySession.set(r.session_id, snippet);
+    }
   }
 
   // The semantic retriever returns ids from a vector index that knows
@@ -523,8 +539,7 @@ export function searchSessionsInDb(
       ...(f.ranks.prompts !== undefined ? { prompts: f.ranks.prompts } : {}),
       ...(f.ranks.semantic !== undefined ? { semantic: f.ranks.semantic } : {}),
     },
-    // Only prompt hits carry one; a title hit matched a column the row
-    // already renders.
+    // A title hit carries one only when the list cannot show its match.
     ...(snippetBySession.has(f.key) ? { snippet: snippetBySession.get(f.key) } : {}),
   }));
 }
