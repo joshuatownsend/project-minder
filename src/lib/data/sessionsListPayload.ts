@@ -13,8 +13,20 @@ import { truncate } from "@/lib/utils";
 export const LIST_PROMPT_CHARS = 200;
 
 /** `text` clipped to {@link LIST_PROMPT_CHARS}, with "…" marking a cut. */
-export const clipListPrompt = <T extends string | null | undefined>(text: T): T =>
-  (text && truncate(text, LIST_PROMPT_CHARS)) as T;
+export const clipListPrompt = (text: string): string => truncate(text, LIST_PROMPT_CHARS);
+
+/**
+ * Clips `s`'s prompts in place and returns it. Runs on a projected summary, so
+ * the projection's "last prompt equals the first" check has compared the
+ * whole prompts (Codex, PR #709).
+ */
+export function clipSummaryPrompts<T extends Pick<SessionSummary, "initialPrompt" | "lastPrompt">>(
+  s: T
+): T {
+  if (s.initialPrompt) s.initialPrompt = clipListPrompt(s.initialPrompt);
+  if (s.lastPrompt) s.lastPrompt = clipListPrompt(s.lastPrompt);
+  return s;
+}
 
 /**
  * The summaries as the list sends them: without `searchableText`, which only
@@ -22,9 +34,5 @@ export const clipListPrompt = <T extends string | null | undefined>(text: T): T 
  * Never changes the caller's objects.
  */
 export function forSessionsList(sessions: SessionSummary[]): SessionSummary[] {
-  return sessions.map(({ searchableText: _text, ...rest }) => {
-    if (rest.initialPrompt) rest.initialPrompt = clipListPrompt(rest.initialPrompt);
-    if (rest.lastPrompt) rest.lastPrompt = clipListPrompt(rest.lastPrompt);
-    return rest;
-  });
+  return sessions.map(({ searchableText: _text, ...rest }) => clipSummaryPrompts(rest));
 }

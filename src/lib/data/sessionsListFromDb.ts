@@ -8,7 +8,7 @@ import { prepCached } from "@/lib/db/connection";
 import type { SessionSummary, SessionStatus, PrLink, TicketLink } from "@/lib/types";
 import { rollUpTreeDelegation, type DelegationTreeSource } from "@/lib/usage/delegationTree";
 import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptPath";
-import { clipListPrompt } from "./sessionsListPayload";
+import { clipSummaryPrompts } from "./sessionsListPayload";
 
 // SQL-backed list loader for `/api/sessions` and `/api/sessions/activity`.
 // Mirrors `scanAllSessions` (in `src/lib/scanner/claudeConversations.ts`)
@@ -429,7 +429,9 @@ function buildSessionsList(
     const isActive = now - h.file_mtime_ms < ACTIVE_WINDOW_MS;
     const status = computeStatus(h.status, h.file_mtime_ms, now, isActive);
     clock.push({ storedStatus: h.status, fileMtimeMs: h.file_mtime_ms });
-    result.push({
+    // Clipped once projected, so the memo does not hold the full prompts
+    // (#704) and the lastPrompt suppression compares them whole (Codex, PR #709).
+    result.push(clipSummaryPrompts({
       // **The shared projection (#496).** Every field both backends can
       // produce is derived here rather than beside its counterpart in
       // `buildAdapterScannedSession` — identity, counts, tokens, duration,
@@ -443,9 +445,8 @@ function buildSessionsList(
         projectSlug: h.project_slug,
         startTs: h.start_ts,
         endTs: h.end_ts,
-        // Clipped here so the memo does not hold the full prompts (#704).
-        initialPrompt: clipListPrompt(h.initial_prompt),
-        lastPrompt: clipListPrompt(h.last_prompt),
+        initialPrompt: h.initial_prompt,
+        lastPrompt: h.last_prompt,
         turnCount: h.turn_count,
         userTurnCount: h.user_turn_count,
         assistantTurnCount: h.assistant_turn_count,
@@ -500,7 +501,7 @@ function buildSessionsList(
       distilledText: h.distilled_text ?? undefined,
       prs: prsBySession.get(h.session_id),
       tickets: ticketsBySession.get(h.session_id),
-    });
+    }));
   }
 
   return result;
