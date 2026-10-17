@@ -9,15 +9,6 @@ import type { SessionSearchFacets, SessionSearchHit, SessionSearchScope } from "
 //
 // The `titles` fields mirror the SQL `titles` retriever in `sessionSearch.ts`.
 
-/**
- * The summaries without `searchableText`, which only the scan below reads.
- * The index never fills it, so on that path the input comes back as is.
- */
-export function withoutSearchableText(sessions: SessionSummary[]): SessionSummary[] {
-  if (!sessions.some((s) => s.searchableText !== undefined)) return sessions;
-  return sessions.map(({ searchableText: _text, ...rest }) => rest);
-}
-
 /** Characters of context kept either side of the match in a hit's snippet. */
 const SNIPPET_BEFORE = 60;
 const SNIPPET_AFTER = 120;

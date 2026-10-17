@@ -12,7 +12,8 @@ vi.mock("@/lib/scanner/claudeConversations", () => ({
 vi.mock("@/lib/demo/demoMode", () => ({ demoMode: vi.fn(async () => false), demoModeEnv: () => false }));
 
 import { installIsolatedState } from "./_helpers/isolatedState";
-import { searchSessionSummaries, withoutSearchableText } from "@/lib/data/sessionSearchSummaries";
+import { searchSessionSummaries } from "@/lib/data/sessionSearchSummaries";
+import { LIST_PROMPT_CHARS } from "@/lib/data/sessionsListPayload";
 
 // No index for the whole file: the pure tests don't care, the façade test needs it.
 const state = installIsolatedState({ prefix: "pm-search-summaries-", env: { MINDER_USE_DB: "0" } });
@@ -113,21 +114,6 @@ describe("searchSessionSummaries", () => {
 
   it("returns nothing for a blank query", () => {
     expect(searchSessionSummaries([older], "   ")).toEqual([]);
-  });
-});
-
-describe("withoutSearchableText", () => {
-  it("drops the field and leaves the caller's objects alone", () => {
-    const s = session("x", { searchableText: "secret text" });
-    const [out] = withoutSearchableText([s]);
-    expect("searchableText" in out).toBe(false);
-    expect(out.sessionId).toBe("x");
-    expect(s.searchableText).toBe("secret text");
-  });
-
-  it("returns the same array when nothing carries text (the index path)", () => {
-    const list = [session("a"), session("b")];
-    expect(withoutSearchableText(list)).toBe(list);
   });
 });
 
@@ -245,5 +231,17 @@ describe("getSessionsList never carries searchableText (#700)", () => {
     expect(meta.backend).toBe("file");
     expect(sessions.map((s) => s.sessionId)).toEqual(["a", "b"]);
     for (const s of sessions) expect("searchableText" in s).toBe(false);
+  });
+
+  it("clips the prompts, while the search still matches past the cut (#704)", async () => {
+    await state.reload();
+    const { scanAllSessions } = await import("@/lib/scanner/claudeConversations");
+    const prompt = `${"x ".repeat(LIST_PROMPT_CHARS)} pastthecut`;
+    vi.mocked(scanAllSessions).mockResolvedValue([session("a", { initialPrompt: prompt })]);
+    const { getSessionsList, searchSessions } = await import("@/lib/data");
+    const { sessions } = await getSessionsList();
+    expect(sessions[0].initialPrompt).toHaveLength(LIST_PROMPT_CHARS + 1);
+    const { hits } = await searchSessions("pastthecut", "titles", 10);
+    expect(hits.map((h) => h.sessionId)).toEqual(["a"]);
   });
 });

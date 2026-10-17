@@ -8,6 +8,7 @@ import { prepCached } from "@/lib/db/connection";
 import type { SessionSummary, SessionStatus, PrLink, TicketLink } from "@/lib/types";
 import { rollUpTreeDelegation, type DelegationTreeSource } from "@/lib/usage/delegationTree";
 import { parseSubagentParentSessionId } from "@/lib/sessions/subagentTranscriptPath";
+import { clipListPrompt } from "./sessionsListPayload";
 
 // SQL-backed list loader for `/api/sessions` and `/api/sessions/activity`.
 // Mirrors `scanAllSessions` (in `src/lib/scanner/claudeConversations.ts`)
@@ -442,8 +443,9 @@ function buildSessionsList(
         projectSlug: h.project_slug,
         startTs: h.start_ts,
         endTs: h.end_ts,
-        initialPrompt: h.initial_prompt,
-        lastPrompt: h.last_prompt,
+        // Clipped here so the memo does not hold the full prompts (#704).
+        initialPrompt: clipListPrompt(h.initial_prompt),
+        lastPrompt: clipListPrompt(h.last_prompt),
         turnCount: h.turn_count,
         userTurnCount: h.user_turn_count,
         assistantTurnCount: h.assistant_turn_count,
